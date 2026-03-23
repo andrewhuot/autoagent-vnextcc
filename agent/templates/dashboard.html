@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-900">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{{ title }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+          },
+          boxShadow: {
+            panel: "0 8px 35px rgba(2, 6, 23, 0.35)",
+          },
+        },
+      },
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+</head>
+<body class="min-h-full bg-slate-900 text-slate-100 font-sans antialiased">
+  <div
+    x-data="dashboardApp()"
+    x-init="init()"
+    class="mx-auto max-w-[1500px] px-5 pb-10 pt-6 lg:px-10"
+  >
+    <header class="mb-6 rounded-2xl border border-slate-700/70 bg-slate-800/70 p-5 shadow-panel backdrop-blur">
+      <div class="flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+        <div>
+          <p class="text-xs uppercase tracking-[0.22em] text-slate-400">AutoAgent VNext Monitoring</p>
+          <h1 class="mt-2 text-2xl font-semibold text-slate-50 lg:text-3xl">Self-Healing Status Dashboard</h1>
+          <p class="mt-2 text-sm text-slate-300">
+            Real-time observability for the observer → optimizer → deployer feedback loop.
+          </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+            <span class="text-slate-400">Config</span>
+            <span class="ml-1 font-semibold text-slate-100" x-text="health.config_version || 'v000'"></span>
+          </div>
+          <div class="rounded-lg border border-slate-700 bg-slate-900/60 px-3 py-2 text-xs text-slate-300">
+            <span class="text-slate-400">Uptime</span>
+            <span class="ml-1 font-semibold text-slate-100" x-text="health.uptime_human || '0s'"></span>
+          </div>
+          <button
+            type="button"
+            @click="fetchAll()"
+            class="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-emerald-300 transition hover:bg-emerald-500/20"
+          >
+            Refresh Data
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <div x-show="error" class="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200" x-text="error"></div>
+
+    <section class="mb-6 grid gap-4 lg:grid-cols-5">
+      <article class="rounded-2xl border border-slate-700 bg-gradient-to-br from-slate-800 to-slate-900 p-5 shadow-panel lg:col-span-2">
+        <p class="text-xs uppercase tracking-[0.2em] text-slate-400">Health Score</p>
+        <div class="mt-3 flex items-end gap-3">
+          <span
+            class="text-5xl font-bold leading-none"
+            :class="healthScoreClass(health.health_score?.color)"
+            x-text="health.health_score?.value ?? '--'"
+          ></span>
+          <span class="pb-1 text-sm text-slate-400">/ 100</span>
+        </div>
+        <p class="mt-4 text-sm text-slate-300" x-text="health.reason || 'No active optimization trigger. System operating normally.'"></p>
+      </article>
+
+      <template x-for="card in metricCards" :key="card.key">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-4 shadow-panel">
+          <p class="text-xs uppercase tracking-[0.18em] text-slate-400" x-text="card.label"></p>
+          <p class="mt-3 text-2xl font-semibold text-slate-100" x-text="card.display"></p>
+          <svg class="mt-3 h-10 w-full" viewBox="0 0 140 40" preserveAspectRatio="none">
+            <polyline
+              fill="none"
+              stroke-width="2"
+              :stroke="card.stroke"
+              :points="sparklinePoints(card.series)"
+            ></polyline>
+          </svg>
+        </article>
+      </template>
+    </section>
+
+    <nav class="mb-5 flex flex-wrap gap-2 rounded-xl border border-slate-700 bg-slate-800/60 p-2">
+      <template x-for="tab in tabs" :key="tab.id">
+        <button
+          type="button"
+          @click="activeTab = tab.id"
+          class="rounded-lg px-4 py-2 text-sm font-medium transition"
+          :class="activeTab === tab.id ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40' : 'text-slate-300 border border-transparent hover:border-slate-600 hover:text-slate-100'"
+          x-text="tab.label"
+        ></button>
+      </template>
+    </nav>
+
+    <section x-show="activeTab === 'health'" x-transition.opacity>
+      <div class="grid gap-4 lg:grid-cols-2">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <h2 class="text-lg font-semibold text-slate-100">Anomalies</h2>
+          <template x-if="!health.anomalies || health.anomalies.length === 0">
+            <p class="mt-3 text-sm text-slate-300">No anomalies detected in the current observation window.</p>
+          </template>
+          <ul class="mt-3 space-y-2" x-show="health.anomalies && health.anomalies.length">
+            <template x-for="(anomaly, idx) in health.anomalies" :key="idx">
+              <li class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200" x-text="anomaly"></li>
+            </template>
+          </ul>
+        </article>
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <h2 class="text-lg font-semibold text-slate-100">Failure Buckets</h2>
+          <div class="mt-4 space-y-3">
+            <template x-for="(count, bucket) in (health.failure_buckets || {})" :key="bucket">
+              <div>
+                <div class="mb-1 flex items-center justify-between text-xs uppercase tracking-wide text-slate-400">
+                  <span x-text="bucket.replace('_', ' ')"></span>
+                  <span class="text-slate-200" x-text="count"></span>
+                </div>
+                <div class="h-2 rounded-full bg-slate-700">
+                  <div
+                    class="h-2 rounded-full bg-rose-400"
+                    :style="`width: ${Math.min(100, count * 10)}%`"
+                  ></div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section x-show="activeTab === 'history'" x-transition.opacity class="space-y-4">
+      <template x-if="!history.entries || history.entries.length === 0">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-6 text-sm text-slate-300 shadow-panel">
+          No optimization attempts logged yet.
+        </article>
+      </template>
+
+      <template x-for="entry in history.entries" :key="entry.attempt_id">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p class="text-sm font-semibold text-slate-100" x-text="entry.change_description"></p>
+              <p class="mt-1 text-xs text-slate-400">
+                <span x-text="entry.timestamp"></span>
+                <span class="mx-2 text-slate-600">•</span>
+                <span x-text="entry.config_section || 'unknown section'"></span>
+              </p>
+            </div>
+            <div class="flex items-center gap-3">
+              <span class="rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wide"
+                    :class="statusClass(entry.status)"
+                    x-text="entry.status"></span>
+              <span class="text-sm text-slate-300" x-text="`${entry.score_before.toFixed(4)} → ${entry.score_after.toFixed(4)}`"></span>
+            </div>
+          </div>
+          <div class="mt-3 rounded-xl border border-slate-700 bg-slate-900/70 p-3 font-mono text-xs leading-5 text-slate-300">
+            <template x-for="(line, idx) in entry.diff_lines" :key="idx">
+              <div :class="diffLineClass(line)" x-text="line"></div>
+            </template>
+          </div>
+        </article>
+      </template>
+    </section>
+
+    <section x-show="activeTab === 'config'" x-transition.opacity class="grid gap-4 lg:grid-cols-3">
+      <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel lg:col-span-2">
+        <h2 class="text-lg font-semibold text-slate-100">Active YAML</h2>
+        <pre class="mt-4 max-h-[640px] overflow-auto rounded-xl border border-slate-700 bg-slate-900/80 p-4 text-xs leading-5 text-slate-200" x-text="config.active_yaml"></pre>
+      </article>
+
+      <div class="space-y-4">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <h2 class="text-lg font-semibold text-slate-100">Version History</h2>
+          <select
+            class="mt-3 w-full rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-slate-200"
+            x-model="selectedVersion"
+          >
+            <template x-for="version in config.versions" :key="version.version">
+              <option :value="version.version" x-text="`${version.version} • ${version.status}`"></option>
+            </template>
+          </select>
+          <template x-if="selectedVersionData">
+            <div class="mt-3 space-y-1 text-xs text-slate-300">
+              <p><span class="text-slate-400">Timestamp:</span> <span x-text="selectedVersionData.timestamp"></span></p>
+              <p><span class="text-slate-400">Hash:</span> <span class="font-mono" x-text="selectedVersionData.hash"></span></p>
+            </div>
+          </template>
+        </article>
+
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <h2 class="text-lg font-semibold text-slate-100">Canary Status</h2>
+          <div class="mt-3 space-y-1 text-sm text-slate-300">
+            <p>
+              <span class="text-slate-400">Verdict:</span>
+              <span class="ml-1 rounded px-2 py-1 text-xs font-semibold uppercase"
+                    :class="statusClass(config.canary?.verdict || 'pending')"
+                    x-text="config.canary?.verdict || 'pending'"></span>
+            </p>
+            <p><span class="text-slate-400">Canary:</span> <span x-text="config.canary?.canary_version || 'none'"></span></p>
+            <p><span class="text-slate-400">Baseline:</span> <span x-text="config.canary?.baseline_version || 'none'"></span></p>
+            <p><span class="text-slate-400">Traffic split:</span> <span x-text="formatPercent(config.canary?.traffic_split || 0)"></span></p>
+            <p><span class="text-slate-400">Canary success:</span> <span x-text="formatPercent(config.canary?.canary_success_rate || 0)"></span></p>
+            <p><span class="text-slate-400">Baseline success:</span> <span x-text="formatPercent(config.canary?.baseline_success_rate || 0)"></span></p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section x-show="activeTab === 'evals'" x-transition.opacity class="space-y-4">
+      <div class="grid gap-4 lg:grid-cols-5">
+        <template x-for="item in evalSummaryCards" :key="item.label">
+          <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-4 shadow-panel">
+            <p class="text-xs uppercase tracking-wide text-slate-400" x-text="item.label"></p>
+            <p class="mt-2 text-2xl font-semibold text-slate-100" x-text="item.value"></p>
+          </article>
+        </template>
+      </div>
+
+      <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+        <h2 class="text-lg font-semibold text-slate-100">Category Breakdown</h2>
+        <div class="mt-3 overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead class="text-left text-xs uppercase tracking-wide text-slate-400">
+              <tr>
+                <th class="pb-2 pr-4">Category</th>
+                <th class="pb-2 pr-4">Pass Rate</th>
+                <th class="pb-2 pr-4">Composite</th>
+                <th class="pb-2">Safety Failures</th>
+              </tr>
+            </thead>
+            <tbody class="text-slate-200">
+              <template x-for="(stats, name) in evals.categories" :key="name">
+                <tr class="border-t border-slate-700">
+                  <td class="py-2 pr-4 capitalize" x-text="name.replace('_', ' ')"></td>
+                  <td class="py-2 pr-4" x-text="`${stats.passed_cases}/${stats.total_cases}`"></td>
+                  <td class="py-2 pr-4" x-text="stats.composite.toFixed(4)"></td>
+                  <td class="py-2" x-text="stats.safety_failures"></td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+        <h2 class="text-lg font-semibold text-slate-100">Case Details</h2>
+        <div class="mt-3 max-h-[520px] overflow-auto space-y-2 pr-1">
+          <template x-for="item in evals.cases" :key="item.case_id">
+            <details class="rounded-lg border border-slate-700 bg-slate-900/60 p-3">
+              <summary class="cursor-pointer list-none text-sm font-medium text-slate-100">
+                <span x-text="item.case_id"></span>
+                <span class="ml-2 text-xs text-slate-400" x-text="item.category"></span>
+                <span class="ml-2 rounded px-2 py-0.5 text-[10px] font-semibold uppercase"
+                      :class="item.passed ? 'bg-emerald-500/20 text-emerald-200' : 'bg-rose-500/20 text-rose-200'"
+                      x-text="item.passed ? 'pass' : 'fail'"></span>
+              </summary>
+              <div class="mt-2 text-xs text-slate-300">
+                <p>Quality: <span x-text="item.quality_score"></span></p>
+                <p>Safety: <span x-text="item.safety_passed ? 'passed' : 'failed'"></span></p>
+                <p>Latency: <span x-text="`${item.latency_ms}ms`"></span></p>
+                <p>Tokens: <span x-text="item.token_count"></span></p>
+                <p x-show="item.details" class="mt-1 text-amber-200" x-text="item.details"></p>
+              </div>
+            </details>
+          </template>
+        </div>
+      </article>
+    </section>
+
+    <section x-show="activeTab === 'conversations'" x-transition.opacity class="space-y-4">
+      <template x-if="!conversations.conversations || conversations.conversations.length === 0">
+        <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-6 text-sm text-slate-300 shadow-panel">
+          No recent conversations found in the store.
+        </article>
+      </template>
+
+      <template x-for="item in conversations.conversations" :key="item.conversation_id">
+        <details class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+          <summary class="cursor-pointer list-none">
+            <div class="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p class="text-sm text-slate-100" x-text="item.user_message"></p>
+                <p class="mt-1 text-xs text-slate-400">
+                  <span x-text="item.timestamp"></span>
+                  <span class="mx-2 text-slate-600">•</span>
+                  <span x-text="item.session_id"></span>
+                </p>
+              </div>
+              <div class="flex flex-wrap items-center gap-2 text-xs text-slate-300">
+                <span class="rounded px-2 py-1 uppercase font-semibold" :class="statusClass(item.outcome)" x-text="item.outcome"></span>
+                <span class="rounded bg-slate-900/70 px-2 py-1" x-text="`${item.latency_ms.toFixed(1)}ms`"></span>
+                <span class="rounded bg-slate-900/70 px-2 py-1" x-text="`$${item.cost.toFixed(4)}`"></span>
+                <span class="rounded bg-slate-900/70 px-2 py-1" x-text="`${item.turns} turns`"></span>
+              </div>
+            </div>
+          </summary>
+
+          <div class="mt-4 grid gap-3 lg:grid-cols-2">
+            <div class="rounded-lg border border-slate-700 bg-slate-900/70 p-3 text-sm text-slate-200">
+              <p class="mb-1 text-xs uppercase tracking-wide text-slate-400">User</p>
+              <p x-text="item.user_message"></p>
+            </div>
+            <div class="rounded-lg border border-slate-700 bg-slate-900/70 p-3 text-sm text-slate-200">
+              <p class="mb-1 text-xs uppercase tracking-wide text-slate-400">Agent</p>
+              <p x-text="item.agent_response"></p>
+            </div>
+          </div>
+
+          <div class="mt-3 rounded-lg border border-slate-700 bg-slate-900/70 p-3 text-xs text-slate-300">
+            <p><span class="text-slate-400">Specialist:</span> <span x-text="item.specialist_used || 'unknown'"></span></p>
+            <p><span class="text-slate-400">Config:</span> <span x-text="item.config_version || 'v000'"></span></p>
+            <p><span class="text-slate-400">Safety flags:</span> <span x-text="item.safety_flags.length ? item.safety_flags.join(', ') : 'none'"></span></p>
+            <p class="mt-1 text-slate-400">Tool calls</p>
+            <pre class="mt-1 overflow-auto rounded bg-slate-950/70 p-2 text-[11px]" x-text="JSON.stringify(item.tool_calls, null, 2)"></pre>
+          </div>
+        </details>
+      </template>
+    </section>
+  </div>
+
+  <script>
+    function dashboardApp() {
+      return {
+        loading: true,
+        error: "",
+        activeTab: "health",
+        tabs: [
+          { id: "health", label: "System Health" },
+          { id: "history", label: "Optimization History" },
+          { id: "config", label: "Active Config" },
+          { id: "evals", label: "Eval Results" },
+          { id: "conversations", label: "Recent Conversations" },
+        ],
+        health: {
+          metrics: {},
+          trends: {
+            success_rate: [],
+            avg_latency_ms: [],
+            error_rate: [],
+            safety_violation_rate: [],
+            avg_cost: [],
+          },
+          health_score: { value: 0, color: "amber" },
+          failure_buckets: {},
+          anomalies: [],
+          config_version: "v000",
+          uptime_human: "0s",
+        },
+        history: { entries: [] },
+        config: { versions: [], canary: {} },
+        evals: { composite: {}, categories: {}, cases: [] },
+        conversations: { conversations: [] },
+        selectedVersion: "",
+
+        async init() {
+          await this.fetchAll();
+          setInterval(() => this.fetchHealth(), 60000);
+        },
+
+        async fetchAll() {
+          this.loading = true;
+          this.error = "";
+          try {
+            const [health, history, config, evals, conversations] = await Promise.all([
+              this.fetchJson("/api/health"),
+              this.fetchJson("/api/history"),
+              this.fetchJson("/api/config"),
+              this.fetchJson("/api/evals"),
+              this.fetchJson("/api/conversations"),
+            ]);
+            this.health = health;
+            this.history = history;
+            this.config = config;
+            this.evals = evals;
+            this.conversations = conversations;
+            if (!this.selectedVersion && this.config.versions.length) {
+              this.selectedVersion = this.config.versions[0].version;
+            }
+          } catch (err) {
+            this.error = err.message || "Failed to load dashboard data.";
+          } finally {
+            this.loading = false;
+          }
+        },
+
+        async fetchHealth() {
+          try {
+            this.health = await this.fetchJson("/api/health");
+          } catch (err) {
+            this.error = err.message || "Failed to refresh health.";
+          }
+        },
+
+        async fetchJson(url) {
+          const response = await fetch(url, { headers: { "Accept": "application/json" } });
+          if (!response.ok) {
+            throw new Error(`Request failed for ${url}: ${response.status}`);
+          }
+          return response.json();
+        },
+
+        get metricCards() {
+          const metrics = this.health.metrics || {};
+          const trends = this.health.trends || {};
+          return [
+            {
+              key: "success",
+              label: "Success Rate",
+              display: this.formatPercent(metrics.success_rate || 0),
+              series: trends.success_rate || [],
+              stroke: "#34d399",
+            },
+            {
+              key: "latency",
+              label: "Avg Latency",
+              display: `${(metrics.avg_latency_ms || 0).toFixed(1)}ms`,
+              series: trends.avg_latency_ms || [],
+              stroke: "#60a5fa",
+            },
+            {
+              key: "error",
+              label: "Error Rate",
+              display: this.formatPercent(metrics.error_rate || 0),
+              series: trends.error_rate || [],
+              stroke: "#fb7185",
+            },
+            {
+              key: "safety",
+              label: "Safety Violations",
+              display: this.formatPercent(metrics.safety_violation_rate || 0),
+              series: trends.safety_violation_rate || [],
+              stroke: "#f59e0b",
+            },
+            {
+              key: "cost",
+              label: "Cost / Conversation",
+              display: `$${(metrics.cost_per_conversation || 0).toFixed(4)}`,
+              series: trends.avg_cost || [],
+              stroke: "#a78bfa",
+            },
+          ];
+        },
+
+        get evalSummaryCards() {
+          const composite = this.evals.composite || {};
+          return [
+            { label: "Composite", value: (composite.composite || 0).toFixed(4) },
+            { label: "Quality", value: (composite.quality || 0).toFixed(4) },
+            { label: "Safety", value: (composite.safety || 0).toFixed(4) },
+            { label: "Latency", value: (composite.latency || 0).toFixed(4) },
+            { label: "Cost", value: (composite.cost || 0).toFixed(4) },
+          ];
+        },
+
+        get selectedVersionData() {
+          return (this.config.versions || []).find((item) => item.version === this.selectedVersion) || null;
+        },
+
+        sparklinePoints(values) {
+          if (!values || values.length === 0) {
+            return "0,20 140,20";
+          }
+          const width = 140;
+          const height = 40;
+          const min = Math.min(...values);
+          const max = Math.max(...values);
+          const range = max - min || 1;
+          return values
+            .map((value, index) => {
+              const x = (index / Math.max(values.length - 1, 1)) * width;
+              const y = height - ((value - min) / range) * height;
+              return `${x.toFixed(2)},${y.toFixed(2)}`;
+            })
+            .join(" ");
+        },
+
+        formatPercent(value) {
+          return `${(value * 100).toFixed(1)}%`;
+        },
+
+        healthScoreClass(color) {
+          if (color === "emerald") {
+            return "text-emerald-300";
+          }
+          if (color === "rose") {
+            return "text-rose-300";
+          }
+          return "text-amber-300";
+        },
+
+        statusClass(status) {
+          const normalized = (status || "").toLowerCase();
+          if (normalized.includes("accept") || normalized.includes("success") || normalized.includes("promote") || normalized === "pass" || normalized === "passed") {
+            return "bg-emerald-500/20 text-emerald-200";
+          }
+          if (normalized.includes("pending") || normalized.includes("no_canary")) {
+            return "bg-amber-500/20 text-amber-200";
+          }
+          return "bg-rose-500/20 text-rose-200";
+        },
+
+        diffLineClass(line) {
+          if (line.startsWith("+")) {
+            return "text-emerald-300";
+          }
+          if (line.startsWith("-")) {
+            return "text-rose-300";
+          }
+          if (line.startsWith("~")) {
+            return "text-amber-300";
+          }
+          return "text-slate-300";
+        },
+      };
+    }
+  </script>
+</body>
+</html>
