@@ -1,0 +1,265 @@
+import { useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { Rocket, RotateCcw } from 'lucide-react';
+import { useConfigs, useDeploy, useDeployStatus, useRollback } from '../lib/api';
+import { EmptyState } from '../components/EmptyState';
+import { LoadingSkeleton } from '../components/LoadingSkeleton';
+import { PageHeader } from '../components/PageHeader';
+import { StatusBadge } from '../components/StatusBadge';
+import { toastError, toastSuccess } from '../lib/toast';
+import { formatPercent, formatTimestamp, statusVariant } from '../lib/utils';
+
+export function Deploy() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { data: deployStatus, isLoading, isError, refetch } = useDeployStatus();
+  const { data: configs } = useConfigs();
+  const deploy = useDeploy();
+  const rollback = useRollback();
+
+  const [showForm, setShowForm] = useState(false);
+  const [version, setVersion] = useState('');
+  const [strategy, setStrategy] = useState<'canary' | 'immediate'>('canary');
+  const showDeployForm = showForm || searchParams.get('new') === '1';
+  const activeConfig = deployStatus?.active_version
+    ? configs?.find((entry) => entry.version === deployStatus.active_version) || null
+    : null;
+
+  function closeForm() {
+    setShowForm(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete('new');
+    setSearchParams(next);
+  }
+
+  function handleDeploy() {
+    if (!version) return;
+    deploy.mutate(
+      { version: Number(version), strategy },
+      {
+        onSuccess: (response) => {
+          toastSuccess('Deploy request completed', response.message);
+          closeForm();
+          setVersion('');
+          refetch();
+        },
+        onError: (error) => {
+          toastError('Deploy failed', error.message);
+        },
+      }
+    );
+  }
+
+  function handleRollback() {
+    rollback.mutate(undefined, {
+      onSuccess: (response) => {
+        toastSuccess('Rollback completed', response.message);
+        refetch();
+      },
+      onError: (error) => {
+        toastError('Rollback failed', error.message);
+      },
+    });
+  }
+
+  if (isLoading) {
+    return (
+      <div className="space-y-4">
+        <LoadingSkeleton rows={4} />
+        <LoadingSkeleton rows={7} />
+      </div>
+    );
+  }
+
+  if (!deployStatus) {
+    return (
+      <EmptyState
+        icon={Rocket}
+        title="No deployment status"
+        description="Initialize and deploy a config version to begin rollout management."
+        actionLabel="Refresh"
+        onAction={() => refetch()}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Deploy"
+        description="Promote stable versions, run canary rollouts, and monitor verdicts before full promotion."
+        actions={
+          <button
+            onClick={() => {
+              if (showDeployForm) {
+                closeForm();
+                return;
+              }
+              setShowForm(true);
+            }}
+            className="rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-blue-700"
+          >
+            {showDeployForm ? 'Hide Deploy Form' : 'Deploy Version'}
+          </button>
+        }
+      />
+
+      {isError && (
+        <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          Could not load deployment status.
+        </div>
+      )}
+
+      <section className="grid gap-4 lg:grid-cols-3">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Active Version</p>
+          <p className="mt-1 text-3xl font-semibold text-gray-900">
+            {deployStatus.active_version ? `v${deployStatus.active_version}` : '—'}
+          </p>
+          {activeConfig && (
+            <p className="mt-1 text-xs text-gray-500">{activeConfig.config_hash} · {activeConfig.status}</p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Canary Version</p>
+          <p className="mt-1 text-3xl font-semibold text-gray-900">
+            {deployStatus.canary_version ? `v${deployStatus.canary_version}` : '—'}
+          </p>
+          {deployStatus.canary_status ? (
+            <p className="mt-1 text-xs text-gray-500">
+              {deployStatus.canary_status.canary_conversations} conversations observed
+            </p>
+          ) : (
+            <p className="mt-1 text-xs text-gray-500">No active canary</p>
+          )}
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Version Count</p>
+          <p className="mt-1 text-3xl font-semibold text-gray-900">{deployStatus.total_versions}</p>
+          <p className="mt-1 text-xs text-gray-500">Tracked in version manifest</p>
+        </div>
+      </section>
+
+      {deployStatus.canary_status && (
+        <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <h3 className="text-sm font-semibold text-gray-900">Canary Verdict</h3>
+            <div className="flex items-center gap-2">
+              <StatusBadge
+                variant={statusVariant(deployStatus.canary_status.verdict)}
+                label={deployStatus.canary_status.verdict}
+              />
+              <button
+                onClick={handleRollback}
+                disabled={rollback.isPending}
+                className="inline-flex items-center gap-1 rounded-lg border border-red-300 bg-white px-2.5 py-1 text-xs text-red-700 hover:bg-red-50 disabled:opacity-60"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+                {rollback.isPending ? 'Rolling back...' : 'Rollback'}
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Canary success rate</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900">
+                {formatPercent(deployStatus.canary_status.canary_success_rate)}
+              </p>
+            </div>
+            <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+              <p className="text-xs uppercase tracking-wide text-gray-500">Baseline success rate</p>
+              <p className="mt-1 text-xl font-semibold text-gray-900">
+                {formatPercent(deployStatus.canary_status.baseline_success_rate)}
+              </p>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {showDeployForm && (
+        <section className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-3 sm:grid-cols-3">
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Version</label>
+              <select
+                value={version}
+                onChange={(event) => setVersion(event.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              >
+                <option value="">Select version</option>
+                {(configs || []).map((config) => (
+                  <option key={config.version} value={config.version}>
+                    v{config.version} · {config.status}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500">Strategy</label>
+              <select
+                value={strategy}
+                onChange={(event) => setStrategy(event.target.value as 'canary' | 'immediate')}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              >
+                <option value="canary">Canary (safe default)</option>
+                <option value="immediate">Immediate promotion</option>
+              </select>
+            </div>
+
+            <div className="flex items-end">
+              <button
+                onClick={handleDeploy}
+                disabled={!version || deploy.isPending}
+                className="w-full rounded-lg bg-blue-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:opacity-60"
+              >
+                {deploy.isPending ? 'Deploying...' : 'Deploy'}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-200 bg-gray-50 px-4 py-3">
+          <h3 className="text-sm font-semibold text-gray-900">Recent Deployment History</h3>
+        </div>
+
+        {deployStatus.history.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-200 bg-white">
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Version</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Timestamp</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Status</th>
+                  <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Composite</th>
+                </tr>
+              </thead>
+              <tbody>
+                {deployStatus.history.map((entry, index) => (
+                  <tr key={`${entry.version}-${entry.timestamp}`} className={index % 2 ? 'bg-gray-50/60' : ''}>
+                    <td className="px-4 py-2 font-medium text-gray-900">v{entry.version}</td>
+                    <td className="px-4 py-2 text-gray-600">{formatTimestamp(entry.timestamp)}</td>
+                    <td className="px-4 py-2">
+                      <StatusBadge variant={statusVariant(entry.status)} label={entry.status} />
+                    </td>
+                    <td className="px-4 py-2 text-gray-600">
+                      {typeof entry.scores?.composite === 'number'
+                        ? `${(entry.scores.composite * 100).toFixed(1)}`
+                        : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="p-6 text-center text-sm text-gray-500">No deployment history yet.</div>
+        )}
+      </section>
+    </div>
+  );
+}

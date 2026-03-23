@@ -1,8 +1,33 @@
-node_modules/
+# Python
 __pycache__/
-*.db
 *.pyc
+*.pyo
+*.egg-info/
 dist/
-.pytest_cache/
+build/
 .venv/
+.pytest_cache/
+
+# Node / Frontend
+node_modules/
+web/dist/
 .next/
+
+# Data
+*.db
+configs/manifest.json
+configs/v[0-9]*.yaml
+!configs/v001_base.yaml
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
