@@ -10,6 +10,9 @@ import { Conversations } from './pages/Conversations';
 import { Deploy } from './pages/Deploy';
 import { LoopMonitor } from './pages/LoopMonitor';
 import { Settings } from './pages/Settings';
+import { Opportunities } from './pages/Opportunities';
+import { Experiments } from './pages/Experiments';
+import { Traces } from './pages/Traces';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -34,6 +37,9 @@ export default function App() {
             <Route path="/conversations" element={<Conversations />} />
             <Route path="/deploy" element={<Deploy />} />
             <Route path="/loop" element={<LoopMonitor />} />
+            <Route path="/opportunities" element={<Opportunities />} />
+            <Route path="/experiments" element={<Experiments />} />
+            <Route path="/traces" element={<Traces />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

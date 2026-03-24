@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import config, conversations, deploy, eval, health, loop, optimize
+from api.routes import config, conversations, deploy, eval, experiments, health, loop, opportunities, optimize, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -110,6 +110,15 @@ async def lifespan(app: FastAPI):
     app.state.structured_logger = structured_logger
     app.state.started_at = startup_epoch
 
+    # Trace, opportunity, and experiment stores
+    from observer.traces import TraceStore
+    from observer.opportunities import OpportunityQueue
+    from optimizer.experiments import ExperimentStore
+
+    app.state.trace_store = TraceStore(db_path=".autoagent/traces.db")
+    app.state.opportunity_queue = OpportunityQueue(db_path=".autoagent/opportunities.db")
+    app.state.experiment_store = ExperimentStore(db_path=".autoagent/experiments.db")
+
     yield
     # No explicit cleanup needed — SQLite connections are context-managed
 
@@ -149,6 +158,9 @@ app.include_router(health.router)
 app.include_router(conversations.router)
 app.include_router(deploy.router)
 app.include_router(loop.router)
+app.include_router(traces.router)
+app.include_router(opportunities.router)
+app.include_router(experiments.router)
 
 
 # ---------------------------------------------------------------------------

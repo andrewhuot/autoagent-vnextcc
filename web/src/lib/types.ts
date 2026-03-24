@@ -207,3 +207,55 @@ export interface LoopStatus {
   completed_cycles: number;
   cycle_history: LoopCycle[];
 }
+
+export interface TraceEvent {
+  event_id: string;
+  event_type: 'model_call' | 'model_response' | 'tool_call' | 'tool_response' | 'error' | 'agent_transfer';
+  timestamp: number;
+  agent_path: string;
+  latency_ms: number;
+  tokens_in?: number;
+  tokens_out?: number;
+  tool_name?: string;
+  error_message?: string;
+}
+
+export interface Trace {
+  trace_id: string;
+  events: TraceEvent[];
+}
+
+export interface OptimizationOpportunity {
+  opportunity_id: string;
+  failure_family: string;
+  affected_agent_path: string;
+  severity: number;
+  prevalence: number;
+  recency: number;
+  business_impact: number;
+  priority_score: number;
+  status: 'open' | 'in_progress' | 'resolved';
+  recommended_operator_families: string[];
+  sample_trace_ids: string[];
+}
+
+export interface ExperimentScores {
+  quality?: number;
+  safety?: number;
+  composite: number;
+}
+
+export interface ExperimentCard {
+  experiment_id: string;
+  hypothesis: string;
+  operator_name: string;
+  touched_surfaces: string[];
+  risk_class: 'low' | 'medium' | 'high';
+  status: 'pending' | 'accepted' | 'rejected';
+  baseline_scores: ExperimentScores;
+  candidate_scores: ExperimentScores;
+  significance_p_value: number;
+  significance_delta: number;
+  deployment_policy: string;
+  created_at: number;
+}

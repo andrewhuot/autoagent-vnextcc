@@ -51,6 +51,33 @@ class ThresholdsConfig(BaseModel):
     max_latency_ms: int = 10000
 
 
+class ContextCachingConfig(BaseModel):
+    """Context caching configuration for reducing redundant token usage."""
+
+    enabled: bool = False
+    threshold_tokens: int = 1000
+    ttl_seconds: int = 300
+    max_use_count: int = 10
+
+
+class CompactionConfig(BaseModel):
+    """Conversation compaction configuration for long-running sessions."""
+
+    enabled: bool = False
+    interval_turns: int = 10
+    overlap_turns: int = 2
+    summarizer_model: str = "gemini-2.0-flash"
+
+
+class MemoryPolicyConfig(BaseModel):
+    """Memory preload/writeback policy configuration."""
+
+    preload: bool = True
+    on_demand: bool = False
+    write_back: bool = True
+    max_entries: int = 100
+
+
 class AgentConfig(BaseModel):
     """Top-level agent configuration."""
 
@@ -58,6 +85,13 @@ class AgentConfig(BaseModel):
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
+    context_caching: ContextCachingConfig = Field(
+        default_factory=ContextCachingConfig
+    )
+    compaction: CompactionConfig = Field(default_factory=CompactionConfig)
+    memory_policy: MemoryPolicyConfig = Field(
+        default_factory=MemoryPolicyConfig
+    )
     model: str = "gemini-2.0-flash"
     quality_boost: bool = False
 

@@ -9,6 +9,9 @@ import {
   RefreshCw,
   Settings,
   X,
+  Flag,
+  TestTubes,
+  Activity,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
@@ -20,6 +23,9 @@ const navItems = [
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
   { to: '/deploy', label: 'Deploy', icon: Rocket },
   { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
+  { to: '/opportunities', label: 'Opportunities', icon: Flag },
+  { to: '/experiments', label: 'Experiments', icon: TestTubes },
+  { to: '/traces', label: 'Traces', icon: Activity },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

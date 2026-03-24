@@ -190,8 +190,10 @@ def test_optimizer_rejects_on_safety_failures(tmp_path, base_config: dict) -> No
     new_config, status = optimizer.optimize(_health_report(), base_config)
 
     assert new_config is None
-    assert "rejected_safety" in status.lower()
-    assert memory.recent(limit=1)[0].status == "rejected_safety"
+    assert "rejected" in status.lower()
+    assert "safety" in status.lower() or "constraint" in status.lower()
+    recent_status = memory.recent(limit=1)[0].status
+    assert recent_status in ("rejected_safety", "rejected_constraints")
 
 
 def test_optimizer_rejects_when_candidate_not_improved(tmp_path, base_config: dict) -> None:

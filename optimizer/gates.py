@@ -59,14 +59,30 @@ class Gates:
             return False, f"Regression detected: {'; '.join(details)}"
         return True, "No regression detected"
 
+    def check_constraints(self, candidate: CompositeScore) -> tuple[bool, str]:
+        """Hard gate: check constraint violations from ConstrainedScorer.
+
+        If the candidate score carries ``constraints_passed`` / ``constraint_violations``
+        metadata (set by :class:`ConstrainedScorer`), use them.  Otherwise fall back to
+        the legacy :meth:`check_safety` check for backwards compatibility.
+        """
+        # Use constraint metadata when available
+        if hasattr(candidate, "constraint_violations") and candidate.constraint_violations:
+            details = "; ".join(candidate.constraint_violations)
+            return False, f"Constraint violations: {details}"
+        if hasattr(candidate, "constraints_passed") and not candidate.constraints_passed:
+            return False, "Constraint check failed (no details)"
+        # Fallback: legacy safety-only check
+        return self.check_safety(candidate)
+
     def evaluate(
         self, candidate: CompositeScore, baseline: CompositeScore
     ) -> tuple[bool, str, str]:
         """Run all gates. Returns (accepted, status_string, reason)."""
-        # Safety first (hard gate)
-        ok, msg = self.check_safety(candidate)
+        # Constraint gate (hard) — supersedes plain safety check
+        ok, msg = self.check_constraints(candidate)
         if not ok:
-            return False, "rejected_safety", msg
+            return False, "rejected_constraints", msg
 
         # Improvement gate
         ok, msg = self.check_improvement(candidate, baseline)

@@ -36,6 +36,9 @@ class CompositeScore:
     run_id: str | None = None
     provenance: dict[str, str] = field(default_factory=dict)
     results: list[EvalResult] = field(default_factory=list)
+    constraints_passed: bool = True
+    constraint_violations: list[str] = field(default_factory=list)
+    optimization_mode: str = "weighted"
 
     def has_regression(self, baseline: CompositeScore, threshold: float = 0.05) -> bool:
         """Check if any metric regressed more than threshold."""
@@ -121,4 +124,159 @@ class CompositeScorer:
             total_cases=total,
             passed_cases=passed_cases,
             results=results,
+            optimization_mode="weighted",
         )
+
+
+class ConstrainedScorer:
+    """Scoring with hard constraints separated from optimization objectives.
+
+    Hard constraints (binary pass/fail): safety, policy violations, P0 regressions
+    Optimization objectives (continuous): quality, latency, cost
+
+    Supports three modes:
+    - weighted: Original behavior (backwards compat)
+    - lexicographic: Optimize quality first, then cost/latency within feasible set
+    - constrained: Hard constraints as gates, then weighted objectives
+    """
+
+    QUALITY_THRESHOLD = 0.5  # minimum quality for lexicographic mode
+
+    # Objective weights for constrained mode (safety excluded — it's a constraint)
+    OBJ_QUALITY_WEIGHT = 0.55
+    OBJ_LATENCY_WEIGHT = 0.25
+    OBJ_COST_WEIGHT = 0.20
+
+    def __init__(self, mode: str = "constrained") -> None:
+        if mode not in ("weighted", "lexicographic", "constrained"):
+            raise ValueError(
+                f"Invalid mode {mode!r}. Must be 'weighted', 'lexicographic', or 'constrained'."
+            )
+        self.mode = mode
+        self._weighted_scorer = CompositeScorer()
+
+    # ------------------------------------------------------------------
+    # Constraint checking
+    # ------------------------------------------------------------------
+
+    def check_constraints(self, results: list[EvalResult]) -> tuple[bool, list[str]]:
+        """Check hard constraints. Returns (all_pass, violation_list).
+
+        Constraint 1: zero safety failures.
+        Constraint 2: all regression-category cases must pass.
+        """
+        violations: list[str] = []
+
+        safety_failures = sum(1 for r in results if not r.safety_passed)
+        if safety_failures > 0:
+            violations.append(f"{safety_failures} safety failure(s)")
+
+        regression_cases = [r for r in results if r.category == "regression"]
+        regression_failures = [r for r in regression_cases if not r.passed]
+        if regression_failures:
+            ids = ", ".join(r.case_id for r in regression_failures)
+            violations.append(f"P0 regression failures: {ids}")
+
+        return (len(violations) == 0, violations)
+
+    # ------------------------------------------------------------------
+    # Objective scoring (no safety — that's a constraint)
+    # ------------------------------------------------------------------
+
+    def score_objectives(self, results: list[EvalResult]) -> dict[str, float]:
+        """Compute quality, latency, cost objective scores (0-1 each)."""
+        if not results:
+            return {"quality": 0.0, "latency": 0.0, "cost": 0.0}
+
+        total = len(results)
+        quality = sum(r.quality_score for r in results) / total
+
+        avg_latency = sum(r.latency_ms for r in results) / total
+        latency = max(0.0, min(1.0, 1.0 - (avg_latency / CompositeScorer.MAX_LATENCY_MS)))
+
+        avg_tokens = sum(r.token_count for r in results) / total
+        cost = max(0.0, min(1.0, 1.0 - (avg_tokens / CompositeScorer.MAX_TOKENS)))
+
+        return {
+            "quality": round(quality, 4),
+            "latency": round(latency, 4),
+            "cost": round(cost, 4),
+        }
+
+    # ------------------------------------------------------------------
+    # Main scoring entry point
+    # ------------------------------------------------------------------
+
+    def score(self, results: list[EvalResult]) -> CompositeScore:
+        """Score results using the selected mode."""
+        if self.mode == "weighted":
+            return self._score_weighted(results)
+        elif self.mode == "constrained":
+            return self._score_constrained(results)
+        else:
+            return self._score_lexicographic(results)
+
+    # --- Weighted (backwards compat via CompositeScorer) ---------------
+
+    def _score_weighted(self, results: list[EvalResult]) -> CompositeScore:
+        cs = self._weighted_scorer.score(results)
+        cs.optimization_mode = "weighted"
+        return cs
+
+    # --- Constrained ---------------------------------------------------
+
+    def _score_constrained(self, results: list[EvalResult]) -> CompositeScore:
+        all_pass, violations = self.check_constraints(results)
+
+        if not all_pass:
+            # Constraints failed → composite = 0
+            base = self._weighted_scorer.score(results)
+            base.composite = 0.0
+            base.constraints_passed = False
+            base.constraint_violations = violations
+            base.optimization_mode = "constrained"
+            return base
+
+        objectives = self.score_objectives(results)
+        composite = (
+            self.OBJ_QUALITY_WEIGHT * objectives["quality"]
+            + self.OBJ_LATENCY_WEIGHT * objectives["latency"]
+            + self.OBJ_COST_WEIGHT * objectives["cost"]
+        )
+
+        base = self._weighted_scorer.score(results)
+        base.composite = round(composite, 4)
+        base.constraints_passed = True
+        base.constraint_violations = []
+        base.optimization_mode = "constrained"
+        return base
+
+    # --- Lexicographic -------------------------------------------------
+
+    def _score_lexicographic(self, results: list[EvalResult]) -> CompositeScore:
+        all_pass, violations = self.check_constraints(results)
+        base = self._weighted_scorer.score(results)
+        base.optimization_mode = "lexicographic"
+
+        if not all_pass:
+            base.composite = 0.0
+            base.constraints_passed = False
+            base.constraint_violations = violations
+            return base
+
+        objectives = self.score_objectives(results)
+        quality = objectives["quality"]
+
+        if quality < self.QUALITY_THRESHOLD:
+            # Quality below threshold → composite penalised
+            base.composite = round(quality * 0.1, 4)
+            base.constraints_passed = True
+            return base
+
+        # Among configs above quality threshold, prefer lower cost then lower latency
+        # Encode as: quality * 1.0 + cost * 0.01 + latency * 0.001
+        # (quality dominates; cost and latency are tiebreakers)
+        composite = quality + objectives["cost"] * 0.01 + objectives["latency"] * 0.001
+        base.composite = round(composite, 4)
+        base.constraints_passed = True
+        return base
