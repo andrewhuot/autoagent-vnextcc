@@ -45,6 +45,226 @@ autoagent loop --max-cycles 20 --stop-on-plateau
 
 ---
 
+## Deploy
+
+### Local Docker
+
+```bash
+docker build -t autoagent-vnextcc .
+docker run -p 8000:8000 autoagent-vnextcc
+# Open http://localhost:8000
+```
+
+To pass API keys for non-mock optimization:
+
+```bash
+docker run -p 8000:8000 \
+  -e GOOGLE_API_KEY="your-google-api-key" \
+  -e OPENAI_API_KEY="your-openai-api-key" \
+  autoagent-vnextcc
+```
+
+Data is ephemeral by default. To persist across restarts:
+
+```bash
+docker run -p 8000:8000 -v autoagent-data:/app/data autoagent-vnextcc
+```
+
+### Google Cloud Run
+
+Step-by-step for someone who has never used GCP.
+
+**1. Install the gcloud CLI**
+
+Download and install from [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install). Then authenticate:
+
+```bash
+gcloud auth login
+```
+
+This opens a browser window. Sign in with your Google account.
+
+**2. Create a GCP project**
+
+```bash
+gcloud projects create autoagent-prod --name="AutoAgent"
+gcloud config set project autoagent-prod
+```
+
+> Pick any project ID you like instead of `autoagent-prod`. Project IDs are globally unique — if it's taken, try `autoagent-prod-123` or similar.
+
+**3. Enable billing**
+
+Cloud Run requires a billing account. Go to [console.cloud.google.com/billing](https://console.cloud.google.com/billing), create a billing account if you don't have one, then link it:
+
+```bash
+# List your billing accounts
+gcloud billing accounts list
+
+# Link billing to your project (replace BILLING_ACCOUNT_ID with the ID from above)
+gcloud billing projects link autoagent-prod --billing-account=BILLING_ACCOUNT_ID
+```
+
+> **Common gotcha:** If you skip this step, every subsequent command will fail with "billing account not configured." This is the #1 reason deploys fail.
+
+**4. Enable required APIs**
+
+```bash
+gcloud services enable \
+  run.googleapis.com \
+  artifactregistry.googleapis.com \
+  cloudbuild.googleapis.com
+```
+
+Expected output: `Operation "operations/..." finished successfully.` for each API.
+
+**5. Set environment variables**
+
+These two env vars drive the entire deploy:
+
+```bash
+export PROJECT_ID="autoagent-prod"   # your project ID from step 2
+export REGION="us-central1"          # cheapest region, fine for most use cases
+```
+
+**6. Deploy (one command)**
+
+```bash
+chmod +x deploy/deploy.sh
+./deploy/deploy.sh $PROJECT_ID $REGION
+```
+
+This script will:
+- Create an Artifact Registry repository (if it doesn't exist)
+- Build the Docker image locally
+- Push it to Artifact Registry
+- Deploy to Cloud Run with 2 vCPU, 2 GB RAM, port 8000
+
+Expected output at the end:
+
+```
+==> Deployment complete!
+https://autoagent-vnextcc-xxxxxxxxxx-uc.a.run.app
+```
+
+**Alternative: manual deploy without the script**
+
+```bash
+# Create Artifact Registry repo
+gcloud artifacts repositories create autoagent \
+  --location=$REGION --repository-format=docker
+
+# Authenticate Docker
+gcloud auth configure-docker ${REGION}-docker.pkg.dev --quiet
+
+# Build and push
+docker build -t ${REGION}-docker.pkg.dev/${PROJECT_ID}/autoagent/autoagent-vnextcc:latest .
+docker push ${REGION}-docker.pkg.dev/${PROJECT_ID}/autoagent/autoagent-vnextcc:latest
+
+# Deploy
+gcloud run deploy autoagent-vnextcc \
+  --image ${REGION}-docker.pkg.dev/${PROJECT_ID}/autoagent/autoagent-vnextcc:latest \
+  --project $PROJECT_ID \
+  --region $REGION \
+  --platform managed \
+  --allow-unauthenticated \
+  --port 8000 \
+  --memory 2Gi \
+  --cpu 2 \
+  --min-instances 0 \
+  --max-instances 1
+```
+
+**7. Pass API keys as secrets (recommended)**
+
+Don't put API keys in plain env vars. Use Secret Manager:
+
+```bash
+# Store your key
+echo -n "your-google-api-key" | gcloud secrets create google-api-key --data-file=-
+
+# Grant Cloud Run access
+gcloud secrets add-iam-policy-binding google-api-key \
+  --member="serviceAccount:$(gcloud iam service-accounts list --format='value(email)' --filter='displayName:Compute Engine default')" \
+  --role="roles/secretmanager.secretAccessor"
+
+# Redeploy with secret
+gcloud run services update autoagent-vnextcc \
+  --region $REGION \
+  --set-secrets="GOOGLE_API_KEY=google-api-key:latest"
+```
+
+**8. Verify it's running**
+
+```bash
+# Get your service URL
+gcloud run services describe autoagent-vnextcc \
+  --region $REGION --format="value(status.url)"
+
+# Health check (replace URL with your actual URL)
+curl https://autoagent-vnextcc-xxxxxxxxxx-uc.a.run.app/api/health
+```
+
+Expected: `{"status": "ok", ...}`
+
+Open the URL in a browser to access the web console.
+
+**9. Custom domain (optional)**
+
+```bash
+gcloud run domain-mappings create \
+  --service autoagent-vnextcc \
+  --domain your-domain.com \
+  --region $REGION
+```
+
+Then add the CNAME or A record shown in the output to your DNS provider.
+
+**Environment variables reference:**
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `GOOGLE_API_KEY` | For Gemini models | Gemini proposer/judge key |
+| `OPENAI_API_KEY` | For OpenAI models | GPT-4o proposer/judge key |
+| `ANTHROPIC_API_KEY` | For Anthropic models | Claude proposer/judge key |
+| `AUTOAGENT_DB` | No (default: `conversations.db`) | SQLite conversation store path |
+| `AUTOAGENT_CONFIGS` | No (default: `configs`) | Versioned config directory |
+| `AUTOAGENT_MEMORY_DB` | No (default: `optimizer_memory.db`) | Optimizer memory SQLite path |
+| `LOG_LEVEL` | No (default: `INFO`) | Log verbosity |
+
+> At least one API key is required for non-mock optimization. For testing with mock providers, no keys are needed.
+
+**Troubleshooting:**
+
+| Problem | Cause | Fix |
+|---|---|---|
+| `ERROR: (gcloud.run.deploy) PERMISSION_DENIED` | Billing not enabled or APIs not enabled | Run steps 3 and 4 above |
+| `ERROR: could not resolve source` | Wrong project selected | Run `gcloud config set project autoagent-prod` |
+| Container starts then crashes | Missing required env vars | Check logs: `gcloud run services logs read autoagent-vnextcc --region $REGION` |
+| `docker push` fails with 403 | Docker not authenticated to Artifact Registry | Run `gcloud auth configure-docker ${REGION}-docker.pkg.dev` |
+| Frontend shows blank page | Frontend build failed in Docker | Ensure `web/` directory exists with `package.json` |
+
+### Fly.io
+
+```bash
+fly launch --name autoagent-vnextcc --region ord --no-deploy
+fly secrets set GOOGLE_API_KEY="your-google-api-key"
+fly deploy
+```
+
+App will be live at `https://autoagent-vnextcc.fly.dev`.
+
+### Railway
+
+```bash
+railway init
+railway up
+```
+
+Railway auto-detects the Dockerfile, builds, and deploys. Set env vars in the Railway dashboard or via `railway variables set GOOGLE_API_KEY=your-key`. App URL is shown in the dashboard.
+
+---
+
 ## Key Features
 
 ### 4-Layer Metric Hierarchy
