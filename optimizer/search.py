@@ -54,6 +54,7 @@ class SearchStrategy(str, Enum):
     SIMPLE = "simple"      # preserve existing deterministic proposer path
     ADAPTIVE = "adaptive"  # HSO + bandit family selection
     FULL = "full"          # HSO + curriculum + Pareto archive
+    PRO = "pro"            # pro-mode prompt optimization (MIPROv2/BootstrapFewShot/GEPA/SIMBA)
 
 
 class OperatorFamily(str, Enum):

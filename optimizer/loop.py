@@ -25,6 +25,7 @@ from .memory import OptimizationAttempt, OptimizationMemory
 from .mutations import create_default_registry
 from .pareto import ConstrainedParetoArchive, ObjectiveDirection
 from .proposer import Proposer
+from .prompt_opt import ProConfig, ProSearchStrategy
 from .search import (
     BanditPolicy,
     HybridBanditSelector,
@@ -69,6 +70,7 @@ class Optimizer:
         human_control_store: HumanControlStore | None = None,
         event_log: EventLog | None = None,
         immutable_surfaces: list[str] | None = None,
+        pro_config: ProConfig | None = None,
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
@@ -84,6 +86,7 @@ class Optimizer:
         self.human_control_store = human_control_store
         self.event_log = event_log
         self.immutable_surfaces: set[str] = set(immutable_surfaces or [])
+        self.pro_config = pro_config or ProConfig()
 
         try:
             self.search_strategy = SearchStrategy(search_strategy)
@@ -164,6 +167,8 @@ class Optimizer:
 
         self._log_event("mutation_proposed", {"strategy": self.search_strategy.value}, cycle_id=cycle_id)
 
+        if self.search_strategy == SearchStrategy.PRO:
+            return self._optimize_pro(health_report, current_config, failure_samples)
         if self.search_strategy == SearchStrategy.SIMPLE:
             return self._optimize_simple(health_report, current_config, failure_samples)
         return self._optimize_hybrid(health_report, current_config, failure_samples)
@@ -216,6 +221,70 @@ class Optimizer:
             candidate_config_raw=proposal.new_config,
             change_description=proposal.change_description,
             config_section=proposal.config_section,
+        )
+
+    # ------------------------------------------------------------------
+    # Pro strategy (research-grade prompt optimization)
+    # ------------------------------------------------------------------
+
+    def _optimize_pro(
+        self,
+        health_report: HealthReport,
+        current_config: dict,
+        failure_samples: list[dict] | None = None,
+    ) -> tuple[dict | None, str]:
+        """Run pro-mode prompt optimization."""
+        validated_current, err = self._validate_current_config(current_config)
+        if err is not None or validated_current is None:
+            return None, err
+
+        # Build failure patterns from failure samples
+        failure_patterns: list[str] = []
+        if failure_samples:
+            for sample in failure_samples[:10]:
+                if desc := sample.get("failure_description", ""):
+                    failure_patterns.append(str(desc))
+
+        from optimizer.providers import LLMRouter, ModelConfig, MockProvider
+
+        # Use a mock LLM router for pro strategy
+        mock_config = ModelConfig(provider="mock", model="mock-proposer")
+        llm_router = LLMRouter(
+            strategy="single",
+            models=[mock_config],
+            providers={(mock_config.provider, mock_config.model): MockProvider(mock_config)},
+        )
+
+        strategy = ProSearchStrategy(
+            llm_router=llm_router,
+            eval_runner=self.eval_runner,
+            config=self.pro_config,
+        )
+
+        result = strategy.run(
+            current_config=current_config,
+            task_description="",
+            failure_patterns=failure_patterns,
+        )
+
+        if not result.improved or result.best_candidate is None:
+            return None, f"REJECTED (pro_no_improvement): Pro-mode found no improvement (best={result.best_score:.4f}, baseline={result.baseline_score:.4f})"
+
+        # Apply the config patch from the optimization result
+        patch = result.to_config_patch()
+        if not patch:
+            return None, "REJECTED (pro_no_patch): Optimization result produced no config changes"
+
+        import copy
+        candidate_config = copy.deepcopy(current_config)
+        candidate_config.update(patch)
+
+        return self._finalize_candidate(
+            health_report=health_report,
+            validated_current=validated_current,
+            candidate_config_raw=candidate_config,
+            change_description=f"Pro-mode optimization ({result.algorithm}): {result.candidates_evaluated} candidates, best={result.best_score:.4f}",
+            config_section="prompt_optimization",
         )
 
     # ------------------------------------------------------------------
