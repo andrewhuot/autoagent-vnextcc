@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from core.types import ArchiveEntry, JudgeVerdict
 from observer.opportunities import OptimizationOpportunity
 from .experiments import ExperimentCard
 from .memory import OptimizationMemory
@@ -90,6 +91,20 @@ _OPERATOR_TO_FAMILY: dict[str, OperatorFamily] = {
 
 
 @dataclass
+class StructuredCritique:
+    """Structured critique output from judge evaluation of a candidate.
+
+    Aggregates evidence spans, failure reasons, judge verdicts, and
+    suggested mutation surfaces for the next optimization cycle.
+    """
+
+    evidence_spans: list[str]
+    failure_reasons: list[str]
+    judge_verdicts: list[JudgeVerdict]
+    suggested_surfaces: list[str]
+
+
+@dataclass
 class CandidateMutation:
     """A scored candidate mutation ready for evaluation."""
 
@@ -102,6 +117,25 @@ class CandidateMutation:
     combined_score: float  # weighted: 0.4*lift + 0.3*novelty + 0.3*(1-risk)
     config_params: dict[str, Any]  # parameters for the mutation operator's apply()
     hypothesis: str
+    structured_critique: StructuredCritique | None = None
+    branch_from_entry_id: str | None = None  # which archive entry to branch from
+
+
+def compute_bandit_value(
+    expected_lift: float,
+    business_impact: float,
+    uncertainty: float,
+    eval_cost: float,
+) -> float:
+    """Compute contextual bandit value for candidate prioritisation.
+
+    Formula: expected_lift * business_impact * uncertainty / max(eval_cost, 0.01)
+
+    Higher values indicate candidates worth evaluating first: high expected
+    improvement on high-impact surfaces with high uncertainty (exploration
+    bonus), normalized by evaluation cost.
+    """
+    return expected_lift * business_impact * uncertainty / max(eval_cost, 0.01)
 
 
 @dataclass

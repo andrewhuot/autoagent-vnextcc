@@ -321,3 +321,106 @@ class SystemHealthResponse(BaseModel):
     dead_letter_count: int = Field(0, description="Dead-letter queue size")
     tasks_running: int = Field(0, description="Count of running background tasks")
     uptime_seconds: float = Field(0.0, description="Process uptime in seconds")
+
+
+# ---------------------------------------------------------------------------
+# Judge subsystem models
+# ---------------------------------------------------------------------------
+
+class JudgeVerdictResponse(BaseModel):
+    """Structured output from any judge in the grader stack."""
+    score: float = Field(..., ge=0.0, le=1.0, description="Judge score 0-1")
+    passed: bool = Field(..., description="Whether the case passed this judge")
+    judge_id: str = Field(..., description="Identifier of the judge that produced this verdict")
+    evidence_spans: list[str] = Field(default_factory=list, description="Quoted evidence from the conversation")
+    failure_reasons: list[str] = Field(default_factory=list, description="Reasons for failure if not passed")
+    confidence: float = Field(1.0, ge=0.0, le=1.0, description="Judge confidence 0-1")
+
+
+class JudgeCalibrationResponse(BaseModel):
+    """Judge calibration health metrics."""
+    agreement_rate: float = Field(0.0, description="Inter-judge agreement rate")
+    drift: float = Field(0.0, description="Score drift over time")
+    position_bias: float = Field(0.0, description="Positional bias measurement")
+    verbosity_bias: float = Field(0.0, description="Verbosity bias measurement")
+    disagreement_rate: float = Field(0.0, description="Rate of judge disagreements")
+
+
+# ---------------------------------------------------------------------------
+# 4-Layer Dimension models
+# ---------------------------------------------------------------------------
+
+class LayeredDimensionResponse(BaseModel):
+    """All 18 metrics grouped by the 4-layer hierarchy."""
+    # Hard Gates
+    safety_compliance: float = Field(0.0, description="G3 safety compliance")
+    state_integrity: float = Field(0.0, description="State integrity gate")
+    authorization_privacy: float = Field(0.0, description="Auth/privacy gate")
+    p0_regressions: float = Field(0.0, description="P0 regression count (lower is better)")
+    # Outcomes
+    task_success_rate: float = Field(0.0, description="G1 task success")
+    response_quality: float = Field(0.0, description="G2 response quality")
+    user_satisfaction_proxy: float = Field(0.0, description="G9 user satisfaction")
+    groundedness: float = Field(0.0, description="Groundedness score")
+    # SLOs
+    latency_p50: float = Field(0.0, description="G4a latency p50")
+    latency_p95: float = Field(0.0, description="G4b latency p95")
+    latency_p99: float = Field(0.0, description="G4c latency p99")
+    token_cost: float = Field(0.0, description="G5 token cost")
+    escalation_rate: float = Field(0.0, description="Escalation rate")
+    # Diagnostics
+    tool_correctness: float = Field(0.0, description="G6 tool correctness")
+    routing_accuracy: float = Field(0.0, description="G7 routing accuracy")
+    handoff_fidelity: float = Field(0.0, description="G8 handoff fidelity")
+    recovery_rate: float = Field(0.0, description="Recovery rate")
+    clarification_quality: float = Field(0.0, description="Clarification quality")
+    judge_disagreement_rate: float = Field(0.0, description="Judge disagreement rate")
+
+
+# ---------------------------------------------------------------------------
+# Archive models
+# ---------------------------------------------------------------------------
+
+class ArchiveEntryResponse(BaseModel):
+    """An entry in the elite Pareto archive with a named role."""
+    entry_id: str = Field(..., description="Unique archive entry ID")
+    role: str = Field(..., description="Archive role (quality_leader, cost_leader, etc.)")
+    candidate_id: str = Field("", description="Candidate variant ID")
+    experiment_id: str = Field("", description="Source experiment ID")
+    objective_vector: list[float] = Field(default_factory=list, description="Multi-objective vector")
+    config_hash: str = Field("", description="Config content hash")
+    scores: dict[str, float] = Field(default_factory=dict, description="Named scores")
+    created_at: str = Field("", description="ISO timestamp of creation")
+
+
+# ---------------------------------------------------------------------------
+# Training escalation models
+# ---------------------------------------------------------------------------
+
+class TrainingRecommendationResponse(BaseModel):
+    """Recommendation to escalate a failure family to training."""
+    failure_family: str = Field(..., description="Failure family identifier")
+    recommended_method: str = Field(..., description="Training method: SFT, DPO, or RFT")
+    confidence: float = Field(0.0, ge=0.0, le=1.0, description="Confidence in recommendation")
+    estimated_improvement: float = Field(0.0, description="Expected improvement fraction")
+    dataset_size: int = Field(0, description="Recommended dataset size")
+    reasoning: str = Field("", description="Explanation for the recommendation")
+
+
+# ---------------------------------------------------------------------------
+# Release manager models
+# ---------------------------------------------------------------------------
+
+class PromotionRecordResponse(BaseModel):
+    """Tracks a candidate through the promotion pipeline."""
+    record_id: str = Field(..., description="Unique promotion record ID")
+    candidate_version: str = Field(..., description="Candidate version being promoted")
+    current_stage: str = Field("gate_check", description="Current promotion stage")
+    stages_completed: list[str] = Field(default_factory=list, description="Stages already completed")
+    gate_results: dict[str, bool] = Field(default_factory=dict, description="Gate pass/fail results")
+    holdout_score: Optional[float] = Field(None, description="Holdout eval score if completed")
+    slice_results: dict[str, float] = Field(default_factory=dict, description="Per-slice scores")
+    canary_verdict: Optional[str] = Field(None, description="Canary stage verdict")
+    status: str = Field("in_progress", description="Overall promotion status")
+    started_at: str = Field("", description="ISO timestamp of start")
+    completed_at: Optional[str] = Field(None, description="ISO timestamp of completion")

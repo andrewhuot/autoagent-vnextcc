@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
+
+from core.types import MetricLayer, METRIC_REGISTRY, get_metrics_by_layer
 
 
 @dataclass
@@ -488,3 +491,271 @@ class EnhancedScorer:
             ))
 
         return per_agent
+
+
+# ---------------------------------------------------------------------------
+# Layered scoring (4-layer metric hierarchy)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class LayeredDimensionScores(DimensionScores):
+    """Extended dimension scores with 4-layer metric hierarchy.
+
+    Adds hard-gate, outcome, SLO, and diagnostic metrics on top of the
+    original 9-dimension DimensionScores.
+    """
+
+    state_integrity: float = 1.0
+    groundedness: float = 1.0
+    escalation_rate: float = 0.0
+    recovery_rate: float = 0.0
+    clarification_quality: float = 0.5
+    judge_disagreement_rate: float = 0.0
+    authorization_privacy: float = 1.0
+    p0_regressions: float = 0.0
+
+    # Map metric names to their layers for quick lookup
+    _LAYER_MAP: dict[str, MetricLayer] = field(default_factory=dict, repr=False)
+
+    def __post_init__(self) -> None:
+        # Build layer map from the canonical registry
+        if not self._LAYER_MAP:
+            for m in METRIC_REGISTRY:
+                self._LAYER_MAP[m.name] = m.layer
+
+    def get_layer(self, metric_name: str) -> MetricLayer:
+        """Return the MetricLayer for a given metric name.
+
+        Falls back to DIAGNOSTIC if the metric is not in the registry.
+        """
+        return self._LAYER_MAP.get(metric_name, MetricLayer.DIAGNOSTIC)
+
+    def get_by_layer(self, layer: MetricLayer) -> dict[str, float]:
+        """Return all metric values for a given layer."""
+        layer_metrics = get_metrics_by_layer(layer)
+        result: dict[str, float] = {}
+        for m in layer_metrics:
+            value = getattr(self, m.name, None)
+            if value is not None:
+                result[m.name] = value
+        return result
+
+    def check_hard_gates(self) -> tuple[bool, list[str]]:
+        """Check all hard-gate metrics against their thresholds.
+
+        Returns:
+            (passed, violations) where violations lists each failing gate.
+        """
+        violations: list[str] = []
+        gate_metrics = get_metrics_by_layer(MetricLayer.HARD_GATE)
+
+        for m in gate_metrics:
+            value = getattr(self, m.name, None)
+            if value is None or m.threshold is None:
+                continue
+            if m.direction == "maximize" and value < m.threshold:
+                violations.append(
+                    f"{m.name}: {value:.4f} < threshold {m.threshold}"
+                )
+            elif m.direction == "minimize" and value > m.threshold:
+                violations.append(
+                    f"{m.name}: {value:.4f} > threshold {m.threshold}"
+                )
+
+        return (len(violations) == 0, violations)
+
+    def to_dict(self) -> dict[str, float]:
+        """Serialize all dimensions including layered extensions."""
+        base = super().to_dict()
+        base.update({
+            "state_integrity": self.state_integrity,
+            "groundedness": self.groundedness,
+            "escalation_rate": self.escalation_rate,
+            "recovery_rate": self.recovery_rate,
+            "clarification_quality": self.clarification_quality,
+            "judge_disagreement_rate": self.judge_disagreement_rate,
+            "authorization_privacy": self.authorization_privacy,
+            "p0_regressions": self.p0_regressions,
+        })
+        return base
+
+
+class LayeredScorer:
+    """Scorer that wraps EnhancedScorer and adds 4-layer metric hierarchy.
+
+    Layer 1 (Hard Gates): Binary pass/fail — any failure vetoes promotion.
+    Layer 2 (Outcomes): North-star metrics for weighted optimization.
+    Layer 3 (SLOs): Operating thresholds that trigger alerts.
+    Layer 4 (Diagnostics): Never optimised directly, used for root-cause.
+    """
+
+    # Default SLO thresholds (can be overridden via slo_config)
+    DEFAULT_SLOS: dict[str, float] = {
+        "latency_p50": 2000.0,
+        "latency_p95": 5000.0,
+        "latency_p99": 10000.0,
+        "escalation_rate": 0.2,
+    }
+
+    def __init__(self, mode: str = "constrained") -> None:
+        self._enhanced = EnhancedScorer(mode=mode)
+
+    def score(self, results: list[EvalResult]) -> CompositeScore:
+        """Score results using EnhancedScorer, then attach layered dimensions."""
+        composite = self._enhanced.score(results)
+
+        # Build layered dimensions from the base dimensions
+        base_dims = composite.dimensions or DimensionScores()
+        layered = LayeredDimensionScores(
+            # Inherit all base dimension values
+            task_success_rate=base_dims.task_success_rate,
+            response_quality=base_dims.response_quality,
+            safety_compliance=base_dims.safety_compliance,
+            latency_p50=base_dims.latency_p50,
+            latency_p95=base_dims.latency_p95,
+            latency_p99=base_dims.latency_p99,
+            token_cost=base_dims.token_cost,
+            tool_correctness=base_dims.tool_correctness,
+            routing_accuracy=base_dims.routing_accuracy,
+            handoff_fidelity=base_dims.handoff_fidelity,
+            user_satisfaction_proxy=base_dims.user_satisfaction_proxy,
+            # Layered extensions — compute from results
+            state_integrity=self._compute_state_integrity(results),
+            groundedness=self._compute_groundedness(results),
+            escalation_rate=self._compute_escalation_rate(results),
+            recovery_rate=self._compute_recovery_rate(results),
+            p0_regressions=self._compute_p0_regressions(results),
+        )
+
+        composite.dimensions = layered
+        return composite
+
+    def check_gates(
+        self, dimensions: LayeredDimensionScores
+    ) -> tuple[bool, list[str]]:
+        """Check hard-gate layer metrics. Delegates to dimensions."""
+        return dimensions.check_hard_gates()
+
+    def compute_outcome_score(
+        self, dimensions: LayeredDimensionScores
+    ) -> float:
+        """Compute weighted Layer 2 (outcome) score.
+
+        Uses weights from the METRIC_REGISTRY for outcome-layer metrics.
+        """
+        outcome_metrics = get_metrics_by_layer(MetricLayer.OUTCOME)
+        total_weight = sum(m.weight for m in outcome_metrics)
+        if total_weight == 0:
+            return 0.0
+
+        weighted_sum = 0.0
+        for m in outcome_metrics:
+            value = getattr(dimensions, m.name, 0.0)
+            weighted_sum += value * m.weight
+
+        return round(weighted_sum / total_weight, 4)
+
+    def check_slos(
+        self,
+        dimensions: LayeredDimensionScores,
+        slo_config: dict[str, float] | None = None,
+    ) -> tuple[bool, list[str]]:
+        """Check SLO-layer metrics against thresholds.
+
+        Args:
+            dimensions: The layered dimension scores to check.
+            slo_config: Optional override thresholds. Keys are metric names,
+                values are threshold values. Defaults to DEFAULT_SLOS.
+
+        Returns:
+            (all_pass, violations) list.
+        """
+        thresholds = slo_config if slo_config is not None else self.DEFAULT_SLOS
+        violations: list[str] = []
+        slo_metrics = get_metrics_by_layer(MetricLayer.SLO)
+
+        for m in slo_metrics:
+            if m.name not in thresholds:
+                continue
+            threshold = thresholds[m.name]
+            value = getattr(dimensions, m.name, None)
+            if value is None:
+                continue
+            if m.direction == "minimize" and value > threshold:
+                violations.append(
+                    f"SLO breach: {m.name}={value:.4f} > {threshold}"
+                )
+            elif m.direction == "maximize" and value < threshold:
+                violations.append(
+                    f"SLO breach: {m.name}={value:.4f} < {threshold}"
+                )
+
+        return (len(violations) == 0, violations)
+
+    # ------------------------------------------------------------------
+    # Internal metric computation from results
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_state_integrity(results: list[EvalResult]) -> float:
+        """State integrity: fraction of results with no state corruption.
+
+        Uses handoff_context_preserved as a proxy — if context survived
+        handoff, state integrity is maintained.
+        """
+        if not results:
+            return 1.0
+        return sum(
+            1 for r in results if r.handoff_context_preserved
+        ) / len(results)
+
+    @staticmethod
+    def _compute_groundedness(results: list[EvalResult]) -> float:
+        """Groundedness: proxy from quality scores and safety compliance.
+
+        Higher quality + safety suggests more grounded responses.
+        """
+        if not results:
+            return 1.0
+        return sum(
+            min(1.0, r.quality_score * 0.7 + (1.0 if r.safety_passed else 0.0) * 0.3)
+            for r in results
+        ) / len(results)
+
+    @staticmethod
+    def _compute_escalation_rate(results: list[EvalResult]) -> float:
+        """Escalation rate: fraction of cases where routing was incorrect.
+
+        Incorrect routing is a proxy for inappropriate escalation.
+        """
+        if not results:
+            return 0.0
+        return sum(
+            1 for r in results if not r.routing_correct
+        ) / len(results)
+
+    @staticmethod
+    def _compute_recovery_rate(results: list[EvalResult]) -> float:
+        """Recovery rate: fraction of initially-failed cases that still passed.
+
+        Uses quality_score < 0.5 as "initially struggling" and passed=True
+        as "recovered".
+        """
+        if not results:
+            return 0.0
+        struggling = [r for r in results if r.quality_score < 0.5]
+        if not struggling:
+            return 1.0  # nothing to recover from
+        recovered = sum(1 for r in struggling if r.passed)
+        return recovered / len(struggling)
+
+    @staticmethod
+    def _compute_p0_regressions(results: list[EvalResult]) -> float:
+        """P0 regression count: number of regression-category failures."""
+        if not results:
+            return 0.0
+        regression_failures = sum(
+            1 for r in results
+            if r.category == "regression" and not r.passed
+        )
+        return float(regression_failures)

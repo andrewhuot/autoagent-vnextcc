@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { ExperimentCardComponent } from '../components/ExperimentCard';
 import { ParetoFrontierView } from '../components/ParetoFrontierView';
-import { useExperiments, useParetoFrontier } from '../lib/api';
+import { ArchiveView } from '../components/ArchiveView';
+import { JudgeCalibrationView } from '../components/JudgeCalibrationView';
+import { useExperiments, useParetoFrontier, useArchiveEntries, useJudgeCalibration } from '../lib/api';
 import { classNames } from '../lib/utils';
 
 type FilterTab = 'all' | 'pending' | 'accepted' | 'rejected';
@@ -20,6 +22,8 @@ export function Experiments() {
   const statusParam = activeTab === 'all' ? undefined : activeTab;
   const { data: experiments = [], isLoading, isError } = useExperiments(statusParam);
   const { data: frontier } = useParetoFrontier();
+  const { data: archiveEntries = [] } = useArchiveEntries();
+  const { data: calibration } = useJudgeCalibration();
 
   return (
     <div className="space-y-6">
@@ -27,6 +31,20 @@ export function Experiments() {
         title="Experiments"
         description="Reviewable experiment cards with hypothesis, diff, and results"
       />
+
+      {/* Archive section */}
+      {archiveEntries.length > 0 && (
+        <section className="rounded-lg border border-gray-200 bg-white p-5">
+          <details>
+            <summary className="cursor-pointer text-sm font-semibold text-gray-900">
+              Elite Archive ({archiveEntries.length} entries)
+            </summary>
+            <div className="mt-4">
+              <ArchiveView entries={archiveEntries} />
+            </div>
+          </details>
+        </section>
+      )}
 
       {frontier && frontier.candidates.length > 0 && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">
@@ -40,6 +58,18 @@ export function Experiments() {
           </details>
         </section>
       )}
+
+      {/* Judge calibration section */}
+      <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <details>
+          <summary className="cursor-pointer text-sm font-semibold text-gray-900">
+            Judge Calibration
+          </summary>
+          <div className="mt-4">
+            <JudgeCalibrationView calibration={calibration} />
+          </div>
+        </details>
+      </section>
 
       {/* Filter tabs */}
       <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
@@ -62,7 +92,7 @@ export function Experiments() {
       {/* Loading / error states */}
       {isLoading && (
         <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-          Loading experiments…
+          Loading experiments...
         </div>
       )}
       {isError && (

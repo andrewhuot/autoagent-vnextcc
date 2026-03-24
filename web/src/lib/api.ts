@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type {
+  ArchiveEntry,
   CanaryStatus,
   ConfigDiff,
   ConfigShow,
@@ -13,6 +14,7 @@ import type {
   EvalResult,
   EvalRun,
   ExperimentCard,
+  JudgeCalibration,
   ParetoFrontier,
   HealthReport,
   LoopStatus,
@@ -882,5 +884,28 @@ export function useParetoFrontier() {
     queryKey: ['pareto', 'frontier'],
     queryFn: () => fetchApi<ParetoFrontier>('/experiments/pareto'),
     refetchInterval: 15000,
+  });
+}
+
+// Archive
+
+export function useArchiveEntries() {
+  return useQuery<ArchiveEntry[]>({
+    queryKey: ['experiments', 'archive'],
+    queryFn: async () => {
+      const payload = await fetchApi<{ entries: ArchiveEntry[] }>('/experiments/archive');
+      return payload.entries ?? [];
+    },
+    refetchInterval: 15000,
+  });
+}
+
+// Judge Calibration
+
+export function useJudgeCalibration() {
+  return useQuery<JudgeCalibration>({
+    queryKey: ['experiments', 'judge-calibration'],
+    queryFn: () => fetchApi<JudgeCalibration>('/experiments/judge-calibration'),
+    refetchInterval: 30000,
   });
 }

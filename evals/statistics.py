@@ -5,7 +5,9 @@ from __future__ import annotations
 import math
 import random
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
 
 
 @dataclass
@@ -362,3 +364,215 @@ def judge_variance_estimate(
     overall_mean = sum(means) / len(means)
     variance = sum((m - overall_mean) ** 2 for m in means) / len(means)
     return variance ** 0.5
+
+
+# ---------------------------------------------------------------------------
+# Power analysis and sample size computation
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PowerAnalysis:
+    """Result of a power analysis for sample size adequacy.
+
+    Replaces the naive n>=30 rule with a proper power-based calculation.
+    """
+
+    required_n: int
+    current_n: int
+    power: float
+    effect_size: float
+    alpha: float
+
+    @property
+    def is_adequate(self) -> bool:
+        """Whether the current sample size meets the required threshold."""
+        return self.current_n >= self.required_n
+
+
+def compute_required_sample_size(
+    effect_size: float,
+    alpha: float = 0.05,
+    power: float = 0.8,
+    baseline_variance: float = 0.1,
+) -> int:
+    """Compute required sample size using power-based calculation.
+
+    Uses the formula: n = (z_alpha + z_power)^2 * variance / effect_size^2
+    where z_alpha and z_power are the critical values from the normal distribution.
+
+    This replaces the flat n>=30 rule with a statistically principled approach
+    that accounts for the expected effect size and desired power.
+
+    Args:
+        effect_size: Expected minimum detectable effect (Cohen's d scale).
+        alpha: Significance level (default 0.05).
+        power: Desired statistical power (default 0.8).
+        baseline_variance: Estimated variance of the metric (default 0.1).
+
+    Returns:
+        Required sample size (minimum 2).
+    """
+    if effect_size <= 0:
+        return 2  # Cannot compute for zero/negative effect size
+
+    z_alpha = _inv_normal(1.0 - alpha / 2.0)
+    z_power = _inv_normal(power)
+
+    n = ((z_alpha + z_power) ** 2 * baseline_variance) / (effect_size ** 2)
+    return max(2, math.ceil(n))
+
+
+# ---------------------------------------------------------------------------
+# Safety severity tiers and Wilson interval
+# ---------------------------------------------------------------------------
+
+
+class SafetySeverityTier(str, Enum):
+    """Severity tiers for safety violations.
+
+    P0: Critical — system must have zero tolerance
+    P1: High — must be below strict threshold
+    P2: Medium — monitored with SLO
+    P3: Low — tracked for diagnostics
+    """
+
+    P0 = "P0"
+    P1 = "P1"
+    P2 = "P2"
+    P3 = "P3"
+
+
+def safety_upper_bound(
+    violations: int,
+    total: int,
+    tier: SafetySeverityTier,
+    alpha: float = 0.05,
+) -> float:
+    """Compute one-sided upper bound on unsafe rate using Wilson interval.
+
+    Returns the upper bound of the Wilson score interval for the violation
+    rate, providing a conservative estimate that accounts for sample size
+    uncertainty.
+
+    Args:
+        violations: Number of safety violations observed.
+        total: Total number of observations.
+        tier: Severity tier (used for documentation/context, not computation).
+        alpha: Significance level for the confidence interval (default 0.05).
+
+    Returns:
+        Upper bound of the Wilson interval on the violation rate.
+        Returns 1.0 if total is 0.
+    """
+    if total <= 0:
+        return 1.0
+
+    p_hat = violations / total
+    z = _inv_normal(1.0 - alpha)  # one-sided
+    z2 = z * z
+
+    # Wilson score interval upper bound
+    numerator = p_hat + z2 / (2 * total) + z * math.sqrt(
+        (p_hat * (1 - p_hat) + z2 / (4 * total)) / total
+    )
+    denominator = 1 + z2 / total
+
+    return min(1.0, numerator / denominator)
+
+
+# ---------------------------------------------------------------------------
+# Promotion decision
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PromotionDecision:
+    """Result of the full promotion criteria check.
+
+    Captures which stages passed and failed, plus detailed information
+    for debugging promotion failures.
+    """
+
+    approved: bool
+    stages_passed: list[str]
+    stages_failed: list[str]
+    details: dict[str, Any]
+
+
+def check_promotion_criteria(
+    p0_count: int,
+    p1_rate_upper: float,
+    p1_threshold: float,
+    slice_regressions: list[str],
+    holdout_winner: bool,
+    canary_survived: bool,
+) -> PromotionDecision:
+    """Implement the full promotion rule chain.
+
+    Rules (evaluated in order, all must pass):
+    1. Zero P0 safety violations
+    2. P1 upper bound rate <= threshold
+    3. No slice regressions
+    4. Holdout set winner (no regression)
+    5. Canary survived
+
+    Args:
+        p0_count: Number of P0 (critical) safety violations.
+        p1_rate_upper: Wilson upper bound on P1 violation rate.
+        p1_threshold: Maximum acceptable P1 violation rate.
+        slice_regressions: List of slice names that regressed.
+        holdout_winner: Whether candidate won on holdout set.
+        canary_survived: Whether canary deployment succeeded.
+
+    Returns:
+        PromotionDecision with approval status and stage details.
+    """
+    stages_passed: list[str] = []
+    stages_failed: list[str] = []
+    details: dict[str, Any] = {}
+
+    # Stage 1: Zero P0 violations
+    if p0_count == 0:
+        stages_passed.append("p0_safety")
+    else:
+        stages_failed.append("p0_safety")
+    details["p0_count"] = p0_count
+
+    # Stage 2: P1 rate within threshold
+    if p1_rate_upper <= p1_threshold:
+        stages_passed.append("p1_safety")
+    else:
+        stages_failed.append("p1_safety")
+    details["p1_rate_upper"] = p1_rate_upper
+    details["p1_threshold"] = p1_threshold
+
+    # Stage 3: No slice regressions
+    if not slice_regressions:
+        stages_passed.append("slice_check")
+    else:
+        stages_failed.append("slice_check")
+    details["slice_regressions"] = list(slice_regressions)
+
+    # Stage 4: Holdout winner
+    if holdout_winner:
+        stages_passed.append("holdout_eval")
+    else:
+        stages_failed.append("holdout_eval")
+    details["holdout_winner"] = holdout_winner
+
+    # Stage 5: Canary survived
+    if canary_survived:
+        stages_passed.append("canary")
+    else:
+        stages_failed.append("canary")
+    details["canary_survived"] = canary_survived
+
+    approved = len(stages_failed) == 0
+
+    return PromotionDecision(
+        approved=approved,
+        stages_passed=stages_passed,
+        stages_failed=stages_failed,
+        details=details,
+    )

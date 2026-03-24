@@ -1,4 +1,6 @@
-import type { ExperimentCard as ExperimentCardType } from '../lib/types';
+import { useState } from 'react';
+import { ChevronRight } from 'lucide-react';
+import type { ExperimentCard as ExperimentCardType, ArchiveRole } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
 import { classNames } from '../lib/utils';
 
@@ -44,7 +46,63 @@ function formatAge(epochSeconds: number): string {
   return `${Math.floor(delta / 86400)}d ago`;
 }
 
+// ---------------------------------------------------------------------------
+// Archive role badge
+// ---------------------------------------------------------------------------
+
+const ROLE_COLORS: Record<ArchiveRole, string> = {
+  quality_leader: 'bg-blue-50 text-blue-700',
+  cost_leader: 'bg-green-50 text-green-700',
+  latency_leader: 'bg-purple-50 text-purple-700',
+  safety_leader: 'bg-red-50 text-red-700',
+  cluster_specialist: 'bg-gray-100 text-gray-700',
+  incumbent: 'bg-amber-50 text-amber-700',
+};
+
+const ROLE_LABELS: Record<ArchiveRole, string> = {
+  quality_leader: 'Quality Leader',
+  cost_leader: 'Cost Leader',
+  latency_leader: 'Latency Leader',
+  safety_leader: 'Safety Leader',
+  cluster_specialist: 'Specialist',
+  incumbent: 'Incumbent',
+};
+
+function ArchiveRoleBadge({ role }: { role: ArchiveRole }) {
+  return (
+    <span className={classNames('rounded-md px-2 py-0.5 text-[11px] font-medium', ROLE_COLORS[role])}>
+      {ROLE_LABELS[role]}
+    </span>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Extended metadata type for evidence / failures / archive
+// ---------------------------------------------------------------------------
+
+interface ExperimentMetadata {
+  evidence_spans?: string[];
+  failure_reasons?: string[];
+  archive_role?: ArchiveRole;
+}
+
+function getMetadata(experiment: ExperimentCardType): ExperimentMetadata {
+  const raw = experiment as Record<string, unknown>;
+  return {
+    evidence_spans: Array.isArray(raw.evidence_spans) ? raw.evidence_spans as string[] : undefined,
+    failure_reasons: Array.isArray(raw.failure_reasons) ? raw.failure_reasons as string[] : undefined,
+    archive_role: typeof raw.archive_role === 'string' ? raw.archive_role as ArchiveRole : undefined,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
 export function ExperimentCardComponent({ experiment }: ExperimentCardProps) {
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const meta = getMetadata(experiment);
+
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 transition-colors hover:border-gray-300">
       {/* Header */}
@@ -56,6 +114,7 @@ export function ExperimentCardComponent({ experiment }: ExperimentCardProps) {
               variant={statusVariant(experiment.status)}
               label={experiment.status}
             />
+            {meta.archive_role && <ArchiveRoleBadge role={meta.archive_role} />}
           </div>
           <p className="mt-2 text-sm font-medium text-gray-900">{experiment.hypothesis}</p>
         </div>
@@ -79,6 +138,20 @@ export function ExperimentCardComponent({ experiment }: ExperimentCardProps) {
         ))}
         <span className="ml-auto text-[11px] text-gray-400">{formatAge(experiment.created_at)}</span>
       </div>
+
+      {/* Failure reasons */}
+      {meta.failure_reasons && meta.failure_reasons.length > 0 && (
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {meta.failure_reasons.map((reason, idx) => (
+            <span
+              key={idx}
+              className="rounded-md bg-red-50 px-2 py-0.5 text-[11px] font-medium text-red-700"
+            >
+              {reason}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Score comparison */}
       <div className="mt-4 space-y-2">
@@ -131,6 +204,36 @@ export function ExperimentCardComponent({ experiment }: ExperimentCardProps) {
           {experiment.deployment_policy}
         </span>
       </div>
+
+      {/* Evidence spans (collapsible) */}
+      {meta.evidence_spans && meta.evidence_spans.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3">
+          <button
+            onClick={() => setEvidenceOpen(!evidenceOpen)}
+            className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-gray-500 hover:text-gray-700"
+          >
+            <ChevronRight
+              className={classNames(
+                'h-3 w-3 transition-transform',
+                evidenceOpen ? 'rotate-90' : ''
+              )}
+            />
+            Evidence ({meta.evidence_spans.length})
+          </button>
+          {evidenceOpen && (
+            <div className="mt-2 space-y-1.5">
+              {meta.evidence_spans.map((span, idx) => (
+                <p
+                  key={idx}
+                  className="rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 font-mono leading-relaxed"
+                >
+                  {span}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

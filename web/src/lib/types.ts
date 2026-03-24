@@ -344,3 +344,99 @@ export interface ExperimentCard {
   created_at: number;
   pareto_position?: 'frontier' | 'dominated' | 'infeasible';
 }
+
+// ---------------------------------------------------------------------------
+// 4-Layer Metric Hierarchy
+// ---------------------------------------------------------------------------
+
+export type MetricLayer = 'hard_gate' | 'outcome' | 'slo' | 'diagnostic';
+
+export interface LayeredMetric {
+  name: string;
+  layer: MetricLayer;
+  direction: 'maximize' | 'minimize';
+  threshold?: number;
+  weight?: number;
+}
+
+export interface LayeredDimensionScores extends DimensionScores {
+  state_integrity: number;
+  groundedness: number;
+  escalation_rate: number;
+  recovery_rate: number;
+  clarification_quality: number;
+  judge_disagreement_rate: number;
+  authorization_privacy: number;
+  p0_regressions: number;
+}
+
+// ---------------------------------------------------------------------------
+// Judge Subsystem
+// ---------------------------------------------------------------------------
+
+export interface JudgeVerdict {
+  score: number;
+  passed: boolean;
+  judge_id: string;
+  evidence_spans: string[];
+  failure_reasons: string[];
+  confidence: number;
+}
+
+export interface JudgeCalibration {
+  agreement_rate: number;
+  drift: number;
+  position_bias: number;
+  verbosity_bias: number;
+  disagreement_rate: number;
+}
+
+// ---------------------------------------------------------------------------
+// Archive Roles
+// ---------------------------------------------------------------------------
+
+export type ArchiveRole = 'quality_leader' | 'cost_leader' | 'latency_leader' | 'safety_leader' | 'cluster_specialist' | 'incumbent';
+
+export interface ArchiveEntry {
+  entry_id: string;
+  role: ArchiveRole;
+  candidate_id: string;
+  experiment_id: string;
+  objective_vector: number[];
+  config_hash: string;
+  scores: Record<string, number>;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Training Escalation
+// ---------------------------------------------------------------------------
+
+export interface TrainingRecommendation {
+  failure_family: string;
+  recommended_method: 'SFT' | 'DPO' | 'RFT';
+  confidence: number;
+  estimated_improvement: number;
+  dataset_size: number;
+  reasoning: string;
+}
+
+// ---------------------------------------------------------------------------
+// Release Manager
+// ---------------------------------------------------------------------------
+
+export type PromotionStage = 'gate_check' | 'holdout_eval' | 'slice_check' | 'canary' | 'released' | 'rolled_back';
+
+export interface PromotionRecord {
+  record_id: string;
+  candidate_version: string;
+  current_stage: PromotionStage;
+  stages_completed: PromotionStage[];
+  gate_results: Record<string, boolean>;
+  holdout_score?: number;
+  slice_results: Record<string, number>;
+  canary_verdict?: string;
+  status: string;
+  started_at: string;
+  completed_at?: string;
+}

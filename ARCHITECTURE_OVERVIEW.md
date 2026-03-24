@@ -229,6 +229,8 @@ POST   /api/opportunities/{id}/status — Update opportunity status
 GET    /api/experiments         — Experiment cards
 GET    /api/experiments/{id}    — Single experiment card
 GET    /api/experiments/stats   — Experiment counts by status
+GET    /api/experiments/archive — Elite Pareto archive with named roles
+GET    /api/experiments/judge-calibration — Judge calibration metrics
 ```
 
 ---
@@ -278,15 +280,16 @@ memory_policy:
 
 | Metric | Value |
 |--------|-------|
-| Python backend | ~14,000 lines |
-| React frontend | ~6,000 lines |
-| Test suite | 157 tests passing |
-| New Python modules | 12 (mutations, experiments, search, traces, opportunities, data_engine, replay, side_effects, mutations_google, mutations_topology, scoring_v2, statistics_v2) |
-| Refactored modules | 5 (gates, scorer, statistics, schema, server) |
-| Reusable React components | 24 |
+| Python backend | ~21,000 lines |
+| React frontend | ~8,000 lines |
+| Test suite | 551 tests passing |
+| Core domain objects | 10 (AgentGraphVersion, SkillVersion, ToolContractVersion, PolicyPackVersion, EnvironmentSnapshot, GraderBundle, EvalCase, CandidateVariant, ArchiveEntry, HandoffArtifact) |
+| Judge subsystem | 6 modules (deterministic, rule_based, llm_judge, audit_judge, calibration, grader_stack) |
+| Python packages | 7 (agent, api, core, deployer, evals, judges, optimizer) |
+| Reusable React components | 28 |
 | Frontend pages | 12 |
-| API endpoints | 28 |
-| New test files | 9 |
+| API endpoints | 30 |
+| Test files | 27 |
 
 ---
 
@@ -372,6 +375,98 @@ optimizer:
 ```
 
 All fields have sensible defaults. The `simple` strategy with defaults is equivalent to v3 behavior.
+
+---
+
+## Researcher-Advised Refactor (v5)
+
+The v5 refactor transforms AutoAgent from a prompt optimizer into **CI/CD for agents**, based on AI researcher feedback. The moat: "we can faithfully replay, grade, and safely improve real enterprise agent workflows."
+
+### New First-Class Domain Objects (`core/`)
+
+| Object | Purpose |
+|--------|---------|
+| `AgentGraphVersion` | Framework-neutral IR for agent systems (typed nodes + edges) |
+| `SkillVersion` | Versioned instruction/script/asset bundles |
+| `ToolContractVersion` | Tool schema + replay mode + validator + sandbox policy |
+| `PolicyPackVersion` | Safety rules, guardrail thresholds, authorization policies |
+| `EnvironmentSnapshot` | Captured external system state for end-state evaluation |
+| `GraderBundle` | Ordered grader stack per eval case |
+| `EvalCase` | Enriched eval case with end-state + grader bundle + diagnostics |
+| `CandidateVariant` | Versioned diff against an AgentGraphVersion |
+| `ArchiveEntry` | Pareto archive entry with named role |
+| `HandoffArtifact` | Structured handoff with goal, constraints, evidence refs |
+
+### 4-Layer Metric Hierarchy (replaces flat 9-dimension)
+
+| Layer | Metrics | Role |
+|-------|---------|------|
+| **Hard Gates** | safety_compliance, authorization_privacy, state_integrity, p0_regressions | Must pass — binary |
+| **North-Star Outcomes** | task_success_rate, groundedness, user_satisfaction_proxy | Optimized |
+| **Operating SLOs** | latency (p50/p95/p99), token_cost, escalation_rate | Constrained |
+| **Diagnostics** | tool_correctness, routing_accuracy, handoff_fidelity, recovery_rate, clarification_quality, judge_disagreement_rate | Diagnosis only |
+
+The optimizer searches Layer 2 (outcomes) within Layer 1 (gates), subject to Layer 3 (SLOs). Layer 4 is never optimized directly.
+
+### Judge Subsystem (`judges/`)
+
+Replaces the utility-function LLM judge with a full grader stack:
+
+1. **Deterministic** — regex, state checks, business invariants (confidence=1.0)
+2. **Rule-based** — format, length, required fields (confidence=1.0)
+3. **LLM Judge** — frozen primary judge with evidence spans
+4. **Audit Judge** — cross-family judge for promotions (different model family than proposer)
+5. **Calibration Suite** — agreement rate, drift, position bias, verbosity bias, disagreement rate
+
+Every judge returns `JudgeVerdict` with score, passed, evidence_spans, failure_reasons, confidence.
+
+### Eval Compiler Enhancements (`evals/data_engine.py`)
+
+- PII scrubbing before storage
+- Near-duplicate detection and dedup
+- Business impact scoring
+- Root-cause tagging (auto-categorize failure type)
+- Negative control generation
+- Five eval suite types: contract_regression, capability, adversarial, discovery, judge_calibration
+
+### 5-Mode Replay Matrix (replaces 4-class side effects)
+
+| Mode | Behavior |
+|------|----------|
+| `deterministic_stub` | Cached response (pure tools) |
+| `recorded_stub_with_freshness` | Cached if fresh, else live |
+| `live_sandbox_clone` | Always live in sandbox |
+| `simulator` | Cached with simulation flag |
+| `forbidden` | Skip, return error marker |
+
+Plus `EnvironmentSnapshot` capture/restore for end-state evaluation.
+
+### Elite Pareto Archive with Named Roles
+
+| Role | Selection Criterion |
+|------|-------------------|
+| `quality_leader` | Best on task success |
+| `cost_leader` | Lowest token cost |
+| `latency_leader` | Lowest latency |
+| `safety_leader` | Best safety score |
+| `cluster_specialist` | Non-dominated on a sub-population |
+| `incumbent` | Currently deployed |
+
+New candidates can branch from any archive entry, not just incumbent.
+
+### Training Escalation (`optimizer/training_escalation.py`)
+
+When a failure family is stable and high-volume with low prompt-fix rate, recommends SFT/DPO/RFT instead of endless prompt patching.
+
+### Release Manager (`deployer/release_manager.py`)
+
+Full promotion pipeline: hard gates → hidden holdout → slice checks → canary → rollback-ready release. Each stage produces an auditable `PromotionRecord`.
+
+### Statistical Refinements
+
+- Power-based sample adequacy (replaces n≥30 rule)
+- Safety severity tiers (P0-P3) with one-sided upper bounds
+- Full promotion criteria chain: zero P0 on red-team → P1 upper bound below threshold → no slice regressions → holdout winner → canary survives
 
 ---
 

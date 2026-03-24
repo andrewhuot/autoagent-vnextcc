@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
+from core.types import ArchiveEntry, ArchiveRole
+
 
 class ObjectiveDirection(str, Enum):
     """Direction for an optimization objective."""
@@ -369,3 +371,151 @@ class ConstrainedParetoArchive:
         if not utility:
             return float("inf")
         return math.sqrt(sum((1.0 - v) ** 2 for v in utility.values()))
+
+
+# ---------------------------------------------------------------------------
+# Elite Pareto Archive (role-aware extension)
+# ---------------------------------------------------------------------------
+
+
+class EliteParetoArchive(ConstrainedParetoArchive):
+    """Pareto archive with named roles for non-dominated candidates.
+
+    Extends ConstrainedParetoArchive to assign semantic roles (quality_leader,
+    cost_leader, etc.) to frontier members and support branching from any
+    non-dominated entry.
+    """
+
+    def __init__(
+        self,
+        objectives: dict[str, ObjectiveDirection],
+        constraints: list[str] | None = None,
+        directions: dict[str, ObjectiveDirection] | None = None,
+    ) -> None:
+        super().__init__(objective_directions=directions or objectives)
+        self._constraints = list(constraints or [])
+        self.entries: dict[str, ArchiveEntry] = {}
+
+    def assign_roles(self) -> None:
+        """Assign an ArchiveRole to each non-dominated candidate.
+
+        Role assignment priority:
+        - quality_leader: best on first objective (task success)
+        - cost_leader: best on cost dimension (lowest)
+        - latency_leader: best on latency dimension (lowest)
+        - safety_leader: best on safety dimension (highest)
+        - incumbent: currently deployed config (marked via metadata)
+        - cluster_specialist: any other non-dominated candidate
+        """
+        front = self.frontier()
+        if not front:
+            return
+
+        obj_names = list(self.objective_directions.keys())
+
+        # Track which candidate_ids have been assigned a leader role
+        assigned: set[str] = set()
+
+        # Quality leader: best on first objective
+        if obj_names:
+            first_obj = obj_names[0]
+            first_dir = self.objective_directions[first_obj]
+            best = max(front, key=lambda c: c["objectives"][first_obj])
+            if first_dir == ObjectiveDirection.MINIMIZE:
+                best = min(front, key=lambda c: c["objectives"][first_obj])
+            cid = best["candidate_id"]
+            if cid in self.entries:
+                self.entries[cid].role = ArchiveRole.quality_leader
+                assigned.add(cid)
+
+        # Cost leader: lowest cost
+        if "cost" in self.objective_directions:
+            best = min(front, key=lambda c: c["objectives"]["cost"])
+            cid = best["candidate_id"]
+            if cid in self.entries and cid not in assigned:
+                self.entries[cid].role = ArchiveRole.cost_leader
+                assigned.add(cid)
+
+        # Latency leader: lowest latency
+        if "latency" in self.objective_directions:
+            best = min(front, key=lambda c: c["objectives"]["latency"])
+            cid = best["candidate_id"]
+            if cid in self.entries and cid not in assigned:
+                self.entries[cid].role = ArchiveRole.latency_leader
+                assigned.add(cid)
+
+        # Safety leader: highest safety
+        if "safety" in self.objective_directions:
+            best = max(front, key=lambda c: c["objectives"]["safety"])
+            cid = best["candidate_id"]
+            if cid in self.entries and cid not in assigned:
+                self.entries[cid].role = ArchiveRole.safety_leader
+                assigned.add(cid)
+
+        # Incumbent: marked via metadata
+        for c in front:
+            cid = c["candidate_id"]
+            if cid in self.entries and cid not in assigned:
+                if self.entries[cid].metadata.get("is_incumbent", False):
+                    self.entries[cid].role = ArchiveRole.incumbent
+                    assigned.add(cid)
+
+        # Cluster specialist: all remaining non-dominated entries
+        for c in front:
+            cid = c["candidate_id"]
+            if cid in self.entries and cid not in assigned:
+                self.entries[cid].role = ArchiveRole.cluster_specialist
+
+    def get_by_role(self, role: ArchiveRole) -> list[ArchiveEntry]:
+        """Return all entries with the given role."""
+        return [e for e in self.entries.values() if e.role == role]
+
+    def add_entry(self, entry: ArchiveEntry) -> bool:
+        """Add an ArchiveEntry to the archive if it is not dominated.
+
+        Returns True if the entry was added to the feasible set and is
+        non-dominated.
+        """
+        objectives = {
+            k: v for k, v in zip(self.objective_directions.keys(), entry.objective_vector)
+        }
+        candidate = self.add_candidate(
+            candidate_id=entry.entry_id,
+            objectives=objectives,
+            constraints_passed=True,
+            metadata=entry.metadata,
+        )
+        self.entries[entry.entry_id] = entry
+
+        # Check if entry is non-dominated
+        front = self.frontier()
+        is_on_front = any(c["candidate_id"] == entry.entry_id for c in front)
+
+        if is_on_front:
+            self.assign_roles()
+
+        return is_on_front
+
+    def get_branch_candidates(self) -> list[ArchiveEntry]:
+        """Return all non-dominated entries that new candidates can branch from.
+
+        Any non-dominated entry is a valid branch point, not just the incumbent.
+        """
+        front = self.frontier()
+        front_ids = {c["candidate_id"] for c in front}
+        return [
+            entry for eid, entry in self.entries.items()
+            if eid in front_ids
+        ]
+
+    def to_dict(self) -> dict:
+        """Serialize archive state including entries and roles."""
+        base = self.as_dict()
+        base["entries"] = {
+            eid: entry.to_dict() for eid, entry in self.entries.items()
+        }
+        base["roles"] = {
+            role.value: [e.entry_id for e in self.get_by_role(role)]
+            for role in ArchiveRole
+        }
+        return base
