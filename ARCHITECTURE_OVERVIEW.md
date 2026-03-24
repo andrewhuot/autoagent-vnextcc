@@ -9,50 +9,57 @@
 ## System Architecture
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Operator Interfaces                          │
-│   CLI (autoagent ...)      REST API (/api/*)      Web Console        │
-└─────────────────────────────────┬────────────────────────────────────┘
-                                  │
-                    ┌─────────────▼─────────────┐
-                    │  FastAPI + TaskManager     │
-                    └─────────────┬─────────────┘
-                                  │
-     ┌────────────┬───────────────┼───────────────┬────────────┐
-     │            │               │               │            │
-┌────▼─────┐ ┌───▼────┐   ┌──────▼──────┐  ┌─────▼─────┐ ┌───▼────┐
-│  Trace   │ │Opport- │   │  Search     │  │  Deploy   │ │ Replay │
-│Collector │ │unity   │   │  Engine     │  │  er       │ │Harness │
-│(Events)  │ │Queue   │   │(Multi-hyp.) │  │(Canary)   │ │        │
-└────┬─────┘ └───┬────┘   └──────┬──────┘  └─────┬─────┘ └───┬────┘
-     │           │               │                │            │
-     │     ┌─────▼──────┐  ┌────▼──────────┐ ┌───▼──────┐     │
-     │     │ Failure    │  │ Mutation      │ │Constrained│    │
-     │     │ Clustering │  │ Operator      │ │Gates +    │    │
-     │     │            │  │ Registry      │ │Stats Layer│    │
-     │     └────────────┘  └──────┬────────┘ └──────────┘     │
-     │                            │                            │
-     │                    ┌───────▼────────┐                   │
-     │                    │ Experiment     │                   │
-     │                    │ Cards          │                   │
-     │                    └───────┬────────┘                   │
-     │                            │                            │
-     └────────────────────────────┼────────────────────────────┘
-                                  │
-                    ┌─────────────▼─────────────┐
-                    │  Eval Data Engine          │
-                    │  (trace→eval, 4 set types, │
-                    │   7 evaluation modes)       │
-                    └─────────────┬─────────────┘
-                                  │
-                    ┌─────────────▼─────────────┐
-                    │   Persistence Layer        │
-                    │  SQLite: traces, evals,    │
-                    │  experiments, opportunities,│
-                    │  optimizer memory, dead ltrs│
-                    │  YAML: configs, versions   │
-                    │  JSON: checkpoints, logs   │
-                    └───────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                            Operator Interfaces                                │
+│   CLI (autoagent ...)       REST API (/api/*)        Web Console (19 pages)   │
+└──────────────────────────────────────┬───────────────────────────────────────┘
+                                       │
+                         ┌─────────────▼─────────────┐
+                         │  FastAPI + TaskManager     │
+                         │  75 endpoints, 18 modules  │
+                         └─────────────┬─────────────┘
+                                       │
+     ┌──────────┬──────────┬───────────┼───────────┬──────────┬──────────┐
+     │          │          │           │           │          │          │
+┌────▼───┐ ┌───▼────┐ ┌───▼─────┐ ┌──▼────┐ ┌────▼───┐ ┌───▼────┐ ┌──▼──────┐
+│ Trace  │ │Opport- │ │ Search  │ │Deploy │ │ Replay │ │Context │ │Registry │
+│Collect-│ │unity   │ │ Engine  │ │er     │ │Harness │ │Work-   │ │(Skills, │
+│or +    │ │Queue   │ │(Multi-  │ │(Can-  │ │        │ │bench   │ │Policies,│
+│Grading │ │        │ │ hyp. +  │ │ary)   │ │        │ │(Anal-  │ │Tools,   │
+│+ Blame │ │        │ │ Pro-    │ │       │ │        │ │yzer,   │ │Handoff  │
+│Map     │ │        │ │ mode)   │ │       │ │        │ │Sim)    │ │Schemas) │
+└────┬───┘ └───┬────┘ └───┬─────┘ └──┬────┘ └────┬───┘ └───┬────┘ └──┬──────┘
+     │         │           │          │           │         │          │
+     │   ┌─────▼──────┐ ┌─▼──────────┐ ┌────▼───┐         │          │
+     │   │ Failure    │ │ Mutation   │ │Constr- │         │          │
+     │   │ Clustering │ │ Operator   │ │ained  │         │          │
+     │   │            │ │ Registry   │ │Gates + │         │          │
+     │   └────────────┘ └──────┬─────┘ │Stats   │         │          │
+     │                         │       └────────┘         │          │
+     │                  ┌──────▼────────┐                  │          │
+     │                  │ Experiment    │                  │          │
+     │                  │ Cards         │                  │          │
+     │                  └──────┬────────┘                  │          │
+     │                         │                           │          │
+     └─────────────────────────┼───────────────────────────┘──────────┘
+                               │
+                 ┌─────────────▼─────────────┐
+                 │  Eval Data Engine          │
+                 │  (trace→eval, 4 set types, │
+                 │   7 evaluation modes)       │
+                 │  + NL Scorer Generation     │
+                 └─────────────┬─────────────┘
+                               │
+                 ┌─────────────▼─────────────┐
+                 │   Persistence Layer        │
+                 │  SQLite: traces, evals,    │
+                 │  experiments, opportunities,│
+                 │  optimizer memory, dead ltrs│
+                 │  registry, blame clusters,  │
+                 │  judge versions, scorers    │
+                 │  YAML: configs, versions   │
+                 │  JSON: checkpoints, logs   │
+                 └───────────────────────────┘
 ```
 
 ---
@@ -73,6 +80,31 @@
 ```
 
 Each cycle is wrapped in exception handling. Failures go to a dead letter queue — the loop never crashes.
+
+---
+
+## Package Map
+
+```
+autoagent/
+├── agent/                  — ADK agent wrapper, graph construction
+├── api/                    — FastAPI app, 18 route modules, 75 endpoints
+├── context/                — Context Engineering Workbench (analyzer, simulator, metrics)
+├── control/                — Human escape hatches, governance wrapper
+├── core/                   — First-class domain objects (10 types)
+├── data/                   — Repositories, event log, persistence layer
+├── deployer/               — Canary deployment, release manager
+├── evals/                  — Data engine, replay harness, scorer, statistics
+│   └── nl_scorer.py        — NL Scorer Generation (natural language → ScorerSpec)
+├── graders/                — Deterministic, similarity, binary rubric judges
+├── judges/                 — Grader stack, calibration, audit judge
+├── observer/               — Trace engine, opportunity queue
+│   ├── blame_map.py        — Blame Map (cluster impact scoring, trend detection)
+│   └── trace_grading.py    — Trace Grading (7 span-level graders)
+├── optimizer/              — Mutations, search, experiments, cost, reliability
+│   └── prompt_opt/         — Pro-mode (MIPROv2, BootstrapFewShot, GEPA, SIMBA)
+└── registry/               — Modular Registry (skills, policies, tool contracts, handoff schemas)
+```
 
 ---
 
@@ -113,6 +145,30 @@ Structured event collection replacing shallow conversation-level metrics:
 - `TraceCollector`: high-level recording API
 - `TraceStore`: SQLite with indexes on trace_id, session_id, agent_path
 
+### Trace Grading (`observer/trace_grading.py`)
+
+Seven span-level graders that score individual trace spans for fine-grained diagnosis:
+
+| Grader | What it scores |
+|--------|---------------|
+| `routing` | Was the correct specialist agent selected? |
+| `tool_selection` | Was the right tool chosen for the task? |
+| `tool_argument` | Were tool arguments correct and complete? |
+| `retrieval_quality` | Did retrieval return relevant, sufficient context? |
+| `handoff_quality` | Was context preserved across agent handoffs? |
+| `memory_use` | Was memory read/written appropriately? |
+| `final_outcome` | Did the span achieve its intended result? |
+
+Each grader returns a span-level score with evidence, enabling pinpoint diagnosis of where an agent went wrong within a trace.
+
+### Blame Map (`observer/blame_map.py`)
+
+Aggregates span-level grades into actionable clusters:
+- `BlameCluster`: groups related failures by root cause
+- Impact scoring: ranks clusters by frequency × severity × business impact
+- Trend detection: identifies worsening failure patterns over time
+- Feeds directly into the opportunity queue for targeted optimization
+
 ### Ranked Opportunity Queue (`observer/opportunities.py`)
 
 Replaces `needs_optimization: bool` with a priority-scored queue:
@@ -127,6 +183,14 @@ Trace-to-eval pipeline with 4 eval set types and 7 evaluation modes:
 - **Set types**: golden, rolling_holdout, challenge/adversarial, live_failure_queue
 - **Modes**: target_response, target_tool_trajectory, rubric_quality, rubric_tool_use, hallucination, safety, user_simulation
 - `TraceToEvalConverter`: bad production traces → eval cases automatically
+
+### NL Scorer Generation (`evals/nl_scorer.py`)
+
+Converts natural language descriptions into structured scoring specifications:
+- Input: plain English description of what "good" looks like
+- Output: `ScorerSpec` with named dimensions, rubric criteria, and weight distribution
+- Dimensions are auto-extracted from the description and validated for completeness
+- Generated scorers integrate directly into the eval pipeline
 
 ### Replay Harness (`evals/replay.py`)
 
@@ -161,6 +225,57 @@ Replaces single-proposal-per-cycle with budget-aware search:
 4. Evaluate top K under fixed budget
 5. Learn which operators work for which failure families
 6. Memory of failed ideas prevents re-running bad changes
+
+### Pro-mode Prompt Optimization (`optimizer/prompt_opt/`)
+
+Four research-grade prompt optimization algorithms, orchestrated by `ProSearchStrategy`:
+
+| Algorithm | Approach | Best for |
+|-----------|----------|----------|
+| `MIPROv2` | Multi-instruction proposal optimization with Bayesian surrogate | Instruction tuning with large search spaces |
+| `BootstrapFewShot` | Bootstraps successful examples as few-shot demonstrations | Few-shot example selection and curation |
+| `GEPA` | Genetic/evolutionary prompt search with population-based selection | Exploring diverse prompt structures |
+| `SIMBA` | Simulation-based optimization with model-approximated evaluation | Reducing eval cost via surrogate models |
+
+`ProSearchStrategy` selects the right algorithm based on the failure family and available eval budget, then manages the optimization lifecycle.
+
+### AutoFix Copilot (`optimizer/autofix.py`)
+
+Constrained improvement proposer that generates targeted fix suggestions:
+- Analyzes blame map clusters and trace grades to identify fixable issues
+- Generates concrete proposals with diffs and expected impact
+- Proposals are gated — never auto-applied without eval validation
+- History tracking for all suggestions, applied or rejected
+
+### Judge Ops (`judges/`)
+
+Production-grade judge lifecycle management:
+- **Versioning**: `GraderVersionStore` tracks every judge configuration change with full lineage
+- **Drift monitoring**: `DriftMonitor` detects when judge behavior shifts over time (score distribution changes, agreement rate drops)
+- **Human feedback**: `HumanFeedbackStore` captures operator corrections to judge decisions, feeding back into calibration
+- **Calibration**: continuous agreement rate, position bias, and verbosity bias tracking
+
+### Context Engineering Workbench (`context/`)
+
+Tools for understanding and optimizing what goes into the agent's context window:
+- **ContextAnalyzer**: breaks down context composition — instructions, examples, retrieved content, conversation history — with token counts and relevance scores
+- **CompactionSimulator**: simulates context compaction strategies and measures information loss
+- **ContextMetrics**: tracks context utilization, waste ratio, and relevance distribution over time
+- **GrowthPattern detection**: identifies context growth patterns (linear, exponential, sawtooth) and predicts when limits will be hit
+- **Handoff scoring**: evaluates context preservation quality across agent handoffs
+
+### Modular Registry (`registry/`)
+
+Centralized, versioned store for all reusable agent components:
+
+| Registry | What it stores |
+|----------|---------------|
+| `SkillRegistry` | Versioned instruction bundles, script assets, prompt templates |
+| `PolicyRegistry` | Safety rules, guardrail configs, authorization policies |
+| `ToolContractRegistry` | Tool schemas, replay modes, validators, sandbox policies |
+| `HandoffSchemaRegistry` | Structured handoff definitions with goal/constraint/evidence specs |
+
+All registries share a common `RegistryStore` backend with search, diff, import/export, and version history. Components are reusable across agents and environments.
 
 ### Multi-Model Provider Router (`optimizer/providers.py`)
 
@@ -202,49 +317,99 @@ React + Vite + TypeScript + Tailwind. Apple/Linear-inspired design.
 | **Experiments** | Reviewable experiment cards with hypothesis and diff |
 | **Traces** | ADK event traces and spans for diagnosis |
 | **Event Log** | Append-only system event timeline |
+| **AutoFix** | Fix proposals, apply/reject workflow, suggestion history |
+| **BlameMap** | Blame cluster visualization, impact scores, trend graphs |
+| **ContextWorkbench** | Context composition analysis, compaction simulation |
+| **JudgeOps** | Judge versioning, drift monitoring, human feedback review |
+| **Registry** | Browse/search/import registry components across all types |
+| **ScorerStudio** | Create, refine, and test NL-generated scorers |
 | Settings | Runtime configuration |
 
 ### REST API
 
-```
-# Existing
-POST   /api/eval/run          — Start eval (async)
-GET    /api/eval/history       — Persisted eval runs
-POST   /api/optimize/run       — Trigger optimization cycle
-GET    /api/optimize/history    — Attempt history
-POST   /api/loop/start         — Start autonomous loop
-GET    /api/loop/status         — Loop health
-GET    /api/health              — Agent health metrics
-GET    /api/health/system       — Operational health
-POST   /api/deploy              — Deploy config version
-GET    /api/conversations       — Browse conversation logs
-GET    /api/config/list         — Config version history
+75 endpoints across 18 route modules.
 
-# New (P0 overhaul)
-GET    /api/traces/recent       — Recent trace events
-GET    /api/traces/{trace_id}   — Full trace with spans
-GET    /api/traces/search       — Search events by type/path/time
-GET    /api/traces/errors       — Recent error events
-GET    /api/opportunities       — Ranked opportunity queue
+```
+# Core
+POST   /api/eval/run              — Start eval (async)
+GET    /api/eval/history           — Persisted eval runs
+POST   /api/optimize/run           — Trigger optimization cycle
+GET    /api/optimize/history        — Attempt history
+POST   /api/loop/start             — Start autonomous loop
+GET    /api/loop/status             — Loop health
+GET    /api/health                  — Agent health metrics
+GET    /api/health/system           — Operational health
+POST   /api/deploy                  — Deploy config version
+GET    /api/conversations           — Browse conversation logs
+GET    /api/config/list             — Config version history
+
+# Traces (8 endpoints)
+GET    /api/traces/recent           — Recent trace events
+GET    /api/traces/{trace_id}       — Full trace with spans
+GET    /api/traces/search           — Search events by type/path/time
+GET    /api/traces/errors           — Recent error events
+GET    /api/traces/blame            — Blame map for a trace
+GET    /api/traces/grades           — Span-level grades
+GET    /api/traces/graph            — Trace graph visualization data
+GET    /api/traces/stats            — Trace statistics
+
+# Opportunities
+GET    /api/opportunities           — Ranked opportunity queue
 POST   /api/opportunities/{id}/status — Update opportunity status
-GET    /api/experiments         — Experiment cards
-GET    /api/experiments/{id}    — Single experiment card
-GET    /api/experiments/stats   — Experiment counts by status
-GET    /api/experiments/archive — Elite Pareto archive with named roles
+
+# Experiments
+GET    /api/experiments             — Experiment cards
+GET    /api/experiments/{id}        — Single experiment card
+GET    /api/experiments/stats       — Experiment counts by status
+GET    /api/experiments/archive     — Elite Pareto archive with named roles
 GET    /api/experiments/judge-calibration — Judge calibration metrics
 
-# New (Three-Way Merge — Simplicity Thesis)
-GET    /api/control/state       — Human control state
-POST   /api/control/pause       — Pause optimization
-POST   /api/control/resume      — Resume optimization
-POST   /api/control/pin/{s}     — Pin immutable surface
-POST   /api/control/unpin/{s}   — Unpin immutable surface
-POST   /api/control/reject/{id} — Reject experiment + rollback canary
-POST   /api/control/inject      — Inject manual mutation
-GET    /api/events              — Append-only system event log
-GET    /api/health/cost         — Cost tracking and budget posture
-GET    /api/health/eval-set     — Eval set health diagnostics
-GET    /api/health/scorecard    — 2-gate + 4-metric scorecard
+# Human Control
+GET    /api/control/state           — Human control state
+POST   /api/control/pause           — Pause optimization
+POST   /api/control/resume          — Resume optimization
+POST   /api/control/pin/{s}         — Pin immutable surface
+POST   /api/control/unpin/{s}       — Unpin immutable surface
+POST   /api/control/reject/{id}     — Reject experiment + rollback canary
+POST   /api/control/inject          — Inject manual mutation
+
+# System
+GET    /api/events                  — Append-only system event log
+GET    /api/health/cost             — Cost tracking and budget posture
+GET    /api/health/eval-set         — Eval set health diagnostics
+GET    /api/health/scorecard        — 2-gate + 4-metric scorecard
+
+# AutoFix (4 endpoints)
+POST   /api/autofix/suggest         — Generate fix suggestions from blame clusters
+GET    /api/autofix/proposals        — List pending fix proposals
+POST   /api/autofix/apply           — Apply a fix proposal (triggers eval)
+GET    /api/autofix/history          — History of all suggestions and outcomes
+
+# Judges (4 endpoints)
+GET    /api/judges/list              — List judge configurations and versions
+POST   /api/judges/feedback          — Submit human feedback on judge decisions
+GET    /api/judges/calibration       — Judge calibration metrics and bias stats
+GET    /api/judges/drift             — Judge drift detection results
+
+# Context (3 endpoints)
+POST   /api/context/analysis         — Analyze context composition and utilization
+POST   /api/context/simulate         — Simulate compaction strategy
+GET    /api/context/report           — Context health report with growth patterns
+
+# Registry (6 endpoints)
+GET    /api/registry/search          — Search across all registry types
+POST   /api/registry/import          — Import registry components
+GET    /api/registry/list            — List components by type
+GET    /api/registry/diff            — Diff two component versions
+GET    /api/registry/{type}/{id}     — Get specific component
+POST   /api/registry/create          — Create new registry component
+
+# Scorers (5 endpoints)
+POST   /api/scorers/create           — Create scorer from natural language
+GET    /api/scorers/list             — List all generated scorers
+GET    /api/scorers/{id}             — Get scorer spec and dimensions
+POST   /api/scorers/refine           — Refine scorer based on feedback
+POST   /api/scorers/test             — Test scorer against sample data
 ```
 
 ---
@@ -305,16 +470,17 @@ human_control:
 
 | Metric | Value |
 |--------|-------|
-| Python backend | ~24,000 lines |
-| React frontend | ~9,000 lines |
-| Test suite | 729 tests passing |
+| Python backend | ~46,600 lines |
+| React frontend | ~8,800 lines |
+| Test suite | 1,131 tests passing |
 | Core domain objects | 10 (AgentGraphVersion, SkillVersion, ToolContractVersion, PolicyPackVersion, EnvironmentSnapshot, GraderBundle, EvalCase, CandidateVariant, ArchiveEntry, HandoffArtifact) |
 | Judge subsystem | 9 modules (deterministic, rule_based, llm_judge, audit_judge, calibration, grader_stack + binary_rubric, similarity, deterministic_grader) |
-| Python packages | 10 (agent, api, core, control, data, deployer, evals, graders, judges, optimizer) |
-| Reusable React components | 28 |
-| Frontend pages | 13 |
-| API endpoints | 38 |
-| Test files | 34 |
+| Python packages | 14 (agent, api, context, control, core, data, deployer, evals, graders, judges, observer, optimizer, optimizer/prompt_opt, registry) |
+| Reusable React components | 29 |
+| Frontend pages | 19 |
+| API endpoints | 75 |
+| Route modules | 18 |
+| Test files | 59 |
 
 ---
 
@@ -559,7 +725,7 @@ Replaced the 9-dimension dashboard with R2's simplicity-first design:
 
 ### Statistical Refinements
 
-- Power-based sample adequacy (replaces n≥30 rule)
+- Power-based sample adequacy (replaces n>=30 rule)
 - Safety severity tiers (P0-P3) with one-sided upper bounds
 - Full promotion criteria chain: zero P0 on red-team → P1 upper bound below threshold → no slice regressions → holdout winner → canary survives
 
@@ -573,13 +739,17 @@ Replaced the 9-dimension dashboard with R2's simplicity-first design:
 
 3. **It doesn't deploy noise.** Clustered bootstrap, sequential testing, and multiple-hypothesis correction prevent accepting improvements that aren't real.
 
-4. **It learns.** The search engine tracks which mutation operators work for which failure families and gets smarter over time.
+4. **It learns.** The search engine tracks which mutation operators work for which failure families and gets smarter over time. Pro-mode algorithms (MIPROv2, BootstrapFewShot, GEPA, SIMBA) bring research-grade optimization when you need it.
 
 5. **It's reviewable.** Every optimization attempt produces an experiment card with hypothesis, diff, scores, and significance — not just "config v17."
 
 6. **It's model-agnostic.** Gemini by default, but swap to Claude, GPT, or a local model with one config change. Or run all of them in ensemble mode.
 
-7. **It looks like a product.** Not a research notebook. Clean CLI, comprehensive API, polished web console with 12 pages.
+7. **It looks like a product.** Not a research notebook. Clean CLI, 75 API endpoints across 18 route modules, polished web console with 19 pages — from dashboard to blame maps to scorer studio.
+
+8. **It diagnoses precisely.** Seven span-level trace graders pinpoint exactly where an agent went wrong. Blame maps aggregate failures into actionable clusters with impact scores and trend detection.
+
+9. **It manages the full lifecycle.** Registry for reusable components, judge versioning with drift detection, context engineering workbench, NL scorer generation — not just optimization, but the entire agent operations workflow.
 
 ---
 

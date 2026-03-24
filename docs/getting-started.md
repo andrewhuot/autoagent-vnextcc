@@ -1,158 +1,162 @@
 # Getting Started
 
-This guide gets AutoAgent VNextCC running locally with the CLI, API, and web console.
+Get AutoAgent VNextCC running in under five minutes. This guide takes you from install to your first optimization cycle.
 
 ## Prerequisites
 
-- Python 3.11+
-- `pip`
-- Node.js 20+ (only needed for frontend development/build)
-- Git
-
-Check versions:
-
-```bash
-python --version
-node --version
-```
+- **Python 3.11+** (3.12 recommended)
+- **pip** (bundled with Python)
+- API keys for at least one LLM provider (OpenAI, Anthropic, or Google)
 
 ## Install
 
+Clone the repo and install in development mode:
+
 ```bash
-git clone https://github.com/your-org/AutoAgent-VNextCC.git
-cd AutoAgent-VNextCC
+git clone https://github.com/your-org/autoagent-vnextcc.git
+cd autoagent-vnextcc
 pip install -e ".[dev]"
 ```
 
-Verify CLI install:
+Verify the install:
 
 ```bash
 autoagent --version
-# autoagent, version 1.0.0
 ```
 
-## Step 1: Initialize Project Assets
+## Initialize a project
+
+Scaffold a new project with a starter template:
 
 ```bash
 autoagent init --template customer-support
 ```
 
-Expected output:
+This creates:
 
-```text
-Initialized AutoAgent project in /.../AutoAgent-VNextCC
-  Template: customer-support
-  Config:   configs/v001_base.yaml
-  Evals:    evals/cases/
+```
+configs/v001_base.yaml    # Base agent configuration
+evals/cases/              # Eval test cases
+agent/config/             # Agent config schema
 ```
 
-## Step 2: Run an Evaluation
+The `customer-support` template includes a multi-specialist agent with support, orders, and recommendations routing. Use `--template minimal` for a bare scaffold.
+
+## Run your first eval
+
+Evaluate the base configuration against the test suite:
 
 ```bash
 autoagent eval run --output results.json
 ```
 
-Expected output shape:
+The eval runner executes every test case, scores quality/safety/latency/cost, and writes a composite score. To target a specific category:
 
-```text
-Full eval suite
-  Cases: 42/50 passed
-  Quality:   0.7800
-  Safety:    1.0000 (0 failures)
-  Latency:   0.8500
-  Cost:      0.7200
-  Composite: 0.8270
-
-Results written to results.json
+```bash
+autoagent eval run --category happy_path --output results.json
 ```
 
-Inspect results later:
+## Read results
 
 ```bash
 autoagent eval results --file results.json
 ```
 
-## Step 3: Start API + Web Console
+Output shows pass rate, quality score, safety failures, latency, cost, and composite score.
+
+## Start optimization
+
+Run three optimization cycles. Each cycle proposes a mutation, evaluates it, and promotes or rejects:
+
+```bash
+autoagent optimize --cycles 3
+```
+
+The optimizer uses failure analysis from your conversation history to generate targeted improvements.
+
+## Run the full loop
+
+For continuous optimization with automatic plateau detection:
+
+```bash
+autoagent loop --max-cycles 20 --stop-on-plateau
+```
+
+The loop orchestrates the full cycle: trace, diagnose, search, eval, gate, deploy, learn, repeat. It stops automatically when improvements plateau.
+
+Additional scheduling options:
+
+```bash
+# Run on a 5-minute interval
+autoagent loop --schedule interval --interval-minutes 5
+
+# Run on a cron schedule
+autoagent loop --schedule cron --cron "*/10 * * * *"
+
+# Resume from a checkpoint
+autoagent loop --resume --checkpoint-file .autoagent/loop_checkpoint.json
+```
+
+## Start the web console
+
+Launch the API server and web dashboard:
 
 ```bash
 autoagent server
 ```
 
-By default, this starts:
-- Web console: `http://localhost:8000`
-- OpenAPI docs: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-- WebSocket: `ws://localhost:8000/ws`
+Open [http://localhost:8000](http://localhost:8000) for the web console. The API is available at `http://localhost:8000/api/`.
 
-## First Web Walkthrough
-
-1. Open `http://localhost:8000`
-2. Go to **Eval Runs** and create a run from the UI
-3. Open **Eval Detail** to inspect per-case outcomes
-4. Go to **Optimize** and run a cycle
-5. Open **Configs** to inspect YAML and compare versions
-
-## Quick Validation Commands
+Options:
 
 ```bash
-# Status snapshot
-autoagent status
-
-# Config history
-autoagent config list
-
-# Recent logs
-autoagent logs --limit 10
-
-# API smoke test
-curl http://localhost:8000/api/health
+autoagent server --host 0.0.0.0 --port 9000 --reload
 ```
 
-## Frontend Dev Mode (Optional)
+## Configuration
 
-If you are actively editing the React app:
+All settings live in `autoagent.yaml` at the project root:
 
-```bash
-# Terminal A
-autoagent server
+```yaml
+optimizer:
+  strategy: round_robin
+  search_strategy: simple          # simple | adaptive | full | pro
+  holdout_rotation_interval: 5
+  drift_threshold: 0.12
+  models:
+    - provider: openai
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
 
-# Terminal B
-cd web
-npm install
-npm run dev
+loop:
+  schedule_mode: continuous
+  interval_minutes: 5.0
+  checkpoint_path: .autoagent/loop_checkpoint.json
+
+eval:
+  history_db_path: eval_history.db
+  significance_alpha: 0.05
+
+budget:
+  per_cycle_dollars: 1.0
+  daily_dollars: 10.0
+  stall_threshold_cycles: 5
+
+human_control:
+  immutable_surfaces: ["safety_instructions"]
 ```
 
-Use the Vite URL (`http://localhost:5173`) for hot reload while keeping API on port 8000.
+Set API keys via environment variables referenced in the config (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`).
 
-## Common Setup Issues
+## Next steps
 
-### `autoagent` command not found
-
-Re-install with editable mode from repo root:
-
-```bash
-pip install -e ".[dev]"
-```
-
-### No data in Dashboard
-
-The dashboard reflects logged conversation/eval/optimization data. Run:
-
-```bash
-autoagent eval run --output results.json
-autoagent optimize --cycles 1
-```
-
-Then refresh the web app.
-
-### Frontend does not load from `autoagent server`
-
-Build frontend assets once:
-
-```bash
-cd web
-npm install
-npm run build
-```
-
-Then re-run `autoagent server`.
+- [Core Concepts](concepts.md) -- understand the eval loop, metric hierarchy, and search strategies
+- [CLI Reference](cli-reference.md) -- every command and flag
+- [API Reference](api-reference.md) -- all 75 REST endpoints
+- [AutoFix Copilot](features/autofix.md) -- automated failure repair
+- [Judge Ops](features/judge-ops.md) -- judge versioning and drift monitoring
+- [Context Workbench](features/context-workbench.md) -- context window analysis
+- [Pro-Mode Optimization](features/prompt-optimization.md) -- MIPROv2, GEPA, SIMBA, BootstrapFewShot
+- [Modular Registry](features/registry.md) -- skills, policies, tool contracts, handoff schemas
+- [Trace Grading](features/trace-grading.md) -- span-level grading and blame maps
+- [NL Scorer](features/nl-scorer.md) -- create scorers from natural language

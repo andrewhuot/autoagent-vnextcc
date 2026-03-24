@@ -1,150 +1,138 @@
-# Concepts
+# Core Concepts
 
-This document explains how AutoAgent VNextCC works as a closed-loop optimization system.
+The mental models behind AutoAgent VNextCC. Read this before diving into features.
 
-## Mental Model
+## The Eval Loop
 
-AutoAgent continuously asks:
-1. Is the current agent healthy?
-2. If not, what should change?
-3. Does the candidate improve quality without harming safety?
-4. Can we deploy it safely?
+AutoAgent runs a closed-loop optimization cycle:
 
-That workflow is the **autoresearch loop**.
-
-## The Autoresearch Loop
-
-```text
-┌──────────────┐
-│  Observe     │  Read recent conversations, compute metrics,
-│              │  detect anomalies/failure buckets
-└──────┬───────┘
-       │ needs optimization?
-       ▼
-┌──────────────┐
-│  Propose     │  Optimizer proposes a config candidate based on
-│              │  failure samples + health context
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Evaluate    │  Run eval suite and compute quality/safety/
-│              │  latency/cost composite score
-└──────┬───────┘
-       │
-       ▼
-┌──────────────┐
-│  Gate        │  Reject invalid/safety/regression/no-improvement
-│              │  candidates; accept only safe improvements
-└──────┬───────┘
-       │ accepted
-       ▼
-┌──────────────┐
-│  Deploy      │  Save version, canary rollout, promote/rollback
-└──────────────┘
+```
+trace → diagnose → search → eval → gate → deploy → learn → repeat
 ```
 
-## Key Objects
+1. **Trace** -- Collect conversation traces and span-level telemetry
+2. **Diagnose** -- Classify failures, build blame maps, identify optimization opportunities
+3. **Search** -- Generate candidate mutations targeting diagnosed weaknesses
+4. **Eval** -- Run candidates against the eval suite with statistical significance testing
+5. **Gate** -- Check safety gates, regression gates, and holdout validation
+6. **Deploy** -- Promote winning configs via canary or immediate deployment
+7. **Learn** -- Record outcomes in optimization memory for future search
+8. **Repeat** -- Loop until plateau, budget exhaustion, or human stop
 
-### Conversation Record
+Each cycle is autonomous but human-interruptible at every stage.
 
-Each conversation is logged with:
-- `conversation_id`, `session_id`
-- `user_message`, `agent_response`
-- `tool_calls`
-- `latency_ms`, `token_count`
-- `outcome` (`success`, `fail`, `error`, `abandon`)
-- `safety_flags`, `error_message`
-- `config_version`, `timestamp`
+## 4-Layer Metric Hierarchy
 
-### Health Report
+Metrics are organized into four layers, evaluated top-down. A failure at a higher layer blocks promotion regardless of lower-layer scores.
 
-`GET /api/health` returns:
-- success rate
-- error rate
-- safety violation rate
-- avg latency
-- avg cost
-- failure buckets
-- optimization recommendation
+| Layer | Purpose | Examples |
+|-------|---------|----------|
+| **Hard Gates** | Binary pass/fail, non-negotiable | Safety violation rate = 0%, no regressions on pinned surfaces |
+| **North-Star Outcomes** | Primary optimization targets | Task success rate, response quality, composite score |
+| **Operating SLOs** | Operational guardrails | Latency p95 < 2s, cost per conversation < $0.05 |
+| **Diagnostics** | Debugging signals, not gated | Tool correctness, routing accuracy, handoff fidelity, failure buckets |
 
-### Optimization Attempt
+The optimizer maximizes north-star outcomes subject to hard gates and SLO constraints.
 
-Each attempt in `optimizer_memory.db` stores:
-- `attempt_id`, `timestamp`
-- `change_description`, `config_diff`, `config_section`
-- `status` (`accepted`, `rejected_*`)
-- `score_before`, `score_after`
-- `health_context`
+## Typed Mutations
 
-### Config Version
+The mutation registry defines 9 operator classes, each targeting a specific configuration surface:
 
-Each version in `configs/manifest.json` has:
-- numeric version
-- hash
-- YAML filename
-- score snapshot
-- status (`active`, `canary`, `retired`, `rolled_back`)
+| Operator | Surface | Risk Class |
+|----------|---------|------------|
+| Rewrite instruction | `instruction` | medium |
+| Add/remove few-shot examples | `few_shot` | low |
+| Modify tool descriptions | `tool_description` | medium |
+| Swap model | `model` | high |
+| Tune generation settings | `generation_settings` | low |
+| Adjust callbacks | `callback` | medium |
+| Context caching policy | `context_caching` | low |
+| Memory policy | `memory_policy` | medium |
+| Routing changes | `routing` | high |
 
-## Scoring Concept
+Every operator declares preconditions, a validator function, rollback strategy, estimated eval cost, and whether it supports auto-deploy. The risk class determines gate strictness: `critical` mutations always require human approval.
 
-The eval system computes multiple dimensions and combines them into a composite score:
-- quality
-- safety
-- latency
-- cost
+## Experiment Cards
 
-Safety is treated as a strict gate in optimization decisions. A high composite score does not override safety failures.
+Every optimization attempt is tracked as an experiment card:
 
-## Task-Based Execution
-
-API eval/optimize/loop operations run as background tasks.
-
-```text
-POST /api/eval/run        -> { task_id }
-GET  /api/tasks/{task_id} -> status/progress/result/error
+```python
+ExperimentCard(
+    experiment_id="exp_a1b2c3",
+    hypothesis="Rewriting the support instruction to be more concise will reduce latency",
+    config_sha="abc123",
+    baseline_scores={"composite": 0.82},
+    candidate_scores={"composite": 0.86},
+    significance=0.03,       # p-value from bootstrap test
+    status="promoted",       # pending → evaluated → promoted | rejected | archived
+)
 ```
 
-Task states:
-- `pending`
-- `running`
-- `completed`
-- `failed`
+Cards form an audit trail. You can inspect any past experiment to understand what was tried, what worked, and why.
 
-This keeps long operations non-blocking and UI-friendly.
+## Judge Stack
 
-## Canary Concept
+Eval scoring uses a layered judge stack, applied in order:
 
-Canary deployment is used to reduce rollout risk:
-- Deploy candidate as canary
-- Observe canary vs baseline success rate
-- Promote if acceptable
-- Roll back if degraded
+1. **Deterministic** -- Pattern matching, keyword checks, schema validation. Fast, zero-cost.
+2. **Similarity** -- Embedding-based comparison against reference answers. Low cost.
+3. **Binary Rubric** -- LLM judge with structured rubric. Scores quality on defined criteria.
+4. **Audit Judge** -- Secondary LLM review of borderline cases. Catches judge errors.
+5. **Calibration** -- Periodic human-vs-judge agreement analysis. Tracks judge drift over time.
 
-This allows optimization to remain autonomous without making unsafe full rollouts.
+Higher layers only fire when lower layers are inconclusive. This keeps eval costs low while maintaining accuracy.
 
-## Headless-First Principle
+## Search Strategies
 
-Every core workflow is available through CLI/API:
-- run evals
-- inspect results
-- optimize
-- diff configs
-- deploy + rollback
-- run loop
+Four search strategies, increasing in sophistication:
 
-The web app exists for visibility and collaboration, not as the only control plane.
+| Strategy | Description | Best For |
+|----------|-------------|----------|
+| `simple` | Deterministic proposer, single candidate per cycle | Getting started, low budget |
+| `adaptive` | Multi-hypothesis search with bandit-based family selection | Most production use |
+| `full` | Adaptive + curriculum learning + Pareto archive | Complex multi-objective optimization |
+| `pro` | Research-grade prompt optimization (MIPROv2, BootstrapFewShot, GEPA, SIMBA) | Maximum quality, higher budget |
 
-## When to Use What
+Set the strategy in `autoagent.yaml`:
 
-- Use **CLI** for scripts, CI, and repetitive operator tasks
-- Use **API** for integration into external control planes
-- Use **Web** for visual debugging, comparisons, and stakeholder walkthroughs
+```yaml
+optimizer:
+  search_strategy: adaptive
+```
 
-## Failure Modes To Expect
+## Anti-Goodhart Guards
 
-- No conversation data yet: observer reports little signal
-- Candidate rejected repeatedly: proposal quality or gate constraints too strict
-- Canary stuck pending: insufficient traffic for verdict
+Three mechanisms prevent metric gaming (Goodhart's Law):
 
-These are expected states, not necessarily system failures.
+**Holdout rotation.** A rotating holdout set is excluded from optimization and used for validation. The holdout rotates every N cycles (default: 5) so the optimizer never fully adapts to any fixed subset.
+
+**Drift detection.** The drift monitor tracks judge agreement rates over time. If a judge's scoring pattern shifts beyond the threshold (default: 0.12), the system flags it and optionally pauses optimization.
+
+**Judge variance.** If variance across judge calls exceeds the threshold (default: 0.03), the experiment is flagged for human review rather than auto-promoted.
+
+## Cost Controls
+
+Three budget mechanisms prevent runaway spend:
+
+```yaml
+budget:
+  per_cycle_dollars: 1.0         # Max spend per optimization cycle
+  daily_dollars: 10.0            # Max daily aggregate spend
+  stall_threshold_cycles: 5      # Pause after N cycles with no improvement
+```
+
+The cost tracker records actual spend per cycle (LLM calls, eval runs). When the daily budget is exhausted or stall is detected, the loop pauses automatically and emits a notification.
+
+## Human Escape Hatches
+
+Humans retain full control at all times:
+
+| Command | Effect |
+|---------|--------|
+| `autoagent pause` | Immediately pause the optimization loop |
+| `autoagent resume` | Resume a paused loop |
+| `autoagent pin <surface>` | Lock a config surface (e.g., `safety_instructions`) -- optimizer cannot modify it |
+| `autoagent unpin <surface>` | Unlock a previously pinned surface |
+| `autoagent reject <experiment_id>` | Reject and roll back a specific experiment |
+
+Pinned surfaces and the pause state persist across restarts via `.autoagent/human_control.json`. The `immutable_surfaces` list in config defines surfaces that can never be modified, even by explicit unpin.

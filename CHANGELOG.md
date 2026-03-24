@@ -1,5 +1,114 @@
 # Changelog
 
+## [3.0.0] — 2026-03-24 — Modular Registry, Trace Grading + Blame Map, NL Scorer (1,131 tests)
+
+### Added
+
+**Modular Registry** (`registry/`)
+- RegistryStore with SQLite-backed versioned CRUD for 4 item types
+- SkillRegistry — versioned instruction/example/constraint bundles
+- PolicyRegistry — versioned rules with hard/soft enforcement
+- ToolContractRegistry — versioned tool schemas with replay mode and side-effect classification
+- HandoffSchemaRegistry — versioned handoff schemas with validation rules
+- Bulk import from YAML/JSON files
+- Search, diffing, and deprecation support
+- CLI: `autoagent registry list|show|add|diff|import`
+- API: 6 endpoints under `/api/registry/`
+
+**Trace Grading** (`observer/trace_grading.py`)
+- 7 span-level graders: routing, tool_selection, tool_argument, retrieval_quality, handoff_quality, memory_use, final_outcome
+- TraceGrader orchestrator with automatic grader applicability detection
+- SpanGrade with score, evidence, failure_reason, metadata
+
+**Blame Map** (`observer/blame_map.py`)
+- BlameCluster with impact scoring (count/total_traces) and trend detection (growing/shrinking/stable)
+- Failure clustering by (grader_name, agent_path, failure_reason)
+- Time-windowed computation from trace store
+
+**NL Scorer Generation** (`evals/nl_scorer.py`, `api/routes/scorers.py`)
+- Create eval scorers from natural language descriptions
+- ScorerSpec with named dimensions and scoring criteria
+- Iterative refinement with additional NL criteria
+- Test scorers against sample eval results
+- CLI: `autoagent scorer create|list|show|refine|test`
+- API: 5 endpoints under `/api/scorers/`
+
+**Frontend**
+- Registry page — browse/search skills, policies, tools, handoff schemas
+- Blame Map page — visualize failure clusters with impact and trends
+- Scorer Studio page — create and test NL scorers
+- CLI: `autoagent trace grade|blame|graph`
+- API: 3 new trace endpoints (blame, grades, graph)
+
+### Numbers
+| Metric | Before | After |
+|--------|--------|-------|
+| Test suite | 951 | 1,131 |
+| Python backend | ~40,000 lines | ~46,600 lines |
+| API endpoints | 60 | 75 |
+| Frontend pages | 16 | 19 |
+| Route modules | 15 | 18 |
+
+---
+
+## [2.5.0] — 2026-03-24 — Pro-Mode Prompt Optimization (951 tests)
+
+### Added
+
+**Pro-Mode Prompt Optimization** (`optimizer/prompt_opt/`)
+- ProSearchStrategy orchestrator with algorithm auto-selection
+- MIPROv2 — Bayesian search over (instruction, example_set) space with kNN surrogate
+- BootstrapFewShot — DSPy-inspired teacher-student demonstration bootstrapping
+- GEPA — Gradient-free evolutionary prompt adaptation with tournament selection, LLM crossover/mutation
+- SIMBA — Simulation-based iterative hill-climbing optimization
+- ProConfig with budget controls and configurable candidates/rounds
+- `pro` search strategy added to optimizer configuration
+
+### Numbers
+| Metric | Before | After |
+|--------|--------|-------|
+| Test suite | 862 | 951 |
+
+---
+
+## [2.2.0] — 2026-03-23 — AutoFix, Judge Ops, Context Workbench (862 tests)
+
+### Added
+
+**AutoFix Copilot** (`api/routes/autofix.py`)
+- AI-driven failure analysis → constrained improvement proposals
+- Review-before-apply workflow with proposal lifecycle
+- CLI: `autoagent autofix suggest|apply|history`
+- API: 4 endpoints under `/api/autofix/`
+
+**Judge Ops** (`judges/`, `api/routes/judges.py`)
+- GraderVersionStore for judge versioning
+- DriftMonitor for agreement rate tracking
+- HumanFeedbackStore for calibration corrections
+- CLI: `autoagent judges list|calibrate|drift`
+- API: 4 endpoints under `/api/judges/`
+
+**Context Engineering Workbench** (`context/`)
+- ContextAnalyzer with growth pattern detection (linear/exponential/sawtooth/stable)
+- CompactionSimulator with 3 strategies (aggressive/balanced/conservative)
+- ContextMetrics (utilization, compaction loss, handoff fidelity, memory staleness)
+- CLI: `autoagent context analyze|simulate|report`
+- API: 3 endpoints under `/api/context/`
+
+**Frontend**
+- AutoFix page
+- Judge Ops page
+- Context Workbench page
+
+### Numbers
+| Metric | Before | After |
+|--------|--------|-------|
+| Test suite | 735 | 862 |
+| Frontend pages | 13 | 16 |
+| API endpoints | 38 | ~52 |
+
+---
+
 ## [2.1.0] — 2026-03-24 — v4 Research Port (CC + Codex Merge)
 
 ### Added

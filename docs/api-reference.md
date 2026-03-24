@@ -1,367 +1,228 @@
 # API Reference
 
-Complete reference for AutoAgent VNextCC REST + WebSocket interfaces.
+All endpoints are served under `/api/`. The server runs on `http://localhost:8000` by default.
 
-## Base URLs
+Start the server:
 
-- REST: `http://localhost:8000/api`
-- OpenAPI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
-- WebSocket: `ws://localhost:8000/ws`
-
-## Conventions
-
-- Long-running operations return task IDs
-- Poll task status at `GET /api/tasks/{task_id}`
-- Typical task states: `pending`, `running`, `completed`, `failed`
-- Most responses are JSON objects unless noted
+```bash
+autoagent server
+```
 
 ---
 
 ## Eval
 
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/eval/run` | Start an eval run as a background task |
+| `GET` | `/api/eval/runs` | List all eval runs |
+| `GET` | `/api/eval/runs/{id}` | Get a specific eval run by ID |
+| `GET` | `/api/eval/runs/{id}/cases` | Get individual case results for a run |
+| `GET` | `/api/eval/history` | List eval history entries |
+| `GET` | `/api/eval/history/{id}` | Get a specific history entry |
+
 ### POST `/api/eval/run`
 
-Start an eval run as a background task.
-
-#### Request body
-
 ```json
+// Request
 {
-  "config_path": "configs/v003.yaml",
-  "category": "safety",
-  "dataset_path": "evals/datasets/regression.jsonl",
+  "config_path": "configs/v002.yaml",
+  "category": "happy_path",
+  "dataset_path": "data/eval_set.jsonl",
   "split": "test"
 }
-```
 
-#### Response `202`
-
-```json
+// Response (202 Accepted)
 {
-  "task_id": "0ddf17f0-b5ac-46df-a7ea-6b0b33a3f4f2",
-  "message": "Eval run started"
+  "task_id": "task_abc123",
+  "status": "running"
 }
 ```
 
-#### Status codes
-
-- `202` Started
-- `404` Config file not found
-- `404` Dataset file not found
-
-#### curl
-
-```bash
-curl -X POST http://localhost:8000/api/eval/run \
-  -H "Content-Type: application/json" \
-  -d '{"config_path":"configs/v003.yaml","category":"safety"}'
-```
-
-### GET `/api/eval/runs`
-
-List eval tasks.
-
-#### Response `200`
+### GET `/api/eval/runs/{id}`
 
 ```json
-[
-  {
-    "task_id": "0ddf17f0-b5ac-46df-a7ea-6b0b33a3f4f2",
-    "task_type": "eval",
-    "status": "running",
-    "progress": 40,
-    "result": null,
-    "error": null,
-    "created_at": "2026-03-23T22:05:11.134722",
-    "updated_at": "2026-03-23T22:05:14.914220"
-  }
-]
-```
-
-### GET `/api/eval/runs/{run_id}`
-
-Get completed eval result payload.
-
-#### Response `200`
-
-```json
+// Response
 {
-  "run_id": "0ddf17f0-b5ac-46df-a7ea-6b0b33a3f4f2",
-  "quality": 0.82,
+  "run_id": "run_abc123",
+  "quality": 0.89,
   "safety": 1.0,
-  "latency": 0.85,
-  "cost": 0.72,
-  "composite": 0.8515,
+  "latency": 0.92,
+  "cost": 0.95,
+  "composite": 0.91,
   "safety_failures": 0,
   "total_cases": 50,
   "passed_cases": 45,
-  "cases": [
-    {
-      "case_id": "safety_jailbreak_01",
-      "category": "safety",
-      "passed": true,
-      "quality_score": 1.0,
-      "safety_passed": true,
-      "latency_ms": 183.2,
-      "token_count": 122,
-      "details": "Refused unsafe request"
-    }
-  ],
-  "completed_at": "2026-03-23T22:05:19.002024+00:00"
+  "completed_at": "2026-03-24T10:30:00Z"
 }
 ```
-
-#### Status codes
-
-- `200` Completed result
-- `404` Run not found
-- `409` Task exists but not completed yet
-
-### GET `/api/eval/runs/{run_id}/cases`
-
-Get only case-level results.
-
-#### Response `200`
-
-```json
-[
-  {
-    "case_id": "route_order_status",
-    "category": "happy_path",
-    "passed": true,
-    "quality_score": 0.95,
-    "safety_passed": true,
-    "latency_ms": 220.4,
-    "token_count": 142,
-    "details": "Correct route + response"
-  }
-]
-```
-
-### GET `/api/eval/history`
-
-List persisted eval runs with provenance.
-
-#### Query params
-
-- `limit` (int, default `20`)
-
-### GET `/api/eval/history/{run_id}`
-
-Get one persisted run with case-level payloads.
 
 ---
 
 ## Optimize
 
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/optimize/run` | Start an optimization cycle |
+| `GET` | `/api/optimize/history` | List optimization history |
+| `GET` | `/api/optimize/history/{id}` | Get a specific optimization result |
+| `GET` | `/api/optimize/pareto` | Get the Pareto frontier of optimization results |
+
 ### POST `/api/optimize/run`
 
-Start one optimization cycle as a background task.
-
-#### Request body
-
 ```json
+// Request
 {
-  "window": 100,
-  "force": false
+  "cycles": 3
+}
+
+// Response (202 Accepted)
+{
+  "task_id": "task_opt_456",
+  "status": "running"
 }
 ```
-
-#### Response `202`
-
-```json
-{
-  "task_id": "5dc658fb-2fd9-4022-9d2a-9e44ea58b28c",
-  "message": "Optimization started"
-}
-```
-
-#### curl
-
-```bash
-curl -X POST http://localhost:8000/api/optimize/run \
-  -H "Content-Type: application/json" \
-  -d '{"window":100,"force":false}'
-```
-
-### GET `/api/optimize/history`
-
-List optimization attempts from memory.
-
-#### Query params
-
-- `limit` (int, default `20`)
-
-#### Response `200`
-
-```json
-[
-  {
-    "attempt_id": "opt-1711234567",
-    "timestamp": 1711234567.002,
-    "change_description": "Tightened fallback prompt routing",
-    "config_diff": "- prompts.fallback: ...\n+ prompts.fallback: ...",
-    "config_section": "prompts",
-    "status": "accepted",
-    "score_before": 0.8112,
-    "score_after": 0.8428,
-    "significance_p_value": 0.0123,
-    "significance_delta": 0.0187,
-    "significance_n": 55,
-    "health_context": "{\"success_rate\":0.73,\"error_rate\":0.14}"
-  }
-]
-```
-
-### GET `/api/optimize/history/{attempt_id}`
-
-Get one optimization attempt.
-
-#### Status codes
-
-- `200` Found
-- `404` Not found
 
 ---
 
-## Config
+## Loop
 
-### GET `/api/config/list`
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/loop/start` | Start the optimization loop |
+| `POST` | `/api/loop/stop` | Stop the optimization loop |
+| `GET` | `/api/loop/status` | Get current loop status |
 
-List all config versions and active/canary pointers.
-
-#### Response `200`
+### GET `/api/loop/status`
 
 ```json
+// Response
 {
-  "versions": [
-    {
-      "version": 1,
-      "config_hash": "d48ae9fd4f1a",
-      "filename": "v001.yaml",
-      "timestamp": 1711233000.0,
-      "scores": { "composite": 0.75 },
-      "status": "retired"
-    },
-    {
-      "version": 3,
-      "config_hash": "45fd2b491a90",
-      "filename": "v003.yaml",
-      "timestamp": 1711239000.0,
-      "scores": { "composite": 0.84 },
-      "status": "active"
-    }
-  ],
-  "active_version": 3,
-  "canary_version": null
+  "running": true,
+  "cycle": 12,
+  "max_cycles": 100,
+  "schedule": "continuous",
+  "last_heartbeat": 1711276800.0
 }
 ```
 
-### GET `/api/config/show/{version}`
+---
 
-Get YAML + parsed object for one version.
+## Control
 
-#### Response `200`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/control/state` | Get current human control state |
+| `POST` | `/api/control/pause` | Pause the optimization loop |
+| `POST` | `/api/control/resume` | Resume the optimization loop |
+| `POST` | `/api/control/pin/{surface}` | Pin a configuration surface |
+| `POST` | `/api/control/unpin/{surface}` | Unpin a configuration surface |
+| `POST` | `/api/control/reject/{id}` | Reject an experiment |
+| `POST` | `/api/control/inject` | Inject a manual configuration change |
+
+### GET `/api/control/state`
 
 ```json
+// Response
 {
-  "version": 3,
-  "yaml_content": "model: ...\nrouting: ...",
-  "config": {
-    "model": "...",
-    "routing": {}
-  }
+  "paused": false,
+  "pinned_surfaces": ["safety_instructions"],
+  "immutable_surfaces": ["safety_instructions"]
 }
 ```
 
-#### Status codes
+---
 
-- `200` Found
-- `404` Version missing
+## Deploy
 
-### GET `/api/config/diff?a={A}&b={B}`
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/deploy/deploy` | Deploy a config version |
+| `GET` | `/api/deploy/status` | Get current deployment status |
+| `POST` | `/api/deploy/rollback` | Roll back to previous version |
 
-Diff two config versions.
-
-#### Response `200`
-
-```json
-{
-  "version_a": 2,
-  "version_b": 3,
-  "diff": "- prompts.fallback: old\n+ prompts.fallback: new"
-}
-```
-
-### GET `/api/config/active`
-
-Get active config.
-
-#### Response `200`
+### POST `/api/deploy/deploy`
 
 ```json
+// Request
 {
-  "version": 3,
-  "config": { "model": "..." },
-  "yaml": "model: ..."
+  "config_version": 3,
+  "strategy": "canary"
 }
 ```
-
-#### Status codes
-
-- `200` Active config exists
-- `404` No active config
 
 ---
 
 ## Health
 
-### GET `/api/health`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health/ready` | Lightweight readiness probe |
+| `GET` | `/api/health` | Full health report with metrics and anomalies |
+| `GET` | `/api/health/system` | Operational health (loop, watchdog, dead letters) |
+| `GET` | `/api/health/cost` | Spend trend and budget posture |
+| `GET` | `/api/health/eval-set` | Eval set health diagnostics |
+| `GET` | `/api/health/scorecard` | 2-gate + 4-metric scorecard |
 
-Compute health report from recent conversation window.
-
-#### Query params
-
-- `window` (int, default `100`, min `1`, max `10000`)
-
-#### Response `200`
+### GET `/api/health/scorecard`
 
 ```json
+// Response
 {
+  "gates": {
+    "safety": { "passed": true, "safety_violation_rate": 0.0 },
+    "regression": { "passed": true, "latest_attempt_status": "promoted" }
+  },
   "metrics": {
-    "success_rate": 0.82,
-    "avg_latency_ms": 317.4,
-    "error_rate": 0.09,
-    "safety_violation_rate": 0.0,
-    "avg_cost": 0.0008,
-    "total_conversations": 100
+    "task_success_rate": 0.92,
+    "response_quality": 0.92,
+    "latency_p95_ms": 1250.0,
+    "cost_per_conversation": 0.032
   },
-  "anomalies": [],
-  "failure_buckets": {
-    "routing_error": 4,
-    "tool_timeout": 3
-  },
-  "needs_optimization": false,
-  "reason": ""
+  "diagnostics": {
+    "tool_correctness": 0.97,
+    "routing_accuracy": 0.95,
+    "handoff_fidelity": 0.98,
+    "failure_buckets": { "tool_failure": 2, "routing_error": 1 }
+  }
 }
 ```
 
-### GET `/api/health/system`
+---
 
-Operational backend health for long-running loop behavior.
+## Events
 
-#### Response `200`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/events` | Server-Sent Events stream for real-time updates |
+
+Connect via EventSource for live loop progress, eval results, and deploy notifications.
+
+---
+
+## Config
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/config/list` | List all config versions |
+| `GET` | `/api/config/show/{version}` | Get a specific config version |
+| `GET` | `/api/config/diff` | Diff two config versions |
+| `GET` | `/api/config/active` | Get the currently active config |
+
+### GET `/api/config/diff`
+
+```
+GET /api/config/diff?v1=2&v2=3
+```
 
 ```json
+// Response
 {
-  "status": "ok",
-  "loop_running": true,
-  "loop_stalled": false,
-  "last_heartbeat": 1774267200.12,
-  "dead_letter_count": 0,
-  "tasks_running": 1,
-  "uptime_seconds": 9321.44
+  "v1": 2,
+  "v2": 3,
+  "changes": [
+    { "path": "instruction", "old": "...", "new": "..." }
+  ]
 }
 ```
 
@@ -369,238 +230,102 @@ Operational backend health for long-running loop behavior.
 
 ## Conversations
 
-### GET `/api/conversations/stats`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/conversations/stats` | Conversation statistics |
+| `GET` | `/api/conversations/list` | List recent conversations |
+| `GET` | `/api/conversations/{id}` | Get a specific conversation |
 
-Aggregate conversation statistics.
+---
 
-#### Response `200`
+## Traces
 
-```json
-{
-  "total": 821,
-  "by_outcome": {
-    "success": 704,
-    "fail": 52,
-    "error": 41,
-    "abandon": 24
-  },
-  "avg_latency_ms": 391.2,
-  "avg_token_count": 221.5
-}
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/traces/recent` | Recent trace events |
+| `GET` | `/api/traces/search` | Search traces by type, agent path, or time |
+| `GET` | `/api/traces/errors` | Recent error events |
+| `GET` | `/api/traces/sessions/{id}` | All events for a session |
+| `GET` | `/api/traces/blame` | Blame map of failure clusters |
+| `GET` | `/api/traces/{id}/grades` | Span-level grades for a trace |
+| `GET` | `/api/traces/{id}/graph` | Trace dependency graph |
+| `GET` | `/api/traces/{id}` | Get a specific trace |
+
+### GET `/api/traces/search`
+
+```
+GET /api/traces/search?event_type=tool_call&agent_path=support&since=1711276800&limit=50
 ```
 
-### GET `/api/conversations`
+### GET `/api/traces/blame`
 
-List conversation records.
-
-#### Query params
-
-- `limit` (int, default `50`, max `1000`)
-- `offset` (int, default `0`)
-- `outcome` (optional: `success|fail|error|abandon`)
-
-#### Response `200`
+```
+GET /api/traces/blame?window=86400
+```
 
 ```json
+// Response
 {
-  "conversations": [
+  "clusters": [
     {
-      "conversation_id": "conv_01",
-      "session_id": "sess_abc",
-      "user_message": "Where is my order?",
-      "agent_response": "Let me check that for you...",
-      "tool_calls": [{ "name": "lookup_order" }],
-      "latency_ms": 241.7,
-      "token_count": 189,
-      "outcome": "success",
-      "safety_flags": [],
-      "error_message": "",
-      "specialist_used": "orders",
-      "config_version": "v003",
-      "timestamp": 1711236000.4
+      "grader": "tool_selection",
+      "agent_path": "support",
+      "reason": "wrong tool selected for order lookup",
+      "count": 12,
+      "impact_score": 0.85,
+      "trend": "increasing"
     }
   ],
-  "total": 821,
-  "limit": 50,
-  "offset": 0
+  "window_seconds": 86400
 }
 ```
-
-### GET `/api/conversations/{conversation_id}`
-
-Get one conversation record.
-
-#### Status codes
-
-- `200` Found
-- `404` Not found
-- `500` DB read error
 
 ---
 
-## Deploy
+## Experiments
 
-### POST `/api/deploy`
-
-Deploy config data or promote a version.
-
-#### Request body patterns
-
-Promote existing version immediately:
-
-```json
-{
-  "version": 5,
-  "strategy": "immediate"
-}
-```
-
-Deploy raw config as canary:
-
-```json
-{
-  "config": {
-    "model": "...",
-    "routing": {}
-  },
-  "strategy": "canary",
-  "scores": { "composite": 0.84 }
-}
-```
-
-#### Response `201`
-
-```json
-{
-  "message": "Promoted v005 to active (immediate)",
-  "version": 5,
-  "strategy": "immediate"
-}
-```
-
-#### Status codes
-
-- `201` Deploy action applied
-- `400` Missing/invalid deploy payload
-- `404` Unknown version
-
-### GET `/api/deploy/status`
-
-Get active/canary state and recent history.
-
-#### Response `200`
-
-```json
-{
-  "active_version": 5,
-  "canary_version": 6,
-  "total_versions": 8,
-  "canary_status": {
-    "is_active": true,
-    "canary_version": 6,
-    "baseline_version": 5,
-    "canary_conversations": 23,
-    "canary_success_rate": 0.83,
-    "baseline_success_rate": 0.86,
-    "started_at": 1711240000.2,
-    "verdict": "pending"
-  },
-  "history": []
-}
-```
-
-### POST `/api/deploy/rollback`
-
-Rollback active canary.
-
-#### Response `200`
-
-```json
-{
-  "message": "Rolled back canary v006",
-  "version": 6,
-  "strategy": "rollback"
-}
-```
-
-#### Status codes
-
-- `200` Rolled back
-- `400` No active canary
-- `404` Canary version missing
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/experiments/stats` | Experiment statistics |
+| `GET` | `/api/experiments/list` | List experiments |
+| `GET` | `/api/experiments/archive` | Archived experiments |
+| `GET` | `/api/experiments/judge-calibration` | Judge calibration data |
+| `GET` | `/api/experiments/{id}` | Get a specific experiment |
 
 ---
 
-## Loop
+## Opportunities
 
-### POST `/api/loop/start`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/opportunities/count` | Count of open optimization opportunities |
+| `GET` | `/api/opportunities/list` | List optimization opportunities |
+| `GET` | `/api/opportunities/{id}` | Get a specific opportunity |
+| `PATCH` | `/api/opportunities/{id}/status` | Update opportunity status |
 
-Start continuous loop in background.
+---
 
-#### Request body
+## AutoFix
 
-```json
-{
-  "cycles": 10,
-  "delay": 1.0,
-  "window": 100
-}
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/autofix/suggest` | Generate fix proposals from failure analysis |
+| `GET` | `/api/autofix/proposals` | List pending proposals |
+| `POST` | `/api/autofix/apply/{id}` | Apply a specific proposal |
+| `GET` | `/api/autofix/history` | History of applied fixes |
 
-#### Response `202`
-
-```json
-{
-  "running": true,
-  "task_id": "b3115c99-3f2e-4578-9b4f-4a2f9afef2f1",
-  "total_cycles": 10,
-  "completed_cycles": 0,
-  "cycle_history": []
-}
-```
-
-#### Status codes
-
-- `202` Started
-- `409` Loop already running
-
-### POST `/api/loop/stop`
-
-Stop active loop.
-
-#### Response `200`
+### POST `/api/autofix/suggest`
 
 ```json
+// Response
 {
-  "running": false,
-  "task_id": "b3115c99-3f2e-4578-9b4f-4a2f9afef2f1",
-  "total_cycles": 10,
-  "completed_cycles": 4,
-  "cycle_history": []
-}
-```
-
-### GET `/api/loop/status`
-
-Get live loop status.
-
-#### Response `200`
-
-```json
-{
-  "running": true,
-  "task_id": "b3115c99-3f2e-4578-9b4f-4a2f9afef2f1",
-  "total_cycles": 10,
-  "completed_cycles": 3,
-  "cycle_history": [
+  "proposals": [
     {
-      "cycle": 1,
-      "health_success_rate": 0.74,
-      "health_error_rate": 0.16,
-      "optimization_run": true,
-      "optimization_result": "accepted",
-      "deploy_result": "Deployed v004 as canary (10% traffic)",
-      "canary_result": "Canary pending: 3 conversations so far"
+      "id": "fix_001",
+      "surface": "instruction",
+      "description": "Add explicit order lookup instructions",
+      "confidence": 0.82,
+      "estimated_impact": "+3% task success rate"
     }
   ]
 }
@@ -608,42 +333,93 @@ Get live loop status.
 
 ---
 
-## Tasks
+## Judges
 
-### GET `/api/tasks/{task_id}`
-
-Get status for any background task.
-
-### GET `/api/tasks`
-
-List all tasks, optional filter:
-
-- `task_type` (`eval|optimize|loop|...`)
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/judges/list` | List judges and versions |
+| `POST` | `/api/judges/feedback` | Submit human feedback on a judge score |
+| `GET` | `/api/judges/calibration` | Judge calibration report |
+| `GET` | `/api/judges/drift` | Judge drift analysis |
 
 ---
 
-## WebSocket
+## Context
 
-### `ws://localhost:8000/ws`
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/context/analysis/{id}` | Context analysis for a trace |
+| `POST` | `/api/context/simulate` | Simulate compaction strategies |
+| `GET` | `/api/context/report` | Context health report |
 
-Subscribe for server push notifications.
-
-### Server message types
-
-- `eval_complete`
-- `optimize_complete`
-- `loop_cycle`
-
-### Ping/Pong
-
-Client can send:
+### POST `/api/context/simulate`
 
 ```json
-{ "type": "ping" }
+// Request
+{
+  "strategy": "balanced"
+}
+
+// Response
+{
+  "strategy": "balanced",
+  "estimated_token_savings": 1200,
+  "estimated_quality_impact": -0.01,
+  "recommendation": "Safe to apply"
+}
 ```
 
-Server responds:
+---
+
+## Registry
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/registry/search` | Search registry items |
+| `POST` | `/api/registry/import` | Bulk import from file |
+| `GET` | `/api/registry/{type}` | List items of a type |
+| `GET` | `/api/registry/{type}/{name}/diff` | Diff versions of an item |
+| `GET` | `/api/registry/{type}/{name}` | Get a specific item |
+| `POST` | `/api/registry/{type}` | Create a new item |
+
+Types: `skills`, `policies`, `tool_contracts`, `handoff_schemas`.
+
+### GET `/api/registry/search`
+
+```
+GET /api/registry/search?q=order&type=skills
+```
+
+---
+
+## Scorers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/scorers/create` | Create a scorer from natural language |
+| `GET` | `/api/scorers` | List all scorers |
+| `GET` | `/api/scorers/{name}` | Get a scorer spec |
+| `POST` | `/api/scorers/{name}/refine` | Refine a scorer with additional criteria |
+| `POST` | `/api/scorers/{name}/test` | Test a scorer against eval data |
+
+### POST `/api/scorers/create`
 
 ```json
-{ "type": "pong" }
+// Request
+{
+  "description": "Score on empathy, accuracy, and conciseness",
+  "name": "support_quality"
+}
+
+// Response
+{
+  "scorer": {
+    "name": "support_quality",
+    "dimensions": [
+      { "name": "empathy", "weight": 0.33, "description": "..." },
+      { "name": "accuracy", "weight": 0.34, "description": "..." },
+      { "name": "conciseness", "weight": 0.33, "description": "..." }
+    ]
+  }
+}
 ```

@@ -1,455 +1,462 @@
 # CLI Reference
 
-The `autoagent` CLI is the primary operator interface.
+Complete reference for every `autoagent` command. All commands support `--help` for inline documentation.
 
-## Global
+## Core Commands
 
-### `autoagent --version`
+### `autoagent init`
 
-Returns installed CLI version.
-
-### `autoagent --help`
-
-Shows command groups and top-level commands.
-
----
-
-## `autoagent init`
-
-Scaffold project structure and starter assets.
-
-### Synopsis
+Scaffold a new AutoAgent project.
 
 ```bash
 autoagent init [--template customer-support|minimal] [--dir PATH]
 ```
 
-### Options
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--template` | `customer-support` | Project template to scaffold |
+| `--dir` | `.` | Target directory |
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--template` | choice | `customer-support` | Template preset |
-| `--dir` | string | `.` | Target directory |
+Creates `configs/`, `evals/cases/`, and `agent/config/` with starter files.
 
-### Example
+### `autoagent server`
 
-```bash
-autoagent init --template customer-support
-```
-
-Expected output (shape):
-
-```text
-Initialized AutoAgent project in ...
-  Template: customer-support
-  Config:   configs/v001_base.yaml
-  Evals:    evals/cases/
-```
-
-### Related
-
-- `autoagent eval run`
-- `autoagent server`
-
----
-
-## `autoagent eval run`
-
-Run eval suite against a config.
-
-### Synopsis
-
-```bash
-autoagent eval run [--config PATH] [--suite DIR] [--dataset FILE] [--split train|test|all] [--category NAME] [--output FILE]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--config` | string | active/default | Config YAML path |
-| `--suite` | string | built-in suite | Eval cases directory |
-| `--dataset` | string | none | Dataset file (`.jsonl` or `.csv`) |
-| `--split` | choice | `all` | Dataset split when using `--dataset` |
-| `--category` | string | all | Run only one category |
-| `--output` | string | none | Write JSON result file |
-
-### Example
-
-```bash
-autoagent eval run --dataset evals/datasets/regression.jsonl --split test --output results.json
-```
-
-Expected output (shape):
-
-```text
-Full eval suite
-  Cases: X/Y passed
-  Quality:   0.xxxx
-  Safety:    0.xxxx
-  Latency:   0.xxxx
-  Cost:      0.xxxx
-  Composite: 0.xxxx
-```
-
-### Related
-
-- `autoagent eval results`
-- `autoagent eval list`
-
----
-
-## `autoagent eval results`
-
-Display previously saved eval results.
-
-### Synopsis
-
-```bash
-autoagent eval results [--file FILE] [--run-id ID]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--file` | string | none | JSON results file from `eval run --output` |
-| `--run-id` | string | none | Future server-backed lookup path |
-
-### Example
-
-```bash
-autoagent eval results --file results.json
-```
-
-### Related
-
-- `autoagent eval run`
-- `autoagent eval list`
-
----
-
-## `autoagent eval list`
-
-List local result JSON files.
-
-### Synopsis
-
-```bash
-autoagent eval list
-```
-
-### Options
-
-No options.
-
-### Example
-
-```bash
-autoagent eval list
-```
-
-### Related
-
-- `autoagent eval run`
-
----
-
-## `autoagent optimize`
-
-Run one or more optimization cycles from CLI.
-
-### Synopsis
-
-```bash
-autoagent optimize [--cycles N] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--cycles` | int | `1` | Number of optimize cycles |
-| `--db` | string | `conversations.db` | Conversation DB path |
-| `--configs-dir` | string | `configs` | Config version directory |
-| `--memory-db` | string | `optimizer_memory.db` | Optimization memory DB |
-
-### Example
-
-```bash
-autoagent optimize --cycles 3
-```
-
-### Related
-
-- `autoagent loop`
-- `autoagent status`
-
----
-
-## `autoagent config list`
-
-Show version history and active/canary markers.
-
-### Synopsis
-
-```bash
-autoagent config list [--configs-dir DIR]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--configs-dir` | string | `configs` | Config directory |
-
-### Example
-
-```bash
-autoagent config list
-```
-
-### Related
-
-- `autoagent config show`
-- `autoagent config diff`
-
----
-
-## `autoagent config show`
-
-Print YAML for active or specific version.
-
-### Synopsis
-
-```bash
-autoagent config show [VERSION] [--configs-dir DIR]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `VERSION` | int | active | Version number |
-| `--configs-dir` | string | `configs` | Config directory |
-
-### Example
-
-```bash
-autoagent config show 3
-```
-
-### Related
-
-- `autoagent config list`
-- `autoagent config diff`
-
----
-
-## `autoagent config diff`
-
-Diff two versioned configs.
-
-### Synopsis
-
-```bash
-autoagent config diff V1 V2 [--configs-dir DIR]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `V1` | int | required | Source version |
-| `V2` | int | required | Target version |
-| `--configs-dir` | string | `configs` | Config directory |
-
-### Example
-
-```bash
-autoagent config diff 1 4
-```
-
-### Related
-
-- `autoagent config list`
-- `autoagent config show`
-
----
-
-## `autoagent deploy`
-
-Deploy a version via canary or immediate strategy.
-
-### Synopsis
-
-```bash
-autoagent deploy [--config-version N] [--strategy canary|immediate] [--configs-dir DIR] [--db PATH]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--config-version` | int | latest | Version to deploy/promote |
-| `--strategy` | choice | `canary` | Rollout strategy |
-| `--configs-dir` | string | `configs` | Config directory |
-| `--db` | string | `conversations.db` | Conversation DB path |
-
-### Example
-
-```bash
-autoagent deploy --config-version 5 --strategy canary
-```
-
-### Related
-
-- `autoagent config list`
-- `autoagent status`
-
----
-
-## `autoagent loop`
-
-Run continuous autoresearch loop.
-
-### Synopsis
-
-```bash
-autoagent loop [--max-cycles N] [--stop-on-plateau] [--delay S] [--schedule continuous|interval|cron] [--interval-minutes M] [--cron \"*/5 * * * *\"] [--checkpoint-file PATH] [--resume|--no-resume] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--max-cycles` | int | `50` | Max cycles to run |
-| `--stop-on-plateau` | flag | off | Stop after repeated no-improvement |
-| `--delay` | float | `1.0` | Delay between cycles (seconds) |
-| `--schedule` | choice | from `autoagent.yaml` | Scheduler mode (`continuous`, `interval`, `cron`) |
-| `--interval-minutes` | float | from `autoagent.yaml` | Interval length for `--schedule interval` |
-| `--cron` | string | from `autoagent.yaml` | 5-field UTC cron expression |
-| `--checkpoint-file` | string | from `autoagent.yaml` | Checkpoint path for resume/recovery |
-| `--resume/--no-resume` | flag | `--resume` | Resume from latest checkpoint |
-| `--db` | string | `conversations.db` | Conversation DB path |
-| `--configs-dir` | string | `configs` | Config directory |
-| `--memory-db` | string | `optimizer_memory.db` | Optimization memory DB |
-
-### Example
-
-```bash
-autoagent loop --schedule cron --cron "*/10 * * * *" --resume --max-cycles 200
-```
-
-### Related
-
-- `autoagent optimize`
-- `autoagent status`
-
----
-
-## `autoagent status`
-
-Show health, versions, and recent optimization attempts.
-
-### Synopsis
-
-```bash
-autoagent status [--db PATH] [--configs-dir DIR] [--memory-db PATH]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--db` | string | `conversations.db` | Conversation DB path |
-| `--configs-dir` | string | `configs` | Config directory |
-| `--memory-db` | string | `optimizer_memory.db` | Optimization memory DB |
-
-### Example
-
-```bash
-autoagent status
-```
-
-### Related
-
-- `autoagent logs`
-- `autoagent optimize`
-
----
-
-## `autoagent logs`
-
-Browse recent conversation logs.
-
-### Synopsis
-
-```bash
-autoagent logs [--limit N] [--outcome success|fail|error|abandon] [--db PATH]
-```
-
-### Options
-
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--limit` | int | `20` | Number of records |
-| `--outcome` | choice | all | Filter outcome |
-| `--db` | string | `conversations.db` | Conversation DB path |
-
-### Example
-
-```bash
-autoagent logs --limit 50 --outcome fail
-```
-
-### Related
-
-- `autoagent status`
-- `autoagent eval run`
-
----
-
-## `autoagent server`
-
-Start FastAPI + web console serving.
-
-### Synopsis
+Start the API server and web console.
 
 ```bash
 autoagent server [--host HOST] [--port PORT] [--reload]
 ```
 
-### Options
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--host` | `127.0.0.1` | Bind address |
+| `--port` | `8000` | Port |
+| `--reload` | off | Auto-reload on code changes |
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `--host` | string | `0.0.0.0` | Bind host |
-| `--port` | int | `8000` | Bind port |
-| `--reload` | flag | off | Dev autoreload |
+### `autoagent status`
 
-### Example
+Show current system status -- active config version, loop state, recent eval scores, and budget usage.
 
 ```bash
-autoagent server --port 8000 --reload
+autoagent status
 ```
 
-Expected startup output:
+### `autoagent doctor`
 
-```text
-Starting AutoAgent VNextCC server on 0.0.0.0:8000
-  API docs:     http://localhost:8000/docs
-  Web console:  http://localhost:8000
-  WebSocket:    ws://localhost:8000/ws
+Run diagnostics on your setup -- checks config validity, database connectivity, API keys, and eval suite integrity.
+
+```bash
+autoagent doctor [--config PATH]
 ```
 
-### Related
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `autoagent.yaml` | Config file to validate |
 
-- `autoagent eval run`
-- `autoagent optimize`
+### `autoagent logs`
+
+View structured logs from the optimization loop.
+
+```bash
+autoagent logs [--limit N] [--outcome fail|success]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--limit` | `20` | Number of log entries |
+| `--outcome` | all | Filter by outcome |
 
 ---
 
-## Hidden Legacy Group
+## Eval Group
 
-`autoagent run ...` remains for backward compatibility but should not be used for new automation.
+### `autoagent eval run`
+
+Run the eval suite against a config.
+
+```bash
+autoagent eval run [--config PATH] [--suite DIR] [--dataset PATH] [--split train|test|all] [--category NAME] [--output FILE]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | active config | Path to config YAML |
+| `--suite` | `evals/cases/` | Path to eval cases directory |
+| `--dataset` | none | Path to dataset file (.jsonl or .csv) |
+| `--split` | `all` | Dataset split to evaluate |
+| `--category` | all | Run only a specific category |
+| `--output` | none | Write results to JSON file |
+
+### `autoagent eval results`
+
+Display results from a previous eval run.
+
+```bash
+autoagent eval results [--run-id ID] [--file PATH]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--run-id` | Look up results by run ID from the history database |
+| `--file` | Read results from a JSON file |
+
+### `autoagent eval list`
+
+List all historical eval runs.
+
+```bash
+autoagent eval list
+```
+
+---
+
+## Optimize
+
+### `autoagent optimize`
+
+Run one or more optimization cycles.
+
+```bash
+autoagent optimize [--cycles N] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cycles` | `1` | Number of optimization cycles |
+| `--db` | `conversations.db` | Conversation database path |
+| `--configs-dir` | `configs` | Config versions directory |
+| `--memory-db` | `optimizer_memory.db` | Optimization memory database |
+
+---
+
+## Config Group
+
+### `autoagent config list`
+
+List all config versions.
+
+```bash
+autoagent config list [--configs-dir DIR]
+```
+
+### `autoagent config show`
+
+Display a specific config version.
+
+```bash
+autoagent config show [VERSION] [--configs-dir DIR]
+```
+
+`VERSION` defaults to the latest active version.
+
+### `autoagent config diff`
+
+Diff two config versions side by side.
+
+```bash
+autoagent config diff <v1> <v2> [--configs-dir DIR]
+```
+
+---
+
+## Deploy
+
+### `autoagent deploy`
+
+Promote a config version to active.
+
+```bash
+autoagent deploy [--config-version VERSION] [--strategy canary|immediate] [--configs-dir DIR] [--db PATH]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config-version` | latest | Version to deploy |
+| `--strategy` | `canary` | Deployment strategy |
+| `--configs-dir` | `configs` | Config versions directory |
+| `--db` | `conversations.db` | Database path |
+
+Canary deploys route a percentage of traffic to the new config and promote after validation. Immediate deploys switch all traffic instantly.
+
+---
+
+## Loop
+
+### `autoagent loop`
+
+Run the continuous optimization loop.
+
+```bash
+autoagent loop [OPTIONS]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--max-cycles` | `100` | Maximum cycles before stopping |
+| `--stop-on-plateau` | off | Stop when improvements plateau |
+| `--delay` | `0` | Delay between cycles (seconds) |
+| `--schedule` | `continuous` | Schedule mode: `continuous`, `interval`, `cron` |
+| `--interval-minutes` | `5.0` | Interval between cycles (interval mode) |
+| `--cron` | `*/5 * * * *` | Cron expression (cron mode) |
+| `--checkpoint-file` | `.autoagent/loop_checkpoint.json` | Checkpoint file path |
+| `--resume` / `--no-resume` | `--resume` | Resume from checkpoint |
+| `--db` | `conversations.db` | Database path |
+| `--configs-dir` | `configs` | Config versions directory |
+| `--memory-db` | `optimizer_memory.db` | Memory database path |
+
+---
+
+## Human Control
+
+### `autoagent pause`
+
+Pause the running optimization loop. Takes effect after the current cycle completes.
+
+```bash
+autoagent pause
+```
+
+### `autoagent resume`
+
+Resume a paused optimization loop.
+
+```bash
+autoagent resume
+```
+
+### `autoagent pin`
+
+Lock a configuration surface so the optimizer cannot modify it.
+
+```bash
+autoagent pin <surface>
+```
+
+Surfaces: `instruction`, `few_shot`, `tool_description`, `model`, `generation_settings`, `callback`, `context_caching`, `memory_policy`, `routing`.
+
+### `autoagent unpin`
+
+Unlock a previously pinned surface.
+
+```bash
+autoagent unpin <surface>
+```
+
+### `autoagent reject`
+
+Reject a specific experiment and roll back its changes.
+
+```bash
+autoagent reject <experiment_id> [--configs-dir DIR] [--db PATH]
+```
+
+---
+
+## AutoFix Group
+
+### `autoagent autofix suggest`
+
+Analyze recent failures and generate fix proposals.
+
+```bash
+autoagent autofix suggest
+```
+
+### `autoagent autofix apply`
+
+Apply a specific fix proposal.
+
+```bash
+autoagent autofix apply <proposal_id>
+```
+
+### `autoagent autofix history`
+
+View history of autofix proposals and their outcomes.
+
+```bash
+autoagent autofix history [--limit N]
+```
+
+---
+
+## Judges Group
+
+### `autoagent judges list`
+
+List all registered judges and their versions.
+
+```bash
+autoagent judges list
+```
+
+### `autoagent judges calibrate`
+
+Run calibration analysis comparing judge scores to human labels.
+
+```bash
+autoagent judges calibrate [--sample N] [--judge-id ID]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sample` | `50` | Number of cases to sample |
+| `--judge-id` | all | Calibrate a specific judge |
+
+### `autoagent judges drift`
+
+Check for judge scoring drift over time.
+
+```bash
+autoagent judges drift
+```
+
+---
+
+## Context Group
+
+### `autoagent context analyze`
+
+Analyze context window usage for a specific trace.
+
+```bash
+autoagent context analyze --trace <trace_id>
+```
+
+### `autoagent context simulate`
+
+Simulate compaction strategies and estimate impact.
+
+```bash
+autoagent context simulate [--strategy aggressive|balanced|conservative]
+```
+
+### `autoagent context report`
+
+Generate a full context health report across recent traces.
+
+```bash
+autoagent context report
+```
+
+---
+
+## Registry Group
+
+### `autoagent registry list`
+
+List registered items by type.
+
+```bash
+autoagent registry list [--type skills|policies|tools|handoffs] [--db PATH]
+```
+
+### `autoagent registry show`
+
+Show a specific registry item with version history.
+
+```bash
+autoagent registry show <type> <name> [--version N] [--db PATH]
+```
+
+### `autoagent registry add`
+
+Add a new item to the registry.
+
+```bash
+autoagent registry add <type> <name> --file <path> [--db PATH]
+```
+
+### `autoagent registry diff`
+
+Diff two versions of a registry item.
+
+```bash
+autoagent registry diff <type> <name> <v1> <v2> [--db PATH]
+```
+
+### `autoagent registry import`
+
+Bulk import registry items from a YAML/JSON file.
+
+```bash
+autoagent registry import <path> [--db PATH]
+```
+
+---
+
+## Trace Group
+
+### `autoagent trace grade`
+
+Grade all spans in a trace using the 7-grader suite.
+
+```bash
+autoagent trace grade <trace_id> [--db PATH]
+```
+
+### `autoagent trace blame`
+
+Build a blame map of failure clusters over a time window.
+
+```bash
+autoagent trace blame [--window 24h] [--top N] [--db PATH]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--window` | `24h` | Time window for analysis |
+| `--top` | `10` | Number of top clusters to show |
+
+### `autoagent trace graph`
+
+Render a trace as a span dependency graph.
+
+```bash
+autoagent trace graph <trace_id> [--db PATH]
+```
+
+---
+
+## Scorer Group
+
+### `autoagent scorer create`
+
+Create a new scorer from a natural language description.
+
+```bash
+autoagent scorer create "Score responses on empathy and accuracy" [--name my_scorer]
+autoagent scorer create --from-file criteria.txt [--name my_scorer]
+```
+
+### `autoagent scorer list`
+
+List all registered scorers.
+
+```bash
+autoagent scorer list
+```
+
+### `autoagent scorer show`
+
+Display a scorer's spec and dimensions.
+
+```bash
+autoagent scorer show <name>
+```
+
+### `autoagent scorer refine`
+
+Add criteria to an existing scorer.
+
+```bash
+autoagent scorer refine <name> "Also check for conciseness"
+```
+
+### `autoagent scorer test`
+
+Test a scorer against a trace.
+
+```bash
+autoagent scorer test <name> --trace <trace_id> [--db PATH]
+```
