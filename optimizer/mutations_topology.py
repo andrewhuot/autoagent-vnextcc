@@ -95,6 +95,7 @@ def register_topology_operators(registry: MutationRegistry) -> None:
                 "between specialist agents. (Experimental)"
             ),
             apply=_apply_detect_transfer_loops,
+            ready=False,
         )
     )
 
@@ -113,6 +114,7 @@ def register_topology_operators(registry: MutationRegistry) -> None:
                 "parallel branches. (Experimental)"
             ),
             apply=_apply_reduce_unnecessary_parallelism,
+            ready=False,
         )
     )
 
@@ -131,5 +133,6 @@ def register_topology_operators(registry: MutationRegistry) -> None:
                 "the agent workflow. (Experimental)"
             ),
             apply=_apply_add_deterministic_steps,
+            ready=False,
         )
     )

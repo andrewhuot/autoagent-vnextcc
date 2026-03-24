@@ -114,10 +114,12 @@ async def lifespan(app: FastAPI):
     from observer.traces import TraceStore
     from observer.opportunities import OpportunityQueue
     from optimizer.experiments import ExperimentStore
+    from agent.tracing import TracingMiddleware
 
     app.state.trace_store = TraceStore(db_path=".autoagent/traces.db")
     app.state.opportunity_queue = OpportunityQueue(db_path=".autoagent/opportunities.db")
     app.state.experiment_store = ExperimentStore(db_path=".autoagent/experiments.db")
+    app.state.tracing_middleware = TracingMiddleware(trace_store=app.state.trace_store)
 
     yield
     # No explicit cleanup needed — SQLite connections are context-managed

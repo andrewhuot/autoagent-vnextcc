@@ -49,6 +49,7 @@ class ZeroShotOptimizer:
                 "system prompts without few-shot examples."
             ),
             apply=cls._apply,
+            ready=False,
         )
 
     @staticmethod
@@ -93,6 +94,7 @@ class FewShotOptimizer:
                 "few-shot examples for better prompt performance."
             ),
             apply=cls._apply,
+            ready=False,
         )
 
     @staticmethod
@@ -138,6 +140,7 @@ class DataDrivenOptimizer:
                 "based on production traffic and eval results."
             ),
             apply=cls._apply,
+            ready=False,
         )
 
     @staticmethod

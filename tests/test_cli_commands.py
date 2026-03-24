@@ -155,3 +155,70 @@ class TestConfigCommands:
         result = runner.invoke(cli, ["config", "list", "--configs-dir", configs_dir])
         assert result.exit_code == 0
         assert "No config versions" in result.output
+
+
+class TestDoctorCommand:
+    def test_doctor_runs_without_error(self, runner):
+        """doctor command exits cleanly and prints the header."""
+        result = runner.invoke(cli, ["doctor"])
+        assert result.exit_code == 0
+        assert "AutoAgent Doctor" in result.output
+        assert "API Keys" in result.output
+        assert "Data Stores" in result.output
+
+    def test_doctor_shows_mock_warning_when_use_mock_true(self, runner, tmp_dir):
+        """doctor reports mock-mode warning when use_mock: true."""
+        config_file = os.path.join(tmp_dir, "autoagent_mock.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: true\n", encoding="utf-8")
+        result = runner.invoke(cli, ["doctor", "--config", config_file])
+        assert result.exit_code == 0
+        assert "Enabled" in result.output
+        assert "use_mock" in result.output
+
+    def test_doctor_no_mock_warning_when_use_mock_false(self, runner, tmp_dir):
+        """doctor does not warn about mock mode when use_mock: false."""
+        config_file = os.path.join(tmp_dir, "autoagent_real.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: false\n", encoding="utf-8")
+        result = runner.invoke(cli, ["doctor", "--config", config_file])
+        assert result.exit_code == 0
+        assert "Disabled" in result.output
+
+    def test_doctor_shows_api_key_set(self, runner, tmp_dir):
+        """doctor shows OPENAI_API_KEY as Set when the env var is present."""
+        config_file = os.path.join(tmp_dir, "autoagent.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: false\n", encoding="utf-8")
+        env = {**os.environ, "OPENAI_API_KEY": "sk-test-key"}
+        result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
+        assert result.exit_code == 0
+        assert "OPENAI_API_KEY" in result.output
+        assert "Set" in result.output
+
+    def test_doctor_shows_api_key_not_set(self, runner, tmp_dir):
+        """doctor shows OPENAI_API_KEY as Not set when the env var is absent."""
+        config_file = os.path.join(tmp_dir, "autoagent.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: false\n", encoding="utf-8")
+        env = {k: v for k, v in os.environ.items() if k != "OPENAI_API_KEY"}
+        result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
+        assert result.exit_code == 0
+        assert "OPENAI_API_KEY" in result.output
+        assert "Not set" in result.output
+
+    def test_doctor_status_line_reports_issues(self, runner, tmp_dir):
+        """Status line reflects issue count."""
+        config_file = os.path.join(tmp_dir, "autoagent.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: true\n", encoding="utf-8")
+        # Strip all API key env vars to force multiple issues
+        env = {
+            k: v for k, v in os.environ.items()
+            if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY")
+        }
+        result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
+        assert result.exit_code == 0
+        assert "issue" in result.output
+
+    def test_eval_run_prints_mock_warning(self, runner):
+        """eval run warns when use_mock is true (default in autoagent.yaml)."""
+        result = runner.invoke(cli, ["eval", "run"])
+        assert result.exit_code == 0
+        # autoagent.yaml has use_mock: true, so the warning should appear
+        assert "mock provider" in result.output.lower() or "simulated" in result.output.lower()

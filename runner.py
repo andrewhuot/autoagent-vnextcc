@@ -242,6 +242,14 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
       autoagent eval run --config configs/v003.yaml --category safety
       autoagent eval run --output results.json
     """
+    runtime = load_runtime_config()
+    if runtime.optimizer.use_mock:
+        click.echo(click.style(
+            "\u26a0 Running with mock provider. Results are simulated. "
+            "Set use_mock: false in autoagent.yaml for real evaluation.",
+            fg="yellow",
+        ))
+
     config = None
     if config_path:
         config = _load_config_dict(config_path)
@@ -249,7 +257,6 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     else:
         click.echo("Evaluating with default config")
 
-    runtime = load_runtime_config()
     runner = EvalRunner(
         cases_dir=suite,
         history_db_path=runtime.eval.history_db_path,
@@ -950,6 +957,219 @@ def logs(limit: int, outcome: str | None, db: str) -> None:
         specialist = r.specialist_used or "—"
         latency = f"{r.latency_ms}ms" if r.latency_ms else "—"
         click.echo(f"{r.conversation_id:<38}  {r.outcome:<10}  {specialist:<16}  {latency:>8}  {msg}")
+
+
+# ---------------------------------------------------------------------------
+# autoagent doctor
+# ---------------------------------------------------------------------------
+
+@cli.command("doctor")
+@click.option("--config", "config_path", default="autoagent.yaml", show_default=True,
+              help="Path to runtime config YAML.")
+def doctor(config_path: str) -> None:
+    """Check system health and configuration.
+
+    Reports on API keys, mock mode, data stores, eval cases, and config versions.
+
+    Examples:
+      autoagent doctor
+    """
+    import sqlite3
+
+    issues: list[str] = []
+
+    click.echo("\nAutoAgent Doctor")
+    click.echo("================")
+
+    # ------------------------------------------------------------------
+    # Configuration
+    # ------------------------------------------------------------------
+    click.echo("\nConfiguration")
+    runtime = load_runtime_config(config_path)
+    if runtime.optimizer.use_mock:
+        issues.append("Mock mode is enabled")
+        click.echo(
+            "  Mock mode:          "
+            + click.style(
+                "\u26a0 Enabled (set optimizer.use_mock: false in autoagent.yaml for production)",
+                fg="yellow",
+            )
+        )
+    else:
+        click.echo(
+            "  Mock mode:          " + click.style("\u2713 Disabled", fg="green")
+        )
+
+    # ------------------------------------------------------------------
+    # API Keys
+    # ------------------------------------------------------------------
+    click.echo("\nAPI Keys")
+    api_keys = [
+        ("OPENAI_API_KEY", "OPENAI_API_KEY"),
+        ("ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY"),
+        ("GOOGLE_API_KEY", "GOOGLE_API_KEY"),
+    ]
+    for label, env_var in api_keys:
+        if os.environ.get(env_var):
+            click.echo(
+                f"  {label + ':':<22}" + click.style("\u2713 Set", fg="green")
+            )
+        else:
+            issues.append(f"{label} is not set")
+            click.echo(
+                f"  {label + ':':<22}" + click.style("\u2717 Not set", fg="red")
+            )
+
+    # ------------------------------------------------------------------
+    # Data Stores
+    # ------------------------------------------------------------------
+    click.echo("\nData Stores")
+
+    # Traces DB
+    traces_db = Path(".autoagent") / "traces.db"
+    if traces_db.exists():
+        try:
+            with sqlite3.connect(str(traces_db)) as conn:
+                tables = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                ]
+                row_count = 0
+                for table in tables:
+                    try:
+                        row_count += conn.execute(
+                            f"SELECT COUNT(*) FROM {table}"  # noqa: S608
+                        ).fetchone()[0]
+                    except sqlite3.OperationalError:
+                        pass
+            if row_count > 0:
+                click.echo(
+                    "  Traces:             "
+                    + click.style(f"\u2713 {row_count} rows", fg="green")
+                )
+            else:
+                issues.append("Traces DB is empty")
+                click.echo(
+                    "  Traces:             "
+                    + click.style(
+                        "\u2717 Empty (run your agent with tracing enabled)", fg="red"
+                    )
+                )
+        except sqlite3.DatabaseError:
+            issues.append("Traces DB is unreadable")
+            click.echo(
+                "  Traces:             "
+                + click.style("\u2717 Unreadable (DB may be corrupt)", fg="red")
+            )
+    else:
+        issues.append("Traces DB does not exist")
+        click.echo(
+            "  Traces:             "
+            + click.style(
+                "\u2717 Empty (run your agent with tracing enabled)", fg="red"
+            )
+        )
+
+    # Eval cases
+    eval_cases_dir = Path("evals") / "cases"
+    if eval_cases_dir.is_dir():
+        yaml_files = list(eval_cases_dir.glob("*.yaml"))
+        if yaml_files:
+            # Count individual cases (documents) across files
+            total_cases = 0
+            for f in yaml_files:
+                try:
+                    with f.open("r", encoding="utf-8") as fh:
+                        docs = list(yaml.safe_load_all(fh))
+                    total_cases += sum(1 for d in docs if d is not None)
+                except Exception:
+                    total_cases += 1  # count the file itself if unparseable
+            click.echo(
+                "  Eval cases:         "
+                + click.style(
+                    f"\u2713 {total_cases} cases in {len(yaml_files)} files", fg="green"
+                )
+            )
+        else:
+            issues.append("No eval case YAML files found")
+            click.echo(
+                "  Eval cases:         "
+                + click.style("\u2717 No YAML files in evals/cases/", fg="red")
+            )
+    else:
+        issues.append("evals/cases/ directory does not exist")
+        click.echo(
+            "  Eval cases:         "
+            + click.style("\u2717 evals/cases/ not found", fg="red")
+        )
+
+    # Config versions
+    configs_dir = Path(CONFIGS_DIR)
+    if configs_dir.is_dir():
+        version_files = list(configs_dir.glob("*.yaml"))
+        if version_files:
+            click.echo(
+                "  Config versions:    "
+                + click.style(f"\u2713 {len(version_files)} versions", fg="green")
+            )
+        else:
+            issues.append("No config version files found")
+            click.echo(
+                "  Config versions:    "
+                + click.style("\u2717 No versions in configs/", fg="red")
+            )
+    else:
+        issues.append("configs/ directory does not exist")
+        click.echo(
+            "  Config versions:    "
+            + click.style("\u2717 configs/ not found", fg="red")
+        )
+
+    # Conversations DB
+    conversations_db = Path(DB_PATH)
+    if conversations_db.exists():
+        try:
+            store = ConversationStore(db_path=str(conversations_db))
+            count = store.count()
+            if count > 0:
+                click.echo(
+                    "  Conversations:      "
+                    + click.style(f"\u2713 {count} conversations", fg="green")
+                )
+            else:
+                issues.append("Conversations DB is empty")
+                click.echo(
+                    "  Conversations:      "
+                    + click.style("\u2717 Empty", fg="red")
+                )
+        except Exception:
+            issues.append("Conversations DB is unreadable")
+            click.echo(
+                "  Conversations:      "
+                + click.style("\u2717 Unreadable", fg="red")
+            )
+    else:
+        issues.append("Conversations DB does not exist")
+        click.echo(
+            "  Conversations:      "
+            + click.style("\u2717 Empty", fg="red")
+        )
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    click.echo("")
+    if issues:
+        click.echo(
+            click.style(
+                f"Status: {len(issues)} issue{'s' if len(issues) != 1 else ''} found \u2014 see warnings above",
+                fg="yellow",
+            )
+        )
+    else:
+        click.echo(click.style("Status: All checks passed \u2713", fg="green"))
 
 
 # ---------------------------------------------------------------------------

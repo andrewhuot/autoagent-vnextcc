@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import sqlite3
 import time
 import uuid
 from collections import defaultdict
@@ -88,14 +89,73 @@ class OperatorPerformanceTracker:
     """Track which mutation operators succeed for which failure families.
 
     Maintains in-memory success/failure counts keyed by
-    ``(operator_name, failure_family)``.  The tracker is intentionally
-    lightweight — no persistence — so it can be swapped for a DB-backed
-    version later without changing the interface.
+    ``(operator_name, failure_family)`` and persists them to a SQLite
+    database so history survives process restarts.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, db_path: str = ".autoagent/operator_performance.db") -> None:
+        self.db_path = db_path
         self._successes: dict[tuple[str, str], int] = defaultdict(int)
         self._totals: dict[tuple[str, str], int] = defaultdict(int)
+        self._init_db()
+        self._load()
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> None:
+        """Create the operator_performance table if it doesn't exist."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS operator_performance (
+                    operator_name TEXT NOT NULL,
+                    failure_family TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    successes INTEGER NOT NULL DEFAULT 0,
+                    total_lift REAL NOT NULL DEFAULT 0.0,
+                    last_updated REAL NOT NULL DEFAULT 0.0,
+                    PRIMARY KEY (operator_name, failure_family)
+                )
+                """
+            )
+            conn.commit()
+
+    def _load(self) -> None:
+        """Load persisted operator performance data into the in-memory dicts."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT operator_name, failure_family, attempts, successes FROM operator_performance"
+            ).fetchall()
+        for operator_name, failure_family, attempts, successes in rows:
+            key = (operator_name, failure_family)
+            self._totals[key] = attempts
+            self._successes[key] = successes
+
+    def _persist(self, operator_name: str, failure_family: str) -> None:
+        """Write the current in-memory counts for one key back to SQLite."""
+        key = (operator_name, failure_family)
+        attempts = self._totals[key]
+        successes = self._successes[key]
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT INTO operator_performance
+                    (operator_name, failure_family, attempts, successes, total_lift, last_updated)
+                VALUES (?, ?, ?, ?, 0.0, ?)
+                ON CONFLICT(operator_name, failure_family) DO UPDATE SET
+                    attempts = excluded.attempts,
+                    successes = excluded.successes,
+                    last_updated = excluded.last_updated
+                """,
+                (operator_name, failure_family, attempts, successes, time.time()),
+            )
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def record_outcome(self, operator_name: str, failure_family: str, success: bool) -> None:
         """Record the outcome of applying *operator_name* to *failure_family*."""
@@ -103,6 +163,7 @@ class OperatorPerformanceTracker:
         self._totals[key] += 1
         if success:
             self._successes[key] += 1
+        self._persist(operator_name, failure_family)
 
     def get_success_rate(self, operator_name: str, failure_family: str) -> float:
         """Return observed success rate, defaulting to 0.5 for unseen combos."""
@@ -188,6 +249,9 @@ class SearchEngine:
                 operator = self.registry.get(op_name)
                 if operator is None:
                     logger.debug("Operator '%s' not found in registry, skipping.", op_name)
+                    continue
+                if not operator.ready:
+                    logger.debug("Operator '%s' is not ready, skipping.", op_name)
                     continue
 
                 # Deduplicate against past failed attempts

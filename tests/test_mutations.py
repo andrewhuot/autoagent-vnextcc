@@ -10,6 +10,8 @@ from optimizer.mutations import (
     RiskClass,
     create_default_registry,
 )
+from optimizer.mutations_google import register_google_operators
+from optimizer.mutations_topology import register_topology_operators
 
 
 def test_create_default_registry_has_9_operators() -> None:
@@ -129,3 +131,26 @@ def test_routing_edit_operator_adds_keywords() -> None:
     assert result["routing"]["rules"][1] == new_rule
     # Original unchanged
     assert len(original["routing"]["rules"]) == 1
+
+
+def test_default_registry_contains_only_ready_operators() -> None:
+    """create_default_registry() must only register operators with ready=True."""
+    registry = create_default_registry()
+    for op in registry.list_all():
+        assert op.ready is True, f"Operator '{op.name}' in default registry has ready=False"
+
+
+def test_google_and_topology_operators_are_not_ready() -> None:
+    """Google and topology stub operators must have ready=False."""
+    registry = create_default_registry()
+    register_google_operators(registry)
+    register_topology_operators(registry)
+
+    google_names = {"google_zero_shot_optimize", "google_few_shot_optimize", "google_data_driven_optimize"}
+    topology_names = {"detect_transfer_loops", "reduce_unnecessary_parallelism", "add_deterministic_steps"}
+    stub_names = google_names | topology_names
+
+    for name in stub_names:
+        op = registry.get(name)
+        assert op is not None, f"Expected operator '{name}' to be registered"
+        assert op.ready is False, f"Stub operator '{name}' should have ready=False"

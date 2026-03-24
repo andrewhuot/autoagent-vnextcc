@@ -12,11 +12,15 @@ import type {
   DiffLine,
   EvalResult,
   EvalRun,
+  ExperimentCard,
   HealthReport,
   LoopStatus,
   OptimizationAttempt,
+  OptimizationOpportunity,
   OptimizeResult,
   TaskStatus,
+  Trace,
+  TraceEvent,
 } from './types';
 
 const API_BASE = '/api';
@@ -689,4 +693,185 @@ export function useTaskStatus(taskId: string | null) {
 export async function getTaskStatus(taskId: string): Promise<TaskStatus> {
   const payload = await fetchApi<TaskStatusRaw>(`/tasks/${taskId}`);
   return mapTask(payload);
+}
+
+// Traces
+
+interface TraceEventsResponse {
+  events: TraceEvent[];
+  message?: string;
+}
+
+interface TraceDetailResponse {
+  trace_id: string;
+  events: TraceEvent[];
+  spans: unknown[];
+  message?: string;
+}
+
+export function useRecentTraces() {
+  return useQuery<TraceEvent[]>({
+    queryKey: ['traces', 'recent'],
+    queryFn: async () => {
+      const payload = await fetchApi<TraceEventsResponse>('/traces/recent');
+      return payload.events ?? [];
+    },
+    refetchInterval: 5000,
+  });
+}
+
+export function useTraceDetail(traceId: string | undefined) {
+  return useQuery<Trace>({
+    queryKey: ['traces', 'detail', traceId],
+    enabled: Boolean(traceId),
+    queryFn: async () => {
+      if (!traceId) throw new ApiRequestError('Missing trace ID', 400);
+      const payload = await fetchApi<TraceDetailResponse>(`/traces/${traceId}`);
+      return {
+        trace_id: payload.trace_id,
+        events: payload.events ?? [],
+      };
+    },
+  });
+}
+
+export function useTraceSearch(params: {
+  event_type?: string;
+  agent_path?: string;
+  since?: number;
+  limit?: number;
+}) {
+  return useQuery<TraceEvent[]>({
+    queryKey: ['traces', 'search', params],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (params.event_type) qs.set('event_type', params.event_type);
+      if (params.agent_path) qs.set('agent_path', params.agent_path);
+      if (params.since !== undefined) qs.set('since', String(params.since));
+      if (params.limit !== undefined) qs.set('limit', String(params.limit));
+      const payload = await fetchApi<TraceEventsResponse>(`/traces/search?${qs.toString()}`);
+      return payload.events ?? [];
+    },
+  });
+}
+
+export function useTraceErrors() {
+  return useQuery<TraceEvent[]>({
+    queryKey: ['traces', 'errors'],
+    queryFn: async () => {
+      const payload = await fetchApi<TraceEventsResponse>('/traces/errors');
+      return payload.events ?? [];
+    },
+    refetchInterval: 10000,
+  });
+}
+
+// Opportunities
+
+interface OpportunitiesResponse {
+  opportunities: OptimizationOpportunity[];
+}
+
+interface OpportunityCountResponse {
+  open: number;
+}
+
+interface UpdateOpportunityStatusParams {
+  opportunity_id: string;
+  status: string;
+  resolution_experiment_id?: string;
+}
+
+interface UpdateOpportunityStatusResponse {
+  opportunity_id: string;
+  status: string;
+}
+
+export function useOpportunities(statusFilter = 'open') {
+  return useQuery<OptimizationOpportunity[]>({
+    queryKey: ['opportunities', statusFilter],
+    queryFn: async () => {
+      const qs = new URLSearchParams({ status: statusFilter });
+      const payload = await fetchApi<OpportunitiesResponse>(`/opportunities?${qs.toString()}`);
+      return payload.opportunities ?? [];
+    },
+    refetchInterval: 10000,
+  });
+}
+
+export function useOpportunityCount() {
+  return useQuery<OpportunityCountResponse>({
+    queryKey: ['opportunities', 'count'],
+    queryFn: () => fetchApi<OpportunityCountResponse>('/opportunities/count'),
+    refetchInterval: 10000,
+  });
+}
+
+export function useOpportunityDetail(id: string | undefined) {
+  return useQuery<OptimizationOpportunity>({
+    queryKey: ['opportunities', 'detail', id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      if (!id) throw new ApiRequestError('Missing opportunity ID', 400);
+      return fetchApi<OptimizationOpportunity>(`/opportunities/${id}`);
+    },
+  });
+}
+
+export function useUpdateOpportunityStatus() {
+  const queryClient = useQueryClient();
+
+  return useMutation<UpdateOpportunityStatusResponse, ApiRequestError, UpdateOpportunityStatusParams>({
+    mutationFn: ({ opportunity_id, status, resolution_experiment_id }) =>
+      fetchApi(`/opportunities/${opportunity_id}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status, resolution_experiment_id }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['opportunities'] });
+    },
+  });
+}
+
+// Experiments
+
+interface ExperimentsResponse {
+  experiments: ExperimentCard[];
+}
+
+interface ExperimentStatsResponse {
+  counts: Record<string, number>;
+}
+
+export function useExperiments(statusFilter?: string) {
+  return useQuery<ExperimentCard[]>({
+    queryKey: ['experiments', statusFilter ?? 'all'],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (statusFilter) qs.set('status', statusFilter);
+      const query = qs.toString() ? `?${qs.toString()}` : '';
+      const payload = await fetchApi<ExperimentsResponse>(`/experiments${query}`);
+      return payload.experiments ?? [];
+    },
+    refetchInterval: 10000,
+  });
+}
+
+export function useExperimentDetail(id: string | undefined) {
+  return useQuery<ExperimentCard>({
+    queryKey: ['experiments', 'detail', id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      if (!id) throw new ApiRequestError('Missing experiment ID', 400);
+      return fetchApi<ExperimentCard>(`/experiments/${id}`);
+    },
+  });
+}
+
+export function useExperimentStats() {
+  return useQuery<ExperimentStatsResponse>({
+    queryKey: ['experiments', 'stats'],
+    queryFn: () => fetchApi<ExperimentStatsResponse>('/experiments/stats'),
+    refetchInterval: 10000,
+  });
 }

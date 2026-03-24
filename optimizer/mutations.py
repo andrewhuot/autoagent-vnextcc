@@ -81,6 +81,7 @@ class MutationOperator:
     apply: Callable[[dict[str, Any], dict[str, Any]], dict[str, Any]] = field(
         default_factory=lambda: lambda config, params: config
     )
+    ready: bool = True
 
 
 class MutationRegistry:
@@ -112,6 +113,10 @@ class MutationRegistry:
     def list_autodeploy(self) -> list[MutationOperator]:
         """Return only operators that support auto-deployment."""
         return [op for op in self._operators.values() if op.supports_autodeploy]
+
+    def get_ready_operators(self) -> list[MutationOperator]:
+        """Return only operators that are ready to use (ready=True)."""
+        return [op for op in self._operators.values() if op.ready]
 
 
 # ---------------------------------------------------------------------------

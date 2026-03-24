@@ -92,20 +92,20 @@ def _simple_eval_fn(config: dict) -> dict[str, float]:
 
 
 class TestOperatorPerformanceTracker:
-    def test_default_success_rate_is_half(self) -> None:
-        tracker = OperatorPerformanceTracker()
+    def test_default_success_rate_is_half(self, tmp_path) -> None:
+        tracker = OperatorPerformanceTracker(db_path=str(tmp_path / "perf.db"))
         assert tracker.get_success_rate("instruction_rewrite", "quality_degradation") == 0.5
 
-    def test_record_and_retrieve(self) -> None:
-        tracker = OperatorPerformanceTracker()
+    def test_record_and_retrieve(self, tmp_path) -> None:
+        tracker = OperatorPerformanceTracker(db_path=str(tmp_path / "perf.db"))
         tracker.record_outcome("instruction_rewrite", "quality_degradation", True)
         tracker.record_outcome("instruction_rewrite", "quality_degradation", True)
         tracker.record_outcome("instruction_rewrite", "quality_degradation", False)
         rate = tracker.get_success_rate("instruction_rewrite", "quality_degradation")
         assert abs(rate - 2 / 3) < 1e-6
 
-    def test_get_best_operators(self) -> None:
-        tracker = OperatorPerformanceTracker()
+    def test_get_best_operators(self, tmp_path) -> None:
+        tracker = OperatorPerformanceTracker(db_path=str(tmp_path / "perf.db"))
         tracker.record_outcome("a", "fam", True)
         tracker.record_outcome("a", "fam", True)
         tracker.record_outcome("b", "fam", True)
@@ -118,8 +118,8 @@ class TestOperatorPerformanceTracker:
         assert best[0][0] == "a"
         assert best[0][1] == 1.0
 
-    def test_get_best_operators_empty(self) -> None:
-        tracker = OperatorPerformanceTracker()
+    def test_get_best_operators_empty(self, tmp_path) -> None:
+        tracker = OperatorPerformanceTracker(db_path=str(tmp_path / "perf.db"))
         assert tracker.get_best_operators("nonexistent") == []
 
 
@@ -320,3 +320,80 @@ class TestSearchBudget:
         assert b.max_eval_budget == 5
         assert b.max_cost_dollars == 1.0
         assert b.time_budget_seconds == 300.0
+
+
+# ---------------------------------------------------------------------------
+# OperatorPerformanceTracker persistence tests
+# ---------------------------------------------------------------------------
+
+
+class TestOperatorPerformanceTrackerPersistence:
+    def test_db_file_is_created(self, tmp_path) -> None:
+        db_path = str(tmp_path / "tracker.db")
+        OperatorPerformanceTracker(db_path=db_path)
+        assert (tmp_path / "tracker.db").exists()
+
+    def test_persists_across_instances(self, tmp_path) -> None:
+        db_path = str(tmp_path / "tracker.db")
+
+        # First instance: record some outcomes
+        tracker1 = OperatorPerformanceTracker(db_path=db_path)
+        tracker1.record_outcome("instruction_rewrite", "quality_degradation", True)
+        tracker1.record_outcome("instruction_rewrite", "quality_degradation", True)
+        tracker1.record_outcome("instruction_rewrite", "quality_degradation", False)
+
+        # Second instance: load from the same DB and verify data is intact
+        tracker2 = OperatorPerformanceTracker(db_path=db_path)
+        rate = tracker2.get_success_rate("instruction_rewrite", "quality_degradation")
+        assert abs(rate - 2 / 3) < 1e-6
+
+    def test_persists_multiple_keys(self, tmp_path) -> None:
+        db_path = str(tmp_path / "tracker.db")
+
+        tracker1 = OperatorPerformanceTracker(db_path=db_path)
+        tracker1.record_outcome("op_a", "fam_x", True)
+        tracker1.record_outcome("op_a", "fam_x", True)
+        tracker1.record_outcome("op_b", "fam_x", False)
+        tracker1.record_outcome("op_a", "fam_y", True)
+
+        tracker2 = OperatorPerformanceTracker(db_path=db_path)
+        assert tracker2.get_success_rate("op_a", "fam_x") == 1.0
+        assert tracker2.get_success_rate("op_b", "fam_x") == 0.0
+        assert tracker2.get_success_rate("op_a", "fam_y") == 1.0
+        # Unseen combo still returns default
+        assert tracker2.get_success_rate("op_c", "fam_z") == 0.5
+
+    def test_new_records_after_reload_accumulate(self, tmp_path) -> None:
+        db_path = str(tmp_path / "tracker.db")
+
+        tracker1 = OperatorPerformanceTracker(db_path=db_path)
+        tracker1.record_outcome("instruction_rewrite", "tool_error", True)
+
+        tracker2 = OperatorPerformanceTracker(db_path=db_path)
+        tracker2.record_outcome("instruction_rewrite", "tool_error", False)
+
+        # 1 success out of 2 total attempts
+        rate = tracker2.get_success_rate("instruction_rewrite", "tool_error")
+        assert abs(rate - 0.5) < 1e-6
+
+        # Third instance should see the full history
+        tracker3 = OperatorPerformanceTracker(db_path=db_path)
+        rate3 = tracker3.get_success_rate("instruction_rewrite", "tool_error")
+        assert abs(rate3 - 0.5) < 1e-6
+
+    def test_get_best_operators_after_reload(self, tmp_path) -> None:
+        db_path = str(tmp_path / "tracker.db")
+
+        tracker1 = OperatorPerformanceTracker(db_path=db_path)
+        tracker1.record_outcome("op_best", "fam", True)
+        tracker1.record_outcome("op_best", "fam", True)
+        tracker1.record_outcome("op_worst", "fam", False)
+        tracker1.record_outcome("op_worst", "fam", False)
+
+        tracker2 = OperatorPerformanceTracker(db_path=db_path)
+        best = tracker2.get_best_operators("fam", n=2)
+        assert len(best) == 2
+        assert best[0][0] == "op_best"
+        assert best[0][1] == 1.0
+        assert best[1][0] == "op_worst"
+        assert best[1][1] == 0.0
