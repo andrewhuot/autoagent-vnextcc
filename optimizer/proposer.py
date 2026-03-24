@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import copy
+import json
+import re
 from dataclasses import dataclass
+
+from .providers import LLMRequest, LLMRouter
 
 
 @dataclass
@@ -17,8 +21,9 @@ class Proposal:
 class Proposer:
     """Proposes config changes using LLM (or mock)."""
 
-    def __init__(self, use_mock: bool = True) -> None:
+    def __init__(self, use_mock: bool = True, llm_router: LLMRouter | None = None) -> None:
         self.use_mock = use_mock
+        self.llm_router = llm_router
 
     def propose(
         self,
@@ -181,8 +186,100 @@ class Proposer:
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
     ) -> Proposal | None:
-        """Real LLM-based proposer (placeholder for Gemini integration)."""
-        # Would call Gemini here with a structured prompt containing:
-        # - current_config, health_metrics, failure_samples, failure_buckets, past_attempts
-        # For now, fall back to mock
-        return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+        """Generate a proposal via configured router and parse structured JSON."""
+        if self.llm_router is None:
+            return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+
+        payload = {
+            "current_config": current_config,
+            "health_metrics": health_metrics,
+            "failure_buckets": failure_buckets,
+            "failure_samples": failure_samples[:10],
+            "past_attempts": past_attempts[:10],
+            "requirements": [
+                "Return JSON only",
+                "Preserve config schema compatibility",
+                "Prioritize safety first, then measurable quality lift",
+                "Include one concrete change that can be evaluated",
+            ],
+            "response_schema": {
+                "change_description": "string",
+                "config_section": "string",
+                "reasoning": "string",
+                "new_config": "object (full config)",
+                "new_config_patch": "optional object for patch-style updates",
+            },
+        }
+        system = (
+            "You are an expert LLM operations optimizer. "
+            "Propose one high-leverage, safe config improvement."
+        )
+        prompt = json.dumps(payload, sort_keys=True)
+
+        try:
+            response = self.llm_router.generate(
+                LLMRequest(
+                    prompt=prompt,
+                    system=system,
+                    temperature=0.1,
+                    max_tokens=1500,
+                    metadata={"task": "optimizer_proposal"},
+                )
+            )
+            parsed = self._extract_json_payload(response.text)
+            if parsed is None:
+                return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+
+            new_config = parsed.get("new_config")
+            if not isinstance(new_config, dict):
+                patch = parsed.get("new_config_patch")
+                if isinstance(patch, dict):
+                    new_config = self._apply_patch(current_config, patch)
+                else:
+                    new_config = copy.deepcopy(current_config)
+
+            return Proposal(
+                change_description=str(parsed.get("change_description") or "LLM-generated proposal"),
+                config_section=str(parsed.get("config_section") or "unknown"),
+                new_config=new_config,
+                reasoning=str(parsed.get("reasoning") or "No reasoning provided"),
+            )
+        except Exception:
+            # Production-safe fallback keeps loop alive during provider outages.
+            return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+
+    @staticmethod
+    def _extract_json_payload(text: str) -> dict | None:
+        """Parse JSON object from full-text LLM response payload."""
+        raw = text.strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if not match:
+                return None
+            try:
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+    @staticmethod
+    def _apply_patch(current_config: dict, patch: dict) -> dict:
+        """Apply dot-path patch values onto a config copy."""
+        updated = copy.deepcopy(current_config)
+        for key, value in patch.items():
+            if "." not in key:
+                updated[key] = value
+                continue
+            target = updated
+            parts = key.split(".")
+            for part in parts[:-1]:
+                if part not in target or not isinstance(target[part], dict):
+                    target[part] = {}
+                target = target[part]
+            target[parts[-1]] = value
+        return updated

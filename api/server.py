@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -35,23 +36,56 @@ WEB_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize shared resources on startup, clean up on shutdown."""
+    from agent.config.runtime import load_runtime_config
+    from deployer.canary import Deployer
+    from deployer.versioning import ConfigVersionManager
+    from evals.runner import EvalRunner
+    from logger.structured import configure_structured_logging
     from logger.store import ConversationStore
     from observer import Observer
     from optimizer import Optimizer
     from optimizer.memory import OptimizationMemory
-    from evals.runner import EvalRunner
-    from deployer.canary import Deployer
-    from deployer.versioning import ConfigVersionManager
+    from optimizer.proposer import Proposer
+    from optimizer.providers import build_router_from_runtime_config
+    from optimizer.reliability import (
+        DeadLetterQueue,
+        LoopCheckpointStore,
+        LoopWatchdog,
+        ResourceMonitor,
+    )
 
+    runtime = load_runtime_config()
+    startup_epoch = time.time()
+
+    structured_logger = configure_structured_logging(
+        log_path=runtime.loop.structured_log_path,
+        max_bytes=runtime.loop.log_max_bytes,
+        backup_count=runtime.loop.log_backup_count,
+    )
     # Core stores
     conversation_store = ConversationStore(db_path=CONVERSATIONS_DB)
     optimization_memory = OptimizationMemory(db_path=OPTIMIZER_MEMORY_DB)
     version_manager = ConfigVersionManager(configs_dir=CONFIGS_DIR)
+    dead_letter_queue = DeadLetterQueue(db_path=runtime.loop.dead_letter_db)
+    checkpoint_store = LoopCheckpointStore(path=runtime.loop.checkpoint_path)
+    loop_watchdog = LoopWatchdog(timeout_seconds=runtime.loop.watchdog_timeout_seconds)
+    resource_monitor = ResourceMonitor()
 
     # High-level components
     observer = Observer(conversation_store)
-    eval_runner = EvalRunner()
-    optimizer = Optimizer(eval_runner=eval_runner, memory=optimization_memory)
+    eval_runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
+    proposer = Proposer(
+        use_mock=runtime.optimizer.use_mock,
+        llm_router=build_router_from_runtime_config(runtime.optimizer),
+    )
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=optimization_memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=conversation_store)
 
     # Infrastructure
@@ -68,6 +102,13 @@ async def lifespan(app: FastAPI):
     app.state.deployer = deployer
     app.state.task_manager = task_manager
     app.state.ws_manager = ws_manager
+    app.state.runtime_config = runtime
+    app.state.dead_letter_queue = dead_letter_queue
+    app.state.checkpoint_store = checkpoint_store
+    app.state.loop_watchdog = loop_watchdog
+    app.state.resource_monitor = resource_monitor
+    app.state.structured_logger = structured_logger
+    app.state.started_at = startup_epoch
 
     yield
     # No explicit cleanup needed — SQLite connections are context-managed

@@ -29,7 +29,9 @@ Start an eval run as a background task.
 ```json
 {
   "config_path": "configs/v003.yaml",
-  "category": "safety"
+  "category": "safety",
+  "dataset_path": "evals/datasets/regression.jsonl",
+  "split": "test"
 }
 ```
 
@@ -46,6 +48,7 @@ Start an eval run as a background task.
 
 - `202` Started
 - `404` Config file not found
+- `404` Dataset file not found
 
 #### curl
 
@@ -136,6 +139,18 @@ Get only case-level results.
 ]
 ```
 
+### GET `/api/eval/history`
+
+List persisted eval runs with provenance.
+
+#### Query params
+
+- `limit` (int, default `20`)
+
+### GET `/api/eval/history/{run_id}`
+
+Get one persisted run with case-level payloads.
+
 ---
 
 ## Optimize
@@ -191,6 +206,9 @@ List optimization attempts from memory.
     "status": "accepted",
     "score_before": 0.8112,
     "score_after": 0.8428,
+    "significance_p_value": 0.0123,
+    "significance_delta": 0.0187,
+    "significance_n": 55,
     "health_context": "{\"success_rate\":0.73,\"error_rate\":0.14}"
   }
 ]
@@ -326,6 +344,24 @@ Compute health report from recent conversation window.
   },
   "needs_optimization": false,
   "reason": ""
+}
+```
+
+### GET `/api/health/system`
+
+Operational backend health for long-running loop behavior.
+
+#### Response `200`
+
+```json
+{
+  "status": "ok",
+  "loop_running": true,
+  "loop_stalled": false,
+  "last_heartbeat": 1774267200.12,
+  "dead_letter_count": 0,
+  "tasks_running": 1,
+  "uptime_seconds": 9321.44
 }
 ```
 

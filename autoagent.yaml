@@ -1,0 +1,48 @@
+optimizer:
+  use_mock: true
+  strategy: round_robin
+  retry:
+    max_attempts: 3
+    base_delay_seconds: 0.5
+    max_delay_seconds: 8.0
+    jitter_seconds: 0.25
+  models:
+    - provider: openai
+      model: gpt-4o
+      api_key_env: OPENAI_API_KEY
+      requests_per_minute: 120
+      input_cost_per_1k_tokens: 0.005
+      output_cost_per_1k_tokens: 0.015
+    - provider: anthropic
+      model: claude-sonnet-4-5
+      api_key_env: ANTHROPIC_API_KEY
+      requests_per_minute: 120
+      input_cost_per_1k_tokens: 0.003
+      output_cost_per_1k_tokens: 0.015
+    - provider: google
+      model: gemini-2.5-pro
+      api_key_env: GOOGLE_API_KEY
+      requests_per_minute: 120
+      input_cost_per_1k_tokens: 0.00125
+      output_cost_per_1k_tokens: 0.005
+
+loop:
+  schedule_mode: continuous
+  interval_minutes: 5.0
+  cron: "*/5 * * * *"
+  checkpoint_path: .autoagent/loop_checkpoint.json
+  dead_letter_db: .autoagent/dead_letters.db
+  watchdog_timeout_seconds: 300
+  resource_warn_memory_mb: 2048
+  resource_warn_cpu_percent: 90
+  structured_log_path: .autoagent/logs/backend.jsonl
+  log_max_bytes: 5000000
+  log_backup_count: 5
+
+eval:
+  history_db_path: eval_history.db
+  dataset_path:
+  dataset_split: test
+  significance_alpha: 0.05
+  significance_min_effect_size: 0.005
+  significance_iterations: 2000

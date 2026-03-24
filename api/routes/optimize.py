@@ -173,6 +173,9 @@ async def list_optimization_history(
             "status": a.status,
             "score_before": a.score_before,
             "score_after": a.score_after,
+            "significance_p_value": a.significance_p_value,
+            "significance_delta": a.significance_delta,
+            "significance_n": a.significance_n,
             "health_context": a.health_context,
         }
         for a in attempts
@@ -195,6 +198,9 @@ async def get_optimization_attempt(attempt_id: str, request: Request) -> dict[st
                 "status": a.status,
                 "score_before": a.score_before,
                 "score_after": a.score_after,
+                "significance_p_value": a.significance_p_value,
+                "significance_delta": a.significance_delta,
+                "significance_n": a.significance_n,
                 "health_context": a.health_context,
             }
     raise HTTPException(status_code=404, detail=f"Attempt not found: {attempt_id}")

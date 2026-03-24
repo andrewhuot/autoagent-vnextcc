@@ -22,6 +22,7 @@ import json
 import os
 import shutil
 import time
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,13 +30,26 @@ import click
 import yaml
 
 from agent.config.loader import load_config
+from agent.config.runtime import load_runtime_config
 from agent.config.schema import validate_config, config_diff as schema_config_diff
 from deployer import Deployer
 from evals import EvalRunner
 from logger import ConversationStore
+from logger.structured import configure_structured_logging
 from observer import Observer
 from optimizer import Optimizer
 from optimizer.memory import OptimizationMemory
+from optimizer.proposer import Proposer
+from optimizer.providers import build_router_from_runtime_config
+from optimizer.reliability import (
+    DeadLetterQueue,
+    GracefulShutdown,
+    LoopCheckpoint,
+    LoopCheckpointStore,
+    LoopScheduler,
+    LoopWatchdog,
+    ResourceMonitor,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -80,6 +94,7 @@ def _score_to_dict(score) -> dict:
     return {
         "quality": score.quality,
         "safety": score.safety,
+        "tool_use_accuracy": getattr(score, "tool_use_accuracy", 0.0),
         "latency": score.latency,
         "cost": score.cost,
         "composite": score.composite,
@@ -108,6 +123,24 @@ def _build_failure_samples(store: ConversationStore, limit: int = 25) -> list[di
 def _ts(epoch: float) -> str:
     """Format epoch timestamp for display."""
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+
+
+def _build_runtime_components() -> tuple[object, EvalRunner, Proposer]:
+    """Create runtime-configured eval runner and multi-model proposer."""
+    runtime = load_runtime_config()
+    eval_runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
+    router = build_router_from_runtime_config(runtime.optimizer)
+    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    return runtime, eval_runner, proposer
+
+
+def _sleep_interruptibly(seconds: float, shutdown: GracefulShutdown) -> None:
+    """Sleep in small increments and return early when shutdown is requested."""
+    remaining = max(0.0, seconds)
+    while remaining > 0 and not shutdown.stop_requested:
+        step = min(0.5, remaining)
+        shutdown.event.wait(timeout=step)
+        remaining -= step
 
 
 # ---------------------------------------------------------------------------
@@ -173,17 +206,34 @@ def init_project(template: str, target_dir: str) -> None:
 # autoagent eval (subgroup)
 # ---------------------------------------------------------------------------
 
-@cli.group("eval")
-def eval_group() -> None:
+@cli.group("eval", invoke_without_command=True)
+@click.pass_context
+def eval_group(ctx: click.Context) -> None:
     """Evaluate agent configs against test suites."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(
+            eval_run,
+            config_path=None,
+            suite=None,
+            dataset=None,
+            dataset_split="all",
+            category=None,
+            output=None,
+        )
 
 
 @eval_group.command("run")
 @click.option("--config", "config_path", default=None, help="Path to config YAML.")
 @click.option("--suite", default=None, help="Path to eval cases directory.")
+@click.option("--dataset", default=None, help="Path to eval dataset (.jsonl or .csv).")
+@click.option("--split", "dataset_split", default="all",
+              type=click.Choice(["train", "test", "all"]),
+              show_default=True,
+              help="Dataset split to evaluate when using --dataset.")
 @click.option("--category", default=None, help="Run only a specific category.")
 @click.option("--output", default=None, help="Write results JSON to file.")
-def eval_run(config_path: str | None, suite: str | None, category: str | None, output: str | None) -> None:
+def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
+             category: str | None, output: str | None) -> None:
     """Run eval suite against a config.
 
     Examples:
@@ -199,13 +249,17 @@ def eval_run(config_path: str | None, suite: str | None, category: str | None, o
     else:
         click.echo("Evaluating with default config")
 
-    runner = EvalRunner(cases_dir=suite) if suite else EvalRunner()
+    runtime = load_runtime_config()
+    runner = EvalRunner(
+        cases_dir=suite,
+        history_db_path=runtime.eval.history_db_path,
+    )
 
     if category:
-        score = runner.run_category(category, config=config)
+        score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
         _print_score(score, f"Category: {category}")
     else:
-        score = runner.run(config=config)
+        score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
         _print_score(score, "Full eval suite")
 
     if output:
@@ -213,6 +267,10 @@ def eval_run(config_path: str | None, suite: str | None, category: str | None, o
             "timestamp": datetime.now(tz=timezone.utc).isoformat(),
             "config_path": config_path,
             "category": category,
+            "dataset": dataset,
+            "split": dataset_split,
+            "run_id": score.run_id,
+            "provenance": score.provenance,
             "scores": _score_to_dict(score),
             "passed": score.passed_cases,
             "total": score.total_cases,
@@ -309,12 +367,19 @@ def optimize(cycles: int, db: str, configs_dir: str, memory_db: str) -> None:
       autoagent optimize
       autoagent optimize --cycles 5
     """
+    runtime, eval_runner, proposer = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
-    eval_runner = EvalRunner()
-    optimizer = Optimizer(eval_runner=eval_runner, memory=memory)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
 
     for cycle in range(1, cycles + 1):
         if cycles > 1:
@@ -346,6 +411,18 @@ def optimize(cycles: int, db: str, configs_dir: str, memory_db: str) -> None:
 
     if cycles > 1:
         click.echo(f"\nOptimization complete. {cycles} cycles executed.")
+
+    if proposer.llm_router is not None:
+        summary = proposer.llm_router.cost_summary()
+        if summary:
+            click.echo("\nProvider cost summary:")
+            for key, item in summary.items():
+                click.echo(
+                    f"  {key}: requests={item['requests']} "
+                    f"prompt_tokens={item['prompt_tokens']} "
+                    f"completion_tokens={item['completion_tokens']} "
+                    f"cost=${item['total_cost']:.6f}"
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -539,11 +616,23 @@ def deploy(config_version: int | None, strategy: str, configs_dir: str, db: str)
 @click.option("--stop-on-plateau", is_flag=True, default=False,
               help="Stop if no improvement for 5 consecutive cycles.")
 @click.option("--delay", default=1.0, show_default=True, type=float, help="Seconds between cycles.")
+@click.option("--schedule", "schedule_mode", default=None,
+              type=click.Choice(["continuous", "interval", "cron"]),
+              help="Scheduling mode. Defaults to autoagent.yaml loop.schedule_mode.")
+@click.option("--interval-minutes", default=None, type=float,
+              help="Interval minutes for --schedule interval.")
+@click.option("--cron", "cron_expression", default=None,
+              help="Cron expression for --schedule cron (5-field UTC).")
+@click.option("--checkpoint-file", default=None,
+              help="Checkpoint file path. Defaults to autoagent.yaml loop.checkpoint_path.")
+@click.option("--resume/--no-resume", default=True, show_default=True,
+              help="Resume from checkpoint when available.")
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
-def loop(max_cycles: int, stop_on_plateau: bool, delay: float,
-         db: str, configs_dir: str, memory_db: str) -> None:
+def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
+         interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
+         resume: bool, db: str, configs_dir: str, memory_db: str) -> None:
     """Run the continuous autoresearch loop.
 
     Observes agent health, proposes improvements, evaluates them, and deploys
@@ -553,67 +642,215 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float,
       autoagent loop
       autoagent loop --max-cycles 100 --stop-on-plateau
     """
+    runtime, eval_runner, proposer = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
-    eval_runner = EvalRunner()
-    optimizer = Optimizer(eval_runner=eval_runner, memory=memory)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
+
+    effective_schedule = schedule_mode or runtime.loop.schedule_mode
+    effective_interval = interval_minutes if interval_minutes is not None else runtime.loop.interval_minutes
+    effective_cron = cron_expression or runtime.loop.cron
+    effective_checkpoint = checkpoint_file or runtime.loop.checkpoint_path
+
+    scheduler = LoopScheduler(
+        mode=effective_schedule,
+        delay_seconds=delay,
+        interval_minutes=effective_interval,
+        cron_expression=effective_cron,
+    )
+    checkpoint_store = LoopCheckpointStore(effective_checkpoint)
+    dead_letter_queue = DeadLetterQueue(runtime.loop.dead_letter_db)
+    watchdog = LoopWatchdog(runtime.loop.watchdog_timeout_seconds)
+    resource_monitor = ResourceMonitor()
+    shutdown = GracefulShutdown()
+    log = configure_structured_logging(
+        log_path=runtime.loop.structured_log_path,
+        max_bytes=runtime.loop.log_max_bytes,
+        backup_count=runtime.loop.log_backup_count,
+    )
 
     plateau_count = 0
     plateau_threshold = 5
+    start_cycle = 1
+    completed_cycles = 0
+
+    if resume:
+        checkpoint = checkpoint_store.load()
+        if checkpoint is not None and checkpoint.last_status != "completed":
+            start_cycle = max(1, min(max_cycles, checkpoint.next_cycle))
+            plateau_count = max(0, checkpoint.plateau_count)
+            completed_cycles = max(0, checkpoint.completed_cycles)
 
     click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
+    click.echo(f"  Schedule: {effective_schedule}")
+    if effective_schedule == "interval":
+        click.echo(f"  Interval: {effective_interval:.2f} minutes")
+    if effective_schedule == "cron":
+        click.echo(f"  Cron (UTC): {effective_cron}")
+    click.echo(f"  Checkpoint: {effective_checkpoint}")
+    if start_cycle > 1:
+        click.echo(f"  Resuming from cycle {start_cycle}")
     if stop_on_plateau:
         click.echo(f"  Will stop after {plateau_threshold} cycles with no improvement")
 
-    for cycle in range(1, max_cycles + 1):
-        click.echo(f"\n{'═' * 50}")
-        click.echo(f" Cycle {cycle}/{max_cycles}")
-        click.echo(f"{'═' * 50}")
-
-        report = observer.observe()
-        click.echo(
-            f"  Health: success={report.metrics.success_rate:.2%}, "
-            f"errors={report.metrics.error_rate:.2%}"
-        )
-
-        improved = False
-        if report.needs_optimization:
-            current_config = _ensure_active_config(deployer)
-            failure_samples = _build_failure_samples(store)
-            new_config, status = optimizer.optimize(
-                report,
-                current_config,
-                failure_samples=failure_samples,
+    with shutdown.install():
+        for cycle in range(start_cycle, max_cycles + 1):
+            watchdog.beat()
+            cycle_started = time.time()
+            checkpoint_store.save(
+                LoopCheckpoint(
+                    next_cycle=cycle,
+                    completed_cycles=completed_cycles,
+                    plateau_count=plateau_count,
+                    last_status="running",
+                    last_cycle_started_at=cycle_started,
+                )
             )
-            click.echo(f"  Optimizer: {status}")
-            if new_config is not None:
-                improved = True
-                score = eval_runner.run(config=new_config)
-                deploy_result = deployer.deploy(new_config, _score_to_dict(score))
-                click.echo(f"  Deploy: {deploy_result}")
-                click.echo(f"  Score: {score.composite:.4f}")
-        else:
-            click.echo("  Healthy; skipping optimization.")
 
-        canary_result = deployer.check_and_act()
-        click.echo(f"  Canary: {canary_result}")
+            click.echo(f"\n{'═' * 50}")
+            click.echo(f" Cycle {cycle}/{max_cycles}")
+            click.echo(f"{'═' * 50}")
 
-        # Plateau detection
-        if stop_on_plateau:
-            if improved:
-                plateau_count = 0
-            else:
-                plateau_count += 1
-                if plateau_count >= plateau_threshold:
-                    click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
+            improved = False
+            try:
+                report = observer.observe()
+                click.echo(
+                    f"  Health: success={report.metrics.success_rate:.2%}, "
+                    f"errors={report.metrics.error_rate:.2%}"
+                )
+
+                if report.needs_optimization:
+                    current_config = _ensure_active_config(deployer)
+                    failure_samples = _build_failure_samples(store)
+                    new_config, status = optimizer.optimize(
+                        report,
+                        current_config,
+                        failure_samples=failure_samples,
+                    )
+                    click.echo(f"  Optimizer: {status}")
+                    if new_config is not None:
+                        improved = True
+                        score = eval_runner.run(config=new_config)
+                        deploy_result = deployer.deploy(new_config, _score_to_dict(score))
+                        click.echo(f"  Deploy: {deploy_result}")
+                        click.echo(f"  Score: {score.composite:.4f}")
+                else:
+                    click.echo("  Healthy; skipping optimization.")
+
+                canary_result = deployer.check_and_act()
+                click.echo(f"  Canary: {canary_result}")
+            except Exception as exc:
+                tb = traceback.format_exc()
+                dead_letter_queue.push(
+                    kind="loop_cycle",
+                    payload={"cycle": cycle},
+                    error=str(exc),
+                    traceback_text=tb,
+                )
+                click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
+                log.error(
+                    "loop_cycle_failed",
+                    extra={"event": "loop_cycle_failed", "cycle": cycle, "status": "failed"},
+                )
+
+            completed_cycles = cycle
+            cycle_finished = time.time()
+
+            if stop_on_plateau:
+                if improved:
+                    plateau_count = 0
+                else:
+                    plateau_count += 1
+                    if plateau_count >= plateau_threshold:
+                        click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
+                        checkpoint_store.save(
+                            LoopCheckpoint(
+                                next_cycle=cycle + 1,
+                                completed_cycles=completed_cycles,
+                                plateau_count=plateau_count,
+                                last_status="stopped_plateau",
+                                last_cycle_started_at=cycle_started,
+                                last_cycle_finished_at=cycle_finished,
+                            )
+                        )
+                        break
+
+            snapshot = resource_monitor.sample()
+            if snapshot.memory_mb > runtime.loop.resource_warn_memory_mb:
+                warning = f"Memory usage high: {snapshot.memory_mb:.2f}MB"
+                click.echo(f"  Warning: {warning}")
+                log.warning(
+                    "resource_warning_memory",
+                    extra={"event": "resource_warning", "memory_mb": snapshot.memory_mb, "cycle": cycle},
+                )
+            if snapshot.cpu_percent > runtime.loop.resource_warn_cpu_percent:
+                warning = f"CPU usage high: {snapshot.cpu_percent:.2f}%"
+                click.echo(f"  Warning: {warning}")
+                log.warning(
+                    "resource_warning_cpu",
+                    extra={"event": "resource_warning", "cpu_percent": snapshot.cpu_percent, "cycle": cycle},
+                )
+
+            if watchdog.is_stalled(now=cycle_finished):
+                stall_error = (
+                    f"Watchdog detected stall: {watchdog.seconds_since_last_beat(now=cycle_finished):.2f}s "
+                    f"> timeout {watchdog.timeout_seconds:.2f}s"
+                )
+                dead_letter_queue.push(
+                    kind="watchdog",
+                    payload={"cycle": cycle},
+                    error=stall_error,
+                )
+                click.echo(f"  Watchdog: {stall_error}")
+                log.warning("watchdog_stall", extra={"event": "watchdog_stall", "cycle": cycle})
+            watchdog.beat()
+
+            checkpoint_store.save(
+                LoopCheckpoint(
+                    next_cycle=cycle + 1,
+                    completed_cycles=completed_cycles,
+                    plateau_count=plateau_count,
+                    last_status="running",
+                    last_cycle_started_at=cycle_started,
+                    last_cycle_finished_at=cycle_finished,
+                )
+            )
+
+            if shutdown.stop_requested:
+                click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
+                break
+
+            if cycle < max_cycles:
+                wait_seconds = scheduler.seconds_until_next(
+                    now_epoch=time.time(),
+                    cycle_started_at=cycle_started,
+                    cycle_finished_at=cycle_finished,
+                )
+                _sleep_interruptibly(wait_seconds, shutdown)
+                if shutdown.stop_requested:
+                    click.echo("\nGraceful shutdown requested during wait. Exiting.")
                     break
 
-        if cycle < max_cycles:
-            time.sleep(delay)
-
-    click.echo(f"\nLoop complete. {min(cycle, max_cycles)} cycles executed.")
+    final_status = "completed" if completed_cycles >= max_cycles and not shutdown.stop_requested else "stopped"
+    checkpoint_store.save(
+        LoopCheckpoint(
+            next_cycle=completed_cycles + 1,
+            completed_cycles=completed_cycles,
+            plateau_count=plateau_count,
+            last_status=final_status,
+            last_cycle_finished_at=time.time(),
+        )
+    )
+    click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
 
 
 # ---------------------------------------------------------------------------
@@ -778,7 +1015,8 @@ def run_eval(config_path: str | None, category: str | None) -> None:
     config = None
     if config_path:
         config = _load_config_dict(config_path)
-    runner = EvalRunner()
+    runtime = load_runtime_config()
+    runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
     if category:
         score = runner.run_category(category, config=config)
         _print_score(score, f"Category: {category}")
@@ -810,12 +1048,19 @@ def run_observe(db: str, window: int) -> None:
 @click.option("--memory-db", default=MEMORY_DB, show_default=True)
 def run_optimize(db: str, configs_dir: str, memory_db: str) -> None:
     """Run optimize (legacy). Use: autoagent optimize"""
+    runtime, eval_runner, proposer = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
-    eval_runner = EvalRunner()
-    optimizer = Optimizer(eval_runner=eval_runner, memory=memory)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
     report = observer.observe()
     click.echo(f"Observed success={report.metrics.success_rate:.2%} error={report.metrics.error_rate:.2%}")
     if not report.needs_optimization:
@@ -839,12 +1084,19 @@ def run_optimize(db: str, configs_dir: str, memory_db: str) -> None:
 @click.option("--delay", default=1.0, show_default=True, type=float)
 def run_loop(cycles: int, db: str, configs_dir: str, memory_db: str, delay: float) -> None:
     """Run loop (legacy). Use: autoagent loop"""
+    runtime, eval_runner, proposer = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
-    eval_runner = EvalRunner()
-    optimizer = Optimizer(eval_runner=eval_runner, memory=memory)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
     click.echo(f"Starting optimization loop ({cycles} cycles)")
     for cycle_num in range(1, cycles + 1):
         click.echo(f"\n{'=' * 50}\nCycle {cycle_num}/{cycles}\n{'=' * 50}")

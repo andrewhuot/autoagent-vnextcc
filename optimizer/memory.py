@@ -16,6 +16,9 @@ class OptimizationAttempt:
     config_section: str = ""
     score_before: float = 0.0
     score_after: float = 0.0
+    significance_p_value: float = 1.0
+    significance_delta: float = 0.0
+    significance_n: int = 0
     health_context: str = ""  # JSON string of health metrics that triggered this
 
 
@@ -40,6 +43,9 @@ class OptimizationMemory:
                     status TEXT NOT NULL,
                     score_before REAL DEFAULT 0.0,
                     score_after REAL DEFAULT 0.0,
+                    significance_p_value REAL DEFAULT 1.0,
+                    significance_delta REAL DEFAULT 0.0,
+                    significance_n INTEGER DEFAULT 0,
                     health_context TEXT DEFAULT ''
                 )
                 """
@@ -53,6 +59,18 @@ class OptimizationMemory:
                 conn.execute(
                     "ALTER TABLE attempts ADD COLUMN config_section TEXT NOT NULL DEFAULT ''"
                 )
+            if "significance_p_value" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN significance_p_value REAL DEFAULT 1.0"
+                )
+            if "significance_delta" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN significance_delta REAL DEFAULT 0.0"
+                )
+            if "significance_n" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN significance_n INTEGER DEFAULT 0"
+                )
             conn.commit()
 
     def log(self, attempt: OptimizationAttempt) -> None:
@@ -62,8 +80,9 @@ class OptimizationMemory:
                 """
                 INSERT OR REPLACE INTO attempts
                     (attempt_id, timestamp, change_description, config_diff, config_section, status,
-                     score_before, score_after, health_context)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     score_before, score_after, significance_p_value, significance_delta,
+                     significance_n, health_context)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.attempt_id,
@@ -74,6 +93,9 @@ class OptimizationMemory:
                     attempt.status,
                     attempt.score_before,
                     attempt.score_after,
+                    attempt.significance_p_value,
+                    attempt.significance_delta,
+                    attempt.significance_n,
                     attempt.health_context,
                 ),
             )
@@ -85,7 +107,8 @@ class OptimizationMemory:
             rows = conn.execute(
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
-                       status, score_before, score_after, health_context
+                       status, score_before, score_after, significance_p_value,
+                       significance_delta, significance_n, health_context
                 FROM attempts
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -100,7 +123,8 @@ class OptimizationMemory:
             rows = conn.execute(
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
-                       status, score_before, score_after, health_context
+                       status, score_before, score_after, significance_p_value,
+                       significance_delta, significance_n, health_context
                 FROM attempts
                 WHERE status = 'accepted'
                 ORDER BY timestamp DESC
@@ -116,7 +140,8 @@ class OptimizationMemory:
             rows = conn.execute(
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
-                       status, score_before, score_after, health_context
+                       status, score_before, score_after, significance_p_value,
+                       significance_delta, significance_n, health_context
                 FROM attempts
                 ORDER BY timestamp DESC
                 """
@@ -141,5 +166,8 @@ class OptimizationMemory:
             status=row[5],
             score_before=row[6],
             score_after=row[7],
-            health_context=row[8],
+            significance_p_value=row[8],
+            significance_delta=row[9],
+            significance_n=row[10],
+            health_context=row[11],
         )

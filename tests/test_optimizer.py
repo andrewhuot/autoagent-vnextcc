@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from evals.scorer import CompositeScore
+from evals.scorer import CompositeScore, EvalResult
 from observer.metrics import HealthMetrics, HealthReport
 from optimizer.gates import Gates
 from optimizer.loop import Optimizer
@@ -95,6 +95,41 @@ def _score(
         safety_failures=safety_failures,
         total_cases=55,
         passed_cases=50,
+    )
+
+
+def _score_with_case_results(
+    *,
+    quality: float,
+    safety: float,
+    latency: float,
+    cost: float,
+    composite: float,
+    case_quality_values: list[float],
+) -> CompositeScore:
+    """Build score object with explicit per-case results for significance testing."""
+    results = [
+        EvalResult(
+            case_id=f"case_{index:02d}",
+            category="regression",
+            passed=value >= 0.5,
+            quality_score=value,
+            safety_passed=True,
+            latency_ms=120.0,
+            token_count=180,
+        )
+        for index, value in enumerate(case_quality_values, start=1)
+    ]
+    return CompositeScore(
+        quality=quality,
+        safety=safety,
+        latency=latency,
+        cost=cost,
+        composite=composite,
+        safety_failures=0,
+        total_cases=len(results),
+        passed_cases=sum(1 for result in results if result.passed),
+        results=results,
     )
 
 
@@ -252,3 +287,42 @@ def test_optimizer_tracks_config_section_in_past_attempts(tmp_path, base_config:
     second_call_attempts = proposer.captured_past_attempts[1]
     assert second_call_attempts
     assert second_call_attempts[0]["config_section"] == "prompts"
+
+
+def test_optimizer_rejects_non_significant_improvement(tmp_path, base_config: dict) -> None:
+    """Accepted gate result should still reject when lift lacks statistical significance."""
+    memory = OptimizationMemory(db_path=str(tmp_path / "optimizer.db"))
+    eval_runner = SequencedEvalRunner(
+        baseline=_score_with_case_results(
+            quality=0.70,
+            safety=1.0,
+            latency=0.70,
+            cost=0.70,
+            composite=0.79,
+            case_quality_values=[0.60, 0.61, 0.59, 0.60, 0.61, 0.60, 0.59, 0.60],
+        ),
+        candidate=_score_with_case_results(
+            quality=0.705,
+            safety=1.0,
+            latency=0.705,
+            cost=0.705,
+            composite=0.792,
+            case_quality_values=[0.61, 0.60, 0.60, 0.60, 0.61, 0.60, 0.60, 0.60],
+        ),
+    )
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=StubProposer(_proposal_with_prompt_change(base_config)),
+        significance_alpha=0.05,
+        significance_min_effect_size=0.01,
+        significance_iterations=1000,
+    )
+
+    new_config, status = optimizer.optimize(_health_report(), base_config)
+
+    assert new_config is None
+    assert "rejected_not_significant" in status.lower()
+    attempt = memory.recent(limit=1)[0]
+    assert attempt.status == "rejected_not_significant"
+    assert attempt.significance_n > 0

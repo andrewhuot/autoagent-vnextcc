@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,7 @@ from api.models import (
     LoopStatusResponse,
 )
 from api.tasks import Task
+from optimizer.reliability import LoopCheckpoint, LoopScheduler
 
 router = APIRouter(prefix="/api/loop", tags=["loop"])
 
@@ -25,6 +27,7 @@ _loop_stop_event = threading.Event()
 _loop_cycle_history: list[dict] = []
 _loop_total_cycles: int = 0
 _loop_completed_cycles: int = 0
+_loop_last_heartbeat: float | None = None
 
 
 def _ensure_active_config(deployer: Any) -> dict:
@@ -63,7 +66,7 @@ def _build_failure_samples(store: Any, limit: int = 25) -> list[dict]:
 @router.post("/start", response_model=LoopStatusResponse, status_code=202)
 async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResponse:
     """Start the continuous optimization loop as a background task."""
-    global _loop_task_id, _loop_cycle_history, _loop_total_cycles, _loop_completed_cycles
+    global _loop_task_id, _loop_cycle_history, _loop_total_cycles, _loop_completed_cycles, _loop_last_heartbeat
 
     with _loop_lock:
         if _loop_task_id is not None:
@@ -79,66 +82,159 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
     eval_runner = request.app.state.eval_runner
     store = request.app.state.conversation_store
 
+    runtime = request.app.state.runtime_config
+    checkpoint_store = request.app.state.checkpoint_store
+    dead_letter_queue = request.app.state.dead_letter_queue
+    loop_watchdog = request.app.state.loop_watchdog
+    resource_monitor = request.app.state.resource_monitor
+    structured_logger = request.app.state.structured_logger
+
     cycles = body.cycles
     delay = body.delay
     window = body.window
 
+    scheduler = LoopScheduler(
+        mode=body.schedule_mode or runtime.loop.schedule_mode,
+        delay_seconds=delay,
+        interval_minutes=body.interval_minutes,
+        cron_expression=body.cron_expression,
+    )
+
     _loop_stop_event.clear()
+
+    start_cycle = 1
+    if body.resume_checkpoint:
+        checkpoint = checkpoint_store.load()
+        if checkpoint is not None and checkpoint.last_status != "completed":
+            start_cycle = max(1, min(cycles, checkpoint.next_cycle))
 
     with _loop_lock:
         _loop_cycle_history = []
         _loop_total_cycles = cycles
-        _loop_completed_cycles = 0
+        _loop_completed_cycles = max(0, start_cycle - 1)
+        _loop_last_heartbeat = None
 
     def run_loop(task: Task) -> dict:
-        import asyncio
-        global _loop_completed_cycles
+        global _loop_completed_cycles, _loop_last_heartbeat
 
-        for cycle_num in range(1, cycles + 1):
+        import asyncio
+
+        for cycle_num in range(start_cycle, cycles + 1):
             if _loop_stop_event.is_set():
                 break
 
             task.progress = int((cycle_num - 1) / cycles * 100)
-            report = observer.observe(window=window)
+            cycle_started = time.time()
+            loop_watchdog.beat(cycle_started)
+            _loop_last_heartbeat = cycle_started
+
+            checkpoint_store.save(
+                LoopCheckpoint(
+                    next_cycle=cycle_num,
+                    completed_cycles=_loop_completed_cycles,
+                    last_status="running",
+                    last_cycle_started_at=cycle_started,
+                )
+            )
 
             cycle_info: dict[str, Any] = {
                 "cycle": cycle_num,
-                "health_success_rate": report.metrics.success_rate,
-                "health_error_rate": report.metrics.error_rate,
+                "health_success_rate": 0.0,
+                "health_error_rate": 0.0,
                 "optimization_run": False,
                 "optimization_result": None,
                 "deploy_result": None,
                 "canary_result": None,
             }
 
-            if report.needs_optimization:
-                cycle_info["optimization_run"] = True
-                current_config = _ensure_active_config(deployer)
-                failure_samples = _build_failure_samples(store)
+            try:
+                report = observer.observe(window=window)
+                cycle_info["health_success_rate"] = report.metrics.success_rate
+                cycle_info["health_error_rate"] = report.metrics.error_rate
 
-                new_config, status_msg = optimizer.optimize(
-                    report, current_config, failure_samples=failure_samples
+                if report.needs_optimization:
+                    cycle_info["optimization_run"] = True
+                    current_config = _ensure_active_config(deployer)
+                    failure_samples = _build_failure_samples(store)
+
+                    new_config, status_msg = optimizer.optimize(
+                        report,
+                        current_config,
+                        failure_samples=failure_samples,
+                    )
+                    cycle_info["optimization_result"] = status_msg
+
+                    if new_config is not None:
+                        score = eval_runner.run(config=new_config)
+                        scores_dict = {
+                            "quality": score.quality,
+                            "safety": score.safety,
+                            "tool_use_accuracy": getattr(score, "tool_use_accuracy", 0.0),
+                            "latency": score.latency,
+                            "cost": score.cost,
+                            "composite": score.composite,
+                        }
+                        deploy_result = deployer.deploy(new_config, scores_dict)
+                        cycle_info["deploy_result"] = deploy_result
+
+                canary_result = deployer.check_and_act()
+                cycle_info["canary_result"] = canary_result
+            except Exception as exc:
+                tb = traceback.format_exc()
+                dead_letter_queue.push(
+                    kind="api_loop_cycle",
+                    payload={"cycle": cycle_num, "task_id": task.task_id},
+                    error=str(exc),
+                    traceback_text=tb,
                 )
-                cycle_info["optimization_result"] = status_msg
+                structured_logger.error(
+                    "api_loop_cycle_failed",
+                    extra={"event": "loop_cycle_failed", "cycle": cycle_num, "status": "failed"},
+                )
+                cycle_info["optimization_result"] = f"cycle_error: {exc}"
 
-                if new_config is not None:
-                    score = eval_runner.run(config=new_config)
-                    scores_dict = {
-                        "quality": score.quality,
-                        "safety": score.safety,
-                        "latency": score.latency,
-                        "cost": score.cost,
-                        "composite": score.composite,
-                    }
-                    deploy_result = deployer.deploy(new_config, scores_dict)
-                    cycle_info["deploy_result"] = deploy_result
+            cycle_finished = time.time()
+            snapshot = resource_monitor.sample()
+            if snapshot.memory_mb > runtime.loop.resource_warn_memory_mb:
+                structured_logger.warning(
+                    "api_resource_warning_memory",
+                    extra={"event": "resource_warning", "memory_mb": snapshot.memory_mb, "cycle": cycle_num},
+                )
+            if snapshot.cpu_percent > runtime.loop.resource_warn_cpu_percent:
+                structured_logger.warning(
+                    "api_resource_warning_cpu",
+                    extra={"event": "resource_warning", "cpu_percent": snapshot.cpu_percent, "cycle": cycle_num},
+                )
 
-            canary_result = deployer.check_and_act()
-            cycle_info["canary_result"] = canary_result
+            if loop_watchdog.is_stalled(now=cycle_finished):
+                stall_error = (
+                    f"Watchdog stall: {loop_watchdog.seconds_since_last_beat(now=cycle_finished):.2f}s "
+                    f"> timeout {loop_watchdog.timeout_seconds:.2f}s"
+                )
+                dead_letter_queue.push(
+                    kind="api_watchdog",
+                    payload={"cycle": cycle_num, "task_id": task.task_id},
+                    error=stall_error,
+                )
+                structured_logger.warning(
+                    "api_loop_watchdog_stall",
+                    extra={"event": "watchdog_stall", "cycle": cycle_num},
+                )
 
             with _loop_lock:
                 _loop_cycle_history.append(cycle_info)
                 _loop_completed_cycles = cycle_num
+                _loop_last_heartbeat = cycle_finished
+
+            checkpoint_store.save(
+                LoopCheckpoint(
+                    next_cycle=cycle_num + 1,
+                    completed_cycles=cycle_num,
+                    last_status="running",
+                    last_cycle_started_at=cycle_started,
+                    last_cycle_finished_at=cycle_finished,
+                )
+            )
 
             # Best-effort websocket broadcast
             try:
@@ -149,7 +245,7 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
                         "task_id": task.task_id,
                         "cycle": cycle_num,
                         "total_cycles": cycles,
-                        "success_rate": report.metrics.success_rate,
+                        "success_rate": cycle_info["health_success_rate"],
                         "optimized": cycle_info["optimization_run"],
                     })
                 )
@@ -158,21 +254,37 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
                 pass
 
             if cycle_num < cycles and not _loop_stop_event.is_set():
-                # Sleep in small increments so we can respond to stop quickly
-                for _ in range(int(delay * 10)):
+                wait_seconds = scheduler.seconds_until_next(
+                    now_epoch=time.time(),
+                    cycle_started_at=cycle_started,
+                    cycle_finished_at=cycle_finished,
+                )
+                for _ in range(int(wait_seconds * 10)):
                     if _loop_stop_event.is_set():
                         break
                     time.sleep(0.1)
 
         task.progress = 100
         with _loop_lock:
+            stalled = loop_watchdog.is_stalled() if _loop_last_heartbeat is not None else False
             result = {
                 "total_cycles": cycles,
                 "completed_cycles": _loop_completed_cycles,
                 "stopped_early": _loop_stop_event.is_set(),
                 "cycle_history": list(_loop_cycle_history),
+                "stalled": stalled,
+                "last_heartbeat": _loop_last_heartbeat,
+                "dead_letter_count": dead_letter_queue.count(),
             }
         task.result = result
+        checkpoint_store.save(
+            LoopCheckpoint(
+                next_cycle=_loop_completed_cycles + 1,
+                completed_cycles=_loop_completed_cycles,
+                last_status="completed" if _loop_completed_cycles >= cycles else "stopped",
+                last_cycle_finished_at=time.time(),
+            )
+        )
         return result
 
     task = task_manager.create_task("loop", run_loop)
@@ -183,7 +295,10 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
         running=True,
         task_id=task.task_id,
         total_cycles=cycles,
-        completed_cycles=0,
+        completed_cycles=max(0, start_cycle - 1),
+        stalled=False,
+        last_heartbeat=None,
+        dead_letter_count=dead_letter_queue.count(),
         cycle_history=[],
     )
 
@@ -204,11 +319,15 @@ async def stop_loop(request: Request) -> LoopStatusResponse:
 
     with _loop_lock:
         history = [LoopCycleInfo(**c) for c in _loop_cycle_history]
+        stalled = request.app.state.loop_watchdog.is_stalled() if _loop_last_heartbeat is not None else False
         return LoopStatusResponse(
             running=False,
             task_id=_loop_task_id,
             total_cycles=_loop_total_cycles,
             completed_cycles=_loop_completed_cycles,
+            stalled=stalled,
+            last_heartbeat=_loop_last_heartbeat,
+            dead_letter_count=request.app.state.dead_letter_queue.count(),
             cycle_history=history,
         )
 
@@ -221,6 +340,7 @@ async def get_loop_status(request: Request) -> LoopStatusResponse:
         total = _loop_total_cycles
         completed = _loop_completed_cycles
         history_raw = list(_loop_cycle_history)
+        last_heartbeat = _loop_last_heartbeat
 
     running = False
     if task_id:
@@ -229,11 +349,15 @@ async def get_loop_status(request: Request) -> LoopStatusResponse:
             running = True
 
     history = [LoopCycleInfo(**c) for c in history_raw]
+    stalled = request.app.state.loop_watchdog.is_stalled() if last_heartbeat is not None else False
 
     return LoopStatusResponse(
         running=running,
         task_id=task_id,
         total_cycles=total,
         completed_cycles=completed,
+        stalled=stalled,
+        last_heartbeat=last_heartbeat,
+        dead_letter_count=request.app.state.dead_letter_queue.count(),
         cycle_history=history,
     )

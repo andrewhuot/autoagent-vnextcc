@@ -1,0 +1,9 @@
+{
+  "next_cycle": 6,
+  "completed_cycles": 5,
+  "plateau_count": 0,
+  "last_status": "stopped",
+  "last_cycle_started_at": 0.0,
+  "last_cycle_finished_at": 1774310651.1148632,
+  "metadata": {}
+}

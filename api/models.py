@@ -41,6 +41,12 @@ class EvalRunRequest(BaseModel):
     """Request to start an eval run."""
     config_path: Optional[str] = Field(None, description="Path to config YAML to evaluate; uses default if omitted")
     category: Optional[str] = Field(None, description="Run only a specific category of test cases")
+    dataset_path: Optional[str] = Field(None, description="Dataset file (.jsonl/.csv) for eval runs")
+    split: str = Field(
+        "all",
+        pattern="^(train|test|all)$",
+        description="Dataset split used with dataset_path",
+    )
 
 
 class EvalCaseResult(BaseModel):
@@ -240,6 +246,25 @@ class LoopStartRequest(BaseModel):
     cycles: int = Field(5, ge=1, le=1000, description="Number of optimization cycles to run")
     delay: float = Field(1.0, ge=0.0, le=300.0, description="Seconds between cycles")
     window: int = Field(100, ge=1, le=10000, description="Observation window size")
+    schedule_mode: Optional[str] = Field(
+        None,
+        pattern="^(continuous|interval|cron)$",
+        description="Loop scheduler mode",
+    )
+    interval_minutes: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=1440.0,
+        description="Interval length (minutes) for interval scheduling",
+    )
+    cron_expression: Optional[str] = Field(
+        None,
+        description="Cron expression (UTC) used when schedule_mode=cron",
+    )
+    resume_checkpoint: bool = Field(
+        True,
+        description="Resume from persisted checkpoint when available",
+    )
 
 
 class LoopCycleInfo(BaseModel):
@@ -259,4 +284,19 @@ class LoopStatusResponse(BaseModel):
     task_id: Optional[str] = Field(None, description="Background task ID if running")
     total_cycles: int = Field(0, description="Total cycles configured")
     completed_cycles: int = Field(0, description="Cycles completed so far")
+    stalled: bool = Field(False, description="Whether watchdog reports loop stall")
+    last_heartbeat: Optional[float] = Field(None, description="Last loop heartbeat unix epoch")
+    dead_letter_count: int = Field(0, description="Queued dead-letter items")
     cycle_history: list[LoopCycleInfo] = Field(default_factory=list, description="Recent cycle results")
+
+
+class SystemHealthResponse(BaseModel):
+    """Operational health for long-running backend components."""
+
+    status: str = Field(..., description="ok/degraded")
+    loop_running: bool = Field(False, description="Whether optimization loop is running")
+    loop_stalled: bool = Field(False, description="Whether loop watchdog is stalled")
+    last_heartbeat: Optional[float] = Field(None, description="Last loop heartbeat timestamp")
+    dead_letter_count: int = Field(0, description="Dead-letter queue size")
+    tasks_running: int = Field(0, description="Count of running background tasks")
+    uptime_seconds: float = Field(0.0, description="Process uptime in seconds")

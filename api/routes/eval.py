@@ -67,18 +67,26 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
             config = yaml.safe_load(f)
 
     category = body.category
+    dataset_path = body.dataset_path
+    split = body.split
+    if dataset_path and not Path(dataset_path).exists():
+        raise HTTPException(status_code=404, detail=f"Dataset file not found: {dataset_path}")
 
     def run_eval(task: Task) -> dict:
         import asyncio
 
         task.progress = 10
         if category:
-            score = eval_runner.run_category(category, config=config)
+            score = eval_runner.run_category(category, config=config, dataset_path=dataset_path, split=split)
         else:
-            score = eval_runner.run(config=config)
+            score = eval_runner.run(config=config, dataset_path=dataset_path, split=split)
         task.progress = 90
 
         result = _score_to_response(task.task_id, score, datetime.now(timezone.utc))
+        result["run_id"] = score.run_id or task.task_id
+        result["provenance"] = score.provenance
+        result["dataset_path"] = dataset_path
+        result["split"] = split
         task.result = result
 
         # Best-effort websocket broadcast
@@ -155,3 +163,24 @@ async def get_eval_run_cases(run_id: str, request: Request) -> list[EvalCaseResu
     if task.result is None:
         raise HTTPException(status_code=500, detail="Eval run completed but no results stored")
     return [EvalCaseResult(**c) for c in task.result.get("cases", [])]
+
+
+@router.get("/history")
+async def list_eval_history(request: Request, limit: int = 20) -> list[dict]:
+    """List persisted eval history runs with provenance metadata."""
+    history_store = request.app.state.eval_runner.history_store
+    if history_store is None:
+        return []
+    return history_store.list_runs(limit=limit)
+
+
+@router.get("/history/{run_id}")
+async def get_eval_history_run(run_id: str, request: Request) -> dict:
+    """Fetch one persisted eval history run by run_id."""
+    history_store = request.app.state.eval_runner.history_store
+    if history_store is None:
+        raise HTTPException(status_code=404, detail="Eval history is not enabled")
+    run = history_store.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {run_id}")
+    return run

@@ -60,7 +60,7 @@ Run eval suite against a config.
 ### Synopsis
 
 ```bash
-autoagent eval run [--config PATH] [--suite DIR] [--category NAME] [--output FILE]
+autoagent eval run [--config PATH] [--suite DIR] [--dataset FILE] [--split train|test|all] [--category NAME] [--output FILE]
 ```
 
 ### Options
@@ -69,13 +69,15 @@ autoagent eval run [--config PATH] [--suite DIR] [--category NAME] [--output FIL
 |---|---|---|---|
 | `--config` | string | active/default | Config YAML path |
 | `--suite` | string | built-in suite | Eval cases directory |
+| `--dataset` | string | none | Dataset file (`.jsonl` or `.csv`) |
+| `--split` | choice | `all` | Dataset split when using `--dataset` |
 | `--category` | string | all | Run only one category |
 | `--output` | string | none | Write JSON result file |
 
 ### Example
 
 ```bash
-autoagent eval run --config configs/v003.yaml --output results.json
+autoagent eval run --dataset evals/datasets/regression.jsonl --split test --output results.json
 ```
 
 Expected output (shape):
@@ -314,7 +316,7 @@ Run continuous autoresearch loop.
 ### Synopsis
 
 ```bash
-autoagent loop [--max-cycles N] [--stop-on-plateau] [--delay S] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
+autoagent loop [--max-cycles N] [--stop-on-plateau] [--delay S] [--schedule continuous|interval|cron] [--interval-minutes M] [--cron \"*/5 * * * *\"] [--checkpoint-file PATH] [--resume|--no-resume] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
 ```
 
 ### Options
@@ -324,6 +326,11 @@ autoagent loop [--max-cycles N] [--stop-on-plateau] [--delay S] [--db PATH] [--c
 | `--max-cycles` | int | `50` | Max cycles to run |
 | `--stop-on-plateau` | flag | off | Stop after repeated no-improvement |
 | `--delay` | float | `1.0` | Delay between cycles (seconds) |
+| `--schedule` | choice | from `autoagent.yaml` | Scheduler mode (`continuous`, `interval`, `cron`) |
+| `--interval-minutes` | float | from `autoagent.yaml` | Interval length for `--schedule interval` |
+| `--cron` | string | from `autoagent.yaml` | 5-field UTC cron expression |
+| `--checkpoint-file` | string | from `autoagent.yaml` | Checkpoint path for resume/recovery |
+| `--resume/--no-resume` | flag | `--resume` | Resume from latest checkpoint |
 | `--db` | string | `conversations.db` | Conversation DB path |
 | `--configs-dir` | string | `configs` | Config directory |
 | `--memory-db` | string | `optimizer_memory.db` | Optimization memory DB |
@@ -331,7 +338,7 @@ autoagent loop [--max-cycles N] [--stop-on-plateau] [--delay S] [--db PATH] [--c
 ### Example
 
 ```bash
-autoagent loop --max-cycles 20 --stop-on-plateau --delay 2
+autoagent loop --schedule cron --cron "*/10 * * * *" --resume --max-cycles 200
 ```
 
 ### Related

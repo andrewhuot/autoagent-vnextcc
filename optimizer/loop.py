@@ -11,6 +11,7 @@ from .memory import OptimizationAttempt, OptimizationMemory
 from .proposer import Proposer
 from agent.config.schema import AgentConfig, config_diff, validate_config
 from evals.runner import EvalRunner
+from evals.statistics import paired_significance
 from observer.metrics import HealthReport
 
 
@@ -23,11 +24,19 @@ class Optimizer:
         memory: OptimizationMemory | None = None,
         proposer: Proposer | None = None,
         gates: Gates | None = None,
+        significance_alpha: float = 0.05,
+        significance_min_effect_size: float = 0.005,
+        significance_iterations: int = 2000,
+        require_statistical_significance: bool = True,
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
         self.proposer = proposer or Proposer(use_mock=True)
         self.gates = gates or Gates()
+        self.significance_alpha = significance_alpha
+        self.significance_min_effect_size = significance_min_effect_size
+        self.significance_iterations = significance_iterations
+        self.require_statistical_significance = require_statistical_significance
 
     def optimize(
         self,
@@ -105,6 +114,31 @@ class Optimizer:
         # 6. Run gates
         accepted, status, reason = self.gates.evaluate(candidate_score, baseline_score)
 
+        significance_p_value = 1.0
+        significance_delta = 0.0
+        significance_n = 0
+        if accepted and self.require_statistical_significance:
+            baseline_values = [self._case_composite(result) for result in baseline_score.results]
+            candidate_values = [self._case_composite(result) for result in candidate_score.results]
+            if baseline_values and candidate_values:
+                significance = paired_significance(
+                    baseline_values,
+                    candidate_values,
+                    alpha=self.significance_alpha,
+                    min_effect_size=self.significance_min_effect_size,
+                    iterations=self.significance_iterations,
+                )
+                significance_p_value = significance.p_value
+                significance_delta = significance.observed_delta
+                significance_n = significance.n_pairs
+                if not significance.is_significant:
+                    accepted = False
+                    status = "rejected_not_significant"
+                    reason = (
+                        "Improvement not statistically significant: "
+                        f"delta={significance_delta:.6f}, p={significance_p_value:.4f}, n={significance_n}"
+                    )
+
         # 7. Log the attempt
         attempt = OptimizationAttempt(
             attempt_id=str(uuid.uuid4())[:8],
@@ -115,6 +149,9 @@ class Optimizer:
             config_section=proposal.config_section,
             score_before=baseline_score.composite,
             score_after=candidate_score.composite,
+            significance_p_value=significance_p_value,
+            significance_delta=significance_delta,
+            significance_n=significance_n,
             health_context=json.dumps(health_report.metrics.to_dict()),
         )
         self.memory.log(attempt)
@@ -122,3 +159,16 @@ class Optimizer:
         if accepted:
             return candidate_config, f"ACCEPTED: {reason}"
         return None, f"REJECTED ({status}): {reason}"
+
+    @staticmethod
+    def _case_composite(result) -> float:
+        """Approximate per-case composite score for paired significance testing."""
+        latency_score = max(0.0, min(1.0, 1.0 - (float(result.latency_ms) / 5000.0)))
+        cost_score = max(0.0, min(1.0, 1.0 - (float(result.token_count) / 2000.0)))
+        safety_score = 1.0 if bool(result.safety_passed) else 0.0
+        return (
+            0.40 * float(result.quality_score)
+            + 0.25 * safety_score
+            + 0.20 * latency_score
+            + 0.15 * cost_score
+        )

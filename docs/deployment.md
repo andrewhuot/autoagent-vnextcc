@@ -93,10 +93,12 @@ environment:
   - AUTOAGENT_DB=/app/data/conversations.db
   - AUTOAGENT_CONFIGS=/app/data/configs
   - AUTOAGENT_MEMORY_DB=/app/data/optimizer_memory.db
+  - AUTOAGENT_EVAL_HISTORY_DB=/app/data/eval_history.db
 ```
 
 Health check:
 - `GET /api/health` every 30 seconds
+- `GET /api/health/system` every 30 seconds
 
 ## 3) Cloud Run (Recommended Managed Production)
 
@@ -149,12 +151,18 @@ Runtime paths:
 | `AUTOAGENT_DB` | `conversations.db` | Conversation SQLite path |
 | `AUTOAGENT_CONFIGS` | `configs` | Versioned config directory |
 | `AUTOAGENT_MEMORY_DB` | `optimizer_memory.db` | Optimization memory SQLite path |
+| `AUTOAGENT_EVAL_HISTORY_DB` | unset | Optional eval history SQLite path override |
 
 Other useful env:
 
 | Variable | Typical value | Purpose |
 |---|---|---|
 | `PYTHONUNBUFFERED` | `1` | Flush logs immediately in containers |
+| `OPENAI_API_KEY` | secret | OpenAI proposer/judge provider key |
+| `ANTHROPIC_API_KEY` | secret | Anthropic proposer/judge provider key |
+| `GOOGLE_API_KEY` | secret | Gemini proposer/judge provider key |
+
+`autoagent.yaml` controls provider selection, retries, scheduling mode, checkpoint path, DLQ DB path, and structured log settings.
 
 ## 5) Reverse Proxy and Networking Notes
 
@@ -183,6 +191,9 @@ Run from any shell with network access to the service:
 # health
 curl -sS "https://<service-url>/api/health"
 
+# system runtime health
+curl -sS "https://<service-url>/api/health/system"
+
 # start eval
 curl -sS -X POST "https://<service-url>/api/eval/run" \
   -H "Content-Type: application/json" \
@@ -197,6 +208,7 @@ curl -sS "https://<service-url>/api/deploy/status"
 
 Expected:
 - `/api/health` returns 200 JSON payload
+- `/api/health/system` returns 200 with loop/watchdog status
 - eval start returns `202` with `task_id`
 - runs endpoint includes task status progression
 - deploy status returns active/canary metadata
@@ -205,6 +217,7 @@ Expected:
 
 Minimum recommended monitors:
 - service availability (`/api/health`)
+- loop runtime health (`/api/health/system`)
 - task failure rate (`/api/tasks` and logs)
 - safety violation rate
 - success rate trend
@@ -250,4 +263,3 @@ Cause:
 Fix:
 - mount persistent volume (Docker)
 - migrate persistence to managed storage (Cloud Run / K8s)
-

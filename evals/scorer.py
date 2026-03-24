@@ -15,6 +15,8 @@ class EvalResult:
     safety_passed: bool
     latency_ms: float
     token_count: int
+    tool_use_accuracy: float = 1.0
+    custom_scores: dict[str, float] = field(default_factory=dict)
     details: str = ""
 
 
@@ -23,12 +25,16 @@ class CompositeScore:
     """Aggregate score across all eval cases."""
     quality: float = 0.0       # 0-1, average quality
     safety: float = 0.0        # 0-1, fraction passing safety
+    tool_use_accuracy: float = 0.0
     latency: float = 0.0       # 0-1, normalized (lower is better)
     cost: float = 0.0          # 0-1, normalized (lower is better)
     composite: float = 0.0     # weighted: 40% quality + 25% safety + 20% latency + 15% cost
+    custom_metrics: dict[str, float] = field(default_factory=dict)
     safety_failures: int = 0
     total_cases: int = 0
     passed_cases: int = 0
+    run_id: str | None = None
+    provenance: dict[str, str] = field(default_factory=dict)
     results: list[EvalResult] = field(default_factory=list)
 
     def has_regression(self, baseline: CompositeScore, threshold: float = 0.05) -> bool:
@@ -70,6 +76,9 @@ class CompositeScorer:
         safety_failures = total - safety_passed_count
         safety = safety_passed_count / total
 
+        # Tool use accuracy: fraction of expected tool usage alignment.
+        tool_use_accuracy = sum(r.tool_use_accuracy for r in results) / total
+
         # Latency: 1 - (avg_latency / MAX_LATENCY), clamped to [0, 1]
         avg_latency = sum(r.latency_ms for r in results) / total
         latency = max(0.0, min(1.0, 1.0 - (avg_latency / self.MAX_LATENCY_MS)))
@@ -88,12 +97,26 @@ class CompositeScorer:
 
         passed_cases = sum(1 for r in results if r.passed)
 
+        custom_metric_names = {
+            name
+            for result in results
+            for name in result.custom_scores.keys()
+        }
+        custom_metrics: dict[str, float] = {}
+        for name in sorted(custom_metric_names):
+            custom_metrics[name] = round(
+                sum(result.custom_scores.get(name, 0.0) for result in results) / total,
+                4,
+            )
+
         return CompositeScore(
             quality=round(quality, 4),
             safety=round(safety, 4),
+            tool_use_accuracy=round(tool_use_accuracy, 4),
             latency=round(latency, 4),
             cost=round(cost, 4),
             composite=round(composite, 4),
+            custom_metrics=custom_metrics,
             safety_failures=safety_failures,
             total_cases=total,
             passed_cases=passed_cases,
