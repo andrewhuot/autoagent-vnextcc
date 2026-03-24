@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import autofix, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, opportunities, optimize, traces
+from api.routes import autofix, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, opportunities, optimize, registry, scorers, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -172,6 +172,16 @@ async def lifespan(app: FastAPI):
 
     app.state.context_analyzer = ContextAnalyzer()
 
+    # Registry store
+    from registry.store import RegistryStore
+    app.state.registry_store = RegistryStore(
+        db_path=os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db"),
+    )
+
+    # NL Scorer
+    from evals.nl_scorer import NLScorer
+    app.state.nl_scorer = NLScorer()
+
     yield
     # No explicit cleanup needed — SQLite connections are context-managed
 
@@ -219,6 +229,8 @@ app.include_router(events.router)
 app.include_router(autofix.router)
 app.include_router(judges.router)
 app.include_router(context.router)
+app.include_router(registry.router)
+app.include_router(scorers.router)
 
 
 # ---------------------------------------------------------------------------

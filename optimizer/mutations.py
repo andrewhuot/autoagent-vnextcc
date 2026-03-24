@@ -50,6 +50,10 @@ class MutationSurface(Enum):
     memory_policy = "memory_policy"
     routing = "routing"
     workflow = "workflow"
+    skill = "skill"
+    policy = "policy"
+    tool_contract = "tool_contract"
+    handoff_schema = "handoff_schema"
 
 
 @dataclass
@@ -289,12 +293,97 @@ def _validate_routing_edit(config: dict[str, Any]) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Registry-aware mutation apply functions
+# ---------------------------------------------------------------------------
+
+
+def _apply_skill_rewrite(
+    config: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Rewrite a skill's instructions or metadata by (name, version)."""
+    cfg = copy.deepcopy(config)
+    skill_name = params.get("name", "")
+    if "skills" not in cfg:
+        cfg["skills"] = {}
+    if skill_name not in cfg["skills"]:
+        cfg["skills"][skill_name] = {}
+    for key in ("instructions", "examples", "constraints", "tool_requirements", "metadata"):
+        if key in params:
+            cfg["skills"][skill_name][key] = params[key]
+    return cfg
+
+
+def _validate_skill_rewrite(config: dict[str, Any]) -> bool:
+    return isinstance(config.get("skills"), dict)
+
+
+def _apply_policy_edit(
+    config: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Edit a policy pack's rules or enforcement settings."""
+    cfg = copy.deepcopy(config)
+    policy_name = params.get("name", "")
+    if "policies" not in cfg:
+        cfg["policies"] = {}
+    if policy_name not in cfg["policies"]:
+        cfg["policies"][policy_name] = {}
+    for key in ("rules", "enforcement", "scope", "metadata"):
+        if key in params:
+            cfg["policies"][policy_name][key] = params[key]
+    return cfg
+
+
+def _validate_policy_edit(config: dict[str, Any]) -> bool:
+    return isinstance(config.get("policies"), dict)
+
+
+def _apply_tool_contract_edit(
+    config: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Edit a tool contract's schema or replay settings."""
+    cfg = copy.deepcopy(config)
+    tool_name = params.get("tool_name", "")
+    if "tool_contracts" not in cfg:
+        cfg["tool_contracts"] = {}
+    if tool_name not in cfg["tool_contracts"]:
+        cfg["tool_contracts"][tool_name] = {}
+    for key in ("input_schema", "output_schema", "side_effect_class", "replay_mode", "description", "metadata"):
+        if key in params:
+            cfg["tool_contracts"][tool_name][key] = params[key]
+    return cfg
+
+
+def _validate_tool_contract_edit(config: dict[str, Any]) -> bool:
+    return isinstance(config.get("tool_contracts"), dict)
+
+
+def _apply_handoff_schema_edit(
+    config: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Edit a handoff schema's fields or validation rules."""
+    cfg = copy.deepcopy(config)
+    schema_name = params.get("name", "")
+    if "handoff_schemas" not in cfg:
+        cfg["handoff_schemas"] = {}
+    if schema_name not in cfg["handoff_schemas"]:
+        cfg["handoff_schemas"][schema_name] = {}
+    for key in ("from_agent", "to_agent", "required_fields", "optional_fields", "validation_rules", "metadata"):
+        if key in params:
+            cfg["handoff_schemas"][schema_name][key] = params[key]
+    return cfg
+
+
+def _validate_handoff_schema_edit(config: dict[str, Any]) -> bool:
+    return isinstance(config.get("handoff_schemas"), dict)
+
+
+# ---------------------------------------------------------------------------
 # Default registry factory
 # ---------------------------------------------------------------------------
 
 
 def create_default_registry() -> MutationRegistry:
-    """Create a MutationRegistry pre-populated with the 9 first-party operators."""
+    """Create a MutationRegistry pre-populated with the 13 first-party operators."""
     registry = MutationRegistry()
 
     registry.register(
@@ -429,6 +518,68 @@ def create_default_registry() -> MutationRegistry:
             supports_autodeploy=False,
             description="Modify routing rules and keyword mappings.",
             apply=_apply_routing_edit,
+        )
+    )
+
+    # --- Registry-aware operators ---
+
+    registry.register(
+        MutationOperator(
+            name="skill_rewrite",
+            surface=MutationSurface.skill,
+            risk_class=RiskClass.low,
+            preconditions=["skill exists in registry"],
+            validator=_validate_skill_rewrite,
+            rollback_strategy="revert skill to previous version in registry",
+            estimated_eval_cost=0.01,
+            supports_autodeploy=True,
+            description="Rewrite a skill's instructions or metadata.",
+            apply=_apply_skill_rewrite,
+        )
+    )
+
+    registry.register(
+        MutationOperator(
+            name="policy_edit",
+            surface=MutationSurface.policy,
+            risk_class=RiskClass.medium,
+            preconditions=["policy exists in registry"],
+            validator=_validate_policy_edit,
+            rollback_strategy="revert policy to previous version in registry",
+            estimated_eval_cost=0.02,
+            supports_autodeploy=False,
+            description="Edit a policy pack's rules or enforcement settings.",
+            apply=_apply_policy_edit,
+        )
+    )
+
+    registry.register(
+        MutationOperator(
+            name="tool_contract_edit",
+            surface=MutationSurface.tool_contract,
+            risk_class=RiskClass.medium,
+            preconditions=["tool contract exists in registry"],
+            validator=_validate_tool_contract_edit,
+            rollback_strategy="revert tool contract to previous version in registry",
+            estimated_eval_cost=0.03,
+            supports_autodeploy=False,
+            description="Edit a tool contract's schema or replay settings.",
+            apply=_apply_tool_contract_edit,
+        )
+    )
+
+    registry.register(
+        MutationOperator(
+            name="handoff_schema_edit",
+            surface=MutationSurface.handoff_schema,
+            risk_class=RiskClass.medium,
+            preconditions=["handoff schema exists in registry"],
+            validator=_validate_handoff_schema_edit,
+            rollback_strategy="revert handoff schema to previous version in registry",
+            estimated_eval_cost=0.02,
+            supports_autodeploy=False,
+            description="Edit a handoff schema's fields or validation rules.",
+            apply=_apply_handoff_schema_edit,
         )
     )
 

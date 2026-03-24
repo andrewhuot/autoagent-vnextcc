@@ -17,6 +17,9 @@ import { EventLogPage } from './pages/EventLog';
 import { AutoFix } from './pages/AutoFix';
 import { JudgeOps } from './pages/JudgeOps';
 import { ContextWorkbench } from './pages/ContextWorkbench';
+import { Registry } from './pages/Registry';
+import { BlameMap } from './pages/BlameMap';
+import { ScorerStudio } from './pages/ScorerStudio';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -48,6 +51,9 @@ export default function App() {
             <Route path="/autofix" element={<AutoFix />} />
             <Route path="/judge-ops" element={<JudgeOps />} />
             <Route path="/context" element={<ContextWorkbench />} />
+            <Route path="/registry" element={<Registry />} />
+            <Route path="/blame" element={<BlameMap />} />
+            <Route path="/scorer-studio" element={<ScorerStudio />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

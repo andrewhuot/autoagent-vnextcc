@@ -15,6 +15,9 @@ const pageTitles: Record<string, string> = {
   '/deploy': 'Deploy',
   '/loop': 'Loop Monitor',
   '/events': 'Event Log',
+  '/registry': 'Registry',
+  '/blame': 'Blame Map',
+  '/scorer-studio': 'Scorer Studio',
   '/settings': 'Settings',
 };
 

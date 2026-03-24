@@ -14,10 +14,10 @@ from optimizer.mutations_google import register_google_operators
 from optimizer.mutations_topology import register_topology_operators
 
 
-def test_create_default_registry_has_9_operators() -> None:
-    """Default registry ships with exactly 9 first-party operators."""
+def test_create_default_registry_has_13_operators() -> None:
+    """Default registry ships with exactly 13 first-party operators."""
     registry = create_default_registry()
-    assert len(registry.list_all()) == 9
+    assert len(registry.list_all()) == 13
 
 
 def test_list_by_surface_filters_correctly() -> None:
@@ -113,8 +113,8 @@ def test_register_duplicate_overwrites() -> None:
     assert updated is not None
     assert updated.description == "Replacement operator for testing."
     assert updated.description != original_desc
-    # Total count should remain 9 (replaced, not added)
-    assert len(registry.list_all()) == 9
+    # Total count should remain 13 (replaced, not added)
+    assert len(registry.list_all()) == 13
 
 
 def test_routing_edit_operator_adds_keywords() -> None:

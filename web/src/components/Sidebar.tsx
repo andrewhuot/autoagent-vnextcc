@@ -16,6 +16,9 @@ import {
   Wrench,
   Scale,
   Layers,
+  BookOpen,
+  MapPin,
+  Sparkles,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
@@ -34,6 +37,9 @@ const navItems = [
   { to: '/autofix', label: 'AutoFix', icon: Wrench },
   { to: '/judge-ops', label: 'Judge Ops', icon: Scale },
   { to: '/context', label: 'Context Workbench', icon: Layers },
+  { to: '/registry', label: 'Registry', icon: BookOpen },
+  { to: '/blame', label: 'Blame Map', icon: MapPin },
+  { to: '/scorer-studio', label: 'Scorer Studio', icon: Sparkles },
   { to: '/settings', label: 'Settings', icon: Settings },
 ];
 

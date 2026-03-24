@@ -14,6 +14,20 @@ Full command set:
   autoagent status
   autoagent logs [--limit N] [--outcome fail|success]
   autoagent server
+  autoagent registry list [--type skills|policies|tools|handoffs]
+  autoagent registry show <type> <name> [--version N]
+  autoagent registry add <type> <name> --file <path>
+  autoagent registry diff <type> <name> <v1> <v2>
+  autoagent registry import <path>
+  autoagent trace grade <trace-id>
+  autoagent trace blame [--window 24h]
+  autoagent trace graph <trace-id>
+  autoagent scorer create "description" [--name NAME]
+  autoagent scorer create --from-file criteria.txt [--name NAME]
+  autoagent scorer list
+  autoagent scorer show <name>
+  autoagent scorer refine <name> "additional criteria"
+  autoagent scorer test <name> --trace <trace-id>
 """
 
 from __future__ import annotations
@@ -59,6 +73,8 @@ from optimizer.reliability import (
 DB_PATH = os.environ.get("AUTOAGENT_DB", "conversations.db")
 CONFIGS_DIR = os.environ.get("AUTOAGENT_CONFIGS", "configs")
 MEMORY_DB = os.environ.get("AUTOAGENT_MEMORY_DB", "optimizer_memory.db")
+REGISTRY_DB = os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db")
+TRACE_DB = os.environ.get("AUTOAGENT_TRACE_DB", "traces.db")
 
 
 def _load_config_dict(config_path: str) -> dict:
@@ -1757,6 +1773,450 @@ def run_status(db: str, configs_dir: str, memory_db: str) -> None:
     canary = ds["canary_version"]
     click.echo(f"  Active:  v{active:03d}" if active else "  Active:  none")
     click.echo(f"  Canary:  v{canary:03d}" if canary else "  Canary:  none")
+
+
+# ---------------------------------------------------------------------------
+# autoagent registry ...
+# ---------------------------------------------------------------------------
+
+REGISTRY_TYPES = ("skills", "policies", "tools", "handoffs")
+
+_REGISTRY_MAP = {
+    "skills": "SkillRegistry",
+    "policies": "PolicyRegistry",
+    "tools": "ToolContractRegistry",
+    "handoffs": "HandoffSchemaRegistry",
+}
+
+
+def _get_registry(registry_type: str, store: object) -> object:
+    """Return the correct registry instance for a given type string."""
+    from registry import (
+        HandoffSchemaRegistry,
+        PolicyRegistry,
+        SkillRegistry,
+        ToolContractRegistry,
+    )
+
+    mapping = {
+        "skills": SkillRegistry,
+        "policies": PolicyRegistry,
+        "tools": ToolContractRegistry,
+        "handoffs": HandoffSchemaRegistry,
+    }
+    cls = mapping.get(registry_type)
+    if cls is None:
+        raise click.BadParameter(
+            f"Unknown type '{registry_type}'. Choose from: {', '.join(REGISTRY_TYPES)}"
+        )
+    return cls(store)
+
+
+@cli.group("registry")
+def registry_group() -> None:
+    """Modular registry — skills, policies, tool contracts, handoff schemas."""
+
+
+@registry_group.command("list")
+@click.option("--type", "registry_type", default=None,
+              type=click.Choice(REGISTRY_TYPES, case_sensitive=False),
+              help="Filter by registry type.")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def registry_list(registry_type: str | None, db: str) -> None:
+    """List registered items.
+
+    Examples:
+      autoagent registry list
+      autoagent registry list --type skills
+    """
+    from registry import RegistryStore
+
+    store = RegistryStore(db_path=db)
+    types_to_show = [registry_type] if registry_type else list(REGISTRY_TYPES)
+
+    for rtype in types_to_show:
+        reg = _get_registry(rtype, store)
+        items = reg.list()
+        click.echo(f"\n{rtype.upper()} ({len(items)})")
+        if not items:
+            click.echo("  (none)")
+            continue
+        for item in items:
+            name = item.get("name") or item.get("tool_name", "?")
+            ver = item.get("version", "?")
+            click.echo(f"  {name:30s}  v{ver}")
+
+
+@registry_group.command("show")
+@click.argument("registry_type", type=click.Choice(REGISTRY_TYPES, case_sensitive=False))
+@click.argument("name")
+@click.option("--version", "version", default=None, type=int, help="Specific version.")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def registry_show(registry_type: str, name: str, version: int | None, db: str) -> None:
+    """Show details for a registry item.
+
+    Examples:
+      autoagent registry show skills returns_handling
+      autoagent registry show tools order_lookup --version 2
+    """
+    from registry import RegistryStore
+
+    store = RegistryStore(db_path=db)
+    reg = _get_registry(registry_type, store)
+    item = reg.get(name, version)
+    if item is None:
+        click.echo(f"Not found: {registry_type}/{name}" +
+                   (f" v{version}" if version else ""))
+        raise SystemExit(1)
+    click.echo(json.dumps(item, indent=2, default=str))
+
+
+@registry_group.command("add")
+@click.argument("registry_type", type=click.Choice(REGISTRY_TYPES, case_sensitive=False))
+@click.argument("name")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True),
+              help="YAML/JSON file with item data.")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def registry_add(registry_type: str, name: str, file_path: str, db: str) -> None:
+    """Add a new item (or new version) to the registry.
+
+    Examples:
+      autoagent registry add skills returns_handling --file skill.yaml
+    """
+    from registry import RegistryStore
+
+    store = RegistryStore(db_path=db)
+    reg = _get_registry(registry_type, store)
+
+    path = Path(file_path)
+    raw = path.read_text(encoding="utf-8")
+    if path.suffix in (".yaml", ".yml"):
+        data = yaml.safe_load(raw)
+    else:
+        data = json.loads(raw)
+
+    if isinstance(data, dict):
+        data["name"] = name
+        result = reg.register(**data)
+        click.echo(f"Registered {registry_type}/{name} -> v{result[1]}")
+    else:
+        click.echo("Error: file must contain a JSON/YAML object.", err=True)
+        raise SystemExit(1)
+
+
+@registry_group.command("diff")
+@click.argument("registry_type", type=click.Choice(REGISTRY_TYPES, case_sensitive=False))
+@click.argument("name")
+@click.argument("v1", type=int)
+@click.argument("v2", type=int)
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def registry_diff(registry_type: str, name: str, v1: int, v2: int, db: str) -> None:
+    """Diff two versions of a registry item.
+
+    Examples:
+      autoagent registry diff skills returns_handling 1 2
+    """
+    from registry import RegistryStore
+
+    store = RegistryStore(db_path=db)
+    reg = _get_registry(registry_type, store)
+    diff = reg.diff(name, v1, v2)
+    click.echo(json.dumps(diff, indent=2, default=str))
+
+
+@registry_group.command("import")
+@click.argument("path", type=click.Path(exists=True))
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def registry_import(path: str, db: str) -> None:
+    """Bulk-import registry items from a YAML/JSON file.
+
+    Examples:
+      autoagent registry import registry_export.yaml
+    """
+    from registry import RegistryStore
+    from registry.importer import import_from_file
+
+    store = RegistryStore(db_path=db)
+    counts = import_from_file(path, store)
+    click.echo("Imported:")
+    for item_type, count in counts.items():
+        click.echo(f"  {item_type}: {count}")
+
+
+# ---------------------------------------------------------------------------
+# autoagent trace ...
+# ---------------------------------------------------------------------------
+
+def _parse_window(window: str) -> float:
+    """Parse a window string like '24h', '30m', '7d' into seconds."""
+    unit_map = {"s": 1, "m": 60, "h": 3600, "d": 86400}
+    if window and window[-1] in unit_map:
+        try:
+            return float(window[:-1]) * unit_map[window[-1]]
+        except ValueError:
+            pass
+    raise click.BadParameter(f"Invalid window '{window}'. Use e.g. 24h, 30m, 7d.")
+
+
+@cli.group("trace")
+def trace_group() -> None:
+    """Trace analysis — grading, blame maps, and graphs."""
+
+
+@trace_group.command("grade")
+@click.argument("trace_id")
+@click.option("--db", default=TRACE_DB, show_default=True)
+def trace_grade(trace_id: str, db: str) -> None:
+    """Grade all spans in a trace.
+
+    Examples:
+      autoagent trace grade abc-123
+    """
+    from observer.trace_grading import TraceGrader
+    from observer.traces import TraceStore
+
+    store = TraceStore(db_path=db)
+    grader = TraceGrader()
+    grades = grader.grade_trace(trace_id, store)
+
+    if not grades:
+        click.echo(f"No spans found for trace {trace_id}")
+        return
+
+    click.echo(f"\nTrace {trace_id} — {len(grades)} grade(s):\n")
+    for g in grades:
+        status = click.style("PASS", fg="green") if g.passed else click.style("FAIL", fg="red")
+        click.echo(f"  [{status}] {g.grader_name:25s}  score={g.score:.2f}  span={g.span_id}")
+        if g.failure_reason:
+            click.echo(f"         reason: {g.failure_reason}")
+
+
+@trace_group.command("blame")
+@click.option("--window", default="24h", show_default=True,
+              help="Time window (e.g. 24h, 7d, 30m).")
+@click.option("--top", "top_n", default=10, show_default=True,
+              help="Number of clusters to show.")
+@click.option("--db", default=TRACE_DB, show_default=True)
+def trace_blame(window: str, top_n: int, db: str) -> None:
+    """Build a blame map of failure clusters.
+
+    Examples:
+      autoagent trace blame --window 24h
+      autoagent trace blame --window 7d --top 5
+    """
+    from observer.blame_map import BlameMap
+    from observer.trace_grading import TraceGrader
+    from observer.traces import TraceStore
+
+    window_secs = _parse_window(window)
+    store = TraceStore(db_path=db)
+    grader = TraceGrader()
+    bmap = BlameMap.from_store(store, grader, window_seconds=window_secs)
+    clusters = bmap.get_top_clusters(top_n)
+
+    if not clusters:
+        click.echo("No failure clusters found.")
+        return
+
+    click.echo(f"\nTop {len(clusters)} blame cluster(s) (window={window}):\n")
+    for i, c in enumerate(clusters, 1):
+        click.echo(f"  {i}. {c.grader_name} | {c.agent_path}")
+        click.echo(f"     Reason:  {c.failure_reason}")
+        click.echo(f"     Count:   {c.count}/{c.total_traces}  Impact: {c.impact_score:.2%}  Trend: {c.trend}")
+        if c.example_trace_ids:
+            click.echo(f"     Example: {c.example_trace_ids[0]}")
+        click.echo()
+
+
+@trace_group.command("graph")
+@click.argument("trace_id")
+@click.option("--db", default=TRACE_DB, show_default=True)
+def trace_graph(trace_id: str, db: str) -> None:
+    """Render a trace as a dependency graph with critical-path analysis.
+
+    Examples:
+      autoagent trace graph abc-123
+    """
+    from observer.trace_grading import TraceGrader
+    from observer.trace_graph import TraceGraph
+    from observer.traces import TraceStore
+
+    store = TraceStore(db_path=db)
+    spans = store.get_spans(trace_id)
+    if not spans:
+        click.echo(f"No spans found for trace {trace_id}")
+        return
+
+    grader = TraceGrader()
+    grades = grader.grade_trace(trace_id, store)
+    graph = TraceGraph.from_spans(spans, grades)
+
+    crit = graph.get_critical_path()
+    bottlenecks = graph.get_bottlenecks()
+
+    click.echo(f"\nTrace {trace_id} — {len(graph.nodes)} node(s), {len(graph.edges)} edge(s)")
+    click.echo(f"\nCritical path ({len(crit)} node(s)):")
+    for node in crit:
+        click.echo(f"  {node.operation:30s}  {node.duration_ms:8.1f}ms  [{node.status}]")
+
+    if bottlenecks:
+        click.echo(f"\nBottlenecks ({len(bottlenecks)}):")
+        for node in bottlenecks:
+            click.echo(f"  {node.operation:30s}  {node.duration_ms:8.1f}ms  span={node.span_id}")
+
+    click.echo("\nFull graph JSON:")
+    click.echo(json.dumps(graph.to_dict(), indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# autoagent scorer ...
+# ---------------------------------------------------------------------------
+
+@cli.group("scorer")
+def scorer_group() -> None:
+    """NL Scorer — create eval scorers from natural language descriptions."""
+
+
+@scorer_group.command("create")
+@click.argument("description", required=False, default=None)
+@click.option("--from-file", "from_file", type=click.Path(exists=True),
+              help="Read NL description from a file.")
+@click.option("--name", default=None, help="Name for the scorer (auto-generated if omitted).")
+def scorer_create(description: str | None, from_file: str | None, name: str | None) -> None:
+    """Create a scorer from a natural language description.
+
+    Examples:
+      autoagent scorer create "The agent should respond within 5 seconds"
+      autoagent scorer create --from-file criteria.txt --name latency_check
+    """
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+
+    if from_file:
+        nl_text = Path(from_file).read_text(encoding="utf-8").strip()
+    elif description:
+        nl_text = description
+    else:
+        click.echo("Error: provide a description argument or --from-file.", err=True)
+        raise SystemExit(1)
+
+    scorer = NLScorer(compiler=NLCompiler())
+    spec = scorer.create(nl_text, name=name)
+    click.echo(f"Created scorer: {spec.name} (v{spec.version})")
+    click.echo(f"Dimensions: {len(spec.dimensions)}")
+    for d in spec.dimensions:
+        click.echo(f"  - {d.name} ({d.grader_type}, weight={d.weight})")
+    click.echo(f"\nYAML:\n{spec.to_yaml()}")
+
+
+@scorer_group.command("list")
+def scorer_list() -> None:
+    """List all scorer specs in memory.
+
+    Examples:
+      autoagent scorer list
+    """
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+
+    scorer = NLScorer(compiler=NLCompiler())
+    specs = scorer.list()
+    if not specs:
+        click.echo("No scorers found. Create one with: autoagent scorer create")
+        return
+    click.echo(f"\n{len(specs)} scorer(s):\n")
+    for s in specs:
+        click.echo(f"  {s.name:30s}  v{s.version}  dims={len(s.dimensions)}")
+
+
+@scorer_group.command("show")
+@click.argument("name")
+def scorer_show(name: str) -> None:
+    """Show a scorer spec in detail.
+
+    Examples:
+      autoagent scorer show latency_check
+    """
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+
+    scorer = NLScorer(compiler=NLCompiler())
+    spec = scorer.get(name)
+    if spec is None:
+        click.echo(f"Scorer '{name}' not found.")
+        raise SystemExit(1)
+    click.echo(json.dumps(spec.to_dict(), indent=2, default=str))
+
+
+@scorer_group.command("refine")
+@click.argument("name")
+@click.argument("additional_nl")
+def scorer_refine(name: str, additional_nl: str) -> None:
+    """Refine an existing scorer with additional criteria.
+
+    Examples:
+      autoagent scorer refine latency_check "Also check for empathy"
+    """
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+
+    scorer = NLScorer(compiler=NLCompiler())
+    try:
+        spec = scorer.refine(name, additional_nl)
+    except KeyError as exc:
+        click.echo(str(exc), err=True)
+        raise SystemExit(1)
+    click.echo(f"Refined scorer: {spec.name} (v{spec.version})")
+    click.echo(f"Dimensions: {len(spec.dimensions)}")
+    for d in spec.dimensions:
+        click.echo(f"  - {d.name} ({d.grader_type}, weight={d.weight})")
+
+
+@scorer_group.command("test")
+@click.argument("name")
+@click.option("--trace", "trace_id", required=True, help="Trace ID to test against.")
+@click.option("--db", default=TRACE_DB, show_default=True)
+def scorer_test(name: str, trace_id: str, db: str) -> None:
+    """Test a scorer against a trace.
+
+    Examples:
+      autoagent scorer test latency_check --trace abc-123
+    """
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+    from evals.scorer import EvalResult
+    from observer.traces import TraceStore
+
+    scorer = NLScorer(compiler=NLCompiler())
+    spec = scorer.get(name)
+    if spec is None:
+        click.echo(f"Scorer '{name}' not found.", err=True)
+        raise SystemExit(1)
+
+    store = TraceStore(db_path=db)
+    events = store.get_trace(trace_id)
+    if not events:
+        click.echo(f"Trace '{trace_id}' not found.", err=True)
+        raise SystemExit(1)
+
+    # Build a minimal EvalResult from trace events
+    eval_result = EvalResult(
+        run_id=trace_id,
+        scores={},
+        conversation=[
+            {"role": "tool" if e.tool_name else "agent", "content": e.tool_output or e.error_message or ""}
+            for e in events
+        ],
+        latency_ms=sum(e.latency_ms for e in events),
+        outcome="success" if not any(e.error_message for e in events) else "error",
+    )
+
+    result = scorer.test(name, eval_result)
+    status = click.style("PASS", fg="green") if result["passed"] else click.style("FAIL", fg="red")
+    click.echo(f"\n{status}  aggregate_score={result['aggregate_score']:.4f}\n")
+    for dim_name, dim_data in result["dimensions"].items():
+        d_status = "PASS" if dim_data["passed"] else "FAIL"
+        click.echo(f"  {dim_name:30s}  {d_status}  score={dim_data['score']:.4f}  weight={dim_data['weight']}")
 
 
 if __name__ == "__main__":

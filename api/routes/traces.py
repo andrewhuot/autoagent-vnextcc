@@ -81,6 +81,68 @@ async def get_session_traces(
     return {"session_id": session_id, "events": [_event_to_dict(e) for e in events]}
 
 
+@router.get("/blame")
+async def get_blame_map(
+    request: Request,
+    window: int = Query(86400, ge=1, description="Time window in seconds"),
+) -> dict:
+    """Build a blame map of failure clusters."""
+    from observer.blame_map import BlameMap
+    from observer.trace_grading import TraceGrader
+
+    trace_store = getattr(request.app.state, "trace_store", None)
+    if trace_store is None:
+        raise HTTPException(status_code=503, detail="Trace store not configured")
+    grader = TraceGrader()
+    blame_map = BlameMap.from_store(trace_store, grader, window_seconds=window)
+    clusters = blame_map.compute(window_seconds=window)
+    return {"clusters": [c.to_dict() for c in clusters], "window_seconds": window}
+
+
+@router.get("/{trace_id}/grades")
+async def get_trace_grades(
+    trace_id: str,
+    request: Request,
+) -> dict:
+    """Grade all spans in a trace."""
+    from observer.trace_grading import TraceGrader
+
+    trace_store = getattr(request.app.state, "trace_store", None)
+    if trace_store is None:
+        raise HTTPException(status_code=503, detail="Trace store not configured")
+    grader = TraceGrader()
+    grades = grader.grade_trace(trace_id, trace_store)
+    return {"trace_id": trace_id, "grades": [g.to_dict() for g in grades]}
+
+
+@router.get("/{trace_id}/graph")
+async def get_trace_graph(
+    trace_id: str,
+    request: Request,
+) -> dict:
+    """Build a graph representation of a trace."""
+    from observer.trace_graph import TraceGraph
+    from observer.trace_grading import TraceGrader
+
+    trace_store = getattr(request.app.state, "trace_store", None)
+    if trace_store is None:
+        raise HTTPException(status_code=503, detail="Trace store not configured")
+
+    spans = trace_store.get_spans(trace_id)
+    grader = TraceGrader()
+    grades = grader.grade_trace(trace_id, trace_store)
+    graph = TraceGraph.from_spans(spans, grades)
+    critical_path = graph.get_critical_path()
+    bottlenecks = graph.get_bottlenecks()
+
+    return {
+        "nodes": [n.to_dict() for n in graph.nodes.values()],
+        "edges": [e.to_dict() for e in graph.edges],
+        "critical_path": [n.to_dict() for n in critical_path],
+        "bottlenecks": [n.to_dict() for n in bottlenecks],
+    }
+
+
 @router.get("/{trace_id}")
 async def get_trace(
     trace_id: str,
