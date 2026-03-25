@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 
-_TABLES = ("skills", "policies", "tool_contracts", "handoff_schemas")
+_TABLES = ("skills", "policies", "tool_contracts", "handoff_schemas", "playbooks")
 
 
 class RegistryStore:

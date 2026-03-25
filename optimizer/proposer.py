@@ -32,10 +32,21 @@ class Proposer:
         failure_samples: list[dict],
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        *,
+        optimization_mode: str | None = None,
+        objective: str | None = None,
+        guardrails: list[str] | None = None,
+        project_memory_context: dict[str, list[str]] | None = None,
     ) -> Proposal | None:
         if self.use_mock:
             return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
-        return self._llm_propose(current_config, health_metrics, failure_samples, failure_buckets, past_attempts)
+        return self._llm_propose(
+            current_config, health_metrics, failure_samples, failure_buckets, past_attempts,
+            optimization_mode=optimization_mode,
+            objective=objective,
+            guardrails=guardrails,
+            project_memory_context=project_memory_context,
+        )
 
     @staticmethod
     def _dominant_failure_bucket(failure_buckets: dict[str, int]) -> str | None:
@@ -185,12 +196,17 @@ class Proposer:
         failure_samples: list[dict],
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        *,
+        optimization_mode: str | None = None,
+        objective: str | None = None,
+        guardrails: list[str] | None = None,
+        project_memory_context: dict[str, list[str]] | None = None,
     ) -> Proposal | None:
         """Generate a proposal via configured router and parse structured JSON."""
         if self.llm_router is None:
             return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
 
-        payload = {
+        payload: dict = {
             "current_config": current_config,
             "health_metrics": health_metrics,
             "failure_buckets": failure_buckets,
@@ -210,6 +226,17 @@ class Proposer:
                 "new_config_patch": "optional object for patch-style updates",
             },
         }
+
+        # Inject optimization context when available
+        if optimization_mode or objective or guardrails or project_memory_context:
+            payload["optimization_context"] = {
+                "mode": optimization_mode or "standard",
+                "objective": objective or "",
+                "guardrails": guardrails or [],
+            }
+            if project_memory_context:
+                payload["project_memory_context"] = project_memory_context
+
         system = (
             "You are an expert LLM operations optimizer. "
             "Propose one high-leverage, safe config improvement."

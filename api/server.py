@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import autofix, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, opportunities, optimize, registry, scorers, traces
+from api.routes import autofix, changes, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, playbooks, registry, scorers, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -182,6 +182,21 @@ async def lifespan(app: FastAPI):
     from evals.nl_scorer import NLScorer
     app.state.nl_scorer = NLScorer()
 
+    # Playbook store
+    from registry.playbooks import PlaybookStore, seed_starter_playbooks
+    app.state.playbook_store = PlaybookStore(
+        db_path=os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db"),
+    )
+    seed_starter_playbooks(app.state.playbook_store)
+
+    # Change card store
+    from optimizer.change_card import ChangeCardStore
+    app.state.change_card_store = ChangeCardStore()
+
+    # Project memory
+    from core.project_memory import ProjectMemory
+    app.state.project_memory = ProjectMemory.load() or ProjectMemory()
+
     yield
     # No explicit cleanup needed — SQLite connections are context-managed
 
@@ -231,6 +246,9 @@ app.include_router(judges.router)
 app.include_router(context.router)
 app.include_router(registry.router)
 app.include_router(scorers.router)
+app.include_router(changes.router)
+app.include_router(playbooks.router)
+app.include_router(memory_routes.router)
 
 
 # ---------------------------------------------------------------------------

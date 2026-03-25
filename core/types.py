@@ -702,6 +702,19 @@ class MetricLayer(str, Enum):
     SLO = "slo"
     DIAGNOSTIC = "diagnostic"
 
+    @property
+    def display_name(self) -> str:
+        """User-facing label for this metric layer."""
+        return METRIC_LAYER_DISPLAY_NAMES.get(self.name, self.value)
+
+
+METRIC_LAYER_DISPLAY_NAMES: dict[str, str] = {
+    "HARD_GATE": "Guardrails",
+    "OUTCOME": "Objectives",
+    "SLO": "Constraints",
+    "DIAGNOSTIC": "Diagnostics",
+}
+
 
 @dataclass
 class LayeredMetric:

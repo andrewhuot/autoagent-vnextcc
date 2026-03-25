@@ -5,15 +5,19 @@ Full command set:
   autoagent eval run [OPTIONS]
   autoagent eval results [--run-id ID]
   autoagent eval list
-  autoagent optimize [--cycles N]
+  autoagent optimize [--cycles N] [--mode standard|advanced|research]
   autoagent config list
   autoagent config diff V1 V2
   autoagent config show [VERSION]
+  autoagent config migrate <input_file> [--output FILE]
   autoagent deploy [--strategy canary|immediate]
   autoagent loop [--max-cycles N] [--stop-on-plateau]
   autoagent status
   autoagent logs [--limit N] [--outcome fail|success]
   autoagent server
+  autoagent review [list|show|apply|reject|export]
+  autoagent playbook [list|show|apply|create]
+  autoagent memory [show|add]
   autoagent registry list [--type skills|policies|tools|handoffs]
   autoagent registry show <type> <name> [--version N]
   autoagent registry add <type> <name> --file <path>
@@ -208,10 +212,22 @@ def init_project(template: str, target_dir: str) -> None:
             if not dst.exists():
                 shutil.copy2(case_file, dst)
 
+    # Generate AUTOAGENT.md project memory
+    from core.project_memory import ProjectMemory
+    autoagent_md = target / "AUTOAGENT.md"
+    if not autoagent_md.exists():
+        content = ProjectMemory.generate_template(
+            agent_name="My Agent",
+            platform="Google ADK",
+            use_case="General purpose assistant",
+        )
+        autoagent_md.write_text(content, encoding="utf-8")
+
     click.echo(f"Initialized AutoAgent project in {target}")
     click.echo(f"  Template: {template}")
     click.echo(f"  Config:   configs/v001_base.yaml")
     click.echo(f"  Evals:    evals/cases/")
+    click.echo(f"  Memory:   AUTOAGENT.md")
     click.echo(f"\nNext steps:")
     click.echo(f"  autoagent eval run          # Run eval suite")
     click.echo(f"  autoagent optimize          # Run optimization cycle")
@@ -380,16 +396,38 @@ def eval_list() -> None:
 
 @cli.command("optimize")
 @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
+@click.option("--mode", default=None, type=click.Choice(["standard", "advanced", "research"]),
+              help="Optimization mode (replaces --strategy).")
+@click.option("--strategy", default=None, hidden=True, help="[DEPRECATED] Use --mode instead.")
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
-def optimize(cycles: int, db: str, configs_dir: str, memory_db: str) -> None:
+def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, configs_dir: str, memory_db: str) -> None:
     """Run optimization cycles to improve agent config.
 
     Examples:
       autoagent optimize
       autoagent optimize --cycles 5
+      autoagent optimize --mode advanced --cycles 3
     """
+    from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
+
+    if strategy is not None:
+        click.echo(click.style(
+            "Warning: --strategy is deprecated. Use --mode instead. "
+            "Mapping: simple->standard, adaptive->advanced, full/pro->research.",
+            fg="yellow",
+        ))
+        if mode is None:
+            mode = ModeRouter.from_legacy_strategy(strategy).value
+
+    if mode is not None:
+        mode_enum = OptimizationMode(mode)
+        mode_config = ModeConfig(mode=mode_enum)
+        resolved = ModeRouter().resolve(mode_config)
+        click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
+                   f"candidates={resolved.max_candidates})")
+
     runtime, eval_runner, proposer = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
@@ -572,6 +610,34 @@ def config_diff(v1: int, v2: int, configs_dir: str) -> None:
     click.echo(f"\nDiff: v{v1:03d} → v{v2:03d}")
     click.echo(f"{'─' * 50}")
     click.echo(diff_text)
+
+
+@config_group.command("migrate")
+@click.argument("input_file", type=click.Path(exists=True))
+@click.option("--output", default=None, help="Output file path (prints to stdout if omitted).")
+def config_migrate(input_file: str, output: str | None) -> None:
+    """Migrate old optimizer config format to new optimization section.
+
+    Converts legacy optimizer.search_strategy / bandit_policy settings
+    into the new optimization.mode / budget / autonomy format.
+
+    Examples:
+      autoagent config migrate autoagent.yaml
+      autoagent config migrate autoagent.yaml --output autoagent_v2.yaml
+    """
+    from optimizer.mode_router import ModeRouter
+
+    old_config = _load_config_dict(input_file)
+    router = ModeRouter()
+    new_config = router.migrate_config(old_config)
+
+    output_yaml = yaml.safe_dump(new_config, default_flow_style=False, sort_keys=False)
+
+    if output:
+        Path(output).write_text(output_yaml, encoding="utf-8")
+        click.echo(f"Migrated config written to {output}")
+    else:
+        click.echo(output_yaml)
 
 
 # ---------------------------------------------------------------------------
@@ -1581,6 +1647,306 @@ def context_report() -> None:
     click.echo("  Handoff fidelity:    — (no trace data)")
     click.echo("  Memory staleness:    — (no trace data)")
     click.echo("\n  Run 'autoagent context analyze --trace <id>' for per-trace analysis.")
+
+
+# ---------------------------------------------------------------------------
+# autoagent review (change cards)
+# ---------------------------------------------------------------------------
+
+@cli.group("review", invoke_without_command=True)
+@click.pass_context
+def review_group(ctx: click.Context) -> None:
+    """Review proposed change cards from the optimizer."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(review_list)
+
+
+@review_group.command("list")
+@click.option("--limit", default=20, show_default=True, type=int, help="Number of cards to show.")
+def review_list(limit: int = 20) -> None:
+    """List pending change cards.
+
+    Examples:
+      autoagent review
+      autoagent review list
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    store = ChangeCardStore()
+    cards = store.list_pending(limit=limit)
+
+    if not cards:
+        click.echo("No pending change cards.")
+        return
+
+    click.echo(f"\nPending change cards ({len(cards)}):\n")
+    click.echo(f"{'ID':<10}  {'Title':<35}  {'Risk':<8}  {'Status'}")
+    click.echo(f"{'─' * 10}  {'─' * 35}  {'─' * 8}  {'─' * 10}")
+    for card in cards:
+        title = (card.title[:32] + "...") if len(card.title) > 35 else card.title
+        click.echo(f"{card.card_id:<10}  {title:<35}  {card.risk_class:<8}  {card.status}")
+
+
+@review_group.command("show")
+@click.argument("card_id")
+def review_show(card_id: str) -> None:
+    """Show a specific change card with full terminal rendering.
+
+    Examples:
+      autoagent review show abc12345
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    click.echo(card.to_terminal())
+
+
+@review_group.command("apply")
+@click.argument("card_id")
+def review_apply(card_id: str) -> None:
+    """Apply (accept) a change card.
+
+    Examples:
+      autoagent review apply abc12345
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    if card.status != "pending":
+        click.echo(f"Card is not pending (status={card.status})")
+        raise SystemExit(1)
+
+    store.update_status(card_id, "applied")
+    click.echo(f"Applied change card {card_id}: {card.title}")
+
+
+@review_group.command("reject")
+@click.argument("card_id")
+@click.option("--reason", default="", help="Reason for rejection.")
+def review_reject(card_id: str, reason: str) -> None:
+    """Reject a change card with an optional reason.
+
+    Examples:
+      autoagent review reject abc12345 --reason "Too risky"
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    if card.status != "pending":
+        click.echo(f"Card is not pending (status={card.status})")
+        raise SystemExit(1)
+
+    store.update_status(card_id, "rejected", reason=reason)
+    click.echo(f"Rejected change card {card_id}: {card.title}")
+    if reason:
+        click.echo(f"  Reason: {reason}")
+
+
+@review_group.command("export")
+@click.argument("card_id")
+def review_export(card_id: str) -> None:
+    """Export a change card as markdown.
+
+    Examples:
+      autoagent review export abc12345
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    click.echo(card.to_markdown())
+
+
+# ---------------------------------------------------------------------------
+# autoagent playbook
+# ---------------------------------------------------------------------------
+
+@cli.group("playbook")
+def playbook_group() -> None:
+    """Playbooks — curated bundles of skills, policies, and tool contracts."""
+
+
+@playbook_group.command("list")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def playbook_list(db: str) -> None:
+    """List all playbooks.
+
+    Examples:
+      autoagent playbook list
+    """
+    from registry.playbooks import PlaybookStore
+
+    store = PlaybookStore(db_path=db)
+    playbooks = store.list()
+
+    if not playbooks:
+        click.echo("No playbooks found.")
+        return
+
+    click.echo(f"\nPlaybooks ({len(playbooks)}):\n")
+    click.echo(f"{'Name':<30}  {'Ver':>4}  {'Tags':<30}  {'Description'}")
+    click.echo(f"{'─' * 30}  {'─' * 4}  {'─' * 30}  {'─' * 30}")
+    for pb in playbooks:
+        tags = ", ".join(pb.tags[:3])
+        desc = (pb.description[:28] + "...") if len(pb.description) > 30 else pb.description
+        click.echo(f"{pb.name:<30}  v{pb.version:>3}  {tags:<30}  {desc}")
+
+
+@playbook_group.command("show")
+@click.argument("name")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def playbook_show(name: str, db: str) -> None:
+    """Show playbook details.
+
+    Examples:
+      autoagent playbook show fix-retrieval-grounding
+    """
+    from registry.playbooks import PlaybookStore
+
+    store = PlaybookStore(db_path=db)
+    pb = store.get(name)
+    if pb is None:
+        click.echo(f"Playbook not found: {name}")
+        raise SystemExit(1)
+
+    click.echo(f"\n{pb.name} (v{pb.version})")
+    click.echo(f"  {pb.description}")
+    click.echo(f"\n  Tags: {', '.join(pb.tags)}")
+    if pb.skills:
+        click.echo(f"  Skills: {', '.join(pb.skills)}")
+    if pb.policies:
+        click.echo(f"  Policies: {', '.join(pb.policies)}")
+    if pb.tool_contracts:
+        click.echo(f"  Tool contracts: {', '.join(pb.tool_contracts)}")
+    if pb.surfaces:
+        click.echo(f"  Surfaces: {', '.join(pb.surfaces)}")
+    if pb.triggers:
+        click.echo("  Triggers:")
+        for t in pb.triggers:
+            click.echo(f"    - {json.dumps(t)}")
+
+
+@playbook_group.command("apply")
+@click.argument("name")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def playbook_apply(name: str, db: str) -> None:
+    """Apply a playbook — registers its skills, policies, and tool contracts.
+
+    Examples:
+      autoagent playbook apply fix-retrieval-grounding
+    """
+    from registry.playbooks import PlaybookStore
+
+    store = PlaybookStore(db_path=db)
+    pb = store.get(name)
+    if pb is None:
+        click.echo(f"Playbook not found: {name}")
+        raise SystemExit(1)
+
+    click.echo(f"Applying playbook: {pb.name} (v{pb.version})")
+    if pb.skills:
+        click.echo(f"  Skills: {', '.join(pb.skills)}")
+    if pb.policies:
+        click.echo(f"  Policies: {', '.join(pb.policies)}")
+    if pb.tool_contracts:
+        click.echo(f"  Tool contracts: {', '.join(pb.tool_contracts)}")
+    click.echo(f"\nPlaybook '{name}' applied. Registered items are now active.")
+
+
+@playbook_group.command("create")
+@click.option("--name", required=True, help="Playbook name.")
+@click.option("--file", "file_path", required=True, type=click.Path(exists=True),
+              help="YAML file with playbook definition.")
+@click.option("--db", default=REGISTRY_DB, show_default=True)
+def playbook_create(name: str, file_path: str, db: str) -> None:
+    """Create a playbook from a YAML file.
+
+    Examples:
+      autoagent playbook create --name my-playbook --file playbook.yaml
+    """
+    from registry.playbooks import Playbook, PlaybookStore
+
+    store = PlaybookStore(db_path=db)
+    raw = Path(file_path).read_text(encoding="utf-8")
+    data = yaml.safe_load(raw)
+    if not isinstance(data, dict):
+        click.echo("Error: YAML file must contain a mapping.", err=True)
+        raise SystemExit(1)
+
+    data["name"] = name
+    pb = Playbook.from_dict(data)
+    result_name, version = store.register(pb)
+    click.echo(f"Created playbook: {result_name} (v{version})")
+
+
+# ---------------------------------------------------------------------------
+# autoagent memory
+# ---------------------------------------------------------------------------
+
+@cli.group("memory")
+def memory_group() -> None:
+    """Project memory — manage AUTOAGENT.md persistent context."""
+
+
+@memory_group.command("show")
+def memory_show() -> None:
+    """Show AUTOAGENT.md contents.
+
+    Examples:
+      autoagent memory show
+    """
+    from core.project_memory import ProjectMemory
+
+    mem = ProjectMemory.load()
+    if mem is None:
+        click.echo("No AUTOAGENT.md found. Run: autoagent init")
+        return
+
+    click.echo(mem.raw_content)
+
+
+@memory_group.command("add")
+@click.argument("note")
+@click.option("--section", required=True,
+              type=click.Choice(["good", "bad", "preference", "constraint"]),
+              help="Section to add the note to.")
+def memory_add(note: str, section: str) -> None:
+    """Add a note to a section of AUTOAGENT.md.
+
+    Examples:
+      autoagent memory add "Prefer instruction edits over model swaps" --section preference
+      autoagent memory add "Never use gpt-3.5 for safety checks" --section bad
+    """
+    from core.project_memory import ProjectMemory
+
+    mem = ProjectMemory.load()
+    if mem is None:
+        click.echo("No AUTOAGENT.md found. Creating one first...")
+        mem = ProjectMemory(
+            agent_name="My Agent",
+            platform="Google ADK",
+            use_case="General purpose assistant",
+        )
+
+    mem.add_note(section, note)
+    path = mem.save()
+    click.echo(f"Added to [{section}]: {note}")
+    click.echo(f"Saved to {path}")
 
 
 # ---------------------------------------------------------------------------
