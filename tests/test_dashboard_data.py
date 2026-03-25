@@ -41,6 +41,33 @@ def test_health_payload_includes_metrics_and_trends(tmp_path, base_config: dict)
     assert payload["metrics"]["success_rate"] >= 0
     assert len(payload["trends"]["success_rate"]) == 24
     assert len(payload["trends"]["avg_latency_ms"]) == 24
+    assert "journey" in payload
+    assert payload["journey"]["total_steps"] == 4
+
+
+def test_health_payload_journey_tracks_progress_and_wins(tmp_path, base_config: dict) -> None:
+    """Journey metadata should include next action, checklist, and recent wins."""
+    service = _build_service(tmp_path, base_config)
+    service.store.log(build_record(outcome="success", config_version="v001"))
+    service.memory.log(
+        OptimizationAttempt(
+            attempt_id="win123",
+            timestamp=time.time(),
+            change_description="Improve refund routing",
+            config_diff="+ route keywords",
+            status="accepted",
+            config_section="routing",
+            score_before=0.71,
+            score_after=0.79,
+        )
+    )
+
+    payload = service.health_payload()
+    journey = payload["journey"]
+    assert journey["progress_pct"] > 0
+    assert journey["next_action"]["command"]
+    assert journey["recent_wins"]
+    assert len(journey["checklist"]) == 4
 
 
 def test_history_payload_contains_recent_attempts(tmp_path, base_config: dict) -> None:

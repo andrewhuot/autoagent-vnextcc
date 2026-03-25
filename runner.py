@@ -247,6 +247,21 @@ def _generate_recommendations(report, score) -> list[str]:  # noqa: ANN001
     return recs
 
 
+def _status_next_action(report, attempts_count: int, accepted_count: int) -> str:  # noqa: ANN001
+    """Return a single next-best-action command for status/UX surfaces."""
+    total_failures = sum(report.failure_buckets.values()) if report.failure_buckets else 0
+    if attempts_count == 0:
+        return "autoagent quickstart"
+    if total_failures > 0:
+        recs = _generate_recommendations(report, None)
+        if recs:
+            return recs[0].split("→")[-1].strip()
+        return "autoagent runbook list"
+    if accepted_count >= 3:
+        return "autoagent loop --max-cycles 20 --stop-on-plateau"
+    return "autoagent loop --max-cycles 3"
+
+
 def _stream_cycle_output(
     cycle_num: int,
     total: int,
@@ -1254,6 +1269,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
 
     # Cycles run
     all_attempts = memory.recent(limit=100)
+    accepted_attempts = [attempt for attempt in all_attempts if attempt.status == "accepted"]
 
     # Top failures bar chart
     buckets = report.failure_buckets
@@ -1267,6 +1283,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
             "cycles_run": len(all_attempts),
             "failure_buckets": buckets,
             "loop_status": "idle",
+            "next_action": _status_next_action(report, len(all_attempts), len(accepted_attempts)),
         }
         click.echo(json.dumps(data, indent=2))
         return
@@ -1300,11 +1317,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
             click.echo(f"    {bucket_name:<20} {bar}  {pct_int:>3}% ({count} conversations)")
 
     # Recommendation
-    recs = _generate_recommendations(report, None)
-    if recs:
-        # Just show the first recommendation on this compact view
-        first_runbook = recs[0].split("autoagent runbook apply ")[-1].strip()
-        click.echo(f"\n  Recommended: autoagent runbook apply {first_runbook}")
+    click.echo(f"\n  Next action: {_status_next_action(report, len(all_attempts), len(accepted_attempts))}")
 
     # Loop status
     click.echo("\n  Loop: idle")

@@ -79,6 +79,74 @@ class DashboardDataService:
             return "v000"
         return f"v{active:03d}"
 
+    def _journey_summary(
+        self, total_conversations: int, attempts: list[OptimizationAttempt]
+    ) -> dict:
+        """Return a UX-friendly progression summary for the happy path."""
+        accepted = [attempt for attempt in attempts if attempt.status == "accepted"]
+        completed_steps = 0
+
+        if total_conversations > 0:
+            completed_steps += 1
+        if attempts:
+            completed_steps += 1
+        if accepted:
+            completed_steps += 1
+        if len(attempts) >= 3:
+            completed_steps += 1
+
+        progress = round((completed_steps / 4) * 100)
+
+        if completed_steps == 0:
+            stage = "Set up and collect your first traces"
+            next_action = {
+                "label": "Run quickstart",
+                "command": "autoagent quickstart",
+            }
+        elif completed_steps == 1:
+            stage = "Great start — run your first optimization cycle"
+            next_action = {
+                "label": "Run one loop cycle",
+                "command": "autoagent loop --max-cycles 1",
+            }
+        elif completed_steps in (2, 3):
+            stage = "Build momentum with repeatable improvements"
+            next_action = {
+                "label": "Run guided quickstart",
+                "command": "autoagent quickstart --verbose",
+            }
+        else:
+            stage = "Pro mode unlocked — scale with canaries and automation"
+            next_action = {
+                "label": "Run continuous loop",
+                "command": "autoagent loop --max-cycles 20 --stop-on-plateau",
+            }
+
+        momentum_points = round(sum(max(0.0, a.score_after - a.score_before) * 1000 for a in accepted))
+        recent_wins = accepted[:3]
+
+        return {
+            "progress_pct": progress,
+            "completed_steps": completed_steps,
+            "total_steps": 4,
+            "stage": stage,
+            "next_action": next_action,
+            "momentum_points": momentum_points,
+            "recent_wins": [
+                {
+                    "change_description": win.change_description,
+                    "delta": round(win.score_after - win.score_before, 4),
+                }
+                for win in recent_wins
+            ],
+            "checklist": [
+                {"label": "Collect traces", "done": total_conversations > 0},
+                {"label": "Run optimization", "done": bool(attempts)},
+                {"label": "Ship first accepted win", "done": bool(accepted)},
+                {"label": "Run 3+ cycles", "done": len(attempts) >= 3},
+            ],
+        }
+
     def _trend_series(self, records: list[ConversationRecord]) -> dict[str, list[float]]:
         """Compute 24 hourly metric series for sparklines."""
         now = time.time()
@@ -129,6 +197,7 @@ class DashboardDataService:
         )
         now = time.time()
         recent_records = self.store.get_recent(limit=1000)
+        recent_attempts = self.memory.recent(limit=100)
 
         return {
             "timestamp": self._iso(now),
@@ -149,6 +218,7 @@ class DashboardDataService:
             "needs_optimization": report.needs_optimization,
             "reason": report.reason,
             "failure_buckets": report.failure_buckets,
+            "journey": self._journey_summary(metrics.total_conversations, recent_attempts),
         }
 
     def history_payload(self) -> dict:
