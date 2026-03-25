@@ -83,6 +83,7 @@ LAYER_1_PREFIXES = {
     "registry",
     "deployer",
     "control",
+    "cx_studio",
 }
 
 LAYER_2_PREFIXES = {

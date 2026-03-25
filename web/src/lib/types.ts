@@ -658,3 +658,43 @@ export interface ProjectMemory {
   sections: ProjectMemorySection[];
   updated_at: string;
 }
+
+// CX Agent Studio types
+export interface CxAgentSummary {
+  name: string;
+  display_name: string;
+  default_language_code: string;
+  description: string;
+}
+
+export interface CxImportResult {
+  config_path: string;
+  eval_path: string | null;
+  snapshot_path: string;
+  agent_name: string;
+  surfaces_mapped: string[];
+  test_cases_imported: number;
+}
+
+export interface CxExportResult {
+  changes: CxChange[];
+  pushed: boolean;
+  resources_updated: number;
+}
+
+export interface CxChange {
+  resource: string;
+  action: string;
+  field?: string;
+  name?: string;
+}
+
+export interface CxDeployResult {
+  environment: string;
+  status: string;
+  version_info: Record<string, unknown>;
+}
+
+export interface CxWidgetResult {
+  html: string;
+}

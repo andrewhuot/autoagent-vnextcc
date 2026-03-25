@@ -3269,5 +3269,185 @@ def replay(limit: int, memory_db: str) -> None:
     click.echo()
 
 
+# ---------------------------------------------------------------------------
+# autoagent cx (CX Agent Studio)
+# ---------------------------------------------------------------------------
+
+@cli.group("cx")
+def cx_group() -> None:
+    """Google Cloud CX Agent Studio — import, export, deploy."""
+
+@cx_group.command("list")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True, help="Agent location.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+def cx_list(project: str, location: str, credentials: str | None) -> None:
+    """List CX agents in a project."""
+    from cx_studio import CxAuth, CxClient
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    from cx_studio.types import CxAgentRef
+    agents = client.list_agents(project, location)
+    if not agents:
+        click.echo("No agents found.")
+        return
+    click.echo(f"\n  {'Name':<40} {'Language':<10} {'Description'}")
+    click.echo(f"  {'─' * 40} {'─' * 10} {'─' * 30}")
+    for agent in agents:
+        agent_id = agent.name.split("/")[-1]
+        click.echo(f"  {agent.display_name:<40} {agent.default_language_code:<10} {agent.description[:30]}")
+
+@cx_group.command("import")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True)
+@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--output-dir", default=".", show_default=True, help="Output directory.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+@click.option("--include-test-cases/--no-test-cases", default=True, show_default=True)
+def cx_import_cmd(project: str, location: str, agent_id: str, output_dir: str, credentials: str | None, include_test_cases: bool) -> None:
+    """Import a CX agent into AutoAgent format."""
+    from cx_studio import CxAuth, CxClient, CxImporter
+    from cx_studio.types import CxAgentRef
+
+    click.echo(f"  Importing agent {agent_id} from {project}/{location}...")
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    importer = CxImporter(client)
+    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+    result = importer.import_agent(ref, output_dir=output_dir, include_test_cases=include_test_cases)
+
+    click.echo(click.style(f"\n  ✓ Imported: {result.agent_name}", fg="green"))
+    click.echo(f"    Config:   {result.config_path}")
+    if result.eval_path:
+        click.echo(f"    Evals:    {result.eval_path}")
+    click.echo(f"    Snapshot: {result.snapshot_path}")
+    click.echo(f"    Surfaces: {', '.join(result.surfaces_mapped)}")
+    click.echo(f"    Test cases: {result.test_cases_imported}")
+
+@cx_group.command("export")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True)
+@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--config", "config_path", required=True, help="AutoAgent config YAML path.")
+@click.option("--snapshot", "snapshot_path", required=True, help="CX snapshot JSON from import.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+@click.option("--dry-run", is_flag=True, help="Preview changes without pushing.")
+def cx_export_cmd(project: str, location: str, agent_id: str, config_path: str, snapshot_path: str, credentials: str | None, dry_run: bool) -> None:
+    """Export optimized config back to CX Agent Studio."""
+    from cx_studio import CxAuth, CxClient, CxExporter
+    from cx_studio.types import CxAgentRef
+    import yaml as _yaml
+
+    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = _yaml.safe_load(f)
+
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    exporter = CxExporter(client)
+
+    if dry_run:
+        click.echo("  Dry run — previewing changes...")
+    result = exporter.export_agent(config, ref, snapshot_path, dry_run=dry_run)
+
+    if not result.changes:
+        click.echo("  No changes detected.")
+        return
+
+    click.echo(f"\n  Changes ({len(result.changes)}):")
+    for change in result.changes:
+        action = change.get("action", "unknown")
+        resource = change.get("resource", "unknown")
+        name = change.get("name", change.get("field", ""))
+        click.echo(f"    {action.upper():<8} {resource}/{name}")
+
+    if result.pushed:
+        click.echo(click.style(f"\n  ✓ Pushed {result.resources_updated} resource(s) to CX Agent Studio", fg="green"))
+    else:
+        click.echo("\n  No changes pushed (dry run or no diff).")
+
+@cx_group.command("deploy")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True)
+@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--environment", default="production", show_default=True)
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+def cx_deploy_cmd(project: str, location: str, agent_id: str, environment: str, credentials: str | None) -> None:
+    """Deploy agent to a CX environment."""
+    from cx_studio import CxAuth, CxClient, CxDeployer
+    from cx_studio.types import CxAgentRef
+
+    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    deployer = CxDeployer(client)
+    result = deployer.deploy_to_environment(ref, environment)
+    click.echo(click.style(f"\n  ✓ Deployed to {result.environment}: {result.status}", fg="green"))
+
+@cx_group.command("widget")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True)
+@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--title", default="Agent", show_default=True, help="Chat widget title.")
+@click.option("--color", default="#1a73e8", show_default=True, help="Primary color hex.")
+@click.option("--output", "output_path", default=None, help="Output HTML file path.")
+def cx_widget_cmd(project: str, location: str, agent_id: str, title: str, color: str, output_path: str | None) -> None:
+    """Generate a df-messenger web widget HTML file."""
+    from cx_studio import CxDeployer, CxAuth, CxClient
+    from cx_studio.types import CxWidgetConfig
+
+    widget_config = CxWidgetConfig(
+        project_id=project,
+        agent_id=agent_id,
+        location=location,
+        chat_title=title,
+        primary_color=color,
+    )
+    # Widget generation doesn't need API access
+    auth = CxAuth.__new__(CxAuth)
+    auth._token = None
+    auth._token_expiry = 0.0
+    auth._project_id = project
+    auth._credentials_path = None
+    client = CxClient.__new__(CxClient)
+    client._auth = auth
+    client._timeout = 30.0
+    client._max_retries = 3
+    deployer = CxDeployer(client)
+    html = deployer.generate_widget_html(widget_config, output_path)
+
+    if output_path:
+        click.echo(click.style(f"\n  ✓ Widget HTML written to {output_path}", fg="green"))
+    else:
+        click.echo(html)
+
+@cx_group.command("status")
+@click.option("--project", required=True, help="GCP project ID.")
+@click.option("--location", default="global", show_default=True)
+@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+def cx_status_cmd(project: str, location: str, agent_id: str, credentials: str | None) -> None:
+    """Show CX agent deployment status."""
+    from cx_studio import CxAuth, CxClient, CxDeployer
+    from cx_studio.types import CxAgentRef
+
+    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    deployer = CxDeployer(client)
+    status = deployer.get_deploy_status(ref)
+
+    click.echo(f"\n  Agent: {status['agent']}")
+    envs = status.get("environments", [])
+    if not envs:
+        click.echo("  No environments found.")
+        return
+    for env in envs:
+        click.echo(f"\n  Environment: {env['name']}")
+        click.echo(f"    Description: {env.get('description', '—')}")
+        versions = env.get("versions", [])
+        click.echo(f"    Versions: {len(versions)}")
+
+
 if __name__ == "__main__":
     cli()

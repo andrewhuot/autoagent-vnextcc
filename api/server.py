@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import autofix, changes, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, runbooks, registry, scorers, traces
+from api.routes import autofix, changes, config, context, control, conversations, cx_studio as cx_studio_routes, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, runbooks, registry, scorers, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -249,6 +249,7 @@ app.include_router(scorers.router)
 app.include_router(changes.router)
 app.include_router(runbooks.router)
 app.include_router(memory_routes.router)
+app.include_router(cx_studio_routes.router)
 
 
 # ---------------------------------------------------------------------------

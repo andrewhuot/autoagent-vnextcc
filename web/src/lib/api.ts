@@ -14,6 +14,12 @@ import type {
   ConfigVersion,
   ConversationRecord,
   ConversationTurn,
+  CxAgentSummary,
+  CxImportResult,
+  CxExportResult,
+  CxDeployResult,
+  CxWidgetResult,
+  CxChange,
   DeployHistoryEntry,
   DeployResponse,
   DeployStatus,
@@ -1450,5 +1456,67 @@ export function useAddMemoryNote() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memory'] });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// CX Agent Studio
+// ---------------------------------------------------------------------------
+
+export function useCxAgents(project: string, location: string) {
+  return useQuery<CxAgentSummary[]>({
+    queryKey: ['cx-agents', project, location],
+    queryFn: () => fetchApi(`/cx/agents?project=${encodeURIComponent(project)}&location=${encodeURIComponent(location)}`),
+    enabled: !!project,
+  });
+}
+
+export function useCxImport() {
+  const qc = useQueryClient();
+  return useMutation<CxImportResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    output_dir?: string;
+    include_test_cases?: boolean;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/import', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['configs'] }),
+  });
+}
+
+export function useCxExport() {
+  return useMutation<CxExportResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    config: Record<string, unknown>;
+    snapshot_path: string;
+    dry_run?: boolean;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/export', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxDeploy() {
+  return useMutation<CxDeployResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    environment?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/deploy', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxWidget() {
+  return useMutation<CxWidgetResult, ApiRequestError, {
+    project_id: string;
+    agent_id: string;
+    location?: string;
+    chat_title?: string;
+    primary_color?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/widget', { method: 'POST', body: JSON.stringify(body) }),
   });
 }

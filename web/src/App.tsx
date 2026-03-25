@@ -23,6 +23,8 @@ import { ScorerStudio } from './pages/ScorerStudio';
 import { ChangeReview } from './pages/ChangeReview';
 import { Runbooks } from './pages/Runbooks';
 import { ProjectMemory } from './pages/ProjectMemory';
+import { CxImport } from './pages/CxImport';
+import { CxDeploy } from './pages/CxDeploy';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -60,6 +62,8 @@ export default function App() {
             <Route path="/registry" element={<Registry />} />
             <Route path="/blame" element={<BlameMap />} />
             <Route path="/scorer-studio" element={<ScorerStudio />} />
+            <Route path="/cx/import" element={<CxImport />} />
+            <Route path="/cx/deploy" element={<CxDeploy />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>
