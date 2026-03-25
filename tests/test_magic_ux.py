@@ -9,11 +9,6 @@ from runner import (
     _stream_cycle_output,
     _generate_recommendations,
     _bar_chart,
-    _score_mood,
-    _soul_line,
-    _print_cli_plan,
-    _print_next_actions,
-)
 
 
 @pytest.fixture
@@ -262,6 +257,30 @@ class TestStreamCycleOutput:
 
 
 # ---------------------------------------------------------------------------
+# _status_next_action
+# ---------------------------------------------------------------------------
+
+class TestStatusNextAction:
+    def _make_report(self, buckets: dict[str, int]):
+        from observer.metrics import HealthReport, HealthMetrics
+        return HealthReport(metrics=HealthMetrics(), failure_buckets=buckets)
+
+    def test_no_attempts_prefers_quickstart(self):
+        report = self._make_report({})
+        assert _status_next_action(report, attempts_count=0, accepted_count=0) == "autoagent quickstart"
+
+    def test_failures_prefers_runbook(self):
+        report = self._make_report({"timeout": 3})
+        action = _status_next_action(report, attempts_count=2, accepted_count=0)
+        assert action.startswith("autoagent runbook apply")
+
+    def test_multiple_wins_prefers_autopilot_loop(self):
+        report = self._make_report({})
+        action = _status_next_action(report, attempts_count=6, accepted_count=3)
+        assert action == "autoagent loop --max-cycles 20 --stop-on-plateau"
+
+
+# ---------------------------------------------------------------------------
 # autoagent status command
 # ---------------------------------------------------------------------------
 
@@ -290,6 +309,10 @@ class TestStatusCommand:
     def test_status_shows_loop(self, runner):
         result = runner.invoke(cli, ["status"])
         assert "Loop:" in result.output
+
+    def test_status_shows_next_action(self, runner):
+        result = runner.invoke(cli, ["status"])
+        assert "Next action:" in result.output
 
 
 # ---------------------------------------------------------------------------

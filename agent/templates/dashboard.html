@@ -59,6 +59,58 @@
       </div>
     </header>
 
+    <section class="mb-6 grid gap-4 lg:grid-cols-3">
+      <article class="rounded-2xl border border-emerald-500/30 bg-gradient-to-br from-emerald-500/10 to-cyan-500/10 p-5 shadow-panel lg:col-span-2">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p class="text-xs uppercase tracking-[0.2em] text-emerald-200/80">Happy Path Journey</p>
+            <h2 class="mt-2 text-xl font-semibold text-slate-50" x-text="health.journey?.stage || 'Start your first optimization run'"></h2>
+          </div>
+          <div class="rounded-lg border border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-100">
+            <span class="text-emerald-200/70">Momentum</span>
+            <span class="ml-1 text-base font-bold" x-text="`${health.journey?.momentum_points || 0} pts`"></span>
+          </div>
+        </div>
+
+        <div class="mt-4">
+          <div class="mb-2 flex items-center justify-between text-xs text-slate-200">
+            <span x-text="`${health.journey?.completed_steps || 0}/${health.journey?.total_steps || 4} milestones`"></span>
+            <span x-text="`${health.journey?.progress_pct || 0}%`"></span>
+          </div>
+          <div class="h-2 rounded-full bg-slate-800/70">
+            <div class="h-2 rounded-full bg-emerald-400 transition-all" :style="`width: ${health.journey?.progress_pct || 0}%`"></div>
+          </div>
+        </div>
+
+        <div class="mt-4 grid gap-2 md:grid-cols-2">
+          <template x-for="(item, idx) in (health.journey?.checklist || [])" :key="idx">
+            <div class="rounded-lg border border-slate-700 bg-slate-900/50 px-3 py-2 text-sm" :class="item.done ? 'text-emerald-200' : 'text-slate-300'">
+              <span x-text="item.done ? '✓' : '○'"></span>
+              <span class="ml-2" x-text="item.label"></span>
+            </div>
+          </template>
+        </div>
+      </article>
+
+      <article class="rounded-2xl border border-slate-700 bg-slate-800/70 p-5 shadow-panel">
+        <h2 class="text-lg font-semibold text-slate-100">Next Best Action</h2>
+        <p class="mt-3 text-xs uppercase tracking-wide text-slate-400" x-text="health.journey?.next_action?.label || 'Run quickstart'"></p>
+        <pre class="mt-2 overflow-auto rounded-lg border border-slate-700 bg-slate-900/80 p-3 text-xs text-cyan-200" x-text="health.journey?.next_action?.command || 'autoagent quickstart'"></pre>
+        <p class="mt-4 text-xs uppercase tracking-wide text-slate-400">Recent Wins</p>
+        <div class="mt-2 space-y-2">
+          <template x-if="!health.journey?.recent_wins || health.journey.recent_wins.length === 0">
+            <p class="text-sm text-slate-300">No accepted changes yet — your first win unlocks this feed.</p>
+          </template>
+          <template x-for="(win, idx) in (health.journey?.recent_wins || [])" :key="idx">
+            <div class="rounded-lg border border-slate-700 bg-slate-900/50 p-2 text-xs text-slate-200">
+              <p x-text="win.change_description"></p>
+              <p class="mt-1 text-emerald-300" x-text="`+${win.delta.toFixed(4)} composite`"></p>
+            </div>
+          </template>
+        </div>
+      </article>
+    </section>
+
     <div x-show="error" class="mb-6 rounded-xl border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-200" x-text="error"></div>
 
     <section class="mb-6 grid gap-4 lg:grid-cols-5">
@@ -353,6 +405,7 @@
           health_score: { value: 0, color: "amber" },
           failure_buckets: {},
           anomalies: [],
+          journey: {},
           config_version: "v000",
           uptime_human: "0s",
         },
