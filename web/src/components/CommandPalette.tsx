@@ -9,8 +9,70 @@ type PaletteItem = {
   label: string;
   description?: string;
   href: string;
-  group: 'Actions' | 'Eval Runs' | 'Configs' | 'Conversations';
+  group: 'Actions' | 'Eval Runs' | 'Configs' | 'Conversations' | 'Smart Results';
 };
+
+const SMART_SEARCH_MAP: Array<{
+  keywords: string[];
+  label: string;
+  description: string;
+  href: string;
+}> = [
+  {
+    keywords: ['why', 'routing', 'failing', 'failure', 'blame'],
+    label: 'Diagnose routing failures',
+    description: 'Jump to Blame Map filtered on routing_error',
+    href: '/blame?filter=routing_error',
+  },
+  {
+    keywords: ['fix', 'safety', 'violation'],
+    label: 'Fix safety violations',
+    description: 'Apply tighten-safety-policy runbook',
+    href: '/runbooks?action=apply&runbook=tighten-safety-policy',
+  },
+  {
+    keywords: ['what', 'changed', 'changes', 'diff'],
+    label: 'What changed?',
+    description: 'View recent config changes',
+    href: '/changes',
+  },
+  {
+    keywords: ['show', 'failures', 'conversations', 'fail'],
+    label: 'Show me failures',
+    description: 'Browse failed conversations',
+    href: '/conversations?outcome=fail',
+  },
+  {
+    keywords: ['how', 'agent', 'doing', 'health', 'status'],
+    label: 'How is my agent doing?',
+    description: 'Open dashboard',
+    href: '/',
+  },
+  {
+    keywords: ['deploy', 'production', 'ship', 'release'],
+    label: 'Deploy to production',
+    description: 'Open CX Deploy page',
+    href: '/cx/deploy',
+  },
+  {
+    keywords: ['import', 'agent', 'cx', 'studio'],
+    label: 'Import agent',
+    description: 'Import from Vertex AI Agent Studio',
+    href: '/cx/import',
+  },
+  {
+    keywords: ['optimize', 'improve', 'run', 'cycle'],
+    label: 'Run optimization',
+    description: 'Start live optimization',
+    href: '/live-optimize',
+  },
+  {
+    keywords: ['compare', 'configs', 'diff', 'versions'],
+    label: 'Compare configs',
+    description: 'View config history',
+    href: '/configs',
+  },
+];
 
 const staticItems: PaletteItem[] = [
   {
@@ -52,6 +114,36 @@ const staticItems: PaletteItem[] = [
 
 function matches(text: string, query: string): boolean {
   return text.toLowerCase().includes(query.toLowerCase());
+}
+
+function smartSearch(query: string): PaletteItem[] {
+  const tokens = query.toLowerCase().split(/\s+/);
+  const results: Array<{ item: typeof SMART_SEARCH_MAP[0], score: number }> = [];
+
+  for (const item of SMART_SEARCH_MAP) {
+    let score = 0;
+    for (const token of tokens) {
+      for (const keyword of item.keywords) {
+        if (keyword.includes(token)) {
+          score += token.length / keyword.length;  // Partial match scoring
+        }
+      }
+    }
+    if (score > 0) {
+      results.push({ item, score });
+    }
+  }
+
+  return results
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((r, index) => ({
+      id: `smart-${index}`,
+      label: r.item.label,
+      description: r.item.description,
+      href: r.item.href,
+      group: 'Smart Results' as const,
+    }));
 }
 
 export function CommandPalette() {
@@ -119,10 +211,18 @@ export function CommandPalette() {
 
   const filteredItems = useMemo(() => {
     if (!query.trim()) return dynamicItems;
-    return dynamicItems.filter((item) => {
+
+    // Get smart search results
+    const smartResults = smartSearch(query);
+
+    // Get regular filtered results
+    const regularResults = dynamicItems.filter((item) => {
       const text = `${item.label} ${item.description || ''} ${item.group}`;
       return matches(text, query);
     });
+
+    // Combine smart results first, then regular results
+    return [...smartResults, ...regularResults];
   }, [dynamicItems, query]);
 
   const grouped = useMemo(() => {
@@ -209,7 +309,10 @@ export function CommandPalette() {
                     }`}
                   >
                     <div className="min-w-0 flex-1">
-                      <p className="truncate font-medium">{entry.label}</p>
+                      <p className="truncate font-medium">
+                        {entry.group === 'Smart Results' && '✨ '}
+                        {entry.label}
+                      </p>
                       {entry.description && (
                         <p className="truncate text-xs text-gray-400">{entry.description}</p>
                       )}

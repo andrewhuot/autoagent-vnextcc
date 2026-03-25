@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, ArrowRight, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck } from 'lucide-react';
 import {
@@ -14,7 +14,12 @@ import {
   useUnpinSurface,
   useSystemEvents,
 } from '../lib/api';
+import { AnimatedNumber } from '../components/AnimatedNumber';
+import { Confetti } from '../components/Confetti';
 import { EmptyState } from '../components/EmptyState';
+import { FixButton } from '../components/FixButton';
+import { HealthPulse } from '../components/HealthPulse';
+import { JourneyTimeline } from '../components/JourneyTimeline';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { MetricCard } from '../components/MetricCard';
 import { PageHeader } from '../components/PageHeader';
@@ -64,6 +69,8 @@ export function Dashboard() {
 
   const [surfaceInput, setSurfaceInput] = useState('prompts.root');
   const [rejectExperimentId, setRejectExperimentId] = useState('');
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [allTimeBest, setAllTimeBest] = useState(0);
 
   const loading = health.isLoading || controlState.isLoading;
 
@@ -73,6 +80,21 @@ export function Dashboard() {
       score: Math.min(100, row.spent_dollars * 100),
     }));
   }, [costHealth.data?.recent_cycles]);
+
+  // Detect personal best and trigger confetti
+  useEffect(() => {
+    if (metrics?.composite) {
+      const currentScore = metrics.composite;
+      if (currentScore > allTimeBest) {
+        setAllTimeBest(currentScore);
+        if (allTimeBest > 0) {
+          // Only trigger confetti if we had a previous best (not on first load)
+          setShowConfetti(true);
+          setTimeout(() => setShowConfetti(false), 100);
+        }
+      }
+    }
+  }, [metrics?.composite, allTimeBest]);
 
   function refreshAll() {
     health.refetch();
@@ -147,6 +169,7 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
+      <Confetti trigger={showConfetti} />
       <PageHeader
         title="Karpathy Loop Scorecard"
         description="Simplicity-first: 2 hard gates + 4 primary metrics. Diagnostics in collapsible panel. Human overrides always visible."
@@ -168,13 +191,22 @@ export function Dashboard() {
         }
       />
 
-      {/* Hard Gates + Primary Metrics */}
+      {/* Health Pulse + Hard Gates */}
       <section className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <div className="rounded-lg border border-gray-200 bg-white p-5">
-          <div className="mb-3 flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-gray-500" />
-            <h3 className="text-sm font-semibold text-gray-900">Hard Gates</h3>
+        <div className="space-y-4">
+          {/* Health Pulse */}
+          <div className="rounded-lg border border-gray-200 bg-white p-5">
+            <div className="flex justify-center">
+              <HealthPulse score={metrics?.composite || 0} label="Agent Health" size="md" />
+            </div>
           </div>
+
+          {/* Hard Gates */}
+          <div className="rounded-lg border border-gray-200 bg-white p-5">
+            <div className="mb-3 flex items-center gap-2">
+              <ShieldCheck className="h-4 w-4 text-gray-500" />
+              <h3 className="text-sm font-semibold text-gray-900">Hard Gates</h3>
+            </div>
           <div className="space-y-3">
             <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
               <p className="text-xs text-gray-500">Safety Gate</p>
@@ -191,6 +223,7 @@ export function Dashboard() {
               <p className="mt-2 text-xs text-gray-600">Latest: {latestAttempt?.status?.replaceAll('_', ' ') || 'no runs'}</p>
             </div>
           </div>
+        </div>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -225,28 +258,106 @@ export function Dashboard() {
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <details>
           <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">Why? Diagnostic Signals</summary>
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            {[
-              { label: 'Error Rate', value: metrics ? 1 - metrics.error_rate : 1 },
-              { label: 'Safety Compliance', value: metrics ? 1 - metrics.safety_violation_rate : 1 },
-              { label: 'Latency Score', value: metrics ? Math.max(0, Math.min(1, 1 - metrics.avg_latency_ms / 5000)) : 1 },
-            ].map((item) => (
-              <div key={item.label} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>{item.label}</span>
-                  <span className="tabular-nums">{percent(item.value)}</span>
+          <div className="mt-4 space-y-4">
+            {/* Metric bars */}
+            <div className="grid gap-4 lg:grid-cols-3">
+              {[
+                { label: 'Error Rate', value: metrics ? 1 - metrics.error_rate : 1 },
+                { label: 'Safety Compliance', value: metrics ? 1 - metrics.safety_violation_rate : 1 },
+                { label: 'Latency Score', value: metrics ? Math.max(0, Math.min(1, 1 - metrics.avg_latency_ms / 5000)) : 1 },
+              ].map((item) => (
+                <div key={item.label} className="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex items-center justify-between text-xs text-gray-500">
+                    <span>{item.label}</span>
+                    <span className="tabular-nums">{percent(item.value)}</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-200">
+                    <div
+                      className={classNames('h-full rounded-full', ratioBarClass(item.value))}
+                      style={{ width: `${Math.round(item.value * 100)}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="mt-2 h-2 overflow-hidden rounded-full bg-gray-200">
-                  <div
-                    className={classNames('h-full rounded-full', ratioBarClass(item.value))}
-                    style={{ width: `${Math.round(item.value * 100)}%` }}
-                  />
+              ))}
+            </div>
+
+            {/* Failure breakdown with fix buttons */}
+            {metrics && (metrics.error_rate > 0 || metrics.safety_violation_rate > 0) && (
+              <div className="space-y-2">
+                <h4 className="text-xs font-semibold text-gray-700">Common Failure Families</h4>
+                <div className="space-y-2">
+                  {metrics.error_rate > 0 && (
+                    <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="flex-1">
+                        <span className="text-xs font-medium text-gray-700">routing_error</span>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-200">
+                          <div
+                            className="h-full rounded-full bg-red-500"
+                            style={{ width: `${Math.round(metrics.error_rate * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="ml-3">
+                        <FixButton
+                          failureFamily="routing_error"
+                          failureCount={Math.round(metrics.error_rate * 100)}
+                          onComplete={refreshAll}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {metrics.safety_violation_rate > 0 && (
+                    <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-gray-50 p-3">
+                      <div className="flex-1">
+                        <span className="text-xs font-medium text-gray-700">safety_violation</span>
+                        <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-200">
+                          <div
+                            className="h-full rounded-full bg-red-500"
+                            style={{ width: `${Math.round(metrics.safety_violation_rate * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div className="ml-3">
+                        <FixButton
+                          failureFamily="safety_violation"
+                          failureCount={Math.round(metrics.safety_violation_rate * 100)}
+                          onComplete={refreshAll}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-            ))}
+            )}
           </div>
         </details>
       </section>
+
+      {/* Journey Timeline */}
+      {history.length > 0 && (
+        <section className="rounded-lg border border-gray-200 bg-white p-5">
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-900">Optimization Journey</h3>
+            <button
+              onClick={() => navigate('/optimize')}
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-800"
+            >
+              View full history
+              <ArrowRight className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <JourneyTimeline
+            nodes={attempts.slice(0, 10).map((attempt: any, index: number) => ({
+              version: `v${index + 1}`,
+              score: attempt.score_after,
+              change: attempt.change_description || 'Optimization change',
+              status: attempt.status === 'accepted' ? 'accepted' : 'rejected',
+              timestamp: attempt.timestamp || Date.now(),
+            }))}
+            onNodeClick={(version) => navigate(`/configs?v=${version}`)}
+          />
+        </section>
+      )}
 
       {/* Score Trajectory */}
       {trajectoryData.length > 0 && (

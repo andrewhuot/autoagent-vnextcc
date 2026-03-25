@@ -29,6 +29,7 @@ const navItems = [
   { to: '/', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
   { to: '/optimize', label: 'Optimize', icon: Zap },
+  { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
   { to: '/configs', label: 'Configs', icon: Settings2 },
   { to: '/conversations', label: 'Conversations', icon: MessageSquare },
   { to: '/deploy', label: 'Deploy', icon: Rocket },

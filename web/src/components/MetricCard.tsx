@@ -1,5 +1,6 @@
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react';
+import { useEffect, useState } from 'react';
 
 interface MetricCardProps {
   title: string;
@@ -8,6 +9,7 @@ interface MetricCardProps {
   trend?: 'up' | 'down' | 'neutral';
   trendValue?: string;
   sparklineData?: number[];
+  glow?: boolean;
 }
 
 export function MetricCard({
@@ -17,14 +19,27 @@ export function MetricCard({
   trend,
   trendValue,
   sparklineData,
+  glow = false,
 }: MetricCardProps) {
+  const [shouldGlow, setShouldGlow] = useState(false);
+
+  useEffect(() => {
+    if (glow) {
+      setShouldGlow(true);
+      const timer = setTimeout(() => {
+        setShouldGlow(false);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [glow]);
+
   const trendColor =
     trend === 'up' ? 'text-green-600' : trend === 'down' ? 'text-red-500' : 'text-gray-400';
   const trendIcon =
     trend === 'up' ? <ArrowUpRight className="h-3 w-3" /> : trend === 'down' ? <ArrowDownRight className="h-3 w-3" /> : <Minus className="h-3 w-3" />;
 
   return (
-    <div className="rounded-lg border border-gray-200 bg-white p-4">
+    <div className={`rounded-lg border border-gray-200 bg-white p-4 ${shouldGlow ? 'metric-card-glow' : ''}`}>
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <p className="text-xs text-gray-500">{title}</p>

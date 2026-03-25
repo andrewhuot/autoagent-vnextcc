@@ -25,6 +25,7 @@ import { Runbooks } from './pages/Runbooks';
 import { ProjectMemory } from './pages/ProjectMemory';
 import { CxImport } from './pages/CxImport';
 import { CxDeploy } from './pages/CxDeploy';
+import { LiveOptimize } from './pages/LiveOptimize';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -45,6 +46,7 @@ export default function App() {
             <Route path="/evals" element={<EvalRuns />} />
             <Route path="/evals/:id" element={<EvalDetail />} />
             <Route path="/optimize" element={<Optimize />} />
+            <Route path="/live-optimize" element={<LiveOptimize />} />
             <Route path="/configs" element={<Configs />} />
             <Route path="/conversations" element={<Conversations />} />
             <Route path="/deploy" element={<Deploy />} />

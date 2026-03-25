@@ -127,22 +127,60 @@ class TestDemoCommand:
         assert result.exit_code == 0
         assert "demo" in result.output.lower()
 
-    def test_demo_runs(self, runner, tmp_dir):
-        result = runner.invoke(cli, ["demo", "--dir", tmp_dir])
+    def test_demo_quickstart_runs(self, runner, tmp_dir):
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert result.exit_code == 0
         assert "Demo complete" in result.output
 
-    def test_demo_shows_score(self, runner, tmp_dir):
-        result = runner.invoke(cli, ["demo", "--dir", tmp_dir])
+    def test_demo_quickstart_shows_score(self, runner, tmp_dir):
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert "Score:" in result.output
 
-    def test_demo_shows_server_hint(self, runner, tmp_dir):
-        result = runner.invoke(cli, ["demo", "--dir", tmp_dir])
+    def test_demo_quickstart_shows_server_hint(self, runner, tmp_dir):
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert "autoagent server" in result.output
 
-    def test_demo_shows_quickstart_hint(self, runner, tmp_dir):
-        result = runner.invoke(cli, ["demo", "--dir", tmp_dir])
+    def test_demo_quickstart_shows_quickstart_hint(self, runner, tmp_dir):
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert "autoagent quickstart" in result.output
+
+    def test_demo_vp_exists(self, runner):
+        result = runner.invoke(cli, ["demo", "vp", "--help"])
+        assert result.exit_code == 0
+        assert "VP-ready demo" in result.output
+
+    def test_demo_vp_runs_with_no_pause(self, runner):
+        result = runner.invoke(cli, ["demo", "vp", "--no-pause"])
+        assert result.exit_code == 0
+        assert "Agent Health Report" in result.output
+        assert "Results" in result.output
+        assert "Next steps" in result.output
+
+    def test_demo_vp_custom_agent_name(self, runner):
+        result = runner.invoke(cli, ["demo", "vp", "--agent-name", "Test Bot", "--no-pause"])
+        assert result.exit_code == 0
+        assert "Test Bot" in result.output
+
+    def test_demo_vp_shows_5_acts(self, runner):
+        result = runner.invoke(cli, ["demo", "vp", "--no-pause"])
+        assert result.exit_code == 0
+        # Act 1: Health report
+        assert "Overall Score" in result.output
+        assert "CRITICAL" in result.output
+        # Act 2: Diagnosis
+        assert "Diagnosing issues" in result.output
+        assert "Root Cause Analysis" in result.output
+        # Act 3: Self-healing
+        assert "Optimizing" in result.output
+        assert "Cycle 1/3" in result.output
+        assert "Cycle 2/3" in result.output
+        assert "Cycle 3/3" in result.output
+        # Act 4: Changes
+        assert "Changes for Review" in result.output
+        # Act 5: Results
+        assert "Results" in result.output
+        assert "Before" in result.output
+        assert "After" in result.output
 
 
 # ---------------------------------------------------------------------------

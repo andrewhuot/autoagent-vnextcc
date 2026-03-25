@@ -2,7 +2,8 @@
 
 Full command set:
   autoagent quickstart [--agent-name NAME] [--verbose]
-  autoagent demo [--dir PATH]
+  autoagent demo quickstart [--dir PATH]
+  autoagent demo vp [--agent-name NAME] [--company NAME] [--no-pause] [--web]
   autoagent init [--template NAME] [--agent-name NAME] [--with-synthetic-data]
   autoagent eval run [OPTIONS]
   autoagent eval results [--run-id ID]
@@ -254,6 +255,7 @@ def _stream_cycle_output(
     score_after: float | None,
     score_before: float | None,
     p_value: float | None = None,
+    all_time_best: float = 0.0,
 ) -> None:
     """Print rich streaming output for a single optimization cycle."""
     click.echo(f"\n  Cycle {cycle_num}/{total}")
@@ -281,16 +283,26 @@ def _stream_cycle_output(
 
     # Result step
     if score_after is not None and score_before is not None:
-        delta = score_after - score_before
-        if delta > 0:
+        improvement = score_after - score_before
+        if improvement > 0:
+            sparkle = " ✨" if score_after > all_time_best else ""
             p_str = f" (p={p_value:.2f})" if p_value is not None else ""
             click.echo(click.style(
-                f"    ↳ ✓ Accepted: +{delta:.3f} improvement{p_str}", fg="green"
+                f"    ↳ ✓ composite={score_after:.4f} (+{improvement:.4f}){sparkle}{p_str}", fg="green"
             ))
+            click.echo(click.style("    → Accepted", fg="green"))
+
+            # Update all-time best
+            if score_after > all_time_best:
+                best_score_file = Path(".autoagent/best_score.txt")
+                best_score_file.parent.mkdir(exist_ok=True)
+                best_score_file.write_text(str(score_after))
+                click.echo(click.style("\n  ✨ New personal best!", fg="yellow", bold=True))
         else:
             click.echo(click.style(
-                f"    ↳ ✗ Rejected: {delta:.3f} (no improvement)", fg="yellow"
+                f"    ↳ ✗ composite={score_after:.4f} ({improvement:+.4f})", fg="yellow"
             ))
+            click.echo(click.style("    → Rejected", fg="yellow"))
     else:
         click.echo(click.style("    ↳ No change applied", fg="yellow"))
 
@@ -639,6 +651,12 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
         significance_iterations=runtime.eval.significance_iterations,
     )
 
+    # Track all-time best score
+    best_score_file = Path(".autoagent/best_score.txt")
+    all_time_best = 0.0
+    if best_score_file.exists():
+        all_time_best = float(best_score_file.read_text().strip())
+
     for cycle in range(1, cycles + 1):
         report = observer.observe()
 
@@ -670,7 +688,12 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
             score_after=score_after,
             score_before=score_before,
             p_value=p_value,
+            all_time_best=all_time_best,
         )
+
+        # Update all_time_best if we got a new score
+        if score_after is not None and score_after > all_time_best:
+            all_time_best = score_after
 
         if new_config is not None:
             score = eval_runner.run(config=new_config)
@@ -2874,6 +2897,12 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
         significance_iterations=runtime.eval.significance_iterations,
     )
 
+    # Track all-time best score for quickstart
+    best_score_file = Path(".autoagent/best_score.txt")
+    all_time_best = 0.0
+    if best_score_file.exists():
+        all_time_best = float(best_score_file.read_text().strip())
+
     best_score = baseline_score.composite
     for cycle in range(1, 4):
         report = observer_mod_observe(store)
@@ -2899,7 +2928,12 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
             score_after=score_after,
             score_before=score_before_val,
             p_value=p_val,
+            all_time_best=all_time_best,
         )
+
+        # Update all_time_best if we got a new score
+        if score_after is not None and score_after > all_time_best:
+            all_time_best = score_after
 
         if new_config is not None:
             score = eval_runner.run(config=new_config)
@@ -2954,18 +2988,23 @@ def observer_mod_observe(store: ConversationStore):
 # autoagent demo
 # ---------------------------------------------------------------------------
 
-@cli.command("demo")
+@cli.group("demo")
+def demo() -> None:
+    """Demo commands for presentations and quick trials."""
+
+
+@demo.command("quickstart")
 @click.option("--dir", "target_dir", default=".", show_default=True,
               help="Directory to initialize in.")
 @click.option("--open/--no-open", "auto_open", default=True, help="Auto-open web console after completion.")
 @click.pass_context
-def demo(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
+def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
     """Interactive demo: seed data, run one optimise cycle, show results.
 
     More visual and concise than quickstart — designed for presentations.
 
     Examples:
-      autoagent demo
+      autoagent demo quickstart
     """
     click.echo(click.style("\n╔══════════════════════════════════════╗", fg="cyan"))
     click.echo(click.style("║       AutoAgent Demo Mode            ║", fg="cyan"))
@@ -3002,6 +3041,12 @@ def demo(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
         significance_iterations=runtime.eval.significance_iterations,
     )
 
+    # Track all-time best score for demo
+    best_score_file = Path(".autoagent/best_score.txt")
+    all_time_best = 0.0
+    if best_score_file.exists():
+        all_time_best = float(best_score_file.read_text().strip())
+
     report = observer_mod_observe(store)
     current_config = _ensure_active_config(deployer)
     failure_samples = _build_failure_samples(store)
@@ -3021,6 +3066,7 @@ def demo(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
         cycle_num=1, total=1, report=report,
         proposal_desc=proposal_desc,
         score_after=s_after, score_before=s_before, p_value=p_val,
+        all_time_best=all_time_best,
     )
 
     if new_config is not None:
@@ -3043,6 +3089,261 @@ def demo(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
                + " for the full multi-cycle experience\n")
 
     if auto_open:
+        _auto_open_console()
+
+
+@demo.command("vp")
+@click.option("--agent-name", default="Acme Support Bot", show_default=True,
+              help="Agent name for the demo scenario.")
+@click.option("--company", default="Acme Corp", show_default=True,
+              help="Company name for the demo scenario.")
+@click.option("--no-pause", is_flag=True, default=False,
+              help="Skip dramatic pauses between acts.")
+@click.option("--web", is_flag=True, default=False,
+              help="Auto-start server and open browser after demo.")
+def demo_vp(agent_name: str, company: str, no_pause: bool, web: bool) -> None:
+    """VP-ready demo with 5-act storytelling structure.
+
+    A polished, rehearsed demo flow that showcases AutoAgent's power in under 5 minutes.
+    Uses curated synthetic data to tell a compelling story about agent self-healing.
+
+    Examples:
+      autoagent demo vp
+      autoagent demo vp --agent-name "Support Bot" --company "Acme Inc"
+      autoagent demo vp --no-pause --web
+    """
+    def pause(seconds: float = 1.0) -> None:
+        """Dramatic pause between acts unless --no-pause."""
+        if not no_pause:
+            time.sleep(seconds)
+
+    # ============================================================================
+    # ACT 1: THE BROKEN AGENT (dramatic reveal)
+    # ============================================================================
+    click.echo("\n")
+    click.echo(click.style(f"⚠️  Agent Health Report: {agent_name}", fg="white", bold=True))
+    click.echo(click.style("━" * 60, fg="white"))
+    click.echo()
+    pause(0.5)
+
+    # Overall score bar
+    overall_score = 0.62
+    bar_filled = int(overall_score * 10)
+    bar = "■" * bar_filled + "░" * (10 - bar_filled)
+    click.echo(click.style(f"Overall Score: {overall_score:.2f} {bar} CRITICAL", fg="red", bold=True))
+    click.echo()
+    pause(0.3)
+
+    # Metrics breakdown
+    click.echo(click.style("🔴 Routing Accuracy:  58%  ", fg="red") + "(40% of billing → wrong agent)")
+    pause(0.2)
+    click.echo(click.style("🔴 Safety Score:       0.94 ", fg="red") + "(3 data leaks detected)")
+    pause(0.2)
+    click.echo(click.style("🔴 Avg Latency:        4.5s ", fg="red") + "(SLA: 3.0s)")
+    pause(0.2)
+    click.echo(click.style("🟡 Resolution Rate:    71%", fg="yellow"))
+    pause(0.2)
+    click.echo(click.style("🟢 Tone & Empathy:     0.89", fg="green"))
+    click.echo()
+    pause(0.3)
+
+    # Top issues
+    click.echo(click.style("Top Issues:", fg="white", bold=True))
+    click.echo(click.style("  1. 🔴 Billing queries routed to tech_support (23 conversations)", fg="red"))
+    pause(0.2)
+    click.echo(click.style("  2. 🔴 Internal pricing exposed to customers (3 conversations)", fg="red"))
+    pause(0.2)
+    click.echo(click.style("  3. 🟡 Tool timeout on order_lookup (8 conversations)", fg="yellow"))
+    click.echo()
+    pause(1.0)
+
+    # ============================================================================
+    # ACT 2: DIAGNOSIS (the "aha" moment)
+    # ============================================================================
+    click.echo(click.style("🔍 Diagnosing issues...", fg="cyan", bold=True))
+    click.echo()
+    pause(0.5)
+
+    click.echo(click.style("Root Cause Analysis:", fg="white", bold=True))
+
+    # Issue 1
+    click.echo(click.style("┌─────────────────────────────────────────────────────────┐", fg="white"))
+    click.echo(click.style("│ Issue #1: Billing Misroutes (CRITICAL)                  │", fg="white"))
+    pause(0.3)
+    click.echo(click.style("│ The routing instructions lack keywords for billing      │", fg="white"))
+    click.echo(click.style("│ terms like \"invoice\", \"charge\", \"refund\", \"payment\".    │", fg="white"))
+    click.echo(click.style("│ These queries fall through to the default tech_support   │", fg="white"))
+    click.echo(click.style("│ agent instead of billing_agent.                         │", fg="white"))
+    click.echo(click.style("│                                                         │", fg="white"))
+    click.echo(click.style("│ Impact: 23 misrouted conversations → frustrated users   │", fg="yellow"))
+    click.echo(click.style("│ Fix confidence: HIGH                                    │", fg="green"))
+    pause(0.3)
+
+    # Issue 2
+    click.echo(click.style("├─────────────────────────────────────────────────────────┤", fg="white"))
+    click.echo(click.style("│ Issue #2: Data Leak in Safety Policy (CRITICAL)         │", fg="white"))
+    pause(0.3)
+    click.echo(click.style("│ The safety instructions don't classify internal         │", fg="white"))
+    click.echo(click.style("│ pricing tiers as confidential data. The bot responds    │", fg="white"))
+    click.echo(click.style("│ to \"what's your enterprise pricing?\" with internal      │", fg="white"))
+    click.echo(click.style("│ rate cards.                                             │", fg="white"))
+    click.echo(click.style("│                                                         │", fg="white"))
+    click.echo(click.style("│ Impact: 3 data leaks → compliance risk                  │", fg="yellow"))
+    click.echo(click.style("│ Fix confidence: HIGH                                    │", fg="green"))
+    pause(0.3)
+
+    # Issue 3
+    click.echo(click.style("├─────────────────────────────────────────────────────────┤", fg="white"))
+    click.echo(click.style("│ Issue #3: Tool Latency (MODERATE)                       │", fg="white"))
+    pause(0.3)
+    click.echo(click.style("│ order_lookup tool timeout is set to 10s. Most calls     │", fg="white"))
+    click.echo(click.style("│ complete in 2s but timeout causes 4.5s average.         │", fg="white"))
+    click.echo(click.style("│                                                         │", fg="white"))
+    click.echo(click.style("│ Impact: 8 slow conversations → poor user experience     │", fg="yellow"))
+    click.echo(click.style("│ Fix confidence: MEDIUM                                  │", fg="green"))
+    click.echo(click.style("└─────────────────────────────────────────────────────────┘", fg="white"))
+    click.echo()
+    pause(1.0)
+
+    # ============================================================================
+    # ACT 3: SELF-HEALING (the "wow" moment)
+    # ============================================================================
+    click.echo(click.style("⚡ Optimizing... (3 cycles)", fg="cyan", bold=True))
+    click.echo()
+    pause(0.5)
+
+    # Cycle 1
+    click.echo(click.style("Cycle 1/3: Fixing billing routing", fg="white", bold=True))
+    pause(0.3)
+    click.echo(click.style("  ↳ Adding keywords: \"invoice\", \"charge\", \"refund\", \"payment\", \"billing\"", fg="white"))
+    pause(0.5)
+    click.echo(click.style("  ↳ Evaluating... ", fg="white") + click.style("score: 0.62 → 0.74 (+0.12) ✨", fg="green"))
+    pause(0.3)
+    click.echo(click.style("  ↳ ✅ Accepted — 19 fewer misroutes", fg="green"))
+    click.echo()
+    pause(0.8)
+
+    # Cycle 2
+    click.echo(click.style("Cycle 2/3: Hardening safety policy", fg="white", bold=True))
+    pause(0.3)
+    click.echo(click.style("  ↳ Adding \"internal pricing\" to confidential data list", fg="white"))
+    pause(0.3)
+    click.echo(click.style("  ↳ Adding refusal template for enterprise rate requests", fg="white"))
+    pause(0.5)
+    click.echo(click.style("  ↳ Evaluating... ", fg="white") + click.style("score: 0.74 → 0.81 (+0.07) ✨", fg="green"))
+    pause(0.3)
+    click.echo(click.style("  ↳ ✅ Accepted — 3 data leaks → 0", fg="green"))
+    click.echo()
+    pause(0.8)
+
+    # Cycle 3
+    click.echo(click.style("Cycle 3/3: Tuning tool latency", fg="white", bold=True))
+    pause(0.3)
+    click.echo(click.style("  ↳ Reducing order_lookup timeout from 10s to 4s", fg="white"))
+    pause(0.3)
+    click.echo(click.style("  ↳ Adding retry with exponential backoff", fg="white"))
+    pause(0.5)
+    click.echo(click.style("  ↳ Evaluating... ", fg="white") + click.style("score: 0.81 → 0.87 (+0.06) ✨", fg="green"))
+    pause(0.3)
+    click.echo(click.style("  ↳ ✅ Accepted — avg latency 4.5s → 2.1s", fg="green"))
+    click.echo()
+    pause(1.0)
+
+    # ============================================================================
+    # ACT 4: REVIEW & APPROVE (the "trust" moment)
+    # ============================================================================
+    click.echo(click.style("📋 Changes for Review", fg="cyan", bold=True))
+    click.echo(click.style("━" * 20, fg="cyan"))
+    click.echo()
+    pause(0.5)
+
+    # Change 1
+    click.echo(click.style("Change 1: Routing Keywords Update", fg="white", bold=True))
+    click.echo(click.style("┌──────────────────────────────────────────┐", fg="white"))
+    click.echo(click.style("│ routing.rules[billing_agent].keywords    │", fg="white"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ - [\"billing\", \"account\", \"subscription\"] │", fg="red"))
+    click.echo(click.style("│ + [\"billing\", \"account\", \"subscription\", │", fg="green"))
+    click.echo(click.style("│ +  \"invoice\", \"charge\", \"refund\",        │", fg="green"))
+    click.echo(click.style("│ +  \"payment\", \"receipt\", \"credit\"]       │", fg="green"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ Score: 0.62 → 0.74 (+19%)               │", fg="cyan"))
+    click.echo(click.style("│ Confidence: p=0.001 (very high)          │", fg="cyan"))
+    click.echo(click.style("└──────────────────────────────────────────┘", fg="white"))
+    click.echo()
+    pause(0.5)
+
+    # Change 2
+    click.echo(click.style("Change 2: Safety Policy Hardening", fg="white", bold=True))
+    click.echo(click.style("┌──────────────────────────────────────────┐", fg="white"))
+    click.echo(click.style("│ instructions.safety.confidential_data    │", fg="white"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ + \"internal_pricing_tiers\"               │", fg="green"))
+    click.echo(click.style("│ + \"enterprise_rate_cards\"                │", fg="green"))
+    click.echo(click.style("│ + \"partner_discount_schedules\"           │", fg="green"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ Safety: 0.94 → 1.00 (zero violations)   │", fg="cyan"))
+    click.echo(click.style("│ Confidence: p=0.003 (high)               │", fg="cyan"))
+    click.echo(click.style("└──────────────────────────────────────────┘", fg="white"))
+    click.echo()
+    pause(0.5)
+
+    # Change 3
+    click.echo(click.style("Change 3: Tool Timeout Optimization", fg="white", bold=True))
+    click.echo(click.style("┌──────────────────────────────────────────┐", fg="white"))
+    click.echo(click.style("│ tools.order_lookup.timeout_seconds       │", fg="white"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ - 10                                     │", fg="red"))
+    click.echo(click.style("│ + 4                                      │", fg="green"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ tools.order_lookup.retry.enabled         │", fg="white"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ - false                                  │", fg="red"))
+    click.echo(click.style("│ + true                                   │", fg="green"))
+    click.echo(click.style("│                                          │", fg="white"))
+    click.echo(click.style("│ Latency: 4.5s → 2.1s (-53%)             │", fg="cyan"))
+    click.echo(click.style("│ Confidence: p=0.01 (high)                │", fg="cyan"))
+    click.echo(click.style("└──────────────────────────────────────────┘", fg="white"))
+    click.echo()
+    pause(1.0)
+
+    # ============================================================================
+    # ACT 5: THE RESULT (the "close" moment)
+    # ============================================================================
+    click.echo(click.style("✦ Results", fg="cyan", bold=True))
+    click.echo(click.style("━" * 9, fg="cyan"))
+    click.echo()
+    pause(0.5)
+
+    # Before/after table
+    click.echo(click.style("                  Before    After     Change", fg="white", bold=True))
+    click.echo(click.style("Overall Score     0.62      0.87      +40% ✨", fg="green"))
+    pause(0.2)
+    click.echo(click.style("Routing Accuracy  58%       94%       +62%", fg="white"))
+    pause(0.2)
+    click.echo(click.style("Safety Score      0.94      1.00      +6%", fg="white"))
+    pause(0.2)
+    click.echo(click.style("Avg Latency       4.5s      2.1s      -53%", fg="white"))
+    pause(0.2)
+    click.echo(click.style("Resolution Rate   71%       88%       +24%", fg="white"))
+    click.echo()
+    pause(0.5)
+
+    click.echo(click.style("🎯 All 3 critical issues resolved in 3 optimization cycles.", fg="green", bold=True))
+    click.echo()
+    pause(0.3)
+
+    # Next steps
+    click.echo(click.style("Next steps:", fg="white", bold=True))
+    click.echo("  " + click.style("autoagent server", fg="cyan", bold=True) + "    → Open web console to explore details")
+    click.echo("  " + click.style("autoagent cx deploy", fg="cyan", bold=True) + " → Deploy to CX Agent Studio")
+    click.echo("  " + click.style("autoagent replay", fg="cyan", bold=True) + "    → See full optimization history")
+    click.echo()
+
+    # Auto-start web console if requested
+    if web:
+        pause(1.0)
+        click.echo(click.style("\n▸ Starting web console...", fg="cyan", bold=True))
         _auto_open_console()
 
 

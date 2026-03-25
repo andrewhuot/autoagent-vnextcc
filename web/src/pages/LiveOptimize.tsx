@@ -1,0 +1,209 @@
+import { useState } from 'react';
+import { PhaseIndicator } from '../components/PhaseIndicator';
+import { LiveCycleCard } from '../components/LiveCycleCard';
+import { ScoreChart } from '../components/ScoreChart';
+import { Confetti } from '../components/Confetti';
+
+type Phase = 'diagnose' | 'propose' | 'evaluate' | 'decide';
+
+interface CycleResult {
+  cycle: number;
+  changeDescription: string;
+  scoreDelta: number;
+  accepted: boolean;
+  bestScore: number;
+}
+
+interface ScorePoint {
+  label: string;
+  score: number;
+}
+
+export function LiveOptimize() {
+  const [isRunning, setIsRunning] = useState(false);
+  const [currentPhase, setCurrentPhase] = useState<Phase | null>(null);
+  const [completedPhases, setCompletedPhases] = useState<Set<string>>(new Set());
+  const [completedCycles, setCompletedCycles] = useState<CycleResult[]>([]);
+  const [scoreData, setScoreData] = useState<ScorePoint[]>([]);
+  const [showConfetti, setShowConfetti] = useState(false);
+  const [totalCycles, setTotalCycles] = useState(3);
+
+  const startOptimization = () => {
+    // Reset state
+    setIsRunning(true);
+    setCurrentPhase(null);
+    setCompletedPhases(new Set());
+    setCompletedCycles([]);
+    setScoreData([]);
+    setShowConfetti(false);
+
+    const eventSource = new EventSource(`/api/optimize/stream?cycles=${totalCycles}&mode=standard`);
+
+    eventSource.addEventListener('cycle_start', (e) => {
+      const data = JSON.parse(e.data);
+      setCurrentPhase('diagnose');
+      setCompletedPhases(new Set());
+    });
+
+    eventSource.addEventListener('diagnosis', (e) => {
+      setCompletedPhases(prev => new Set([...prev, 'diagnose']));
+      setCurrentPhase('propose');
+    });
+
+    eventSource.addEventListener('proposal', (e) => {
+      setCompletedPhases(prev => new Set([...prev, 'propose']));
+      setCurrentPhase('evaluate');
+    });
+
+    eventSource.addEventListener('evaluation', (e) => {
+      setCompletedPhases(prev => new Set([...prev, 'evaluate']));
+      setCurrentPhase('decide');
+    });
+
+    eventSource.addEventListener('decision', (e) => {
+      setCompletedPhases(prev => new Set([...prev, 'decide']));
+    });
+
+    eventSource.addEventListener('cycle_complete', (e) => {
+      const data = JSON.parse(e.data);
+      const newCycle: CycleResult = {
+        cycle: data.cycle,
+        changeDescription: data.change_description,
+        scoreDelta: data.score_delta,
+        accepted: data.accepted,
+        bestScore: data.best_score,
+      };
+
+      setCompletedCycles(prev => [newCycle, ...prev]); // Newest first
+      setScoreData(prev => [
+        ...prev,
+        { label: `Cycle ${data.cycle}`, score: data.best_score * 100 }
+      ]);
+      setCurrentPhase(null);
+      setCompletedPhases(new Set());
+    });
+
+    eventSource.addEventListener('optimization_complete', (e) => {
+      const data = JSON.parse(e.data);
+      setIsRunning(false);
+      setCurrentPhase(null);
+
+      // Trigger confetti on completion
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 2500);
+
+      eventSource.close();
+    });
+
+    eventSource.onerror = (error) => {
+      console.error('SSE Error:', error);
+      setIsRunning(false);
+      setCurrentPhase(null);
+      eventSource.close();
+    };
+  };
+
+  return (
+    <div className="p-6 max-w-7xl mx-auto">
+      <Confetti trigger={showConfetti} />
+
+      {/* Header */}
+      <div className="mb-8">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-gray-900">Live Optimization</h1>
+            <p className="text-sm text-gray-500 mt-1">
+              Watch your agent improve in real-time
+            </p>
+          </div>
+
+          <div className="flex items-center gap-4">
+            {!isRunning && (
+              <div className="flex items-center gap-2">
+                <label htmlFor="cycles" className="text-sm text-gray-600">Cycles:</label>
+                <select
+                  id="cycles"
+                  value={totalCycles}
+                  onChange={(e) => setTotalCycles(Number(e.target.value))}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value={1}>1</option>
+                  <option value={3}>3</option>
+                  <option value={5}>5</option>
+                  <option value={10}>10</option>
+                </select>
+              </div>
+            )}
+
+            <button
+              onClick={startOptimization}
+              disabled={isRunning}
+              className={`
+                px-6 py-2 rounded-lg font-medium text-sm transition-colors
+                ${
+                  isRunning
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700'
+                }
+              `}
+            >
+              {isRunning ? 'Running...' : 'Start Optimization'}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Phase Indicator */}
+      {isRunning && (
+        <div className="mb-8 bg-white rounded-lg border border-gray-200 shadow-sm">
+          <PhaseIndicator activePhase={currentPhase} completedPhases={completedPhases} />
+        </div>
+      )}
+
+      {/* Score Chart */}
+      {scoreData.length > 0 && (
+        <div className="mb-8">
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Score Progress</h2>
+          <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm">
+            <ScoreChart data={scoreData} height={280} />
+          </div>
+        </div>
+      )}
+
+      {/* Completed Cycles */}
+      {completedCycles.length > 0 && (
+        <div>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">
+            Optimization History ({completedCycles.length} cycle{completedCycles.length !== 1 ? 's' : ''})
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {completedCycles.map((cycle) => (
+              <LiveCycleCard
+                key={cycle.cycle}
+                cycle={cycle.cycle}
+                changeDescription={cycle.changeDescription}
+                scoreDelta={cycle.scoreDelta}
+                accepted={cycle.accepted}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!isRunning && completedCycles.length === 0 && (
+        <div className="text-center py-16 bg-white rounded-lg border border-gray-200">
+          <div className="text-gray-400 mb-4">
+            <svg className="w-16 h-16 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          </div>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">Ready to optimize</h3>
+          <p className="text-sm text-gray-500">
+            Click "Start Optimization" to begin improving your agent
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

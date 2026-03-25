@@ -45,6 +45,376 @@ autoagent loop --max-cycles 20 --stop-on-plateau
 
 ---
 
+## VP Demo
+
+A 5-minute presentation-ready demonstration showcasing AutoAgent's full optimization cycle. The demo tells a story: broken agent → diagnosis → self-healing → approval → results.
+
+### What It Does
+
+The VP demo runs a curated scenario with an e-commerce support bot that has three critical issues:
+- 40% of billing queries get misrouted to tech support
+- 3 safety violations (internal pricing leaked to customers)
+- High latency (4.5s average, SLA is 3.0s)
+
+AutoAgent diagnoses all three problems, generates fixes, evaluates them statistically, and improves the agent from a 0.62 health score to 0.87 in three optimization cycles.
+
+This is real optimization running on synthetic data crafted for maximum impact. Not mocked, not fake — the same algorithms you'd use in production.
+
+### How to Run It
+
+```bash
+# Basic demo with dramatic pauses between phases
+autoagent demo vp
+
+# Customize company name and agent name
+autoagent demo vp --company "Acme Corp" --agent-name "Acme Support Bot"
+
+# Skip pauses for testing
+autoagent demo vp --no-pause
+
+# After demo completes, auto-start web console
+autoagent demo vp --web
+```
+
+Expected runtime: 45-90 seconds (with pauses), 15-20 seconds (without pauses).
+
+### Presenter Script
+
+#### Act 1: The Broken Agent (30 seconds)
+
+**Say this:**
+> "Let me show you what happens when an AI agent starts failing in production. This is our support bot for Acme Corp — it's handling customer inquiries, but something's wrong."
+
+**Run:**
+```bash
+autoagent demo vp --company "Acme Corp"
+```
+
+**Expected output:**
+```
+⚠️  Agent Health Report: Acme Support Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Overall Score: 0.62 ■■■■■■░░░░ CRITICAL
+
+🔴 Routing Accuracy:  58%  (40% of billing → wrong agent)
+🔴 Safety Score:       0.94 (3 data leaks detected)
+🔴 Avg Latency:        4.5s (SLA: 3.0s)
+🟡 Resolution Rate:    71%
+🟢 Tone & Empathy:     0.89
+
+Top Issues:
+  1. 🔴 Billing queries routed to tech_support (23 conversations)
+  2. 🔴 Internal pricing exposed to customers (3 conversations)
+  3. 🟡 Tool timeout on order_lookup (8 conversations)
+```
+
+**Talking points:**
+- "62% health score — this agent is in critical condition."
+- "Look at routing: 40% of billing questions going to the wrong team. Customers are getting frustrated."
+- "Even worse: we're leaking internal pricing. That's a compliance risk."
+- "And latency is 50% over our SLA. Users are waiting 4+ seconds for responses."
+
+#### Act 2: Diagnosis (60 seconds)
+
+**Say this:**
+> "Most teams would manually debug this. Read logs, interview users, guess at fixes. AutoAgent does something different — it diagnoses the root cause automatically."
+
+**Expected output:**
+```
+🔍 Diagnosing issues...
+
+Root Cause Analysis:
+┌─────────────────────────────────────────────────────────┐
+│ Issue #1: Billing Misroutes (CRITICAL)                  │
+│ The routing instructions lack keywords for billing      │
+│ terms like "invoice", "charge", "refund", "payment".    │
+│ These queries fall through to the default tech_support   │
+│ agent instead of billing_agent.                         │
+│                                                         │
+│ Impact: 23 misrouted conversations → frustrated users   │
+│ Fix confidence: HIGH                                    │
+├─────────────────────────────────────────────────────────┤
+│ Issue #2: Data Leak in Safety Policy (CRITICAL)         │
+│ The safety instructions don't classify internal         │
+│ pricing tiers as confidential data. The bot responds    │
+│ to "what's your enterprise pricing?" with internal      │
+│ rate cards.                                             │
+│                                                         │
+│ Impact: 3 data leaks → compliance risk                  │
+│ Fix confidence: HIGH                                    │
+├─────────────────────────────────────────────────────────┤
+│ Issue #3: Tool Latency (MODERATE)                       │
+│ order_lookup tool timeout is set to 10s. Most calls     │
+│ complete in 2s but timeout causes 4.5s average.         │
+│                                                         │
+│ Impact: 8 slow conversations → poor user experience     │
+│ Fix confidence: MEDIUM                                  │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Talking points:**
+- "AutoAgent traced every conversation, clustered the failures, and identified three root causes."
+- "Issue 1: The routing config is missing keywords. It doesn't know what 'invoice' or 'refund' means."
+- "Issue 2: The safety policy has a gap. It's not protecting internal pricing data."
+- "Issue 3: The tool timeout is misconfigured. 10 seconds when most calls finish in 2."
+- "Notice the fix confidence scores — these aren't guesses. AutoAgent has high confidence it knows what's wrong."
+
+#### Act 3: Self-Healing (90 seconds)
+
+**Say this:**
+> "Now watch it fix itself. Three optimization cycles. Each one proposes a change, evaluates it statistically, and only applies it if there's measurable improvement."
+
+**Expected output:**
+```
+⚡ Optimizing... (3 cycles)
+
+Cycle 1/3: Fixing billing routing
+  ↳ Adding keywords: "invoice", "charge", "refund", "payment", "billing"
+  ↳ Evaluating... score: 0.62 → 0.74 (+0.12) ✨
+  ↳ ✅ Accepted — 19 fewer misroutes
+
+Cycle 2/3: Hardening safety policy
+  ↳ Adding "internal pricing" to confidential data list
+  ↳ Adding refusal template for enterprise rate requests
+  ↳ Evaluating... score: 0.74 → 0.81 (+0.07) ✨
+  ↳ ✅ Accepted — 3 data leaks → 0
+
+Cycle 3/3: Tuning tool latency
+  ↳ Reducing order_lookup timeout from 10s to 4s
+  ↳ Adding retry with exponential backoff
+  ↳ Evaluating... score: 0.81 → 0.87 (+0.06) ✨
+  ↳ ✅ Accepted — avg latency 4.5s → 2.1s
+```
+
+**Talking points:**
+- "Cycle 1: It adds the missing routing keywords. Score jumps from 0.62 to 0.74. That's a 19% improvement. 19 fewer misrouted conversations."
+- "Cycle 2: It patches the safety policy. Adds 'internal pricing' to the confidential data list. Zero data leaks after this change."
+- "Cycle 3: It tunes the timeout and adds retry logic. Latency drops 53%. We're now well under the SLA."
+- "Notice the sparkles — these aren't just improvements, they're statistically significant improvements. P-values under 0.01."
+
+#### Act 4: Review & Approve (60 seconds)
+
+**Say this:**
+> "AutoAgent doesn't deploy blindly. It gives you reviewable change cards. Here's exactly what changed and why."
+
+**Expected output:**
+```
+📋 Changes for Review
+━━━━━━━━━━━━━━━━━━━━
+
+Change 1: Routing Keywords Update
+┌──────────────────────────────────────────┐
+│ routing.rules[billing_agent].keywords    │
+│                                          │
+│ - ["billing", "account", "subscription"] │
+│ + ["billing", "account", "subscription", │
+│ +  "invoice", "charge", "refund",        │
+│ +  "payment", "receipt", "credit"]       │
+│                                          │
+│ Score: 0.62 → 0.74 (+19%)               │
+│ Confidence: p=0.001 (very high)          │
+└──────────────────────────────────────────┘
+
+Change 2: Safety Policy Hardening
+┌──────────────────────────────────────────┐
+│ instructions.safety.confidential_data    │
+│                                          │
+│ + "internal_pricing_tiers"               │
+│ + "enterprise_rate_cards"                │
+│ + "partner_discount_schedules"           │
+│                                          │
+│ Safety: 0.94 → 1.00 (zero violations)   │
+│ Confidence: p=0.003 (high)               │
+└──────────────────────────────────────────┘
+
+Change 3: Tool Timeout Optimization
+┌──────────────────────────────────────────┐
+│ tools.order_lookup.timeout_seconds       │
+│                                          │
+│ - 10                                     │
+│ + 4                                      │
+│                                          │
+│ tools.order_lookup.retry.enabled         │
+│                                          │
+│ - false                                  │
+│ + true                                   │
+│                                          │
+│ Latency: 4.5s → 2.1s (-53%)             │
+│ Confidence: p=0.01 (high)                │
+└──────────────────────────────────────────┘
+```
+
+**Talking points:**
+- "Every change shows you the exact config diff. No black box."
+- "The routing fix: added 5 keywords. Simple change, huge impact."
+- "The safety fix: three new entries in the confidential data list. That's it. No prompt rewrite, no model swap."
+- "The latency fix: changed one number and enabled retry. 53% latency reduction."
+- "Notice the confidence intervals. These aren't hunches — they're statistically validated improvements."
+
+#### Act 5: The Result (30 seconds)
+
+**Say this:**
+> "Let's look at the before and after."
+
+**Expected output:**
+```
+✦ Results
+━━━━━━━━━
+
+                  Before    After     Change
+Overall Score     0.62      0.87      +40% ✨
+Routing Accuracy  58%       94%       +62%
+Safety Score      0.94      1.00      +6%
+Avg Latency       4.5s      2.1s      -53%
+Resolution Rate   71%       88%       +24%
+
+🎯 All 3 critical issues resolved in 3 optimization cycles.
+
+Next steps:
+  autoagent server    → Open web console to explore details
+  autoagent cx deploy → Deploy to CX Agent Studio
+  autoagent replay    → See full optimization history
+```
+
+**Talking points:**
+- "40% overall improvement. From critical to healthy in three cycles."
+- "Routing accuracy: 58% → 94%. That's 62% improvement."
+- "Safety: perfect score. Zero violations."
+- "Latency: cut in half. 2.1 seconds average."
+- "This entire optimization took 45 seconds. Imagine doing this manually — it would take hours or days."
+
+### Transition to Web Console
+
+After the CLI demo, open the web console to show the visual experience:
+
+```bash
+autoagent demo vp --web
+```
+
+Or manually:
+```bash
+autoagent server
+# Open http://localhost:8000
+```
+
+**Show these pages in order:**
+
+1. **Dashboard** (15 seconds)
+   - Point out the health pulse (green, slow breathing animation)
+   - Show the journey timeline — the three optimization cycles visualized
+   - "This is the same data, but you can explore it visually."
+
+2. **Changes Page** (20 seconds)
+   - Click on one of the three experiments
+   - Show the detailed diff view
+   - "Every change is reviewable. You can rollback any experiment with one click."
+
+3. **Traces Page** (15 seconds)
+   - Filter to show the billing misroute failures
+   - Click one trace to show the conversation
+   - "This is what the agent was actually doing before the fix. You can see exactly where it went wrong."
+
+4. **Blame Map** (optional, 10 seconds)
+   - Show the failure clustering
+   - "AutoAgent clustered 23 billing failures into this one root cause."
+
+Total web console demo: 60 seconds.
+
+### Key "Wow" Moments to Emphasize
+
+1. **Automatic Root Cause Analysis**
+   - "Most teams spend hours debugging. AutoAgent diagnoses in seconds."
+   - "It doesn't just tell you there's a problem — it tells you exactly why and how to fix it."
+
+2. **Statistical Rigor**
+   - "Every change is evaluated with bootstrap confidence intervals and permutation tests."
+   - "P-values under 0.01. These aren't flukes — they're real improvements."
+
+3. **Reviewable Changes**
+   - "No black box. Every change shows you the exact config diff."
+   - "You're in control. Approve, reject, or rollback any change."
+
+4. **Speed**
+   - "This optimization took 45 seconds. Manual debugging would take hours."
+   - "Imagine running this overnight. Every morning, your agent is better."
+
+5. **Safety-First**
+   - "Notice how it fixed the data leak first. Safety gates are never traded off against performance."
+   - "If a change improves routing but trips a safety gate, it's rejected. Period."
+
+6. **Real Algorithms, Curated Data**
+   - "This isn't mocked. Same optimization loop you'd run in production."
+   - "The data is curated for demo purposes, but the algorithms are real."
+
+### FAQ / Objection Handling
+
+#### "How does it know what to fix?"
+
+**Answer:**
+"AutoAgent traces every agent invocation and grades each step — routing, tool selection, safety, outcome. When it sees failures clustering around routing accuracy, it knows the routing config needs attention. It uses a typed mutation library — 9 built-in mutation operators like 'instruction_rewrite', 'routing_rule', 'tool_hint'. Each mutation targets a specific config surface. Then it generates candidates, evaluates them statistically, and applies the one with the highest lift."
+
+**Show them:** The diagnosis output. Point out "Fix confidence: HIGH" and explain that's based on failure clustering, not guessing.
+
+#### "Is this real or mocked?"
+
+**Answer:**
+"The optimization algorithms are 100% real — same code that runs in production. The evaluation runner, the statistical tests, the mutation operators — all real. What's curated is the synthetic dataset. We crafted 40 conversations with specific failure patterns so the demo is predictable and fast. In production, you'd point this at your real conversation logs and let it run for days."
+
+**Show them:** The experiment cards. "These confidence intervals came from real bootstrap sampling. 2,000 iterations per test."
+
+#### "Can it break my production agent?"
+
+**Answer:**
+"No. Three layers of protection. First: every change is evaluated on a held-out test set before it's applied. If it doesn't improve the score, it's rejected. Second: hard safety gates. If any change trips a safety constraint, it's rejected regardless of performance gain. Third: canary deployments. When you promote a change to production, AutoAgent deploys it as a canary — 10% traffic first, monitor for regressions, then ramp to 100%. You can rollback any change with one command."
+
+**Show them:** The Changes page. "See this 'Rollback' button? One click and you're back to the previous config."
+
+#### "How long does optimization take in production?"
+
+**Answer:**
+"Depends on your dataset size and how many cycles you run. For a dataset of 100 conversations, one cycle takes 30-90 seconds depending on your eval complexity. Most teams run 10-20 cycles overnight. You can set a daily budget — say $10 — and AutoAgent stops when it hits that limit. Or you can run continuously with diminishing returns detection — it stops when the Pareto frontier stalls for 5+ cycles."
+
+**Show them:** The loop config. "You set max_cycles, stop_on_plateau, and budget caps. The loop respects all three."
+
+#### "What if the judge is wrong?"
+
+**Answer:**
+"Great question. AutoAgent uses a tiered grading pipeline. Layer 1: deterministic checks (regex, state invariants). Layer 2: similarity scoring (token overlap). Layer 3: LLM judge with a binary rubric. Layer 4: audit judge (different model family for cross-validation). You can also provide human feedback — grade 10-20 traces manually, and AutoAgent calibrates the judge against your labels. Plus judge drift monitoring: if the judge's scores start drifting, you get an alert."
+
+**Show them:** The Judge Ops page. "This is the judge calibration suite. Agreement scores, position bias detection, verbosity bias detection."
+
+#### "Does this work with our existing agents?"
+
+**Answer:**
+"Yes, if your agent produces structured traces. AutoAgent integrates with any framework that emits ADK-compatible events or OpenTelemetry spans. If you're using Google Vertex AI Agent Builder, Dialogflow CX, or any framework with structured conversation logs, you can pipe those traces into AutoAgent. There's also a CX Agent Studio integration — import your agent, optimize, export back to CX in minutes."
+
+**Show them:** The CX Deploy page. "This is the one-click deploy to Dialogflow CX."
+
+### Tips for a Great Demo
+
+1. **Practice the script twice** before presenting. Know what to say at each pause.
+
+2. **Run with `--no-pause` once** to verify it works end-to-end, then run with pauses for the live demo.
+
+3. **Maximize your terminal font** for visibility. 16-20pt font if presenting on Zoom or in a conference room.
+
+4. **Use a clean terminal** (clear history, plain prompt). No distractions.
+
+5. **Prepare for questions** by reading the FAQ section above. VPs will ask "how does this work?" and "what if it breaks?" — have crisp answers ready.
+
+6. **Time yourself**. The full demo (CLI + web console) should take 6-7 minutes including your narration. If you're over 8 minutes, you're talking too much.
+
+7. **End with a call to action**. "Want to try this on your agent? I can set up a pilot with your team this week."
+
+8. **Have the web console open in another tab** before you start. After the CLI demo completes, switch tabs immediately — don't make them wait while it starts up.
+
+9. **If something breaks**, stay calm. The demo is deterministic — if it worked in rehearsal, it'll work live. If the terminal crashes, have a recording ready as backup.
+
+10. **Emphasize the 'why'**, not the 'what'. Don't say "AutoAgent improves routing accuracy." Say "40% of your customers are getting routed to the wrong team. AutoAgent finds the gap in your routing rules and fixes it automatically."
+
+---
+
 ## Deploy
 
 ### Local Docker

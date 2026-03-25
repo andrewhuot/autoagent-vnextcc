@@ -16,31 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import (
-    autofix,
-    changes,
-    config,
-    context,
-    control,
-    conversations,
-    cx_studio as cx_studio_routes,
-    deploy,
-    eval,
-    events,
-    experiments,
-    health,
-    judges,
-    loop,
-    memory as memory_routes,
-    opportunities,
-    optimize,
-    optimize_stream,
-    quickfix,
-    runbooks,
-    registry,
-    scorers,
-    traces,
-)
+from api.routes import autofix, changes, config, context, control, conversations, cx_studio as cx_studio_routes, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, optimize_stream, quickfix, runbooks, registry, scorers, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -256,7 +232,6 @@ app.add_middleware(
 app.include_router(eval.router)
 app.include_router(optimize.router)
 app.include_router(optimize_stream.router)
-app.include_router(quickfix.router)
 app.include_router(config.router)
 app.include_router(health.router)
 app.include_router(conversations.router)

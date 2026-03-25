@@ -1,411 +1,959 @@
-# CX Agent Studio Integration — Implementation Plan
+# WOW Features Implementation Plan
 
-## Architecture Overview
+## Executive Summary
+Implement 6 high-impact UX features across 4 parallel tracks. All features are ADDITIVE — no breaking changes.
 
+**Quality Gates:**
+- All 1,429+ existing tests must pass
+- TypeScript compilation must succeed
+- Dependency layer enforcement must pass
+- New tests required for: SSE endpoint, quickfix API, CLI sparkles, smart search
+
+---
+
+## Track A: Celebration Components (Features 1 + 3)
+
+### Feature 1: Animated Score Celebration
+
+#### Component 1: Confetti.tsx
+**Path:** `web/src/components/Confetti.tsx`
+
+```typescript
+interface ConfettiProps {
+  trigger: boolean;  // When true, starts animation
+  duration?: number; // Default 2000ms
+}
 ```
-cx_studio/                    # Layer 1 (advanced) — imports from core only
-├── __init__.py               # Public API surface
-├── auth.py                   # Google Cloud auth (ADC + service account JSON)
-├── client.py                 # REST API client for CX Agent Studio v3
-├── types.py                  # Pydantic models for CX API resources
-├── mapper.py                 # Bidirectional mapping: CX schema ↔ AgentConfig
-├── importer.py               # Import CX agent → AutoAgent config + evals
-├── exporter.py               # Export AutoAgent config → CX Agent Studio
-├── deployer.py               # Deploy to CX environments + widget HTML generation
-└── errors.py                 # CX-specific error types
 
-api/routes/cx_studio.py       # Layer 2 — FastAPI routes for web console
-web/src/pages/CxImport.tsx    # Import wizard page
-web/src/pages/CxDeploy.tsx    # Deploy + widget embed page
-tests/test_cx_studio.py       # Comprehensive tests with mocked API responses
+**Implementation:**
+- Pure CSS animation, no libraries
+- 20 particle divs, absolutely positioned
+- Random colors: ['#10b981', '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6']
+- Burst pattern: spread from center using `translate()` and `rotate()`
+- Each particle: random angle (0-360°), random distance (100-300px)
+- Animation: `opacity: 1 → 0`, `transform: translateY(0) → translateY(100px)`, 2s ease-out
+- Auto-cleanup: unmount particles after animation completes
+
+**CSS Keyframes:**
+```css
+@keyframes confetti-burst {
+  0% { transform: translate(0, 0) rotate(0deg); opacity: 1; }
+  100% { transform: translate(var(--x), var(--y)) rotate(720deg); opacity: 0; }
+}
 ```
 
-## Design Decisions
+#### Component 2: AnimatedNumber.tsx
+**Path:** `web/src/components/AnimatedNumber.tsx`
 
-1. **Auth**: Support both ADC and service account JSON. ADC is default; `--credentials` flag for service account.
-2. **Config mapping**: Map only optimizable surfaces (prompts, tools, routing, thresholds). Non-optimizable fields preserved as opaque passthrough in `_cx_metadata`.
-3. **Deployment safety**: Export requires change card approval when in advanced/research mode.
-4. **REST-only**: Use REST API directly (no MCP dependency). Simpler, more testable.
-5. **Offline snapshots**: Import creates a complete local snapshot that works without GCP connectivity.
-6. **Widget generation**: Both static HTML file export and live preview in web console.
+```typescript
+interface AnimatedNumberProps {
+  value: number;
+  decimals?: number;  // Default 4
+  duration?: number;  // Default 800ms
+}
+```
 
-## Module Details
+**Implementation:**
+- Use `requestAnimationFrame` for smooth counting
+- Easing: ease-out (slow at end)
+- Start from previous value (stored in ref)
+- Update displayed value 60fps during animation
+- Format with fixed decimals
 
-### cx_studio/types.py — CX Resource Models
+**Logic:**
+```typescript
+const animate = (start: number, end: number, duration: number) => {
+  const startTime = performance.now();
+  const step = (currentTime: number) => {
+    const elapsed = currentTime - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    const eased = 1 - Math.pow(1 - progress, 3); // ease-out cubic
+    const current = start + (end - start) * eased;
+    setDisplayValue(current);
+    if (progress < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+};
+```
+
+#### Component 3: MetricCard glow animation
+**Path:** `web/src/components/MetricCard.tsx` (MODIFY)
+
+**New Prop:**
+```typescript
+interface MetricCardProps {
+  // ... existing props
+  glow?: boolean;  // Trigger glow animation
+}
+```
+
+**CSS Addition:**
+```css
+@keyframes metric-glow {
+  0%, 100% { box-shadow: 0 0 0 rgba(16, 185, 129, 0); border-color: rgb(229, 231, 235); }
+  50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.5); border-color: rgb(16, 185, 129); }
+}
+
+.metric-card-glow {
+  animation: metric-glow 1.5s ease-in-out;
+}
+```
+
+**Logic:** When `glow` prop changes to true, add the class for 1.5s, then remove.
+
+#### Component 4: PersonalBestBadge
+**Path:** `web/src/components/PersonalBestBadge.tsx`
+
+```typescript
+interface PersonalBestBadgeProps {
+  show: boolean;
+  onHide: () => void;
+}
+```
+
+**Implementation:**
+- Gold gradient background: `bg-gradient-to-r from-yellow-400 to-orange-500`
+- Sparkle icon (✨) + "New personal best!" text
+- Fixed position: top-right of viewport, z-50
+- Fade in animation (0.3s), auto-hide after 5s with fade out
+- CSS: `@keyframes slideInRight` for entrance
+
+### Feature 3: Agent Health Pulse
+
+#### Component: HealthPulse.tsx
+**Path:** `web/src/components/HealthPulse.tsx`
+
+```typescript
+interface HealthPulseProps {
+  score: number;        // 0-1
+  label?: string;       // "Agent Health"
+  size?: 'sm' | 'md' | 'lg';  // Default 'md'
+}
+```
+
+**Implementation:**
+
+**SVG Structure:**
+```tsx
+<svg viewBox="0 0 120 120" className={sizeClass}>
+  {/* Pulse ring - animated circle */}
+  <circle
+    cx="60" cy="60" r="50"
+    fill="none"
+    stroke={strokeColor}
+    strokeWidth="2"
+    className="pulse-ring"
+  />
+  {/* Static background circle */}
+  <circle cx="60" cy="60" r="45" fill={bgColor} />
+  {/* Score text */}
+  <text x="60" y="60" textAnchor="middle" className="score-text">
+    {(score * 100).toFixed(0)}
+  </text>
+</svg>
+```
+
+**CSS Keyframes:**
+```css
+@keyframes pulse-healthy {
+  0%, 100% { r: 50; opacity: 0.8; }
+  50% { r: 55; opacity: 0.4; }
+}
+
+@keyframes pulse-warning {
+  0%, 100% { r: 50; opacity: 0.8; }
+  50% { r: 55; opacity: 0.4; }
+}
+
+@keyframes pulse-critical {
+  0%, 100% { r: 50; opacity: 1; }
+  50% { r: 56; opacity: 0.3; }
+}
+```
+
+**Color/Animation Logic:**
+- `score > 0.85`: green (#10b981), 3s pulse
+- `0.65 <= score <= 0.85`: amber (#f59e0b), 1.5s pulse
+- `score < 0.65`: red (#ef4444), 0.8s pulse
+
+**ECG Line:** Small SVG path next to score, animated using `stroke-dashoffset`
+
+**Status Text:** Below the ring, animated fade-in on change
+
+---
+
+## Track B: Live Optimization Feed (Feature 2)
+
+### Backend: SSE Endpoint
+
+#### File: api/routes/optimize_stream.py
+**Path:** `api/routes/optimize_stream.py` (CREATE)
 
 ```python
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Request
+from fastapi.responses import StreamingResponse
+from typing import AsyncGenerator
+import asyncio
+import json
 
-class CxAgentRef(BaseModel):
-    """Reference to a CX agent (project/location/agent triple)."""
-    project: str
-    location: str = "global"
-    agent_id: str
+router = APIRouter(prefix="/api/optimize", tags=["optimize"])
 
-    @property
-    def parent(self) -> str:
-        return f"projects/{self.project}/locations/{self.location}"
+@router.get("/stream")
+async def optimize_stream(
+    request: Request,
+    cycles: int = 3,
+    mode: str = "standard"
+) -> StreamingResponse:
+    """Server-Sent Events stream for live optimization progress."""
 
-    @property
-    def name(self) -> str:
-        return f"{self.parent}/agents/{self.agent_id}"
+    async def event_generator() -> AsyncGenerator[str, None]:
+        optimizer = request.app.state.optimizer
+        eval_runner = request.app.state.eval_runner
 
-class CxAgent(BaseModel):
-    """CX Agent resource."""
-    name: str
-    display_name: str
-    default_language_code: str = "en"
-    description: str = ""
-    generative_settings: dict = Field(default_factory=dict)
+        for cycle in range(1, cycles + 1):
+            # Event 1: cycle_start
+            yield f"event: cycle_start\ndata: {json.dumps({'cycle': cycle, 'total': cycles})}\n\n"
+            await asyncio.sleep(0.1)
 
-class CxPlaybook(BaseModel):
-    """CX Playbook resource."""
-    name: str
-    display_name: str
-    instructions: list[str] = Field(default_factory=list)
-    steps: list[dict] = Field(default_factory=list)
-    examples: list[dict] = Field(default_factory=list)
+            # Event 2: diagnosis
+            diagnosis_result = await run_diagnosis()  # Get from optimizer
+            yield f"event: diagnosis\ndata: {json.dumps(diagnosis_result)}\n\n"
+            await asyncio.sleep(0.5)
 
-class CxTool(BaseModel):
-    """CX Tool definition."""
-    name: str
-    display_name: str
-    tool_type: str  # "OPEN_API" | "DATA_STORE" | "FUNCTION" | "CONNECTOR"
-    spec: dict = Field(default_factory=dict)
+            # Event 3: proposal
+            proposal_result = await run_proposal()
+            yield f"event: proposal\ndata: {json.dumps(proposal_result)}\n\n"
+            await asyncio.sleep(0.5)
 
-class CxFlow(BaseModel):
-    """CX Flow (conversation flow with pages and routes)."""
-    name: str
-    display_name: str
-    pages: list[dict] = Field(default_factory=list)
-    transition_routes: list[dict] = Field(default_factory=list)
-    event_handlers: list[dict] = Field(default_factory=list)
+            # Event 4: evaluation
+            eval_result = await run_evaluation()
+            yield f"event: evaluation\ndata: {json.dumps(eval_result)}\n\n"
+            await asyncio.sleep(0.5)
 
-class CxIntent(BaseModel):
-    """CX Intent with training phrases."""
-    name: str
-    display_name: str
-    training_phrases: list[dict] = Field(default_factory=list)
+            # Event 5: decision
+            decision_result = await run_decision()
+            yield f"event: decision\ndata: {json.dumps(decision_result)}\n\n"
+            await asyncio.sleep(0.5)
 
-class CxTestCase(BaseModel):
-    """CX Test Case — maps to AutoAgent eval case."""
-    name: str
-    display_name: str
-    tags: list[str] = Field(default_factory=list)
-    conversation_turns: list[dict] = Field(default_factory=list)
-    expected_output: dict = Field(default_factory=dict)
+            # Event 6: cycle_complete
+            yield f"event: cycle_complete\ndata: {json.dumps({'cycle': cycle, 'best_score': 0.78})}\n\n"
 
-class CxEnvironment(BaseModel):
-    """CX Environment (draft, staging, production)."""
-    name: str
-    display_name: str
-    description: str = ""
-    version_configs: list[dict] = Field(default_factory=list)
+        # Event 7: optimization_complete
+        yield f"event: optimization_complete\ndata: {json.dumps({'cycles': cycles, 'baseline': 0.72, 'final': 0.83, 'improvement': 0.11})}\n\n"
 
-class CxAgentSnapshot(BaseModel):
-    """Complete snapshot of a CX agent for offline use."""
-    agent: CxAgent
-    playbooks: list[CxPlaybook] = Field(default_factory=list)
-    tools: list[CxTool] = Field(default_factory=list)
-    flows: list[CxFlow] = Field(default_factory=list)
-    intents: list[CxIntent] = Field(default_factory=list)
-    test_cases: list[CxTestCase] = Field(default_factory=list)
-    environments: list[CxEnvironment] = Field(default_factory=list)
-    fetched_at: str = ""  # ISO timestamp
-
-class CxWidgetConfig(BaseModel):
-    """Configuration for df-messenger web widget."""
-    project_id: str
-    agent_id: str
-    location: str = "global"
-    language_code: str = "en"
-    chat_title: str = "Agent"
-    primary_color: str = "#1a73e8"
-    chat_icon: str = ""
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 ```
 
-### cx_studio/auth.py — Authentication
+**Event Schema Reference:**
+1. `cycle_start`: `{ cycle: number, total: number }`
+2. `diagnosis`: `{ failure_buckets: object, dominant: string, total_failures: number }`
+3. `proposal`: `{ change_description: string, config_section: string, reasoning: string }`
+4. `evaluation`: `{ score_before: number, score_after: number, improvement: number }`
+5. `decision`: `{ accepted: boolean, p_value: number, effect_size: number }`
+6. `cycle_complete`: `{ cycle: number, best_score: number }`
+7. `optimization_complete`: `{ cycles: number, baseline: number, final: number, improvement: number }`
+
+**Register Route:** Add to `api/server.py`:
+```python
+from api.routes import optimize_stream
+app.include_router(optimize_stream.router)
+```
+
+### Frontend: Live Optimization Page
+
+#### Component 1: PhaseIndicator.tsx
+**Path:** `web/src/components/PhaseIndicator.tsx`
+
+```typescript
+interface PhaseIndicatorProps {
+  activePhase: 'diagnose' | 'propose' | 'evaluate' | 'decide' | null;
+  completedPhases: Set<string>;
+}
+```
+
+**Implementation:**
+- 4 boxes in a row with arrows between
+- Each box: 120px wide, rounded border
+- States:
+  - Pending: gray bg, gray border, circle outline icon
+  - Active: blue bg, blue border, pulse animation, filled circle icon
+  - Complete: green bg, green border, checkmark icon
+- Arrow: `→` character or SVG, gray
+
+**CSS:**
+```css
+@keyframes phase-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.05); opacity: 0.9; }
+}
+```
+
+#### Component 2: LiveCycleCard.tsx
+**Path:** `web/src/components/LiveCycleCard.tsx`
+
+```typescript
+interface LiveCycleCardProps {
+  cycle: number;
+  changeDescription: string;
+  scoreDelta: number;
+  accepted: boolean;
+}
+```
+
+**Implementation:**
+- Card with border
+- Header: "Cycle #{cycle}" + Accept/Reject badge (green/red)
+- Body: change description (truncated to 2 lines)
+- Footer: Score delta with arrow icon (up/down based on sign)
+- Animate in from bottom: `@keyframes slideInUp`
+
+#### Page: LiveOptimize.tsx
+**Path:** `web/src/pages/LiveOptimize.tsx`
+
+**State:**
+```typescript
+const [isRunning, setIsRunning] = useState(false);
+const [currentPhase, setCurrentPhase] = useState<Phase | null>(null);
+const [completedCycles, setCompletedCycles] = useState<CycleResult[]>([]);
+const [scoreData, setScoreData] = useState<ScorePoint[]>([]);
+```
+
+**Layout:**
+- Top: "Live Optimization" heading + "Start Optimization" button (or "Running..." when active)
+- Center: PhaseIndicator (large, prominent)
+- Below: Real-time score chart (updates as cycles complete)
+- Bottom: Grid of LiveCycleCard components (newest first)
+
+**SSE Connection:**
+```typescript
+const startOptimization = () => {
+  const eventSource = new EventSource('/api/optimize/stream?cycles=3&mode=standard');
+
+  eventSource.addEventListener('cycle_start', (e) => {
+    const data = JSON.parse(e.data);
+    setCurrentPhase('diagnose');
+  });
+
+  eventSource.addEventListener('diagnosis', (e) => {
+    setCurrentPhase('propose');
+  });
+
+  eventSource.addEventListener('proposal', (e) => {
+    setCurrentPhase('evaluate');
+  });
+
+  eventSource.addEventListener('evaluation', (e) => {
+    setCurrentPhase('decide');
+  });
+
+  eventSource.addEventListener('cycle_complete', (e) => {
+    const data = JSON.parse(e.data);
+    setCompletedCycles(prev => [...prev, data]);
+    setScoreData(prev => [...prev, { cycle: data.cycle, score: data.best_score }]);
+    setCurrentPhase(null);
+  });
+
+  eventSource.addEventListener('optimization_complete', (e) => {
+    setIsRunning(false);
+    triggerConfetti();  // From Feature 1
+    eventSource.close();
+  });
+};
+```
+
+---
+
+## Track C: Dashboard Integration (Features 5 + 6)
+
+### Feature 5: Journey Timeline
+
+#### Component: JourneyTimeline.tsx
+**Path:** `web/src/components/JourneyTimeline.tsx`
+
+```typescript
+interface TimelineNode {
+  version: string;
+  score: number;
+  change: string;
+  status: 'accepted' | 'rejected' | 'baseline';
+  timestamp: number;
+}
+
+interface JourneyTimelineProps {
+  nodes: TimelineNode[];
+  onNodeClick?: (version: string) => void;
+}
+```
+
+**Implementation:**
+
+**Structure:**
+```tsx
+<div className="timeline-container horizontal-scroll">
+  <svg className="timeline-line">
+    {/* Animated path connecting nodes */}
+    <path d="M 0 50 L {totalWidth} 50" stroke="#ccc" strokeWidth="2" className="timeline-path" />
+  </svg>
+  <div className="timeline-nodes">
+    {nodes.map((node, i) => (
+      <div key={node.version} className="timeline-node" style={{ left: `${i * 150}px` }}>
+        {/* Circle */}
+        <div className={`node-circle ${node.status}`}>
+          <span className="node-label">{node.version}</span>
+        </div>
+        {/* Score below */}
+        <div className="node-score">{node.score.toFixed(2)}</div>
+        {/* Change above */}
+        <div className="node-change">{truncate(node.change, 20)}</div>
+      </div>
+    ))}
+  </div>
+</div>
+```
+
+**CSS:**
+```css
+@keyframes draw-line {
+  from { stroke-dashoffset: 1000; }
+  to { stroke-dashoffset: 0; }
+}
+
+.timeline-path {
+  stroke-dasharray: 1000;
+  animation: draw-line 2s ease-out forwards;
+}
+
+.node-circle.accepted {
+  background: #10b981;
+  border: 2px solid #059669;
+}
+
+.node-circle.rejected {
+  background: #ef4444;
+  border: 2px solid #dc2626;
+}
+
+.node-circle.current {
+  animation: pulse-ring 2s infinite;
+}
+```
+
+**Data Source:** Fetch from `/api/optimize/history`, transform to TimelineNode format.
+
+### Feature 6: One-Click Fix Buttons
+
+#### Component: FixButton.tsx
+**Path:** `web/src/components/FixButton.tsx`
+
+```typescript
+interface FixButtonProps {
+  failureFamily: string;  // e.g., "routing_error"
+  failureCount: number;
+  onComplete?: () => void;
+}
+```
+
+**Runbook Mapping:**
+```typescript
+const RUNBOOK_MAP: Record<string, string> = {
+  routing_error: 'fix-retrieval-grounding',
+  safety_violation: 'tighten-safety-policy',
+  quality_issue: 'enhance-few-shot-examples',
+  latency_problem: 'reduce-tool-latency',
+  cost_overrun: 'optimize-cost-efficiency',
+  tool_error: 'reduce-tool-latency',
+  hallucination: 'fix-retrieval-grounding',
+};
+```
+
+**Implementation:**
+- Button: "Fix →" with wrench icon
+- Click: Open modal with confirmation
+  - Title: "Apply Runbook"
+  - Body: "Apply '{runbook_name}' and run 1 optimization cycle to fix {failure_count} {failureFamily} failures?"
+  - Actions: "Cancel" | "Apply & Optimize"
+- On confirm: POST to `/api/quickfix` with `{ failure_family: string }`
+- Loading state: Button shows spinner
+- Success: Button shows green checkmark, toast notification
+- Error: Button shows red X, error message
+
+**API Call:**
+```typescript
+const handleApply = async () => {
+  setLoading(true);
+  try {
+    const response = await fetch('/api/quickfix', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ failure_family: failureFamily }),
+    });
+    const result = await response.json();
+    setSuccess(result.success);
+    onComplete?.();
+  } catch (error) {
+    setError(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
+```
+
+#### Backend: Quickfix Endpoint
+
+**Path:** `api/routes/quickfix.py` (CREATE)
 
 ```python
-class CxAuth:
-    """Google Cloud authentication for CX API."""
+from fastapi import APIRouter, Request, HTTPException
+from pydantic import BaseModel
 
-    def __init__(self, credentials_path: str | None = None):
-        """Initialize with ADC or explicit service account JSON."""
+router = APIRouter(prefix="/api", tags=["quickfix"])
 
-    def get_headers(self) -> dict[str, str]:
-        """Return Authorization headers with fresh access token."""
+class QuickfixRequest(BaseModel):
+    failure_family: str
 
-    def _refresh_if_needed(self) -> None:
-        """Refresh token if expired or about to expire."""
+RUNBOOK_MAP = {
+    "routing_error": "fix-retrieval-grounding",
+    "safety_violation": "tighten-safety-policy",
+    "quality_issue": "enhance-few-shot-examples",
+    "latency_problem": "reduce-tool-latency",
+    "cost_overrun": "optimize-cost-efficiency",
+    "tool_error": "reduce-tool-latency",
+    "hallucination": "fix-retrieval-grounding",
+}
+
+@router.post("/quickfix")
+async def quickfix(request: Request, body: QuickfixRequest):
+    """One-click fix: apply runbook + run 1 optimization cycle."""
+    runbook_name = RUNBOOK_MAP.get(body.failure_family)
+    if not runbook_name:
+        raise HTTPException(status_code=400, detail="Unknown failure family")
+
+    runbook_store = request.app.state.runbook_store
+    runbook = runbook_store.get(runbook_name)
+    if not runbook:
+        raise HTTPException(status_code=404, detail="Runbook not found")
+
+    # Apply runbook surfaces/skills to config
+    # ... (load active config, merge runbook surfaces, save as experiment)
+
+    # Run 1 optimization cycle targeting those surfaces
+    optimizer = request.app.state.optimizer
+    result = optimizer.optimize(cycles=1, surfaces=runbook.surfaces)
+
+    return {
+        "success": result.accepted,
+        "runbook": runbook_name,
+        "score_before": result.score_before,
+        "score_after": result.score_after,
+        "improvement": result.improvement,
+    }
 ```
 
-### cx_studio/client.py — REST API Client
-
+**Register Route:** Add to `api/server.py`:
 ```python
-class CxClient:
-    """REST client for Google Cloud CX Agent Studio API v3."""
-
-    BASE_URL = "https://{region}-dialogflow.googleapis.com/v3"
-
-    def __init__(self, auth: CxAuth, timeout: float = 30.0, max_retries: int = 3):
-        ...
-
-    # Agent operations
-    def get_agent(self, ref: CxAgentRef) -> CxAgent: ...
-    def list_agents(self, project: str, location: str) -> list[CxAgent]: ...
-    def update_agent(self, ref: CxAgentRef, agent: CxAgent) -> CxAgent: ...
-
-    # Playbook operations
-    def list_playbooks(self, ref: CxAgentRef) -> list[CxPlaybook]: ...
-    def update_playbook(self, ref: CxAgentRef, playbook: CxPlaybook) -> CxPlaybook: ...
-
-    # Tool operations
-    def list_tools(self, ref: CxAgentRef) -> list[CxTool]: ...
-
-    # Flow operations
-    def list_flows(self, ref: CxAgentRef) -> list[CxFlow]: ...
-
-    # Intent operations
-    def list_intents(self, ref: CxAgentRef) -> list[CxIntent]: ...
-
-    # Test case operations
-    def list_test_cases(self, ref: CxAgentRef) -> list[CxTestCase]: ...
-
-    # Environment operations
-    def list_environments(self, ref: CxAgentRef) -> list[CxEnvironment]: ...
-    def deploy_to_environment(self, ref: CxAgentRef, env_name: str) -> dict: ...
-
-    # Full snapshot
-    def fetch_snapshot(self, ref: CxAgentRef) -> CxAgentSnapshot: ...
+from api.routes import quickfix
+app.include_router(quickfix.router)
 ```
 
-### cx_studio/mapper.py — Bidirectional Config Mapping
+#### Dashboard Integration
 
+**Path:** `web/src/pages/Dashboard.tsx` (MODIFY)
+
+**Changes:**
+1. Add FixButton to failure breakdown section (currently in "Why? Diagnostic Signals" collapsible)
+2. Replace static health score with HealthPulse component
+3. Add JourneyTimeline between health metrics and failure breakdown
+4. Add Confetti trigger when new score exceeds all-time best
+5. Use AnimatedNumber for composite score display
+
+**Example:**
+```tsx
+{/* Replace static score with HealthPulse */}
+<HealthPulse score={metrics.composite} label="Agent Health" size="lg" />
+
+{/* Add Journey Timeline */}
+<section className="...">
+  <h3>Optimization Journey</h3>
+  <JourneyTimeline nodes={timelineNodes} onNodeClick={(v) => navigate(`/configs?v=${v}`)} />
+</section>
+
+{/* Add FixButton to failure breakdown */}
+<div className="failure-item">
+  <span>{failureFamily}</span>
+  <div className="failure-bar">...</div>
+  <FixButton failureFamily={failureFamily} failureCount={count} onComplete={refreshAll} />
+</div>
+```
+
+---
+
+## Track D: Command Palette + CLI (Features 4 + 1 CLI)
+
+### Feature 4: Natural Language Command Palette Search
+
+**Path:** `web/src/components/CommandPalette.tsx` (MODIFY)
+
+**Add Smart Search Mapping:**
+```typescript
+const SMART_SEARCH_MAP: Array<{
+  keywords: string[];
+  label: string;
+  description: string;
+  href: string;
+  category: 'Suggested Actions' | 'Navigate' | 'Recent';
+}> = [
+  {
+    keywords: ['why', 'routing', 'failing', 'failure', 'blame'],
+    label: 'Diagnose routing failures',
+    description: 'Jump to Blame Map filtered on routing_error',
+    href: '/blame?filter=routing_error',
+    category: 'Suggested Actions',
+  },
+  {
+    keywords: ['fix', 'safety', 'violation'],
+    label: 'Fix safety violations',
+    description: 'Apply tighten-safety-policy runbook',
+    href: '/runbooks?action=apply&runbook=tighten-safety-policy',
+    category: 'Suggested Actions',
+  },
+  {
+    keywords: ['what', 'changed', 'changes', 'diff'],
+    label: 'What changed?',
+    description: 'View recent config changes',
+    href: '/changes',
+    category: 'Navigate',
+  },
+  {
+    keywords: ['show', 'failures', 'conversations', 'fail'],
+    label: 'Show me failures',
+    description: 'Browse failed conversations',
+    href: '/conversations?outcome=fail',
+    category: 'Navigate',
+  },
+  {
+    keywords: ['how', 'agent', 'doing', 'health', 'status'],
+    label: 'How is my agent doing?',
+    description: 'Open dashboard',
+    href: '/',
+    category: 'Navigate',
+  },
+  {
+    keywords: ['deploy', 'production', 'ship', 'release'],
+    label: 'Deploy to production',
+    description: 'Open CX Deploy page',
+    href: '/cx/deploy',
+    category: 'Suggested Actions',
+  },
+  {
+    keywords: ['import', 'agent', 'cx', 'studio'],
+    label: 'Import agent',
+    description: 'Import from Vertex AI Agent Studio',
+    href: '/cx/import',
+    category: 'Navigate',
+  },
+  {
+    keywords: ['optimize', 'improve', 'run', 'cycle'],
+    label: 'Run optimization',
+    description: 'Start live optimization',
+    href: '/live-optimize',
+    category: 'Suggested Actions',
+  },
+  {
+    keywords: ['compare', 'configs', 'diff', 'versions'],
+    label: 'Compare configs',
+    description: 'View config history',
+    href: '/configs',
+    category: 'Navigate',
+  },
+];
+```
+
+**Fuzzy Match Logic:**
+```typescript
+function smartSearch(query: string): SmartSearchResult[] {
+  const tokens = query.toLowerCase().split(/\s+/);
+  const results: Array<{ item: typeof SMART_SEARCH_MAP[0], score: number }> = [];
+
+  for (const item of SMART_SEARCH_MAP) {
+    let score = 0;
+    for (const token of tokens) {
+      for (const keyword of item.keywords) {
+        if (keyword.includes(token)) {
+          score += token.length / keyword.length;  // Partial match scoring
+        }
+      }
+    }
+    if (score > 0) {
+      results.push({ item, score });
+    }
+  }
+
+  return results
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map(r => r.item);
+}
+```
+
+**UI Changes:**
+- When smart search results exist, show "Smart Results" group at the top
+- Show icon badge (sparkle ✨) next to smart results
+- Regular search results appear below
+
+### Feature 1 CLI: Sparkles on Improvements
+
+**Path:** `runner.py` (MODIFY)
+
+**Location:** Find the optimization output section (search for where composite scores are printed)
+
+**Changes:**
+
+1. **Track all-time best score:**
 ```python
-class CxMapper:
-    """Bidirectional mapping between CX agent snapshot and AgentConfig."""
-
-    def to_autoagent(self, snapshot: CxAgentSnapshot) -> dict:
-        """Convert CX snapshot → AutoAgent config dict.
-
-        Mapping:
-        - CxAgent.generative_settings → generation_settings
-        - CxPlaybook.instructions → prompts (root + specialists)
-        - CxTool definitions → tools config
-        - CxFlow transition_routes → routing.rules
-        - CxIntent training_phrases → routing keywords/patterns
-        - CxTestCase → eval test cases (returned separately)
-        - Non-mappable fields → _cx_metadata (opaque passthrough)
-        """
-
-    def to_cx(self, config: dict, base_snapshot: CxAgentSnapshot) -> CxAgentSnapshot:
-        """Convert AutoAgent config → CX snapshot for export.
-
-        Uses base_snapshot as template, overlays optimized fields.
-        """
-
-    def extract_test_cases(self, snapshot: CxAgentSnapshot) -> list[dict]:
-        """Convert CX test cases → AutoAgent eval TestCase format."""
+# At the top of optimize command
+best_score_file = Path(".autoagent/best_score.txt")
+all_time_best = 0.0
+if best_score_file.exists():
+    all_time_best = float(best_score_file.read_text().strip())
 ```
 
-### cx_studio/importer.py — Import Pipeline
-
+2. **Add sparkle on improvement:**
 ```python
-class CxImporter:
-    """Import a CX agent into AutoAgent."""
+# After each cycle evaluation
+improvement = score_after - score_before
+if improvement > 0:
+    sparkle = " ✨" if score_after > all_time_best else ""
+    click.echo(f"  ✓ composite={score_after:.4f} (+{improvement:.4f}){sparkle}")
 
-    def __init__(self, client: CxClient, mapper: CxMapper): ...
-
-    def import_agent(
-        self,
-        ref: CxAgentRef,
-        output_dir: str = ".",
-        include_test_cases: bool = True,
-        include_conversations: bool = False,
-    ) -> ImportResult:
-        """Full import pipeline:
-        1. Fetch snapshot from CX API
-        2. Map to AutoAgent config
-        3. Extract test cases → eval suite
-        4. Save snapshot for offline use
-        5. Write config + eval files
-
-        Returns ImportResult with paths and summary.
-        """
-
-class ImportResult(BaseModel):
-    config_path: str
-    eval_path: str | None
-    snapshot_path: str
-    agent_name: str
-    surfaces_mapped: list[str]
-    test_cases_imported: int
+    # Update all-time best
+    if score_after > all_time_best:
+        best_score_file.parent.mkdir(exist_ok=True)
+        best_score_file.write_text(str(score_after))
+        click.echo(click.style("\n  ✨ New personal best!", fg="yellow", bold=True))
+else:
+    click.echo(f"  ✗ composite={score_after:.4f} ({improvement:+.4f})")
 ```
 
-### cx_studio/exporter.py — Export Pipeline
+**Color:** Use `click.style()` with `fg="yellow"` for the sparkle and "New personal best!" message.
 
-```python
-class CxExporter:
-    """Export optimized AutoAgent config back to CX Agent Studio."""
+---
 
-    def __init__(self, client: CxClient, mapper: CxMapper): ...
+## Integration Checklist
 
-    def export_agent(
-        self,
-        config: dict,
-        ref: CxAgentRef,
-        snapshot_path: str,
-        dry_run: bool = False,
-    ) -> ExportResult:
-        """Export pipeline:
-        1. Load base snapshot
-        2. Map AutoAgent config → CX format
-        3. Compute diff (for change card)
-        4. If not dry_run, push changes via REST API
+### Dashboard.tsx Integration
+- [ ] Import: HealthPulse, JourneyTimeline, FixButton, Confetti, AnimatedNumber
+- [ ] Replace static health display with `<HealthPulse score={metrics.composite} />`
+- [ ] Add `<JourneyTimeline nodes={timelineNodes} />` section
+- [ ] Add `<FixButton>` to each failure bucket in diagnostics
+- [ ] Add `<Confetti trigger={showConfetti} />` at top level
+- [ ] Replace score number with `<AnimatedNumber value={metrics.composite} />`
+- [ ] Add logic to detect new personal best and trigger confetti
 
-        Returns ExportResult with changes summary.
-        """
+### App.tsx Routing
+- [ ] Import LiveOptimize page
+- [ ] Add route: `<Route path="/live-optimize" element={<LiveOptimize />} />`
 
-    def preview_changes(self, config: dict, snapshot_path: str) -> list[dict]:
-        """Preview what would change without pushing."""
+### Sidebar.tsx Navigation
+- [ ] Add nav item: `{ to: '/live-optimize', label: 'Live Optimize', icon: Sparkles }`
+- [ ] Style with special highlight (e.g., gradient text or icon color)
 
-class ExportResult(BaseModel):
-    changes: list[dict]
-    pushed: bool
-    resources_updated: int
+### server.py Routes
+- [ ] Import and register optimize_stream router
+- [ ] Import and register quickfix router
+
+### Tests Required
+
+#### Backend Tests
+1. `tests/api/test_optimize_stream.py` - SSE endpoint streaming
+2. `tests/api/test_quickfix.py` - Quickfix endpoint logic
+3. `tests/test_runner_sparkles.py` - CLI sparkle output
+
+#### Frontend Tests (optional, not required for passing)
+- Smart search keyword matching
+- SSE event handling in LiveOptimize
+
+---
+
+## CSS Variables & Keyframes (Global)
+
+Add to `web/src/index.css`:
+
+```css
+/* Confetti particles */
+@keyframes confetti-burst {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(var(--x), var(--y)) rotate(720deg) scale(0.5);
+    opacity: 0;
+  }
+}
+
+/* Metric card glow */
+@keyframes metric-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 rgba(16, 185, 129, 0);
+    border-color: rgb(229, 231, 235);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(16, 185, 129, 0.5);
+    border-color: rgb(16, 185, 129);
+  }
+}
+
+/* Health pulse rings */
+@keyframes pulse-healthy {
+  0%, 100% { r: 50; opacity: 0.8; }
+  50% { r: 55; opacity: 0.4; }
+}
+
+@keyframes pulse-warning {
+  0%, 100% { r: 50; opacity: 0.8; }
+  50% { r: 55; opacity: 0.4; }
+}
+
+@keyframes pulse-critical {
+  0%, 100% { r: 50; opacity: 1; }
+  50% { r: 56; opacity: 0.3; }
+}
+
+/* Phase indicator pulse */
+@keyframes phase-pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 0.9;
+  }
+}
+
+/* Timeline line draw */
+@keyframes draw-line {
+  from { stroke-dashoffset: 1000; }
+  to { stroke-dashoffset: 0; }
+}
+
+/* Slide in animations */
+@keyframes slideInRight {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideInUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
 ```
 
-### cx_studio/deployer.py — Deployment + Widget
+---
 
-```python
-class CxDeployer:
-    """Deploy CX agent to environments and generate widget embed code."""
+## Dependency Layer Classification
 
-    def __init__(self, client: CxClient): ...
+New modules may need classification in `tests/test_dependency_layers.py`:
 
-    def deploy_to_environment(
-        self,
-        ref: CxAgentRef,
-        environment: str = "production",
-    ) -> DeployResult: ...
+- `api/routes/optimize_stream.py` → **surface** (API route)
+- `api/routes/quickfix.py` → **surface** (API route)
+- All web components remain unclassified (frontend code)
 
-    def generate_widget_html(
-        self,
-        widget_config: CxWidgetConfig,
-        output_path: str | None = None,
-    ) -> str:
-        """Generate df-messenger widget HTML.
-        Returns HTML string, optionally writes to file.
-        """
+---
 
-    def get_deploy_status(self, ref: CxAgentRef) -> dict: ...
+## Commit Strategy
 
-class DeployResult(BaseModel):
-    environment: str
-    status: str
-    version_info: dict = Field(default_factory=dict)
+**Feature branches:**
+1. `feat/celebration-components` (Track A)
+2. `feat/live-optimization-feed` (Track B)
+3. `feat/dashboard-integration` (Track C)
+4. `feat/smart-palette-cli` (Track D)
+
+**Final commit:** Merge all tracks to master with message:
+```
+feat: wow UX — celebrations, live feed, health pulse, smart search, journey timeline, one-click fix
+
+- Animated celebrations: confetti, score counter, glow, personal best badge
+- Live optimization feed: SSE streaming, phase indicators, real-time updates
+- Agent health pulse: living indicator with color-coded animations
+- Smart command palette: natural language search with keyword matching
+- Journey timeline: horizontal optimization history visualization
+- One-click fix buttons: runbook application + optimization in single click
+- CLI sparkles: ✨ on improvements and personal bests
+
+All features additive, no breaking changes. Tests: 1,429+ passing.
 ```
 
-### CLI Commands (runner.py cx subgroup)
+---
 
-```python
-@cli.group("cx")
-def cx_group() -> None:
-    """Google Cloud CX Agent Studio — import, export, deploy."""
+## Quality Assurance
 
-@cx_group.command("list")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--credentials", default=None)
-def cx_list(project, location, credentials): ...
+### Pre-commit Checks
+```bash
+# TypeScript compilation
+cd web && npx tsc --noEmit
 
-@cx_group.command("import")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--agent", "agent_id", required=True)
-@click.option("--output-dir", default=".")
-@click.option("--credentials", default=None)
-@click.option("--include-test-cases/--no-test-cases", default=True)
-def cx_import(project, location, agent_id, output_dir, credentials, include_test_cases): ...
+# Python tests
+python3 -m pytest tests/ -x -q
 
-@cx_group.command("export")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--agent", "agent_id", required=True)
-@click.option("--config", "config_path", required=True)
-@click.option("--snapshot", "snapshot_path", required=True)
-@click.option("--credentials", default=None)
-@click.option("--dry-run", is_flag=True)
-def cx_export(project, location, agent_id, config_path, snapshot_path, credentials, dry_run): ...
-
-@cx_group.command("deploy")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--agent", "agent_id", required=True)
-@click.option("--environment", default="production")
-@click.option("--credentials", default=None)
-def cx_deploy(project, location, agent_id, environment, credentials): ...
-
-@cx_group.command("widget")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--agent", "agent_id", required=True)
-@click.option("--title", default="Agent")
-@click.option("--color", default="#1a73e8")
-@click.option("--output", "output_path", default=None)
-def cx_widget(project, location, agent_id, title, color, output_path): ...
-
-@cx_group.command("status")
-@click.option("--project", required=True)
-@click.option("--location", default="global")
-@click.option("--agent", "agent_id", required=True)
-@click.option("--credentials", default=None)
-def cx_status(project, location, agent_id, credentials): ...
+# Dependency layers
+python3 -m pytest tests/test_dependency_layers.py -v
 ```
 
-### API Routes (api/routes/cx_studio.py)
+### Manual Testing Checklist
+- [ ] Confetti triggers on score improvement in Dashboard
+- [ ] Health pulse animates with correct color/speed based on score
+- [ ] Live Optimize page SSE connection works end-to-end
+- [ ] Phase indicator updates correctly during optimization
+- [ ] Journey timeline renders and is scrollable
+- [ ] Timeline nodes show correct colors (green/red/gray)
+- [ ] Fix buttons open modal, call API, show loading/success states
+- [ ] Command palette smart search returns relevant results
+- [ ] CLI shows ✨ sparkle on improvements
+- [ ] CLI shows "New personal best!" message when exceeding all-time best
+- [ ] AnimatedNumber counts smoothly from old to new value
+- [ ] Sidebar "Live Optimize" nav item has special styling
 
-```
-POST /api/cx/import     — Import a CX agent (returns task_id for async)
-POST /api/cx/export     — Export config to CX (returns task_id)
-POST /api/cx/deploy     — Deploy to CX environment
-POST /api/cx/widget     — Generate widget HTML
-GET  /api/cx/agents     — List agents in a project
-GET  /api/cx/status     — Get CX agent status
-GET  /api/cx/preview    — Preview export changes
-```
+---
 
-### Web Pages
+## Success Criteria
 
-**CxImport.tsx** — Import wizard:
-- Step 1: Enter project/location/credentials
-- Step 2: Select agent from list
-- Step 3: Preview mapped surfaces
-- Step 4: Confirm and import
+✅ All 6 features implemented and functional
+✅ 1,429+ tests passing
+✅ TypeScript compilation successful
+✅ Dependency layer test passing
+✅ No breaking changes to existing features
+✅ Performance: No noticeable lag in animations or SSE streaming
+✅ Accessibility: Keyboard navigation works in command palette
+✅ Mobile: Dashboard remains responsive with new components
 
-**CxDeploy.tsx** — Deploy + widget:
-- Deploy section: Select environment, deploy with status
-- Widget section: Configure and preview df-messenger embed, copy HTML
+---
 
-### Dependency Layer Classification
+## Timeline Estimate
 
-`cx_studio` → Layer 1 (LAYER_1_PREFIXES in test_dependency_layers.py)
+- **Track A** (Celebration Components): 2-3 hours
+- **Track B** (Live Feed): 3-4 hours
+- **Track C** (Dashboard Integration): 2-3 hours
+- **Track D** (Smart Palette + CLI): 1-2 hours
+- **Integration & Testing**: 1-2 hours
 
-It imports from:
-- `agent.config.schema` (Layer 0) — AgentConfig for mapping
-- `evals.runner` (Layer 0) — TestCase for eval import
-- stdlib/PyPI only (pydantic, httpx)
-
-It does NOT import from Layer 2 (api/, web/).
-
-## Test Strategy
-
-`tests/test_cx_studio.py`:
-- Unit tests for mapper (round-trip: CX → AutoAgent → CX)
-- Unit tests for auth (token refresh, error handling)
-- Unit tests for client (mocked HTTP responses)
-- Unit tests for importer/exporter (full pipeline with mocked client)
-- Unit tests for deployer (widget HTML generation)
-- Integration test for CLI commands (click.testing.CliRunner)
-- Dependency layer test passes with cx_studio as Layer 1
+**Total:** 9-14 hours (parallelized to ~4-6 hours with 4 agents)

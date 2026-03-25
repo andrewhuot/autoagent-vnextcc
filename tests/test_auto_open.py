@@ -33,12 +33,12 @@ class TestQuickstartOpenFlag:
         assert result.exit_code == 0
 
 class TestDemoOpenFlag:
-    def test_demo_has_open_flag(self, runner):
-        result = runner.invoke(cli, ["demo", "--help"])
+    def test_demo_quickstart_has_open_flag(self, runner):
+        result = runner.invoke(cli, ["demo", "quickstart", "--help"])
         assert result.exit_code == 0
         assert "--open" in result.output or "--no-open" in result.output
 
-    def test_demo_no_open_runs(self, runner):
-        """demo --no-open should complete without starting server."""
-        result = runner.invoke(cli, ["demo", "--no-open"])
+    def test_demo_quickstart_no_open_runs(self, runner):
+        """demo quickstart --no-open should complete without starting server."""
+        result = runner.invoke(cli, ["demo", "quickstart", "--no-open"])
         assert result.exit_code == 0
