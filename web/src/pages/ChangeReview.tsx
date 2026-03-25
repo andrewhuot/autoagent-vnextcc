@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Check, X, Download, ChevronDown, ChevronRight, AlertTriangle, Shield, TrendingUp } from 'lucide-react';
+import { Check, X, Download, ChevronDown, ChevronRight, AlertTriangle, FileCheck, Shield, TrendingUp } from 'lucide-react';
+import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { useChanges, useApplyChange, useRejectChange } from '../lib/api';
 import { classNames } from '../lib/utils';
@@ -132,7 +133,16 @@ export function ChangeReview() {
         </div>
       )}
 
-      {!isLoading && !isError && (
+      {!isLoading && !isError && changes.length === 0 && (
+        <EmptyState
+          icon={FileCheck}
+          title="No change cards yet"
+          description="Change cards are generated when the optimizer proposes config improvements. Run an optimization cycle to see proposals here."
+          cliHint="autoagent optimize"
+        />
+      )}
+
+      {!isLoading && !isError && changes.length > 0 && (
         <>
           {/* Pending cards list */}
           <section className="rounded-lg border border-gray-200 bg-white p-5">

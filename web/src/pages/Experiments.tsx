@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { FlaskConical } from 'lucide-react';
+import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { ExperimentCardComponent } from '../components/ExperimentCard';
 import { ParetoFrontierView } from '../components/ParetoFrontierView';
@@ -110,9 +112,12 @@ export function Experiments() {
             ))}
           </div>
         ) : (
-          <div className="flex h-48 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-            No experiments match this filter.
-          </div>
+          <EmptyState
+            icon={FlaskConical}
+            title="No experiments yet"
+            description="Experiments appear after optimization cycles propose and evaluate config changes."
+            cliHint="autoagent optimize --cycles 3"
+          />
         )
       )}
     </div>

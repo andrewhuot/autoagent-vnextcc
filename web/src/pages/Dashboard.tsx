@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, PauseCircle, PlayCircle, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ArrowRight, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck } from 'lucide-react';
 import {
   useControlState,
   useCostHealth,
@@ -14,6 +14,7 @@ import {
   useUnpinSurface,
   useSystemEvents,
 } from '../lib/api';
+import { EmptyState } from '../components/EmptyState';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { MetricCard } from '../components/MetricCard';
 import { PageHeader } from '../components/PageHeader';
@@ -114,6 +115,25 @@ export function Dashboard() {
 
   const metrics = health.data?.metrics;
   const history = optimizeHistory.data || [];
+
+  const hasNoData = !metrics && history.length === 0;
+  if (hasNoData) {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Karpathy Loop Scorecard"
+          description="Simplicity-first: 2 hard gates + 4 primary metrics."
+        />
+        <EmptyState
+          icon={LayoutDashboard}
+          title="No data yet"
+          description="Run the quickstart command to seed data, evaluate your agent, and run your first optimization cycle."
+          cliHint="autoagent quickstart"
+        />
+      </div>
+    );
+  }
+
   const attempts = history.slice().reverse();
   const trajectoryData = attempts.map((attempt, index) => ({
     label: `#${index + 1}`,

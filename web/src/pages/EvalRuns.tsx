@@ -259,6 +259,7 @@ export function EvalRuns() {
           icon={FlaskConical}
           title="No eval runs yet"
           description="Launch your first evaluation to baseline quality, safety, latency, and cost."
+          cliHint="autoagent eval run"
           actionLabel="Create Eval Run"
           onAction={() => setShowForm(true)}
         />

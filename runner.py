@@ -1,7 +1,9 @@
 """CLI entry point for AutoAgent VNextCC.
 
 Full command set:
-  autoagent init [--template NAME]
+  autoagent quickstart [--agent-name NAME] [--verbose]
+  autoagent demo [--dir PATH]
+  autoagent init [--template NAME] [--agent-name NAME] [--with-synthetic-data]
   autoagent eval run [OPTIONS]
   autoagent eval results [--run-id ID]
   autoagent eval list
@@ -187,21 +189,33 @@ def cli() -> None:
               help="Project template to scaffold.")
 @click.option("--dir", "target_dir", default=".", show_default=True,
               help="Directory to initialize in.")
-def init_project(template: str, target_dir: str) -> None:
+@click.option("--agent-name", default="My Agent", show_default=True,
+              help="Agent name for AUTOAGENT.md.")
+@click.option("--platform", default="Google ADK", show_default=True,
+              help="Platform for AUTOAGENT.md.")
+@click.option("--with-synthetic-data/--no-synthetic-data", default=True,
+              show_default=True, help="Seed synthetic conversations and evals.")
+def init_project(template: str, target_dir: str, agent_name: str,
+                 platform: str, with_synthetic_data: bool) -> None:
     """Scaffold a new AutoAgent project with config, eval suite, and structure."""
     target = Path(target_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
+
+    click.echo(click.style("\n✦ AutoAgent Init", fg="cyan", bold=True))
+    click.echo("")
 
     # Create directory structure
     dirs = ["configs", "evals/cases", "agent/config"]
     for d in dirs:
         (target / d).mkdir(parents=True, exist_ok=True)
+    click.echo(click.style("  ✓ ", fg="green") + "Created directory structure")
 
     # Copy base config
     src_config = Path(__file__).parent / "agent" / "config" / "base_config.yaml"
     dst_config = target / "configs" / "v001_base.yaml"
     if src_config.exists() and not dst_config.exists():
         shutil.copy2(src_config, dst_config)
+    click.echo(click.style("  ✓ ", fg="green") + "Copied base config")
 
     # Copy eval cases
     src_evals = Path(__file__).parent / "evals" / "cases"
@@ -211,27 +225,59 @@ def init_project(template: str, target_dir: str) -> None:
             dst = dst_evals / case_file.name
             if not dst.exists():
                 shutil.copy2(case_file, dst)
+    click.echo(click.style("  ✓ ", fg="green") + "Copied eval cases")
 
     # Generate AUTOAGENT.md project memory
     from core.project_memory import ProjectMemory
     autoagent_md = target / "AUTOAGENT.md"
     if not autoagent_md.exists():
         content = ProjectMemory.generate_template(
-            agent_name="My Agent",
-            platform="Google ADK",
+            agent_name=agent_name,
+            platform=platform,
             use_case="General purpose assistant",
         )
         autoagent_md.write_text(content, encoding="utf-8")
+    click.echo(click.style("  ✓ ", fg="green") + f"Generated AUTOAGENT.md ({agent_name})")
 
-    click.echo(f"Initialized AutoAgent project in {target}")
-    click.echo(f"  Template: {template}")
-    click.echo(f"  Config:   configs/v001_base.yaml")
-    click.echo(f"  Evals:    evals/cases/")
-    click.echo(f"  Memory:   AUTOAGENT.md")
-    click.echo(f"\nNext steps:")
-    click.echo(f"  autoagent eval run          # Run eval suite")
-    click.echo(f"  autoagent optimize          # Run optimization cycle")
-    click.echo(f"  autoagent server            # Start API + web console")
+    # Seed starter runbooks
+    try:
+        from registry.runbooks import RunbookStore, seed_starter_runbooks
+        runbook_db = str(target / "registry.db") if target_dir != "." else REGISTRY_DB
+        runbook_store = RunbookStore(db_path=runbook_db)
+        n_runbooks = seed_starter_runbooks(runbook_store)
+        click.echo(click.style("  ✓ ", fg="green") + f"Seeded {n_runbooks} starter runbooks")
+    except Exception:
+        click.echo(click.style("  ⚠ ", fg="yellow") + "Skipped runbook seeding")
+
+    # Seed synthetic data
+    n_convos = 0
+    if with_synthetic_data:
+        try:
+            from evals.synthetic import generate_dataset, seed_conversations
+            db_file = str(target / "conversations.db") if target_dir != "." else DB_PATH
+            store = ConversationStore(db_path=db_file)
+            ds = generate_dataset()
+            n_convos = seed_conversations(store, dataset=ds)
+            click.echo(click.style("  ✓ ", fg="green") + f"Seeded {n_convos} synthetic conversations")
+            click.echo(click.style("  ✓ ", fg="green") + f"Seeded {len(ds.eval_cases)} synthetic eval cases")
+        except Exception:
+            click.echo(click.style("  ⚠ ", fg="yellow") + "Skipped synthetic data seeding")
+
+    click.echo("")
+    click.echo(click.style("  Initialized AutoAgent project in ", fg="white") + click.style(str(target), fg="cyan"))
+    click.echo(f"    Template:  {template}")
+    click.echo(f"    Config:    configs/v001_base.yaml")
+    click.echo(f"    Evals:     evals/cases/")
+    click.echo(f"    Memory:    AUTOAGENT.md")
+    if with_synthetic_data and n_convos:
+        click.echo(f"    Data:      {n_convos} synthetic conversations")
+    click.echo("")
+    click.echo(click.style("  Next steps:", bold=True))
+    click.echo("    autoagent eval run          # Run eval suite")
+    click.echo("    autoagent optimize          # Run optimization cycle")
+    click.echo("    autoagent server            # Start API + web console")
+    click.echo("    autoagent quickstart        # Run the full loop automatically")
+    click.echo("")
 
 
 # ---------------------------------------------------------------------------
@@ -2583,6 +2629,183 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
     for dim_name, dim_data in result["dimensions"].items():
         d_status = "PASS" if dim_data["passed"] else "FAIL"
         click.echo(f"  {dim_name:30s}  {d_status}  score={dim_data['score']:.4f}  weight={dim_data['weight']}")
+
+
+# ---------------------------------------------------------------------------
+# autoagent quickstart
+# ---------------------------------------------------------------------------
+
+@cli.command("quickstart")
+@click.option("--agent-name", default="My Agent", show_default=True,
+              help="Agent name for AUTOAGENT.md.")
+@click.option("--verbose", is_flag=True, default=False, help="Show detailed output.")
+@click.option("--dir", "target_dir", default=".", show_default=True,
+              help="Directory to initialize in.")
+@click.pass_context
+def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: str) -> None:
+    """Run the ENTIRE golden path: init → seed → eval → optimize → summary.
+
+    A single command that takes you from zero to optimized agent in minutes.
+
+    Examples:
+      autoagent quickstart
+      autoagent quickstart --agent-name "Support Bot" --verbose
+    """
+    click.echo(click.style("\n✦ AutoAgent Quickstart", fg="cyan", bold=True))
+    click.echo(click.style("  Running the full golden path...\n", fg="white"))
+
+    # Step 1: Init
+    click.echo(click.style("━━━ Step 1/4: Initialize project", fg="cyan", bold=True))
+    ctx.invoke(init_project, template="customer-support", target_dir=target_dir,
+               agent_name=agent_name, platform="Google ADK", with_synthetic_data=True)
+
+    # Step 2: Run eval baseline
+    click.echo(click.style("\n━━━ Step 2/4: Run eval baseline", fg="cyan", bold=True))
+    runtime = load_runtime_config()
+    if runtime.optimizer.use_mock:
+        click.echo(click.style(
+            "  ⚠ Running with mock provider. Results are simulated.",
+            fg="yellow",
+        ))
+    eval_runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
+    baseline_score = eval_runner.run()
+    click.echo(click.style("  ✓ ", fg="green") + f"Baseline composite: {baseline_score.composite:.4f}")
+    click.echo(f"    Cases: {baseline_score.passed_cases}/{baseline_score.total_cases} passed")
+    if verbose:
+        _print_score(baseline_score, "  Baseline details")
+
+    # Step 3: Run 3 optimisation cycles
+    click.echo(click.style("\n━━━ Step 3/4: Optimize (3 cycles)", fg="cyan", bold=True))
+    db_path = str(Path(target_dir).resolve() / "conversations.db") if target_dir != "." else DB_PATH
+    store = ConversationStore(db_path=db_path)
+    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
+    memory = OptimizationMemory(db_path=MEMORY_DB)
+    router = build_router_from_runtime_config(runtime.optimizer)
+    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
+
+    best_score = baseline_score.composite
+    for cycle in range(1, 4):
+        click.echo(f"\n  Cycle {cycle}/3 ", nl=False)
+        report = observer_mod_observe(store)
+        current_config = _ensure_active_config(deployer)
+        failure_samples = _build_failure_samples(store)
+        new_config, status = optimizer.optimize(
+            report, current_config, failure_samples=failure_samples,
+        )
+        if new_config is not None:
+            score = eval_runner.run(config=new_config)
+            deployer.deploy(new_config, _score_to_dict(score))
+            improvement = score.composite - best_score
+            color = "green" if improvement > 0 else "yellow"
+            click.echo(click.style(f"  composite={score.composite:.4f}", fg=color)
+                       + f" ({'+' if improvement >= 0 else ''}{improvement:.4f})")
+            best_score = max(best_score, score.composite)
+        else:
+            click.echo(click.style(f"  {status}", fg="yellow"))
+
+    # Step 4: Summary
+    click.echo(click.style("\n━━━ Step 4/4: Summary", fg="cyan", bold=True))
+    improvement = best_score - baseline_score.composite
+    click.echo(f"\n  Baseline:    {baseline_score.composite:.4f}")
+    click.echo(f"  Best score:  {best_score:.4f}")
+    if improvement > 0:
+        click.echo(click.style(f"  Improvement: +{improvement:.4f} ✓", fg="green"))
+    else:
+        click.echo(click.style(f"  Improvement: {improvement:.4f}", fg="yellow"))
+
+    click.echo(click.style("\n  ✦ Quickstart complete!", fg="cyan", bold=True))
+    click.echo("    Next: " + click.style("autoagent server", bold=True)
+               + " to explore results in the web console\n")
+
+
+def observer_mod_observe(store: ConversationStore):
+    """Thin wrapper to run Observer.observe() from a store."""
+    obs = Observer(store)
+    return obs.observe()
+
+
+# ---------------------------------------------------------------------------
+# autoagent demo
+# ---------------------------------------------------------------------------
+
+@cli.command("demo")
+@click.option("--dir", "target_dir", default=".", show_default=True,
+              help="Directory to initialize in.")
+@click.pass_context
+def demo(ctx: click.Context, target_dir: str) -> None:
+    """Interactive demo: seed data, run one optimise cycle, show results.
+
+    More visual and concise than quickstart — designed for presentations.
+
+    Examples:
+      autoagent demo
+    """
+    click.echo(click.style("\n╔══════════════════════════════════════╗", fg="cyan"))
+    click.echo(click.style("║       AutoAgent Demo Mode            ║", fg="cyan"))
+    click.echo(click.style("╚══════════════════════════════════════╝\n", fg="cyan"))
+
+    # Init + seed
+    click.echo(click.style("▸ Setting up project...", fg="white", bold=True))
+    ctx.invoke(init_project, template="customer-support", target_dir=target_dir,
+               agent_name="Demo Agent", platform="Google ADK", with_synthetic_data=True)
+
+    # Single eval
+    click.echo(click.style("\n▸ Running evaluation...", fg="white", bold=True))
+    runtime = load_runtime_config()
+    eval_runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
+    score = eval_runner.run()
+    click.echo(f"  Score: {score.composite:.4f}  |  "
+               f"Passed: {score.passed_cases}/{score.total_cases}  |  "
+               f"Safety: {score.safety:.4f}")
+
+    # Single optimise cycle
+    click.echo(click.style("\n▸ Running optimization cycle...", fg="white", bold=True))
+    db_path = str(Path(target_dir).resolve() / "conversations.db") if target_dir != "." else DB_PATH
+    store = ConversationStore(db_path=db_path)
+    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
+    memory = OptimizationMemory(db_path=MEMORY_DB)
+    router = build_router_from_runtime_config(runtime.optimizer)
+    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    optimizer = Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+    )
+
+    report = observer_mod_observe(store)
+    current_config = _ensure_active_config(deployer)
+    failure_samples = _build_failure_samples(store)
+    new_config, status = optimizer.optimize(
+        report, current_config, failure_samples=failure_samples,
+    )
+
+    if new_config is not None:
+        new_score = eval_runner.run(config=new_config)
+        deployer.deploy(new_config, _score_to_dict(new_score))
+        delta = new_score.composite - score.composite
+        color = "green" if delta > 0 else "yellow"
+        click.echo(f"  Before: {score.composite:.4f}  →  After: {new_score.composite:.4f}  "
+                   + click.style(f"({'+' if delta >= 0 else ''}{delta:.4f})", fg=color))
+    else:
+        click.echo(f"  Optimizer: {status}")
+
+    # Done
+    click.echo(click.style("\n▸ Demo complete!", fg="cyan", bold=True))
+    click.echo("  Run " + click.style("autoagent server", bold=True)
+               + " to open the web console")
+    click.echo("  Run " + click.style("autoagent quickstart", bold=True)
+               + " for the full multi-cycle experience\n")
 
 
 if __name__ == "__main__":
