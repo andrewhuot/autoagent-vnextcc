@@ -628,10 +628,10 @@ export interface ChangeCard {
 }
 
 // ---------------------------------------------------------------------------
-// Playbooks
+// Runbooks
 // ---------------------------------------------------------------------------
 
-export interface Playbook {
+export interface Runbook {
   name: string;
   description: string;
   tags: string[];

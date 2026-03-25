@@ -16,7 +16,7 @@ const pageTitles: Record<string, string> = {
   '/loop': 'Loop Monitor',
   '/events': 'Event Log',
   '/changes': 'Change Review',
-  '/playbooks': 'Playbooks',
+  '/runbooks': 'Runbooks',
   '/memory': 'Project Memory',
   '/registry': 'Registry',
   '/blame': 'Blame Map',

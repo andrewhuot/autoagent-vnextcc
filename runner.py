@@ -16,7 +16,7 @@ Full command set:
   autoagent logs [--limit N] [--outcome fail|success]
   autoagent server
   autoagent review [list|show|apply|reject|export]
-  autoagent playbook [list|show|apply|create]
+  autoagent runbook [list|show|apply|create]
   autoagent memory [show|add]
   autoagent registry list [--type skills|policies|tools|handoffs]
   autoagent registry show <type> <name> [--version N]
@@ -1773,55 +1773,55 @@ def review_export(card_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# autoagent playbook
+# autoagent runbook
 # ---------------------------------------------------------------------------
 
-@cli.group("playbook")
-def playbook_group() -> None:
-    """Playbooks — curated bundles of skills, policies, and tool contracts."""
+@cli.group("runbook")
+def runbook_group() -> None:
+    """Runbooks — curated bundles of skills, policies, and tool contracts."""
 
 
-@playbook_group.command("list")
+@runbook_group.command("list")
 @click.option("--db", default=REGISTRY_DB, show_default=True)
-def playbook_list(db: str) -> None:
-    """List all playbooks.
+def runbook_list(db: str) -> None:
+    """List all runbooks.
 
     Examples:
-      autoagent playbook list
+      autoagent runbook list
     """
-    from registry.playbooks import PlaybookStore
+    from registry.runbooks import RunbookStore
 
-    store = PlaybookStore(db_path=db)
-    playbooks = store.list()
+    store = RunbookStore(db_path=db)
+    runbooks = store.list()
 
-    if not playbooks:
-        click.echo("No playbooks found.")
+    if not runbooks:
+        click.echo("No runbooks found.")
         return
 
-    click.echo(f"\nPlaybooks ({len(playbooks)}):\n")
+    click.echo(f"\nRunbooks ({len(runbooks)}):\n")
     click.echo(f"{'Name':<30}  {'Ver':>4}  {'Tags':<30}  {'Description'}")
     click.echo(f"{'─' * 30}  {'─' * 4}  {'─' * 30}  {'─' * 30}")
-    for pb in playbooks:
+    for pb in runbooks:
         tags = ", ".join(pb.tags[:3])
         desc = (pb.description[:28] + "...") if len(pb.description) > 30 else pb.description
         click.echo(f"{pb.name:<30}  v{pb.version:>3}  {tags:<30}  {desc}")
 
 
-@playbook_group.command("show")
+@runbook_group.command("show")
 @click.argument("name")
 @click.option("--db", default=REGISTRY_DB, show_default=True)
-def playbook_show(name: str, db: str) -> None:
-    """Show playbook details.
+def runbook_show(name: str, db: str) -> None:
+    """Show runbook details.
 
     Examples:
-      autoagent playbook show fix-retrieval-grounding
+      autoagent runbook show fix-retrieval-grounding
     """
-    from registry.playbooks import PlaybookStore
+    from registry.runbooks import RunbookStore
 
-    store = PlaybookStore(db_path=db)
+    store = RunbookStore(db_path=db)
     pb = store.get(name)
     if pb is None:
-        click.echo(f"Playbook not found: {name}")
+        click.echo(f"Runbook not found: {name}")
         raise SystemExit(1)
 
     click.echo(f"\n{pb.name} (v{pb.version})")
@@ -1841,47 +1841,47 @@ def playbook_show(name: str, db: str) -> None:
             click.echo(f"    - {json.dumps(t)}")
 
 
-@playbook_group.command("apply")
+@runbook_group.command("apply")
 @click.argument("name")
 @click.option("--db", default=REGISTRY_DB, show_default=True)
-def playbook_apply(name: str, db: str) -> None:
-    """Apply a playbook — registers its skills, policies, and tool contracts.
+def runbook_apply(name: str, db: str) -> None:
+    """Apply a runbook — registers its skills, policies, and tool contracts.
 
     Examples:
-      autoagent playbook apply fix-retrieval-grounding
+      autoagent runbook apply fix-retrieval-grounding
     """
-    from registry.playbooks import PlaybookStore
+    from registry.runbooks import RunbookStore
 
-    store = PlaybookStore(db_path=db)
+    store = RunbookStore(db_path=db)
     pb = store.get(name)
     if pb is None:
-        click.echo(f"Playbook not found: {name}")
+        click.echo(f"Runbook not found: {name}")
         raise SystemExit(1)
 
-    click.echo(f"Applying playbook: {pb.name} (v{pb.version})")
+    click.echo(f"Applying runbook: {pb.name} (v{pb.version})")
     if pb.skills:
         click.echo(f"  Skills: {', '.join(pb.skills)}")
     if pb.policies:
         click.echo(f"  Policies: {', '.join(pb.policies)}")
     if pb.tool_contracts:
         click.echo(f"  Tool contracts: {', '.join(pb.tool_contracts)}")
-    click.echo(f"\nPlaybook '{name}' applied. Registered items are now active.")
+    click.echo(f"\nRunbook '{name}' applied. Registered items are now active.")
 
 
-@playbook_group.command("create")
-@click.option("--name", required=True, help="Playbook name.")
+@runbook_group.command("create")
+@click.option("--name", required=True, help="Runbook name.")
 @click.option("--file", "file_path", required=True, type=click.Path(exists=True),
-              help="YAML file with playbook definition.")
+              help="YAML file with runbook definition.")
 @click.option("--db", default=REGISTRY_DB, show_default=True)
-def playbook_create(name: str, file_path: str, db: str) -> None:
-    """Create a playbook from a YAML file.
+def runbook_create(name: str, file_path: str, db: str) -> None:
+    """Create a runbook from a YAML file.
 
     Examples:
-      autoagent playbook create --name my-playbook --file playbook.yaml
+      autoagent runbook create --name my-runbook --file runbook.yaml
     """
-    from registry.playbooks import Playbook, PlaybookStore
+    from registry.runbooks import Runbook, RunbookStore
 
-    store = PlaybookStore(db_path=db)
+    store = RunbookStore(db_path=db)
     raw = Path(file_path).read_text(encoding="utf-8")
     data = yaml.safe_load(raw)
     if not isinstance(data, dict):
@@ -1889,9 +1889,9 @@ def playbook_create(name: str, file_path: str, db: str) -> None:
         raise SystemExit(1)
 
     data["name"] = name
-    pb = Playbook.from_dict(data)
+    pb = Runbook.from_dict(data)
     result_name, version = store.register(pb)
-    click.echo(f"Created playbook: {result_name} (v{version})")
+    click.echo(f"Created runbook: {result_name} (v{version})")
 
 
 # ---------------------------------------------------------------------------

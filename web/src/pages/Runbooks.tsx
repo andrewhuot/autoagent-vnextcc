@@ -2,25 +2,25 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Search, ChevronDown, ChevronRight, BookOpen, Tag, Play, FileCode, Shield, ArrowLeftRight } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
-import { usePlaybooks, usePlaybookDetail, useApplyPlaybook } from '../lib/api';
+import { useRunbooks, useRunbookDetail, useApplyRunbook } from '../lib/api';
 import { classNames } from '../lib/utils';
 import { toastSuccess, toastError } from '../lib/toast';
-import type { Playbook } from '../lib/types';
+import type { Runbook } from '../lib/types';
 
-export function Playbooks() {
+export function Runbooks() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [expandedName, setExpandedName] = useState<string | null>(null);
 
-  const { data: playbooks = [], isLoading, isError } = usePlaybooks();
-  const detailQuery = usePlaybookDetail(expandedName ?? undefined);
-  const applyMutation = useApplyPlaybook();
+  const { data: runbooks = [], isLoading, isError } = useRunbooks();
+  const detailQuery = useRunbookDetail(expandedName ?? undefined);
+  const applyMutation = useApplyRunbook();
 
   // Collect all unique tags
-  const allTags = Array.from(new Set(playbooks.flatMap((p) => p.tags))).sort();
+  const allTags = Array.from(new Set(runbooks.flatMap((p) => p.tags))).sort();
 
-  // Filter playbooks
-  const filtered = playbooks.filter((p) => {
+  // Filter runbooks
+  const filtered = runbooks.filter((p) => {
     const matchesSearch =
       !searchQuery.trim() ||
       p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -34,7 +34,7 @@ export function Playbooks() {
       { name },
       {
         onSuccess: () => {
-          toastSuccess('Playbook applied', `${name} has been applied.`);
+          toastSuccess('Runbook applied', `${name} has been applied.`);
         },
         onError: (error) => {
           toastError('Apply failed', error.message);
@@ -50,8 +50,8 @@ export function Playbooks() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Playbooks"
-        description="Browse and apply playbooks — curated bundles of skills, policies, and tool contracts"
+        title="Runbooks"
+        description="Browse and apply runbooks — curated bundles of skills, policies, and tool contracts"
         actions={
           <Link
             to="/registry"
@@ -68,7 +68,7 @@ export function Playbooks() {
         <Search className="h-4 w-4 shrink-0 text-gray-400" />
         <input
           type="text"
-          placeholder="Search playbooks..."
+          placeholder="Search runbooks..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="w-full bg-transparent text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none"
@@ -110,36 +110,36 @@ export function Playbooks() {
       {/* Loading / error */}
       {isLoading && (
         <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-          Loading playbooks...
+          Loading runbooks...
         </div>
       )}
       {isError && (
         <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50 text-sm text-red-600">
-          Failed to load playbooks.
+          Failed to load runbooks.
         </div>
       )}
 
-      {/* Playbook list */}
+      {/* Runbook list */}
       {!isLoading && !isError && (
         <div className="space-y-2">
           {filtered.length === 0 ? (
             <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-              No playbooks found.
+              No runbooks found.
             </div>
           ) : (
-            filtered.map((playbook) => {
-              const isExpanded = expandedName === playbook.name;
+            filtered.map((runbook) => {
+              const isExpanded = expandedName === runbook.name;
               const detail = isExpanded ? detailQuery.data : null;
 
               return (
                 <div
-                  key={playbook.name}
+                  key={runbook.name}
                   className="rounded-xl border border-gray-200 bg-white transition-colors"
                 >
-                  {/* Playbook header */}
+                  {/* Runbook header */}
                   <div className="flex items-center gap-3 px-4 py-3">
                     <button
-                      onClick={() => toggleExpand(playbook.name)}
+                      onClick={() => toggleExpand(runbook.name)}
                       className="flex min-w-0 flex-1 items-center gap-3 text-left"
                     >
                       {isExpanded ? (
@@ -148,13 +148,13 @@ export function Playbooks() {
                         <ChevronRight className="h-4 w-4 shrink-0 text-gray-400" />
                       )}
                       <div className="min-w-0 flex-1">
-                        <span className="font-mono text-sm font-medium text-gray-900">{playbook.name}</span>
-                        <p className="mt-0.5 truncate text-xs text-gray-500">{playbook.description}</p>
+                        <span className="font-mono text-sm font-medium text-gray-900">{runbook.name}</span>
+                        <p className="mt-0.5 truncate text-xs text-gray-500">{runbook.description}</p>
                       </div>
                     </button>
 
                     <div className="flex items-center gap-2">
-                      {playbook.tags.map((tag) => (
+                      {runbook.tags.map((tag) => (
                         <span
                           key={tag}
                           className="rounded-md bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700"
@@ -163,7 +163,7 @@ export function Playbooks() {
                         </span>
                       ))}
                       <button
-                        onClick={() => handleApply(playbook.name)}
+                        onClick={() => handleApply(runbook.name)}
                         disabled={applyMutation.isPending}
                         className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
                       >

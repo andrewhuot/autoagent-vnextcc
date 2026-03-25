@@ -26,7 +26,7 @@ import type {
   JudgeFeedbackRecord,
   JudgeOpsJudgeSummary,
   ParetoFrontier,
-  Playbook,
+  Runbook,
   ProjectMemory,
   HealthReport,
   LoopStatus,
@@ -1361,39 +1361,39 @@ export function useExportChange(id: string | undefined) {
 }
 
 // ---------------------------------------------------------------------------
-// Playbooks
+// Runbooks
 // ---------------------------------------------------------------------------
 
-export function usePlaybooks() {
-  return useQuery<Playbook[]>({
-    queryKey: ['playbooks'],
+export function useRunbooks() {
+  return useQuery<Runbook[]>({
+    queryKey: ['runbooks'],
     queryFn: async () => {
-      const payload = await fetchApi<{ playbooks: Playbook[] }>('/playbooks');
-      return payload.playbooks ?? [];
+      const payload = await fetchApi<{ runbooks: Runbook[] }>('/runbooks');
+      return payload.runbooks ?? [];
     },
     refetchInterval: 10000,
   });
 }
 
-export function usePlaybookDetail(name: string | undefined) {
-  return useQuery<Playbook>({
-    queryKey: ['playbooks', 'detail', name],
+export function useRunbookDetail(name: string | undefined) {
+  return useQuery<Runbook>({
+    queryKey: ['runbooks', 'detail', name],
     enabled: Boolean(name),
     queryFn: async () => {
-      if (!name) throw new ApiRequestError('Missing playbook name', 400);
-      return fetchApi<Playbook>(`/playbooks/${encodeURIComponent(name)}`);
+      if (!name) throw new ApiRequestError('Missing runbook name', 400);
+      return fetchApi<Runbook>(`/runbooks/${encodeURIComponent(name)}`);
     },
   });
 }
 
-export function useApplyPlaybook() {
+export function useApplyRunbook() {
   const queryClient = useQueryClient();
 
   return useMutation<{ status: string; message: string }, ApiRequestError, { name: string }>({
     mutationFn: ({ name }) =>
-      fetchApi(`/playbooks/${encodeURIComponent(name)}/apply`, { method: 'POST' }),
+      fetchApi(`/runbooks/${encodeURIComponent(name)}/apply`, { method: 'POST' }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+      queryClient.invalidateQueries({ queryKey: ['runbooks'] });
     },
   });
 }

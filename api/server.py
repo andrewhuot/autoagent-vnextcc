@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from api.routes import autofix, changes, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, playbooks, registry, scorers, traces
+from api.routes import autofix, changes, config, context, control, conversations, deploy, eval, events, experiments, health, judges, loop, memory as memory_routes, opportunities, optimize, runbooks, registry, scorers, traces
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
 
@@ -182,12 +182,12 @@ async def lifespan(app: FastAPI):
     from evals.nl_scorer import NLScorer
     app.state.nl_scorer = NLScorer()
 
-    # Playbook store
-    from registry.playbooks import PlaybookStore, seed_starter_playbooks
-    app.state.playbook_store = PlaybookStore(
+    # Runbook store
+    from registry.runbooks import RunbookStore, seed_starter_runbooks
+    app.state.runbook_store = RunbookStore(
         db_path=os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db"),
     )
-    seed_starter_playbooks(app.state.playbook_store)
+    seed_starter_runbooks(app.state.runbook_store)
 
     # Change card store
     from optimizer.change_card import ChangeCardStore
@@ -247,7 +247,7 @@ app.include_router(context.router)
 app.include_router(registry.router)
 app.include_router(scorers.router)
 app.include_router(changes.router)
-app.include_router(playbooks.router)
+app.include_router(runbooks.router)
 app.include_router(memory_routes.router)
 
 

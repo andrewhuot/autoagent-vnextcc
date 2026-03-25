@@ -1,4 +1,4 @@
-"""Playbook registry — user-facing bundles of skills, policies, and tool contracts."""
+"""Runbook registry — user-facing bundles of skills, policies, and tool contracts."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from typing import Any
 
 
 @dataclass
-class Playbook:
+class Runbook:
     """A user-facing bundle that groups related registry items."""
 
     name: str
@@ -43,7 +43,7 @@ class Playbook:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> Playbook:
+    def from_dict(cls, data: dict[str, Any]) -> Runbook:
         return cls(
             name=data["name"],
             description=data.get("description", ""),
@@ -60,8 +60,8 @@ class Playbook:
         )
 
 
-class PlaybookStore:
-    """SQLite-backed storage for playbooks."""
+class RunbookStore:
+    """SQLite-backed storage for runbooks."""
 
     def __init__(self, db_path: str = "registry.db") -> None:
         self._db_path = db_path
@@ -71,7 +71,7 @@ class PlaybookStore:
 
     def _create_table(self) -> None:
         self._conn.execute("""
-            CREATE TABLE IF NOT EXISTS playbooks (
+            CREATE TABLE IF NOT EXISTS runbooks (
                 name       TEXT    NOT NULL,
                 version    INTEGER NOT NULL,
                 data       TEXT    NOT NULL,
@@ -82,58 +82,58 @@ class PlaybookStore:
         """)
         self._conn.commit()
 
-    def register(self, playbook: Playbook) -> tuple[str, int]:
-        """Register a new playbook version. Returns (name, version)."""
+    def register(self, runbook: Runbook) -> tuple[str, int]:
+        """Register a new runbook version. Returns (name, version)."""
         # Get latest version
         row = self._conn.execute(
-            "SELECT MAX(version) as max_v FROM playbooks WHERE name = ?",
-            (playbook.name,),
+            "SELECT MAX(version) as max_v FROM runbooks WHERE name = ?",
+            (runbook.name,),
         ).fetchone()
         latest = row["max_v"] if row and row["max_v"] is not None else 0
         new_version = latest + 1
-        playbook.version = new_version
+        runbook.version = new_version
 
         from datetime import datetime, timezone
         now = datetime.now(timezone.utc).isoformat()
 
         self._conn.execute(
-            "INSERT INTO playbooks (name, version, data, created_at) VALUES (?, ?, ?, ?)",
-            (playbook.name, new_version, json.dumps(playbook.to_dict(), sort_keys=True), now),
+            "INSERT INTO runbooks (name, version, data, created_at) VALUES (?, ?, ?, ?)",
+            (runbook.name, new_version, json.dumps(runbook.to_dict(), sort_keys=True), now),
         )
         self._conn.commit()
-        return playbook.name, new_version
+        return runbook.name, new_version
 
-    def get(self, name: str, version: int | None = None) -> Playbook | None:
-        """Get a playbook by name and optional version."""
+    def get(self, name: str, version: int | None = None) -> Runbook | None:
+        """Get a runbook by name and optional version."""
         if version is None:
             row = self._conn.execute(
-                "SELECT * FROM playbooks WHERE name = ? ORDER BY version DESC LIMIT 1",
+                "SELECT * FROM runbooks WHERE name = ? ORDER BY version DESC LIMIT 1",
                 (name,),
             ).fetchone()
         else:
             row = self._conn.execute(
-                "SELECT * FROM playbooks WHERE name = ? AND version = ?",
+                "SELECT * FROM runbooks WHERE name = ? AND version = ?",
                 (name, version),
             ).fetchone()
         if row is None:
             return None
         data = json.loads(row["data"])
         data["deprecated"] = bool(row["deprecated"])
-        return Playbook.from_dict(data)
+        return Runbook.from_dict(data)
 
-    def list(self, include_deprecated: bool = False) -> list[Playbook]:
-        """List all playbooks (latest versions only by default)."""
+    def list(self, include_deprecated: bool = False) -> list[Runbook]:
+        """List all runbooks (latest versions only by default)."""
         if include_deprecated:
             rows = self._conn.execute(
-                "SELECT * FROM playbooks ORDER BY name, version"
+                "SELECT * FROM runbooks ORDER BY name, version"
             ).fetchall()
         else:
-            # Get latest non-deprecated version of each playbook
+            # Get latest non-deprecated version of each runbook
             rows = self._conn.execute("""
-                SELECT p.* FROM playbooks p
+                SELECT p.* FROM runbooks p
                 INNER JOIN (
                     SELECT name, MAX(version) as max_v
-                    FROM playbooks WHERE deprecated = 0
+                    FROM runbooks WHERE deprecated = 0
                     GROUP BY name
                 ) latest ON p.name = latest.name AND p.version = latest.max_v
                 ORDER BY p.name
@@ -143,37 +143,37 @@ class PlaybookStore:
         for r in rows:
             data = json.loads(r["data"])
             data["deprecated"] = bool(r["deprecated"])
-            result.append(Playbook.from_dict(data))
+            result.append(Runbook.from_dict(data))
         return result
 
     def deprecate(self, name: str, version: int) -> bool:
         cursor = self._conn.execute(
-            "UPDATE playbooks SET deprecated = 1 WHERE name = ? AND version = ?",
+            "UPDATE runbooks SET deprecated = 1 WHERE name = ? AND version = ?",
             (name, version),
         )
         self._conn.commit()
         return cursor.rowcount > 0
 
-    def search(self, query: str) -> list[Playbook]:
-        """Search playbooks by name or data content."""
+    def search(self, query: str) -> list[Runbook]:
+        """Search runbooks by name or data content."""
         pattern = f"%{query}%"
         rows = self._conn.execute(
-            "SELECT * FROM playbooks WHERE (name LIKE ? OR data LIKE ?) AND deprecated = 0 ORDER BY name, version",
+            "SELECT * FROM runbooks WHERE (name LIKE ? OR data LIKE ?) AND deprecated = 0 ORDER BY name, version",
             (pattern, pattern),
         ).fetchall()
         result = []
         for r in rows:
             data = json.loads(r["data"])
             data["deprecated"] = bool(r["deprecated"])
-            result.append(Playbook.from_dict(data))
+            result.append(Runbook.from_dict(data))
         return result
 
     def close(self) -> None:
         self._conn.close()
 
 
-# Built-in starter playbooks
-STARTER_PLAYBOOKS: list[dict[str, Any]] = [
+# Built-in starter runbooks
+STARTER_RUNBOOKS: list[dict[str, Any]] = [
     {
         "name": "fix-retrieval-grounding",
         "description": "Improve retrieval quality and reduce hallucination from RAG",
@@ -262,13 +262,13 @@ STARTER_PLAYBOOKS: list[dict[str, Any]] = [
 ]
 
 
-def seed_starter_playbooks(store: PlaybookStore) -> int:
-    """Seed the store with built-in starter playbooks. Returns count of seeded playbooks."""
+def seed_starter_runbooks(store: RunbookStore) -> int:
+    """Seed the store with built-in starter runbooks. Returns count of seeded runbooks."""
     count = 0
-    for pb_data in STARTER_PLAYBOOKS:
+    for pb_data in STARTER_RUNBOOKS:
         existing = store.get(pb_data["name"])
         if existing is None:
-            playbook = Playbook.from_dict(pb_data)
-            store.register(playbook)
+            runbook = Runbook.from_dict(pb_data)
+            store.register(runbook)
             count += 1
     return count

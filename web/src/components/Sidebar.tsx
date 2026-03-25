@@ -41,7 +41,7 @@ const navItems = [
   { to: '/autofix', label: 'AutoFix', icon: Wrench },
   { to: '/judge-ops', label: 'Judge Ops', icon: Scale },
   { to: '/context', label: 'Context Workbench', icon: Layers },
-  { to: '/playbooks', label: 'Playbooks', icon: Library },
+  { to: '/runbooks', label: 'Runbooks', icon: Library },
   { to: '/registry', label: 'Registry', icon: BookOpen },
   { to: '/memory', label: 'Memory', icon: Brain },
   { to: '/blame', label: 'Blame Map', icon: MapPin },
