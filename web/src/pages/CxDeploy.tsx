@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Rocket, Code2, Copy, Check } from 'lucide-react';
+import { Code2, Copy, Check } from 'lucide-react';
 import { useCxDeploy, useCxWidget } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
@@ -57,35 +57,35 @@ export function CxDeploy() {
       />
 
       {/* Shared config */}
-      <div className="bg-zinc-800 rounded-lg border border-zinc-700 p-4 space-y-3">
-        <h3 className="text-sm font-medium text-zinc-200">Agent Reference</h3>
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h3 className="text-sm font-medium text-gray-200">Agent Reference</h3>
         <div className="grid grid-cols-3 gap-2">
           <input
             type="text" placeholder="GCP Project ID" value={project}
             onChange={(e) => setProject(e.target.value)}
-            className="bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none"
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
           <input
             type="text" placeholder="Location" value={location}
             onChange={(e) => setLocation(e.target.value)}
-            className="bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none"
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
           <input
             type="text" placeholder="Agent ID" value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
-            className="bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none"
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
         </div>
       </div>
 
       {/* Deploy section */}
-      <div className="bg-zinc-800 rounded-lg border border-zinc-700 p-4 space-y-3">
-        <h3 className="text-sm font-medium text-zinc-200">Deploy to Environment</h3>
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h3 className="text-sm font-medium text-gray-200">Deploy to Environment</h3>
         <div className="flex gap-2">
           <select
             value={environment}
             onChange={(e) => setEnvironment(e.target.value)}
-            className="bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none"
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           >
             <option value="production">Production</option>
             <option value="staging">Staging</option>
@@ -108,23 +108,23 @@ export function CxDeploy() {
       </div>
 
       {/* Widget section */}
-      <div className="bg-zinc-800 rounded-lg border border-zinc-700 p-4 space-y-3">
-        <h3 className="text-sm font-medium text-zinc-200">Web Widget</h3>
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h3 className="text-sm font-medium text-gray-200">Web Widget</h3>
         <div className="flex gap-2">
           <input
             type="text" placeholder="Chat title" value={chatTitle}
             onChange={(e) => setChatTitle(e.target.value)}
-            className="flex-1 bg-zinc-900 border border-zinc-600 rounded px-3 py-1.5 text-sm text-zinc-200 focus:border-blue-500 focus:outline-none"
+            className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
           <input
             type="color" value={primaryColor}
             onChange={(e) => setPrimaryColor(e.target.value)}
-            className="w-10 h-8 bg-zinc-900 border border-zinc-600 rounded cursor-pointer"
+            className="w-10 h-8 bg-gray-900 border border-gray-600 rounded cursor-pointer"
           />
           <button
             onClick={handleGenerateWidget}
             disabled={!project || !agentId || widgetMutation.isPending}
-            className="px-4 py-1.5 bg-zinc-600 text-white text-sm rounded hover:bg-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="px-4 py-1.5 bg-gray-600 text-white text-sm rounded hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Code2 className="w-4 h-4 inline mr-1" />
             {widgetMutation.isPending ? 'Generating...' : 'Generate'}
@@ -133,12 +133,12 @@ export function CxDeploy() {
         {widgetMutation.data && (
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-zinc-400">Widget HTML</span>
+              <span className="text-xs text-gray-400">Widget HTML</span>
               <button onClick={handleCopyHtml} className="text-xs text-blue-400 hover:text-blue-300 flex items-center gap-1">
                 {copied ? <><Check className="w-3 h-3" /> Copied</> : <><Copy className="w-3 h-3" /> Copy HTML</>}
               </button>
             </div>
-            <pre className="bg-zinc-900 border border-zinc-700 rounded p-3 text-xs text-zinc-300 overflow-x-auto max-h-64 overflow-y-auto">
+            <pre className="bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-300 overflow-x-auto max-h-64 overflow-y-auto">
               {widgetMutation.data.html}
             </pre>
           </div>

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import type { ExperimentCard as ExperimentCardType, ArchiveRole } from '../lib/types';
 import { StatusBadge } from './StatusBadge';
+import { SourceBadge } from './SourceBadge';
 import { classNames } from '../lib/utils';
 
 interface ExperimentCardProps {
@@ -84,6 +85,7 @@ interface ExperimentMetadata {
   evidence_spans?: string[];
   failure_reasons?: string[];
   archive_role?: ArchiveRole;
+  source?: 'mock' | 'live';
 }
 
 function getMetadata(experiment: ExperimentCardType): ExperimentMetadata {
@@ -92,6 +94,7 @@ function getMetadata(experiment: ExperimentCardType): ExperimentMetadata {
     evidence_spans: Array.isArray(raw.evidence_spans) ? raw.evidence_spans as string[] : undefined,
     failure_reasons: Array.isArray(raw.failure_reasons) ? raw.failure_reasons as string[] : undefined,
     archive_role: typeof raw.archive_role === 'string' ? raw.archive_role as ArchiveRole : undefined,
+    source: typeof raw.source === 'string' ? raw.source as 'mock' | 'live' : undefined,
   };
 }
 
@@ -115,6 +118,7 @@ export function ExperimentCardComponent({ experiment }: ExperimentCardProps) {
               label={experiment.status}
             />
             {meta.archive_role && <ArchiveRoleBadge role={meta.archive_role} />}
+            {meta.source && <SourceBadge source={meta.source} />}
           </div>
           <p className="mt-2 text-sm font-medium text-gray-900">{experiment.hypothesis}</p>
         </div>

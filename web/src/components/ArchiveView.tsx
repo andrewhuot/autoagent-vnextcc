@@ -1,5 +1,6 @@
 import type { ArchiveEntry, ArchiveRole } from '../lib/types';
 import { classNames } from '../lib/utils';
+import { SourceBadge } from './SourceBadge';
 
 interface Props {
   entries: ArchiveEntry[];
@@ -95,23 +96,29 @@ export function ArchiveView({ entries }: Props) {
                     <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Experiment</th>
                     <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Scores</th>
                     <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Objective</th>
+                    <th className="px-3 py-2 text-left text-[11px] font-semibold uppercase tracking-wide text-gray-500">Source</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {group.map((entry, idx) => (
-                    <tr
-                      key={entry.entry_id}
-                      className={classNames(
-                        'border-b border-gray-100 last:border-b-0',
-                        isIncumbent ? 'bg-amber-50/40' : idx % 2 === 1 ? 'bg-gray-50/40' : ''
-                      )}
-                    >
-                      <td className="px-3 py-2 font-mono text-xs text-gray-700">{entry.candidate_id || entry.entry_id.slice(0, 8)}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-gray-500">{entry.experiment_id || '-'}</td>
-                      <td className="px-3 py-2"><ScoreChips scores={entry.scores} /></td>
-                      <td className="px-3 py-2"><ObjectiveVector vector={entry.objective_vector} /></td>
-                    </tr>
-                  ))}
+                  {group.map((entry, idx) => {
+                    const rawEntry = entry as unknown as Record<string, unknown>;
+                    const source = (typeof rawEntry.source === 'string' ? rawEntry.source : undefined) as 'mock' | 'live' | undefined;
+                    return (
+                      <tr
+                        key={entry.entry_id}
+                        className={classNames(
+                          'border-b border-gray-100 last:border-b-0',
+                          isIncumbent ? 'bg-amber-50/40' : idx % 2 === 1 ? 'bg-gray-50/40' : ''
+                        )}
+                      >
+                        <td className="px-3 py-2 font-mono text-xs text-gray-700">{entry.candidate_id || entry.entry_id.slice(0, 8)}</td>
+                        <td className="px-3 py-2 font-mono text-xs text-gray-500">{entry.experiment_id || '-'}</td>
+                        <td className="px-3 py-2"><ScoreChips scores={entry.scores} /></td>
+                        <td className="px-3 py-2"><ObjectiveVector vector={entry.objective_vector} /></td>
+                        <td className="px-3 py-2">{source && <SourceBadge source={source} />}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

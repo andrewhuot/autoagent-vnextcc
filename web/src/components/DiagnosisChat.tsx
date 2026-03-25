@@ -189,7 +189,7 @@ export function DiagnosisChat() {
 
                   {msg.metadata?.metrics && (
                     <div className="mt-2 rounded-lg border border-emerald-100 bg-emerald-50 px-2.5 py-1.5 text-xs text-emerald-700">
-                      Score: {msg.metadata.metrics.before.toFixed(4)} -> {msg.metadata.metrics.after.toFixed(4)}
+                      Score: {msg.metadata.metrics.before.toFixed(4)} {'->'} {msg.metadata.metrics.after.toFixed(4)}
                     </div>
                   )}
 

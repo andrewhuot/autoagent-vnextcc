@@ -14,7 +14,6 @@ import {
   useUnpinSurface,
   useSystemEvents,
 } from '../lib/api';
-import { AnimatedNumber } from '../components/AnimatedNumber';
 import { Confetti } from '../components/Confetti';
 import { DiagnosisChat } from '../components/DiagnosisChat';
 import { EmptyState } from '../components/EmptyState';
@@ -72,6 +71,7 @@ export function Dashboard() {
   const [rejectExperimentId, setRejectExperimentId] = useState('');
   const [showConfetti, setShowConfetti] = useState(false);
   const [allTimeBest, setAllTimeBest] = useState(0);
+  const [viewMode, setViewMode] = useState<'simple' | 'advanced'>('simple');
 
   const loading = health.isLoading || controlState.isLoading;
 
@@ -84,8 +84,9 @@ export function Dashboard() {
 
   // Detect personal best and trigger confetti
   useEffect(() => {
-    if (metrics?.composite) {
-      const currentScore = metrics.composite;
+    const metrics = health.data?.metrics;
+    if (metrics?.success_rate) {
+      const currentScore = metrics.success_rate;
       if (currentScore > allTimeBest) {
         setAllTimeBest(currentScore);
         if (allTimeBest > 0) {
@@ -95,7 +96,7 @@ export function Dashboard() {
         }
       }
     }
-  }, [metrics?.composite, allTimeBest]);
+  }, [health.data?.metrics?.success_rate, allTimeBest]);
 
   function refreshAll() {
     health.refetch();
@@ -176,6 +177,30 @@ export function Dashboard() {
         description="Simplicity-first: 2 hard gates + 4 primary metrics. Diagnostics in collapsible panel. Human overrides always visible."
         actions={
           <>
+            <div className="flex items-center gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+              <button
+                onClick={() => setViewMode('simple')}
+                className={classNames(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  viewMode === 'simple'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                )}
+              >
+                Simple
+              </button>
+              <button
+                onClick={() => setViewMode('advanced')}
+                className={classNames(
+                  'rounded-md px-3 py-1.5 text-xs font-medium transition-colors',
+                  viewMode === 'advanced'
+                    ? 'bg-white text-gray-900 shadow-sm'
+                    : 'text-gray-600 hover:text-gray-900'
+                )}
+              >
+                Advanced
+              </button>
+            </div>
             <button
               onClick={() => navigate('/evals?new=1')}
               className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
@@ -198,7 +223,7 @@ export function Dashboard() {
           {/* Health Pulse */}
           <div className="rounded-lg border border-gray-200 bg-white p-5">
             <div className="flex justify-center">
-              <HealthPulse score={metrics?.composite || 0} label="Agent Health" size="md" />
+              <HealthPulse score={metrics?.success_rate || 0} label="Agent Health" size="md" />
             </div>
           </div>
 
@@ -235,10 +260,10 @@ export function Dashboard() {
             trend={metrics && metrics.success_rate >= 0.8 ? 'up' : metrics && metrics.success_rate >= 0.65 ? 'neutral' : 'down'}
           />
           <MetricCard
-            title="Response Quality"
-            value={metrics ? formatPercent(metrics.success_rate) : '0%'}
-            subtitle="rubric quality"
-            trend={metrics && metrics.success_rate >= 0.8 ? 'up' : 'neutral'}
+            title="Error Rate"
+            value={metrics ? formatPercent(metrics.error_rate) : '0%'}
+            subtitle="failure frequency"
+            trend={metrics && metrics.error_rate <= 0.05 ? 'up' : metrics && metrics.error_rate <= 0.15 ? 'neutral' : 'down'}
           />
           <MetricCard
             title="Latency p95"
@@ -255,11 +280,12 @@ export function Dashboard() {
         </div>
       </section>
 
-      {/* Diagnostics (collapsible) */}
-      <section className="rounded-lg border border-gray-200 bg-white p-5">
-        <details>
-          <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">Why? Diagnostic Signals</summary>
-          <div className="mt-4 space-y-4">
+      {/* Diagnostics (collapsible) - only in Advanced mode */}
+      {viewMode === 'advanced' && (
+        <section className="rounded-lg border border-gray-200 bg-white p-5">
+          <details>
+            <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">Why? Diagnostic Signals</summary>
+            <div className="mt-4 space-y-4">
             {/* Metric bars */}
             <div className="grid gap-4 lg:grid-cols-3">
               {[
@@ -332,7 +358,8 @@ export function Dashboard() {
             )}
           </div>
         </details>
-      </section>
+        </section>
+      )}
 
       {/* Journey Timeline */}
       {history.length > 0 && (
@@ -377,8 +404,9 @@ export function Dashboard() {
         </section>
       )}
 
-      {/* Cost Controls + Human Escape Hatches */}
-      <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
+      {/* Cost Controls + Human Escape Hatches - only in Advanced mode */}
+      {viewMode === 'advanced' && (
+        <section className="grid gap-4 xl:grid-cols-[1fr_1fr]">
         <div className="rounded-lg border border-gray-200 bg-white p-5">
           <h3 className="text-sm font-semibold text-gray-900">Cost Controls</h3>
           <p className="mt-1 text-sm text-gray-600">Spend tracking and diminishing returns detection.</p>
@@ -469,7 +497,8 @@ export function Dashboard() {
             </div>
           </div>
         </div>
-      </section>
+        </section>
+      )}
 
       {/* Event Timeline */}
       <section className="rounded-lg border border-gray-200 bg-white p-5">

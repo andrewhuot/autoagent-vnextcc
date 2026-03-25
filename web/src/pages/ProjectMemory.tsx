@@ -22,7 +22,7 @@ function SectionCard({
 }: {
   section: ProjectMemorySection;
   onContentChange: (key: string, content: string) => void;
-  onAddNote: (key: string) => void;
+  onAddNote: (key: string, note: string) => void;
   isAddingNote: boolean;
 }) {
   const [noteText, setNoteText] = useState('');
@@ -30,7 +30,7 @@ function SectionCard({
 
   function handleSubmitNote() {
     if (!noteText.trim()) return;
-    onAddNote(section.key);
+    onAddNote(section.key, noteText.trim());
     setNoteText('');
     setShowNoteInput(false);
   }
@@ -139,11 +139,7 @@ export function ProjectMemory() {
     );
   }
 
-  function handleAddNote(sectionKey: string) {
-    const noteInput = document.querySelector<HTMLInputElement>(
-      `input[placeholder="Enter a note..."]`
-    );
-    const note = noteInput?.value?.trim();
+  function handleAddNote(sectionKey: string, note: string) {
     if (!note) return;
 
     addNoteMutation.mutate(

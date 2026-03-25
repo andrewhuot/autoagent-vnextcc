@@ -4,24 +4,36 @@ import { Menu, Search } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { ToastViewport } from './ToastViewport';
+import { MockModeBanner } from './MockModeBanner';
 import { wsClient } from '../lib/websocket';
 
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
   '/evals': 'Eval Runs',
   '/optimize': 'Optimize',
+  '/live-optimize': 'Live Optimize',
   '/configs': 'Configs',
   '/conversations': 'Conversations',
   '/deploy': 'Deploy',
   '/loop': 'Loop Monitor',
-  '/events': 'Event Log',
+  '/opportunities': 'Opportunities',
   '/changes': 'Change Review',
+  '/experiments': 'Experiments',
+  '/traces': 'Traces',
+  '/events': 'Event Log',
+  '/autofix': 'AutoFix',
+  '/judge-ops': 'Judge Ops',
+  '/context': 'Context Workbench',
   '/runbooks': 'Runbooks',
   '/skills': 'Skills',
-  '/memory': 'Project Memory',
   '/registry': 'Registry',
+  '/memory': 'Project Memory',
   '/blame': 'Blame Map',
   '/scorer-studio': 'Scorer Studio',
+  '/adk/import': 'ADK Import',
+  '/adk/deploy': 'ADK Deploy',
+  '/cx/import': 'CX Import',
+  '/cx/deploy': 'CX Deploy',
   '/agent-skills': 'Agent Skills',
   '/settings': 'Settings',
 };
@@ -90,6 +102,7 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-surface)] text-gray-900">
+      <MockModeBanner />
       <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">

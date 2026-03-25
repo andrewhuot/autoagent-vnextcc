@@ -22,37 +22,75 @@ import {
   GitPullRequest,
   Library,
   Brain,
-  Puzzle,
+  Download,
+  Upload,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
-const navItems = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
-  { to: '/optimize', label: 'Optimize', icon: Zap },
-  { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
-  { to: '/configs', label: 'Configs', icon: Settings2 },
-  { to: '/conversations', label: 'Conversations', icon: MessageSquare },
-  { to: '/deploy', label: 'Deploy', icon: Rocket },
-  { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
-  { to: '/opportunities', label: 'Opportunities', icon: Flag },
-  { to: '/changes', label: 'Changes', icon: GitPullRequest },
-  { to: '/experiments', label: 'Experiments', icon: TestTubes },
-  { to: '/traces', label: 'Traces', icon: Activity },
-  { to: '/events', label: 'Event Log', icon: ScrollText },
-  { to: '/autofix', label: 'AutoFix', icon: Wrench },
-  { to: '/judge-ops', label: 'Judge Ops', icon: Scale },
-  { to: '/context', label: 'Context Workbench', icon: Layers },
-  { to: '/runbooks', label: 'Runbooks', icon: Library },
-  { to: '/skills', label: 'Skills', icon: Zap },
-  { to: '/registry', label: 'Registry', icon: BookOpen },
-  { to: '/memory', label: 'Memory', icon: Brain },
-  { to: '/blame', label: 'Blame Map', icon: MapPin },
-  { to: '/scorer-studio', label: 'Scorer Studio', icon: Sparkles },
-  { to: '/adk/import', label: 'ADK Import', icon: Puzzle },
-  { to: '/adk/deploy', label: 'ADK Deploy', icon: Rocket },
-  { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },
-  { to: '/settings', label: 'Settings', icon: Settings },
+interface NavItem {
+  to: string;
+  label: string;
+  icon: any;
+}
+
+interface NavSection {
+  title: string;
+  items: NavItem[];
+}
+
+const navSections: NavSection[] = [
+  {
+    title: 'Operate',
+    items: [
+      { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
+      { to: '/conversations', label: 'Conversations', icon: MessageSquare },
+      { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
+      { to: '/deploy', label: 'Deploy', icon: Rocket },
+      { to: '/traces', label: 'Traces', icon: Activity },
+      { to: '/events', label: 'Event Log', icon: ScrollText },
+    ],
+  },
+  {
+    title: 'Improve',
+    items: [
+      { to: '/optimize', label: 'Optimize', icon: Zap },
+      { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
+      { to: '/opportunities', label: 'Opportunities', icon: Flag },
+      { to: '/changes', label: 'Changes', icon: GitPullRequest },
+      { to: '/experiments', label: 'Experiments', icon: TestTubes },
+      { to: '/autofix', label: 'AutoFix', icon: Wrench },
+    ],
+  },
+  {
+    title: 'Integrations',
+    items: [
+      { to: '/adk/import', label: 'ADK Import', icon: Download },
+      { to: '/adk/deploy', label: 'ADK Deploy', icon: Upload },
+      { to: '/cx/import', label: 'CX Import', icon: Download },
+      { to: '/cx/deploy', label: 'CX Deploy', icon: Upload },
+    ],
+  },
+  {
+    title: 'Governance',
+    items: [
+      { to: '/judge-ops', label: 'Judge Ops', icon: Scale },
+      { to: '/configs', label: 'Configs', icon: Settings2 },
+      { to: '/memory', label: 'Memory', icon: Brain },
+      { to: '/runbooks', label: 'Runbooks', icon: Library },
+      { to: '/scorer-studio', label: 'Scorer Studio', icon: Sparkles },
+    ],
+  },
+  {
+    title: 'Analysis',
+    items: [
+      { to: '/context', label: 'Context Workbench', icon: Layers },
+      { to: '/skills', label: 'Skills', icon: Zap },
+      { to: '/registry', label: 'Registry', icon: BookOpen },
+      { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },
+      { to: '/blame', label: 'Blame Map', icon: MapPin },
+    ],
+  },
 ];
 
 interface SidebarProps {
@@ -91,27 +129,54 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
           </button>
         </div>
 
-        <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 py-2">
-          {navItems.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              end={to === '/'}
-              onClick={onClose}
-              className={({ isActive }) =>
-                classNames(
-                  'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors',
-                  isActive
-                    ? 'bg-gray-100 font-medium text-gray-900'
-                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                )
-              }
-            >
-              <Icon className="h-4 w-4 shrink-0" />
-              <span>{label}</span>
-            </NavLink>
+        <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-2">
+          {navSections.map((section) => (
+            <div key={section.title}>
+              <h3 className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
+                {section.title}
+              </h3>
+              <div className="space-y-0.5">
+                {section.items.map(({ to, label, icon: Icon }) => (
+                  <NavLink
+                    key={to}
+                    to={to}
+                    end={to === '/'}
+                    onClick={onClose}
+                    className={({ isActive }) =>
+                      classNames(
+                        'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors',
+                        isActive
+                          ? 'bg-gray-100 font-medium text-gray-900'
+                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      )
+                    }
+                  >
+                    <Icon className="h-4 w-4 shrink-0" />
+                    <span>{label}</span>
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
+
+        <div className="space-y-0.5 px-3 py-2">
+          <NavLink
+            to="/settings"
+            onClick={onClose}
+            className={({ isActive }) =>
+              classNames(
+                'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-colors',
+                isActive
+                  ? 'bg-gray-100 font-medium text-gray-900'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              )
+            }
+          >
+            <Settings className="h-4 w-4 shrink-0" />
+            <span>Settings</span>
+          </NavLink>
+        </div>
 
         <div className="border-t border-gray-100 px-5 py-3">
           <kbd className="text-[11px] text-gray-400">&#8984;K</kbd>

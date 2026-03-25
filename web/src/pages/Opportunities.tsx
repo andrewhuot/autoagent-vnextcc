@@ -25,19 +25,7 @@ export function Opportunities() {
         <div className="flex items-center gap-2">
           <span className="h-2 w-2 rounded-full bg-amber-400" />
           <span className="text-sm text-gray-700">
-            <span className="font-semibold tabular-nums">{counts.open}</span> open
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-blue-500" />
-          <span className="text-sm text-gray-700">
-            <span className="font-semibold tabular-nums">{counts.in_progress}</span> in progress
-          </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="h-2 w-2 rounded-full bg-green-500" />
-          <span className="text-sm text-gray-700">
-            <span className="font-semibold tabular-nums">{counts.resolved}</span> resolved
+            <span className="font-semibold tabular-nums">{counts.open}</span> open opportunities
           </span>
         </div>
       </div>

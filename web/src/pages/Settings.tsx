@@ -103,7 +103,7 @@ export function Settings() {
               <ExternalLink className="h-3.5 w-3.5" />
             </a>
             <a
-              href="https://github.com/your-org/AutoAgent-VNextCC"
+              href="https://github.com/andrewhuot/autoagent-vnextcc"
               target="_blank"
               rel="noreferrer"
               className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2 text-sm text-blue-700 transition hover:bg-blue-50"
