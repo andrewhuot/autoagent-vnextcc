@@ -1349,6 +1349,20 @@ export function useRejectChange() {
   });
 }
 
+export function useUpdateHunkStatus() {
+  const queryClient = useQueryClient();
+  return useMutation<unknown, ApiRequestError, { cardId: string; hunkId: string; status: string }>({
+    mutationFn: ({ cardId, hunkId, status }) =>
+      fetchApi(`/changes/${encodeURIComponent(cardId)}/hunks`, {
+        method: 'PATCH',
+        body: JSON.stringify({ hunk_id: hunkId, status }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
 export function useExportChange(id: string | undefined) {
   return useQuery<{ markdown: string }>({
     queryKey: ['changes', 'export', id],

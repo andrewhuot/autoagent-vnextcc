@@ -597,6 +597,7 @@ export interface PromotionRecord {
 // ---------------------------------------------------------------------------
 
 export interface DiffHunk {
+  hunk_id: string;
   file_path: string;
   old_start: number;
   old_count: number;

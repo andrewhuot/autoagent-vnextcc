@@ -147,6 +147,157 @@ def _ts(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _auto_open_console(port: int = 8080) -> None:
+    """Start API server in background and open browser."""
+    import threading
+    import webbrowser
+
+    def _run_server():
+        import uvicorn
+        try:
+            uvicorn.run("api.server:app", host="0.0.0.0", port=port, log_level="warning")
+        except Exception:
+            pass  # Port in use or other error
+
+    server_thread = threading.Thread(target=_run_server, daemon=True)
+    server_thread.start()
+
+    # Give the server a moment to start
+    time.sleep(1.5)
+
+    # Check if server started by trying to connect
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(2)
+        sock.connect(("localhost", port))
+        sock.close()
+        # Server is running — open browser
+        webbrowser.open(f"http://localhost:{port}")
+        click.echo(click.style(
+            f"\n  Web console running at http://localhost:{port} — press Ctrl+C to stop",
+            fg="cyan",
+        ))
+        # Block until Ctrl+C
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            click.echo("\n  Shutting down web console...")
+    except (socket.timeout, ConnectionRefusedError, OSError):
+        sock.close()
+        click.echo(
+            "\n  Could not start web console. Run "
+            + click.style("autoagent server", bold=True)
+            + " to open it manually."
+        )
+
+
+def _format_relative_time(epoch: float) -> str:
+    """Format an epoch timestamp as a human-readable relative time string."""
+    delta = time.time() - epoch
+    if delta < 60:
+        return "just now"
+    if delta < 3600:
+        return f"{int(delta / 60)}m ago"
+    if delta < 86400:
+        return f"{int(delta / 3600)}h ago"
+    return f"{int(delta / 86400)}d ago"
+
+
+# ---------------------------------------------------------------------------
+# Magic UX helpers (Features 1, 2, 4, 5)
+# ---------------------------------------------------------------------------
+
+FAILURE_TO_RUNBOOK: dict[str, str] = {
+    "routing_error": "fix-retrieval-grounding",
+    "safety_violation": "tighten-safety-policy",
+    "timeout": "reduce-tool-latency",
+    "tool_failure": "reduce-tool-latency",
+    "unhelpful_response": "improve-response-quality",
+    "quality_issue": "improve-response-quality",
+}
+
+
+def _bar_chart(value: float, width: int = 10) -> str:
+    """Return a Unicode block bar chart string for *value* in [0, 1]."""
+    filled = round(value * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def _generate_recommendations(report, score) -> list[str]:  # noqa: ANN001
+    """Return up to 3 actionable recommendation strings based on failure buckets."""
+    buckets = report.failure_buckets
+    if not buckets:
+        return []
+    total = sum(buckets.values())
+    if total == 0:
+        return []
+
+    sorted_buckets = sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)
+    recs: list[str] = []
+    for i, (bucket, count) in enumerate(sorted_buckets[:3], start=1):
+        pct = round(count / total * 100)
+        runbook = FAILURE_TO_RUNBOOK.get(bucket, "improve-response-quality")
+        recs.append(
+            f"  {i}. {bucket} is {pct}% of failures"
+            f" → autoagent runbook apply {runbook}"
+        )
+    return recs
+
+
+def _stream_cycle_output(
+    cycle_num: int,
+    total: int,
+    report,  # noqa: ANN001
+    proposal_desc: str | None,
+    score_after: float | None,
+    score_before: float | None,
+    p_value: float | None = None,
+) -> None:
+    """Print rich streaming output for a single optimization cycle."""
+    click.echo(f"\n  Cycle {cycle_num}/{total}")
+
+    # Diagnose step
+    buckets = report.failure_buckets if report is not None else {}
+    total_failures = sum(buckets.values())
+    if total_failures > 0:
+        parts = ", ".join(f"{count} {name}" for name, count in
+                         sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)[:3])
+        click.echo(click.style(f"    ↳ Diagnosing... found {parts}", fg="white"))
+    else:
+        click.echo(click.style("    ↳ Diagnosing... no dominant failures detected", fg="white"))
+
+    # Proposing step
+    if buckets:
+        dominant = max(buckets, key=lambda k: buckets[k])
+        click.echo(click.style(
+            f"    ↳ Proposing fix for {dominant} (dominant failure)", fg="white"
+        ))
+    else:
+        click.echo(click.style("    ↳ Proposing config improvement", fg="white"))
+
+    click.echo(click.style("    ↳ Evaluating candidate config...", fg="white"))
+
+    # Result step
+    if score_after is not None and score_before is not None:
+        delta = score_after - score_before
+        if delta > 0:
+            p_str = f" (p={p_value:.2f})" if p_value is not None else ""
+            click.echo(click.style(
+                f"    ↳ ✓ Accepted: +{delta:.3f} improvement{p_str}", fg="green"
+            ))
+        else:
+            click.echo(click.style(
+                f"    ↳ ✗ Rejected: {delta:.3f} (no improvement)", fg="yellow"
+            ))
+    else:
+        click.echo(click.style("    ↳ No change applied", fg="yellow"))
+
+    if proposal_desc:
+        click.echo(click.style(f"    → {proposal_desc}", fg="cyan"))
+
+
 def _build_runtime_components() -> tuple[object, EvalRunner, Proposer]:
     """Create runtime-configured eval runner and multi-model proposer."""
     runtime = load_runtime_config()
@@ -489,35 +640,53 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
     )
 
     for cycle in range(1, cycles + 1):
-        if cycles > 1:
-            click.echo(f"\n{'=' * 50}")
-            click.echo(f"Cycle {cycle}/{cycles}")
-            click.echo(f"{'=' * 50}")
-
         report = observer.observe()
-        click.echo(f"Observed success={report.metrics.success_rate:.2%} error={report.metrics.error_rate:.2%}")
 
         if not report.needs_optimization:
-            click.echo("System healthy; skipping optimization.")
+            click.echo(f"\n  Cycle {cycle}/{cycles} — System healthy; skipping optimization.")
             continue
 
         current_config = _ensure_active_config(deployer)
         failure_samples = _build_failure_samples(store)
-        new_config, status = optimizer.optimize(
+        new_config, opt_status = optimizer.optimize(
             report,
             current_config,
             failure_samples=failure_samples,
         )
-        click.echo(f"Optimizer: {status}")
+
+        # Gather storytelling data from memory
+        latest_attempts = memory.recent(limit=1)
+        latest = latest_attempts[0] if latest_attempts else None
+        proposal_desc = latest.change_description if latest else None
+        score_after: float | None = latest.score_after if latest else None
+        score_before: float | None = latest.score_before if latest else None
+        p_value: float | None = latest.significance_p_value if latest else None
+
+        _stream_cycle_output(
+            cycle_num=cycle,
+            total=cycles,
+            report=report,
+            proposal_desc=proposal_desc,
+            score_after=score_after,
+            score_before=score_before,
+            p_value=p_value,
+        )
 
         if new_config is not None:
             score = eval_runner.run(config=new_config)
             deploy_result = deployer.deploy(new_config, _score_to_dict(score))
-            click.echo(f"Deploy: {deploy_result}")
-            _print_score(score, "New config score")
+            click.echo(f"  Deploy: {deploy_result}")
 
     if cycles > 1:
         click.echo(f"\nOptimization complete. {cycles} cycles executed.")
+
+    # Feature 4: recommendations
+    final_report = observer.observe()
+    recs = _generate_recommendations(final_report, None)
+    if recs:
+        click.echo(click.style("\n  ⚡ Recommended next steps:", fg="cyan", bold=True))
+        for rec in recs:
+            click.echo(rec)
 
     if proposer.llm_router is not None:
         summary = proposer.llm_router.cost_summary()
@@ -1002,51 +1171,64 @@ def status(db: str, configs_dir: str, memory_db: str) -> None:
     Examples:
       autoagent status
     """
-    click.echo("\n╔══════════════════════════════════════════════════╗")
-    click.echo("║           AutoAgent VNextCC Status               ║")
-    click.echo("╚══════════════════════════════════════════════════╝")
+    # Feature 5: Rich status display
+    click.echo(click.style("\nAutoAgent Status", bold=True))
+    click.echo("━" * 17)
 
-    # Conversations
     store = ConversationStore(db_path=db)
-    total_conversations = store.count()
-    click.echo(f"\n  Conversations: {total_conversations}")
-
-    if total_conversations > 0:
-        report = Observer(store).observe()
-        metrics = report.metrics
-        # Color-code success rate
-        sr = metrics.success_rate
-        sr_indicator = "●" if sr >= 0.8 else "◐" if sr >= 0.6 else "○"
-        click.echo(f"  {sr_indicator} Success rate:  {sr:.2%}")
-        click.echo(f"    Error rate:    {metrics.error_rate:.2%}")
-        click.echo(f"    Avg latency:   {metrics.avg_latency_ms:.1f}ms")
-        click.echo(f"    Safety:        {metrics.safety_violation_rate:.2%} violations")
-
-        if report.needs_optimization:
-            click.echo(f"\n  ⚠ Optimization recommended: {report.reason}")
-
-    # Deployment status
     deployer = Deployer(configs_dir=configs_dir, store=store)
-    deploy_status = deployer.status()
-    click.echo(f"\n  Config versions: {deploy_status['total_versions']}")
-
-    active = deploy_status["active_version"]
-    canary = deploy_status["canary_version"]
-    click.echo(f"    Active:  v{active:03d}" if active else "    Active:  none")
-    if canary:
-        click.echo(f"    Canary:  v{canary:03d}")
-
-    # Recent optimization attempts
     memory = OptimizationMemory(db_path=memory_db)
-    recent = memory.recent(limit=5)
-    if recent:
-        click.echo("\n  Recent optimizations:")
-        for attempt in recent:
-            status_icon = "✓" if attempt.status == "accepted" else "✗"
-            delta = attempt.score_after - attempt.score_before
-            delta_str = f"+{delta:.4f}" if delta > 0 else f"{delta:.4f}"
-            click.echo(f"    {status_icon} [{attempt.status}] {attempt.change_description}")
-            click.echo(f"      Score: {attempt.score_before:.4f} → {attempt.score_after:.4f} ({delta_str})")
+
+    # Config info
+    deploy_status = deployer.status()
+    active = deploy_status["active_version"]
+    config_str = f"v{active:03d}" if active else "none"
+    click.echo(f"  Config:     {config_str}")
+
+    # Conversations count (preserved for compatibility)
+    total_conversations = store.count()
+    click.echo(f"  Conversations: {total_conversations}")
+
+    # Eval score from memory
+    recent_attempts = memory.recent(limit=1)
+    if recent_attempts:
+        latest = recent_attempts[0]
+        click.echo(f"  Eval score: {latest.score_after:.4f}")
+    else:
+        click.echo("  Eval score: n/a")
+
+    # Health metrics
+    report = Observer(store).observe()
+    metrics = report.metrics
+    safety_str = f"{metrics.safety_violation_rate:.3f}"
+    safety_ok = "✓" if metrics.safety_violation_rate == 0.0 else "✗"
+    click.echo(f"  Safety:     {safety_str} {safety_ok}")
+
+    # Cycles run
+    all_attempts = memory.recent(limit=100)
+    click.echo(f"  Cycles run: {len(all_attempts)}")
+
+    # Top failures bar chart
+    buckets = report.failure_buckets
+    if buckets:
+        click.echo("\n  Top failures:")
+        total_failures = sum(buckets.values())
+        sorted_buckets = sorted(buckets.items(), key=lambda kv: kv[1], reverse=True)[:5]
+        for bucket_name, count in sorted_buckets:
+            pct = count / total_failures if total_failures > 0 else 0.0
+            bar = _bar_chart(pct)
+            pct_int = round(pct * 100)
+            click.echo(f"    {bucket_name:<20} {bar}  {pct_int:>3}% ({count} conversations)")
+
+    # Recommendation
+    recs = _generate_recommendations(report, None)
+    if recs:
+        # Just show the first recommendation on this compact view
+        first_runbook = recs[0].split("autoagent runbook apply ")[-1].strip()
+        click.echo(f"\n  Recommended: autoagent runbook apply {first_runbook}")
+
+    # Loop status
+    click.echo("\n  Loop: idle")
 
 
 # ---------------------------------------------------------------------------
@@ -2641,8 +2823,9 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
 @click.option("--verbose", is_flag=True, default=False, help="Show detailed output.")
 @click.option("--dir", "target_dir", default=".", show_default=True,
               help="Directory to initialize in.")
+@click.option("--open/--no-open", "auto_open", default=True, help="Auto-open web console after completion.")
 @click.pass_context
-def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: str) -> None:
+def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: str, auto_open: bool) -> None:
     """Run the ENTIRE golden path: init → seed → eval → optimize → summary.
 
     A single command that takes you from zero to optimized agent in minutes.
@@ -2693,23 +2876,35 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
 
     best_score = baseline_score.composite
     for cycle in range(1, 4):
-        click.echo(f"\n  Cycle {cycle}/3 ", nl=False)
         report = observer_mod_observe(store)
         current_config = _ensure_active_config(deployer)
         failure_samples = _build_failure_samples(store)
-        new_config, status = optimizer.optimize(
+        new_config, qs_status = optimizer.optimize(
             report, current_config, failure_samples=failure_samples,
         )
+
+        # Feature 1 + 2: gather latest attempt for storytelling
+        latest_attempts = memory.recent(limit=1)
+        latest = latest_attempts[0] if latest_attempts else None
+        proposal_desc = latest.change_description if latest else None
+        score_after: float | None = latest.score_after if latest else None
+        score_before_val: float | None = latest.score_before if latest else None
+        p_val: float | None = latest.significance_p_value if latest else None
+
+        _stream_cycle_output(
+            cycle_num=cycle,
+            total=3,
+            report=report,
+            proposal_desc=proposal_desc,
+            score_after=score_after,
+            score_before=score_before_val,
+            p_value=p_val,
+        )
+
         if new_config is not None:
             score = eval_runner.run(config=new_config)
             deployer.deploy(new_config, _score_to_dict(score))
-            improvement = score.composite - best_score
-            color = "green" if improvement > 0 else "yellow"
-            click.echo(click.style(f"  composite={score.composite:.4f}", fg=color)
-                       + f" ({'+' if improvement >= 0 else ''}{improvement:.4f})")
             best_score = max(best_score, score.composite)
-        else:
-            click.echo(click.style(f"  {status}", fg="yellow"))
 
     # Step 4: Summary
     click.echo(click.style("\n━━━ Step 4/4: Summary", fg="cyan", bold=True))
@@ -2721,9 +2916,32 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     else:
         click.echo(click.style(f"  Improvement: {improvement:.4f}", fg="yellow"))
 
+    # Feature 1: Story block — top 3 accepted changes
+    accepted = [a for a in memory.recent(limit=10) if a.status == "accepted"]
+    accepted.sort(key=lambda a: a.score_after - a.score_before, reverse=True)
+    if accepted:
+        click.echo(click.style(
+            f"\n  ✦ Your agent improved from {baseline_score.composite:.2f}"
+            f" → {best_score:.2f} in 3 cycles.", fg="cyan", bold=True,
+        ))
+        click.echo("    Key improvements:")
+        for i, attempt in enumerate(accepted[:3], start=1):
+            click.echo(f"    {i}. {attempt.change_description}")
+
+    # Feature 4: Recommendations
+    final_report = observer_mod_observe(store)
+    recs = _generate_recommendations(final_report, None)
+    if recs:
+        click.echo(click.style("\n  ⚡ Recommended next steps:", fg="cyan", bold=True))
+        for rec in recs:
+            click.echo(rec)
+
     click.echo(click.style("\n  ✦ Quickstart complete!", fg="cyan", bold=True))
     click.echo("    Next: " + click.style("autoagent server", bold=True)
                + " to explore results in the web console\n")
+
+    if auto_open:
+        _auto_open_console()
 
 
 def observer_mod_observe(store: ConversationStore):
@@ -2739,8 +2957,9 @@ def observer_mod_observe(store: ConversationStore):
 @cli.command("demo")
 @click.option("--dir", "target_dir", default=".", show_default=True,
               help="Directory to initialize in.")
+@click.option("--open/--no-open", "auto_open", default=True, help="Auto-open web console after completion.")
 @click.pass_context
-def demo(ctx: click.Context, target_dir: str) -> None:
+def demo(ctx: click.Context, target_dir: str, auto_open: bool) -> None:
     """Interactive demo: seed data, run one optimise cycle, show results.
 
     More visual and concise than quickstart — designed for presentations.
@@ -2786,19 +3005,35 @@ def demo(ctx: click.Context, target_dir: str) -> None:
     report = observer_mod_observe(store)
     current_config = _ensure_active_config(deployer)
     failure_samples = _build_failure_samples(store)
-    new_config, status = optimizer.optimize(
+    new_config, demo_status = optimizer.optimize(
         report, current_config, failure_samples=failure_samples,
+    )
+
+    # Feature 2: streaming output for demo cycle
+    latest_attempts = memory.recent(limit=1)
+    latest = latest_attempts[0] if latest_attempts else None
+    proposal_desc = latest.change_description if latest else None
+    s_after: float | None = latest.score_after if latest else None
+    s_before: float | None = latest.score_before if latest else None
+    p_val: float | None = latest.significance_p_value if latest else None
+
+    _stream_cycle_output(
+        cycle_num=1, total=1, report=report,
+        proposal_desc=proposal_desc,
+        score_after=s_after, score_before=s_before, p_value=p_val,
     )
 
     if new_config is not None:
         new_score = eval_runner.run(config=new_config)
         deployer.deploy(new_config, _score_to_dict(new_score))
-        delta = new_score.composite - score.composite
-        color = "green" if delta > 0 else "yellow"
-        click.echo(f"  Before: {score.composite:.4f}  →  After: {new_score.composite:.4f}  "
-                   + click.style(f"({'+' if delta >= 0 else ''}{delta:.4f})", fg=color))
-    else:
-        click.echo(f"  Optimizer: {status}")
+
+    # Feature 4: Recommendations
+    final_report = observer_mod_observe(store)
+    recs = _generate_recommendations(final_report, None)
+    if recs:
+        click.echo(click.style("\n  ⚡ Recommended next steps:", fg="cyan", bold=True))
+        for rec in recs:
+            click.echo(rec)
 
     # Done
     click.echo(click.style("\n▸ Demo complete!", fg="cyan", bold=True))
@@ -2806,6 +3041,232 @@ def demo(ctx: click.Context, target_dir: str) -> None:
                + " to open the web console")
     click.echo("  Run " + click.style("autoagent quickstart", bold=True)
                + " for the full multi-cycle experience\n")
+
+    if auto_open:
+        _auto_open_console()
+
+
+@cli.command("explain")
+@click.option("--verbose", is_flag=True, default=False, help="Show detailed breakdown.")
+@click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
+@click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
+def explain(verbose: bool, db: str, configs_dir: str, memory_db: str) -> None:
+    """Generate a plain-English summary of the agent's current state."""
+    store = ConversationStore(db_path=db)
+    observer = Observer(store)
+    report: "HealthReport" = observer.observe()
+    metrics = report.metrics
+    failure_buckets: dict = report.failure_buckets or {}
+
+    memory = OptimizationMemory(db_path=memory_db)
+    attempts = memory.recent(limit=100)
+
+    deployer = Deployer(configs_dir=configs_dir, store=store)
+    dep_status = deployer.status()
+
+    # Determine health label
+    sr = metrics.success_rate
+    if sr >= 0.9:
+        health_label = "Excellent"
+        health_color = "green"
+    elif sr >= 0.75:
+        health_label = "Good"
+        health_color = "green"
+    elif sr >= 0.5:
+        health_label = "Needs Work"
+        health_color = "yellow"
+    else:
+        health_label = "Critical"
+        health_color = "red"
+
+    # Load agent name from config if possible
+    try:
+        cfg = load_config(configs_dir)
+        agent_name = cfg.get("agent_name") or cfg.get("name") or "Agent"
+        runtime_label = cfg.get("runtime", "")
+    except Exception:
+        agent_name = "Agent"
+        runtime_label = ""
+
+    header_parts = [agent_name]
+    if runtime_label:
+        header_parts.append(f"({runtime_label})")
+    header = "Your Agent: " + " ".join(header_parts)
+
+    click.echo(click.style(header, bold=True))
+    click.echo(click.style("━" * len(header), fg="cyan"))
+    click.echo()
+
+    health_str = click.style(f"{health_label} ({sr:.2f}/1.00)", fg=health_color, bold=True)
+    click.echo(f"Overall health: {health_str}")
+    click.echo()
+
+    # Prose summary
+    cycle_count = len(attempts)
+    pct_correct = int(sr * 100)
+
+    top_bucket = max(failure_buckets, key=failure_buckets.get) if failure_buckets else None
+    total_failures = sum(failure_buckets.values())
+
+    if top_bucket and total_failures > 0:
+        top_pct = int((failure_buckets[top_bucket] / total_failures) * 100)
+        weakness_prose = (
+            f"The main weakness is {top_bucket.replace('_', ' ')}, "
+            f"which accounts for {top_pct}% of all failures."
+        )
+    else:
+        weakness_prose = "No significant failure patterns detected."
+
+    if cycle_count > 0 and attempts:
+        baseline = attempts[-1].score_before if attempts else None
+        latest = attempts[0].score_after if attempts else None
+        if baseline and latest and baseline > 0:
+            improvement_pct = int(((latest - baseline) / baseline) * 100)
+            cycle_prose = (
+                f" The optimizer has run {cycle_count} cycle{'s' if cycle_count != 1 else ''} "
+                f"and improved quality by {improvement_pct}% from the initial baseline."
+            )
+        else:
+            cycle_prose = f" The optimizer has run {cycle_count} cycle{'s' if cycle_count != 1 else ''}."
+    else:
+        cycle_prose = " The optimizer has not run any cycles yet."
+
+    click.echo(f"Your agent handles {pct_correct}% of queries correctly. {weakness_prose}{cycle_prose}")
+    click.echo()
+
+    # Strengths
+    click.echo(click.style("Strengths:", bold=True))
+    has_strength = False
+    if metrics.safety_violation_rate == 0:
+        click.echo("  " + click.style("✓", fg="green") + " Safety compliance: 100% — zero violations")
+        has_strength = True
+    if metrics.success_rate > 0.9:
+        click.echo("  " + click.style("✓", fg="green") + " Routing accuracy: above 90% threshold")
+        has_strength = True
+    if metrics.avg_latency_ms > 0 and metrics.avg_latency_ms < 2000:
+        click.echo("  " + click.style("✓", fg="green") + f" Response latency: {metrics.avg_latency_ms:.0f}ms avg (within target)")
+        has_strength = True
+    if metrics.error_rate < 0.05:
+        click.echo("  " + click.style("✓", fg="green") + " Error rate: low (< 5%)")
+        has_strength = True
+    if not has_strength:
+        click.echo("  " + click.style("─", fg="yellow") + " No significant strengths identified yet")
+    click.echo()
+
+    # Weaknesses
+    click.echo(click.style("Weaknesses:", bold=True))
+    has_weakness = False
+    for bucket, count in sorted(failure_buckets.items(), key=lambda x: -x[1]):
+        if count > 0:
+            bucket_label = bucket.replace("_", " ").title()
+            if total_failures > 0:
+                fail_pct = int((count / total_failures) * 100)
+                click.echo(
+                    "  " + click.style("✗", fg="red") + f" {bucket_label}: {fail_pct}% failure rate ({count} occurrences)"
+                )
+            else:
+                click.echo("  " + click.style("✗", fg="red") + f" {bucket_label}: {count} occurrences")
+            has_weakness = True
+    if metrics.avg_latency_ms >= 3000:
+        click.echo(
+            "  " + click.style("✗", fg="red")
+            + f" Tool latency: {metrics.avg_latency_ms / 1000:.1f}s avg (target: 3.0s)"
+        )
+        has_weakness = True
+    if metrics.error_rate >= 0.1:
+        click.echo(
+            "  " + click.style("✗", fg="red")
+            + f" Error rate: {metrics.error_rate * 100:.0f}% (above 10% threshold)"
+        )
+        has_weakness = True
+    if not has_weakness:
+        click.echo("  " + click.style("─", fg="yellow") + " No significant weaknesses detected")
+    click.echo()
+
+    # Recommendation
+    click.echo(click.style("Recommendation:", bold=True))
+    if top_bucket:
+        click.echo(f"  Focus on {top_bucket.replace('_', ' ')} accuracy. Run:")
+        click.echo("  " + click.style("autoagent runbook apply fix-retrieval-grounding", bold=True))
+    elif metrics.success_rate < 0.75:
+        click.echo("  Run an optimization cycle to improve overall quality:")
+        click.echo("  " + click.style("autoagent optimize --cycles 3", bold=True))
+    else:
+        click.echo("  Agent is performing well. Continue monitoring with:")
+        click.echo("  " + click.style("autoagent status", bold=True))
+
+    # Verbose: per-bucket details and full score history
+    if verbose:
+        click.echo()
+        click.echo(click.style("── Verbose: Failure Bucket Details ──", fg="cyan"))
+        if failure_buckets:
+            for bucket, count in sorted(failure_buckets.items(), key=lambda x: -x[1]):
+                bucket_label = bucket.replace("_", " ").title()
+                click.echo(f"  {bucket_label}: {count} failures")
+        else:
+            click.echo("  No failure buckets recorded.")
+
+        click.echo()
+        click.echo(click.style("── Verbose: Score History ──", fg="cyan"))
+        if attempts:
+            for i, attempt in enumerate(reversed(attempts)):
+                version = i + 1
+                rel = _format_relative_time(attempt.timestamp)
+                delta = attempt.score_after - attempt.score_before
+                delta_str = f"{'+' if delta >= 0 else ''}{delta:.4f}"
+                status_icon = click.style("✓", fg="green") if attempt.status == "accepted" else click.style("✗", fg="red")
+                click.echo(
+                    f"  v{version:03d}  {attempt.score_after:.4f}  {status_icon} {delta_str}"
+                    f"  {attempt.change_description[:45]}  {rel}"
+                )
+        else:
+            click.echo("  No optimization history yet.")
+
+
+@cli.command("replay")
+@click.option("--limit", default=20, show_default=True, type=int, help="Number of entries to show.")
+@click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
+def replay(limit: int, memory_db: str) -> None:
+    """Show optimization history like git log --oneline."""
+    memory = OptimizationMemory(db_path=memory_db)
+    attempts = memory.recent(limit=limit)
+
+    click.echo(click.style("AutoAgent Optimization History", bold=True))
+    click.echo(click.style("━" * 30, fg="cyan"))
+    click.echo()
+
+    if not attempts:
+        click.echo(click.style("  No optimization history yet.", fg="yellow"))
+        click.echo()
+        click.echo("  Run " + click.style("autoagent optimize", bold=True) + " to start the first cycle.")
+        return
+
+    # reverse to chronological order (recent() returns newest first)
+    chronological = list(reversed(attempts))
+
+    for i, attempt in enumerate(chronological):
+        version = i + 1
+        score = attempt.score_after
+        accepted = attempt.status == "accepted"
+        status_icon = click.style("✓", fg="green") if accepted else click.style("✗", fg="red")
+        delta = attempt.score_after - attempt.score_before
+        if delta == 0 and attempt.score_before == 0:
+            delta_str = click.style("─  ─", fg="white", dim=True)
+        else:
+            delta_sign = "+" if delta >= 0 else ""
+            delta_color = "green" if delta >= 0 else "red"
+            delta_str = click.style(f"{delta_sign}{delta:.2f}", fg=delta_color)
+        desc = attempt.change_description or "No description"
+        if not accepted:
+            desc = f"[rejected] {desc}"
+        desc_truncated = desc[:45].ljust(45)
+        rel = _format_relative_time(attempt.timestamp)
+        version_str = click.style(f"v{version:03d}", fg="cyan" if accepted else "white", dim=(not accepted))
+        score_str = f"{score:.4f}"
+        click.echo(f"  {version_str}  {score_str}  {status_icon} {delta_str}  {desc_truncated}  {rel}")
+
+    click.echo()
 
 
 if __name__ == "__main__":

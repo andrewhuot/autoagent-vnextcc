@@ -3,9 +3,10 @@ import { useQuery } from '@tanstack/react-query';
 import { Check, X, Download, ChevronDown, ChevronRight, AlertTriangle, FileCheck, Shield, TrendingUp } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
-import { useChanges, useApplyChange, useRejectChange } from '../lib/api';
+import { HunkDiffViewer } from '../components/DiffViewer';
+import { useChanges, useApplyChange, useRejectChange, useUpdateHunkStatus } from '../lib/api';
 import { classNames } from '../lib/utils';
-import type { ChangeCard, DiffHunk } from '../lib/types';
+import type { ChangeCard } from '../lib/types';
 
 const API_BASE = '/api';
 
@@ -15,45 +16,21 @@ const riskColors: Record<string, string> = {
   high: 'bg-red-50 text-red-700',
 };
 
-function HunkViewer({ hunk, index }: { hunk: DiffHunk; index: number }) {
-  const lines = hunk.content.split('\n');
+function MetricBar({ label, before, after }: { label: string; before: number; after: number }) {
+  const improved = after >= before;
+  const pct = Math.min(after * 100, 100);
   return (
-    <div className="rounded-lg border border-gray-200 bg-white">
-      <div className="flex items-center justify-between border-b border-gray-100 px-3 py-2">
-        <span className="font-mono text-xs text-gray-600">{hunk.file_path}</span>
-        <div className="flex items-center gap-2">
-          <span className="text-[11px] text-gray-400">
-            @@ -{hunk.old_start},{hunk.old_count} +{hunk.new_start},{hunk.new_count} @@
-          </span>
-          <span
-            className={classNames(
-              'rounded-md px-1.5 py-0.5 text-[10px] font-medium',
-              hunk.status === 'accepted'
-                ? 'bg-green-50 text-green-700'
-                : hunk.status === 'rejected'
-                  ? 'bg-red-50 text-red-700'
-                  : 'bg-gray-100 text-gray-600'
-            )}
-          >
-            {hunk.status}
-          </span>
-        </div>
+    <div className="flex items-center gap-2 text-xs">
+      <span className="w-20 shrink-0 text-gray-600">{label}</span>
+      <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full ${improved ? 'bg-green-500' : 'bg-red-400'}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
-      <pre className="max-h-64 overflow-auto p-3 text-xs">
-        {lines.map((line, i) => (
-          <div
-            key={`${index}-${i}`}
-            className={classNames(
-              'px-1',
-              line.startsWith('+') ? 'bg-green-50 text-green-800' : '',
-              line.startsWith('-') ? 'bg-red-50 text-red-800' : '',
-              !line.startsWith('+') && !line.startsWith('-') ? 'text-gray-600' : ''
-            )}
-          >
-            {line}
-          </div>
-        ))}
-      </pre>
+      <span className={`font-mono ${improved ? 'text-green-700' : 'text-red-600'}`}>
+        {after.toFixed(4)}
+      </span>
     </div>
   );
 }
@@ -65,32 +42,28 @@ async function fetchChangeExport(id: string): Promise<string> {
   return data.markdown ?? '';
 }
 
-export function ChangeReview() {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+function SelectedCardDetail({ selectedCard }: { selectedCard: ChangeCard }) {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
 
-  const { data: changes = [], isLoading, isError } = useChanges();
   const applyMutation = useApplyChange();
   const rejectMutation = useRejectChange();
+  const updateHunkStatus = useUpdateHunkStatus();
 
   const exportQuery = useQuery({
-    queryKey: ['changes', 'export', selectedId],
-    queryFn: () => fetchChangeExport(selectedId!),
+    queryKey: ['changes', 'export', selectedCard.id],
+    queryFn: () => fetchChangeExport(selectedCard.id),
     enabled: false,
   });
 
-  const selectedCard = changes.find((c) => c.id === selectedId) ?? null;
-  const pendingChanges = changes.filter((c) => c.status === 'pending');
-
-  function handleApply(id: string) {
-    applyMutation.mutate({ id });
+  function handleApply() {
+    applyMutation.mutate({ id: selectedCard.id });
   }
 
-  function handleReject(id: string) {
+  function handleReject() {
     if (!rejectReason.trim()) return;
     rejectMutation.mutate(
-      { id, reason: rejectReason },
+      { id: selectedCard.id, reason: rejectReason },
       {
         onSuccess: () => {
           setRejectReason('');
@@ -107,12 +80,170 @@ export function ChangeReview() {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
         link.href = url;
-        link.download = `change-${selectedId}.md`;
+        link.download = `change-${selectedCard.id}.md`;
         link.click();
         URL.revokeObjectURL(url);
       }
     });
   }
+
+  function handleHunkAccept(hunkId: string) {
+    updateHunkStatus.mutate({ cardId: selectedCard.id, hunkId, status: 'accepted' });
+  }
+
+  function handleHunkReject(hunkId: string) {
+    updateHunkStatus.mutate({ cardId: selectedCard.id, hunkId, status: 'rejected' });
+  }
+
+  // Build combined metric keys from before+after for bar chart
+  const metricKeys = Array.from(
+    new Set([
+      ...Object.keys(selectedCard.metrics_before),
+      ...Object.keys(selectedCard.metrics_after),
+    ])
+  );
+
+  return (
+    <section className="rounded-lg border border-gray-200 bg-white p-5">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-gray-900">{selectedCard.title}</h3>
+          <p className="mt-1 text-sm text-gray-600">{selectedCard.why}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleExport}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100"
+          >
+            <Download className="h-3.5 w-3.5" />
+            Export MD
+          </button>
+          <button
+            onClick={handleApply}
+            disabled={applyMutation.isPending}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-700 disabled:opacity-60"
+          >
+            <Check className="h-3.5 w-3.5" />
+            {applyMutation.isPending ? 'Applying...' : 'Apply'}
+          </button>
+          <button
+            onClick={() => setShowRejectInput(!showRejectInput)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-red-700"
+          >
+            <X className="h-3.5 w-3.5" />
+            Reject
+          </button>
+        </div>
+      </div>
+
+      {showRejectInput && (
+        <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
+          <input
+            type="text"
+            placeholder="Rejection reason..."
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-red-500 focus:outline-none"
+          />
+          <button
+            onClick={handleReject}
+            disabled={rejectMutation.isPending || !rejectReason.trim()}
+            className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
+          >
+            {rejectMutation.isPending ? 'Rejecting...' : 'Confirm Reject'}
+          </button>
+        </div>
+      )}
+
+      {/* Summary card */}
+      <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+        <h4 className="text-sm font-semibold text-blue-900">Summary</h4>
+        <p className="mt-1 text-sm text-blue-700">
+          This change {selectedCard.why} by modifying {selectedCard.diff_hunks.length} config section
+          {selectedCard.diff_hunks.length !== 1 ? 's' : ''}.
+        </p>
+      </div>
+
+      {/* Info badges */}
+      <div className="mb-4 flex flex-wrap gap-2">
+        <span
+          className={classNames(
+            'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium',
+            riskColors[selectedCard.risk] ?? 'bg-gray-100 text-gray-600'
+          )}
+        >
+          <AlertTriangle className="h-3 w-3" />
+          {selectedCard.risk} risk
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700">
+          <Shield className="h-3 w-3" />
+          {Math.round(selectedCard.confidence.score * 100)}% confidence
+        </span>
+        <span className="rounded-md bg-gray-100 px-2 py-1 text-[11px] font-medium text-gray-600">
+          {selectedCard.status}
+        </span>
+      </div>
+
+      {/* Confidence explanation */}
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <h4 className="text-xs font-medium text-gray-500">Confidence Explanation</h4>
+        <p className="mt-1 text-sm text-gray-700">{selectedCard.confidence.explanation}</p>
+        {selectedCard.confidence.evidence.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {selectedCard.confidence.evidence.map((e, i) => (
+              <li key={i} className="text-xs text-gray-600">
+                - {e}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Metrics comparison with bar chart */}
+      <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+        <h4 className="mb-3 flex items-center gap-1.5 text-xs font-medium text-gray-500">
+          <TrendingUp className="h-3 w-3" />
+          Metrics Before → After
+        </h4>
+        <div className="space-y-2">
+          {metricKeys.map((key) => {
+            const before = selectedCard.metrics_before[key] ?? 0;
+            const after = selectedCard.metrics_after[key] ?? 0;
+            return <MetricBar key={key} label={key} before={before} after={after} />;
+          })}
+        </div>
+      </div>
+
+      {/* Rollout plan */}
+      {selectedCard.rollout_plan && (
+        <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <h4 className="text-xs font-medium text-gray-500">Rollout Plan</h4>
+          <p className="mt-1 text-sm text-gray-700">{selectedCard.rollout_plan}</p>
+        </div>
+      )}
+
+      {/* Diff hunks via HunkDiffViewer with per-hunk accept/reject */}
+      <div>
+        <h4 className="mb-2 text-xs font-medium text-gray-500">
+          Diff Hunks ({selectedCard.diff_hunks.length})
+        </h4>
+        <HunkDiffViewer
+          hunks={selectedCard.diff_hunks}
+          onAccept={handleHunkAccept}
+          onReject={handleHunkReject}
+        />
+      </div>
+    </section>
+  );
+}
+
+export function ChangeReview() {
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const { data: changes = [], isLoading, isError } = useChanges();
+
+  const selectedCard = changes.find((c) => c.id === selectedId) ?? null;
+  const pendingChanges = changes.filter((c) => c.status === 'pending');
 
   return (
     <div className="space-y-6">
@@ -193,148 +324,9 @@ export function ChangeReview() {
           </section>
 
           {/* Selected card detail */}
-          {selectedCard && (
-            <section className="rounded-lg border border-gray-200 bg-white p-5">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-900">{selectedCard.title}</h3>
-                  <p className="mt-1 text-sm text-gray-600">{selectedCard.why}</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={handleExport}
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export MD
-                  </button>
-                  <button
-                    onClick={() => handleApply(selectedCard.id)}
-                    disabled={applyMutation.isPending}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-700 disabled:opacity-60"
-                  >
-                    <Check className="h-3.5 w-3.5" />
-                    {applyMutation.isPending ? 'Applying...' : 'Apply'}
-                  </button>
-                  <button
-                    onClick={() => setShowRejectInput(!showRejectInput)}
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-red-700"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                    Reject
-                  </button>
-                </div>
-              </div>
+          {selectedCard && <SelectedCardDetail selectedCard={selectedCard} />}
 
-              {showRejectInput && (
-                <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3">
-                  <input
-                    type="text"
-                    placeholder="Rejection reason..."
-                    value={rejectReason}
-                    onChange={(e) => setRejectReason(e.target.value)}
-                    className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm focus:border-red-500 focus:outline-none"
-                  />
-                  <button
-                    onClick={() => handleReject(selectedCard.id)}
-                    disabled={rejectMutation.isPending || !rejectReason.trim()}
-                    className="rounded-md bg-red-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-60"
-                  >
-                    {rejectMutation.isPending ? 'Rejecting...' : 'Confirm Reject'}
-                  </button>
-                </div>
-              )}
-
-              {/* Info badges */}
-              <div className="mb-4 flex flex-wrap gap-2">
-                <span
-                  className={classNames(
-                    'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium',
-                    riskColors[selectedCard.risk] ?? 'bg-gray-100 text-gray-600'
-                  )}
-                >
-                  <AlertTriangle className="h-3 w-3" />
-                  {selectedCard.risk} risk
-                </span>
-                <span className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-[11px] font-medium text-blue-700">
-                  <Shield className="h-3 w-3" />
-                  {Math.round(selectedCard.confidence.score * 100)}% confidence
-                </span>
-                <span className="rounded-md bg-gray-100 px-2 py-1 text-[11px] font-medium text-gray-600">
-                  {selectedCard.status}
-                </span>
-              </div>
-
-              {/* Confidence explanation */}
-              <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                <h4 className="text-xs font-medium text-gray-500">Confidence Explanation</h4>
-                <p className="mt-1 text-sm text-gray-700">{selectedCard.confidence.explanation}</p>
-                {selectedCard.confidence.evidence.length > 0 && (
-                  <ul className="mt-2 space-y-1">
-                    {selectedCard.confidence.evidence.map((e, i) => (
-                      <li key={i} className="text-xs text-gray-600">
-                        - {e}
-                      </li>
-                    ))}
-                  </ul>
-                )}
-              </div>
-
-              {/* Metrics before/after */}
-              <div className="mb-4 grid gap-4 sm:grid-cols-2">
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-gray-500">
-                    <TrendingUp className="h-3 w-3" />
-                    Metrics Before
-                  </h4>
-                  <div className="space-y-1">
-                    {Object.entries(selectedCard.metrics_before).map(([key, val]) => (
-                      <div key={key} className="flex items-center justify-between text-xs">
-                        <span className="text-gray-600">{key}</span>
-                        <span className="font-mono font-medium text-gray-900">{typeof val === 'number' ? val.toFixed(4) : val}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <h4 className="mb-2 flex items-center gap-1.5 text-xs font-medium text-gray-500">
-                    <TrendingUp className="h-3 w-3" />
-                    Metrics After
-                  </h4>
-                  <div className="space-y-1">
-                    {Object.entries(selectedCard.metrics_after).map(([key, val]) => (
-                      <div key={key} className="flex items-center justify-between text-xs">
-                        <span className="text-gray-600">{key}</span>
-                        <span className="font-mono font-medium text-gray-900">{typeof val === 'number' ? val.toFixed(4) : val}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              {/* Rollout plan */}
-              {selectedCard.rollout_plan && (
-                <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
-                  <h4 className="text-xs font-medium text-gray-500">Rollout Plan</h4>
-                  <p className="mt-1 text-sm text-gray-700">{selectedCard.rollout_plan}</p>
-                </div>
-              )}
-
-              {/* Diff hunks */}
-              <div>
-                <h4 className="mb-2 text-xs font-medium text-gray-500">
-                  Diff Hunks ({selectedCard.diff_hunks.length})
-                </h4>
-                <div className="space-y-3">
-                  {selectedCard.diff_hunks.map((hunk, i) => (
-                    <HunkViewer key={i} hunk={hunk} index={i} />
-                  ))}
-                </div>
-              </div>
-            </section>
-          )}
-
-          {/* All changes (non-pending) */}
+          {/* Resolved changes */}
           {changes.filter((c) => c.status !== 'pending').length > 0 && (
             <section className="rounded-lg border border-gray-200 bg-white p-5">
               <h3 className="mb-4 text-sm font-semibold text-gray-900">Resolved Changes</h3>
