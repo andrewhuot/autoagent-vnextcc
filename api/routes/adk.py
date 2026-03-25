@@ -56,6 +56,7 @@ class AdkStatusResponse(BaseModel):
 
 class AdkDiffResponse(BaseModel):
     changes: list[dict]
+    diff: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -65,11 +66,9 @@ class AdkDiffResponse(BaseModel):
 @router.post("/import", response_model=AdkImportResponse, status_code=201)
 async def import_adk_agent(body: AdkImportRequest) -> AdkImportResponse:
     """Import an ADK agent from local directory."""
-    from adk import AdkParser, AdkMapper, AdkImporter
+    from adk import AdkImporter
     try:
-        parser = AdkParser()
-        mapper = AdkMapper()
-        importer = AdkImporter(parser, mapper)
+        importer = AdkImporter()
         result = importer.import_agent(
             agent_path=body.path,
             output_dir=body.output_dir,
@@ -90,11 +89,9 @@ async def import_adk_agent(body: AdkImportRequest) -> AdkImportResponse:
 @router.post("/export", response_model=AdkExportResponse)
 async def export_adk_agent(body: AdkExportRequest) -> AdkExportResponse:
     """Export optimized config back to ADK source."""
-    from adk import AdkParser, AdkMapper, AdkExporter
+    from adk import AdkExporter
     try:
-        parser = AdkParser()
-        mapper = AdkMapper()
-        exporter = AdkExporter(parser, mapper)
+        exporter = AdkExporter()
         result = exporter.export_agent(
             config=body.config,
             snapshot_path=body.snapshot_path,
@@ -139,23 +136,24 @@ async def deploy_adk_agent(body: AdkDeployRequest) -> AdkDeployResponse:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
-@router.get("/status", response_model=AdkStatusResponse)
-async def get_adk_status(path: str) -> AdkStatusResponse:
+@router.get("/status", response_model=dict)
+async def get_adk_status(path: str) -> dict:
     """Get agent structure summary."""
     from pathlib import Path
-    from adk import AdkParser
+    from adk import parse_agent_directory
     try:
         if not path:
             raise HTTPException(status_code=400, detail="path is required")
-        parser = AdkParser()
-        tree = parser.parse_agent_directory(Path(path))
-        return AdkStatusResponse(
-            agent_name=tree.root.name,
-            model=tree.root.model or "gemini-2.0-flash",
-            tools_count=len(tree.root.tools),
-            sub_agents=[sa.name for sa in tree.root.sub_agents],
-            has_config=bool(tree.root.generate_config),
-        )
+        tree = parse_agent_directory(Path(path))
+        return {
+            "agent": {
+                "name": tree.agent.name,
+                "model": tree.agent.model or "gemini-2.0-flash",
+                "tools": [{"name": t, "description": ""} for t in tree.agent.tools],
+                "sub_agents": [{"name": sa.agent.name, "tools": sa.agent.tools} for sa in tree.sub_agents],
+                "has_config": bool(tree.agent.generate_config),
+            }
+        }
     except HTTPException:
         raise
     except Exception as exc:
@@ -167,7 +165,7 @@ async def preview_adk_diff(config_path: str, snapshot_path: str) -> AdkDiffRespo
     """Preview export changes."""
     import yaml
     from pathlib import Path
-    from adk import AdkParser, AdkMapper, AdkExporter
+    from adk import AdkExporter
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
@@ -175,11 +173,17 @@ async def preview_adk_diff(config_path: str, snapshot_path: str) -> AdkDiffRespo
         raise HTTPException(status_code=400, detail=f"Invalid config: {exc}")
 
     try:
-        parser = AdkParser()
-        mapper = AdkMapper()
-        exporter = AdkExporter(parser, mapper)
+        exporter = AdkExporter()
         changes = exporter.preview_changes(config, snapshot_path)
-        return AdkDiffResponse(changes=changes)
+        # Generate a simple diff string from changes
+        diff_lines = []
+        for change in changes:
+            action = change.get("action", "modified")
+            file = change.get("file", "unknown")
+            field = change.get("field", "unknown")
+            diff_lines.append(f"{action}: {file} -> {field}")
+        diff = "\n".join(diff_lines) if diff_lines else None
+        return AdkDiffResponse(changes=changes, diff=diff)
     except HTTPException:
         raise
     except Exception as exc:

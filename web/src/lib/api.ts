@@ -23,7 +23,7 @@ import type {
   CxExportResult,
   CxDeployResult,
   CxWidgetResult,
-  CxChange,
+
   ExecutableSkill,
   SkillLeaderboardEntry,
   DeployHistoryEntry,
@@ -1614,9 +1614,9 @@ export function useAdkExport() {
 
 export function useAdkDeploy() {
   return useMutation<AdkDeployResult, ApiRequestError, {
-    agent_path: string;
-    target: 'cloudrun' | 'vertexai';
-    project_id: string;
+    path: string;
+    target: 'cloud-run' | 'vertex-ai';
+    project: string;
     region?: string;
   }>({
     mutationFn: (body) => fetchApi('/adk/deploy', { method: 'POST', body: JSON.stringify(body) }),
