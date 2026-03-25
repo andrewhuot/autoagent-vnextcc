@@ -89,6 +89,26 @@ class BudgetRuntimeConfig(BaseModel):
     tracker_db_path: str = ".autoagent/cost_tracker.db"
 
 
+class OptimizationConfig(BaseModel):
+    """New user-facing optimization config (objective-first).
+
+    This replaces the algorithm-centric knobs (search_strategy, bandit_policy)
+    with a goal-oriented surface: pick a mode, state your objective, set
+    guardrails and budgets.  The ``ModeRouter`` translates these into the
+    internal strategy parameters the optimizer needs.
+    """
+
+    mode: Literal["standard", "advanced", "research"] = "standard"
+    objective: str = ""
+    guardrails: list[str] = Field(default_factory=list)
+    budget_per_cycle: float = Field(1.0, ge=0.0, le=10000.0)
+    budget_daily: float = Field(10.0, ge=0.0, le=100000.0)
+    autonomy: Literal["supervised", "semi-auto", "autonomous"] = "supervised"
+    allowed_surfaces: list[str] = Field(
+        default_factory=lambda: ["instructions", "examples", "tool_descriptions"]
+    )
+
+
 class RuntimeConfig(BaseModel):
     """Top-level runtime settings loaded from `autoagent.yaml`."""
 
@@ -96,6 +116,7 @@ class RuntimeConfig(BaseModel):
     loop: LoopRuntimeConfig = Field(default_factory=LoopRuntimeConfig)
     eval: EvalRuntimeConfig = Field(default_factory=EvalRuntimeConfig)
     budget: BudgetRuntimeConfig = Field(default_factory=BudgetRuntimeConfig)
+    optimization: OptimizationConfig = Field(default_factory=OptimizationConfig)
 
 
 def load_runtime_config(path: str = "autoagent.yaml") -> RuntimeConfig:

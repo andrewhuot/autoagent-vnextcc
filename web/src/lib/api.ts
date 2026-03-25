@@ -5,6 +5,7 @@ import type {
   AutoFixHistoryEntry,
   AutoFixProposal,
   CanaryStatus,
+  ChangeCard,
   ContextHealthReport,
   ContextSimulationResult,
   ContextTraceAnalysis,
@@ -25,6 +26,8 @@ import type {
   JudgeFeedbackRecord,
   JudgeOpsJudgeSummary,
   ParetoFrontier,
+  Playbook,
+  ProjectMemory,
   HealthReport,
   LoopStatus,
   OptimizationAttempt,
@@ -1290,5 +1293,148 @@ export function useScorecard(window = 100) {
     queryKey: ['health', 'scorecard', window],
     queryFn: () => fetchApi<ScorecardResponse>(`/health/scorecard?window=${window}`),
     refetchInterval: 10000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Change Review (Proposed Change Cards)
+// ---------------------------------------------------------------------------
+
+export function useChanges() {
+  return useQuery<ChangeCard[]>({
+    queryKey: ['changes'],
+    queryFn: async () => {
+      const payload = await fetchApi<{ changes: ChangeCard[] }>('/changes');
+      return payload.changes ?? [];
+    },
+    refetchInterval: 5000,
+  });
+}
+
+export function useChangeDetail(id: string | undefined) {
+  return useQuery<ChangeCard>({
+    queryKey: ['changes', 'detail', id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      if (!id) throw new ApiRequestError('Missing change ID', 400);
+      return fetchApi<ChangeCard>(`/changes/${encodeURIComponent(id)}`);
+    },
+  });
+}
+
+export function useApplyChange() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ status: string; message: string }, ApiRequestError, { id: string }>({
+    mutationFn: ({ id }) =>
+      fetchApi(`/changes/${encodeURIComponent(id)}/apply`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useRejectChange() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ status: string; message: string }, ApiRequestError, { id: string; reason: string }>({
+    mutationFn: ({ id, reason }) =>
+      fetchApi(`/changes/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ reason }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useExportChange(id: string | undefined) {
+  return useQuery<{ markdown: string }>({
+    queryKey: ['changes', 'export', id],
+    enabled: false, // only fetch on demand
+    queryFn: async () => {
+      if (!id) throw new ApiRequestError('Missing change ID', 400);
+      return fetchApi<{ markdown: string }>(`/changes/${encodeURIComponent(id)}/export`);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Playbooks
+// ---------------------------------------------------------------------------
+
+export function usePlaybooks() {
+  return useQuery<Playbook[]>({
+    queryKey: ['playbooks'],
+    queryFn: async () => {
+      const payload = await fetchApi<{ playbooks: Playbook[] }>('/playbooks');
+      return payload.playbooks ?? [];
+    },
+    refetchInterval: 10000,
+  });
+}
+
+export function usePlaybookDetail(name: string | undefined) {
+  return useQuery<Playbook>({
+    queryKey: ['playbooks', 'detail', name],
+    enabled: Boolean(name),
+    queryFn: async () => {
+      if (!name) throw new ApiRequestError('Missing playbook name', 400);
+      return fetchApi<Playbook>(`/playbooks/${encodeURIComponent(name)}`);
+    },
+  });
+}
+
+export function useApplyPlaybook() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ status: string; message: string }, ApiRequestError, { name: string }>({
+    mutationFn: ({ name }) =>
+      fetchApi(`/playbooks/${encodeURIComponent(name)}/apply`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['playbooks'] });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Project Memory (AUTOAGENT.md)
+// ---------------------------------------------------------------------------
+
+export function useProjectMemory() {
+  return useQuery<ProjectMemory>({
+    queryKey: ['memory'],
+    queryFn: () => fetchApi<ProjectMemory>('/memory'),
+  });
+}
+
+export function useUpdateMemory() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ProjectMemory, ApiRequestError, ProjectMemory>({
+    mutationFn: (data) =>
+      fetchApi('/memory', {
+        method: 'PUT',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['memory'] });
+    },
+  });
+}
+
+export function useAddMemoryNote() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ status: string }, ApiRequestError, { section: string; note: string }>({
+    mutationFn: ({ section, note }) =>
+      fetchApi('/memory/note', {
+        method: 'POST',
+        body: JSON.stringify({ section, note }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['memory'] });
+    },
   });
 }

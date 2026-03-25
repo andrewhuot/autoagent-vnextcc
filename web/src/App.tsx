@@ -20,6 +20,9 @@ import { ContextWorkbench } from './pages/ContextWorkbench';
 import { Registry } from './pages/Registry';
 import { BlameMap } from './pages/BlameMap';
 import { ScorerStudio } from './pages/ScorerStudio';
+import { ChangeReview } from './pages/ChangeReview';
+import { Playbooks } from './pages/Playbooks';
+import { ProjectMemory } from './pages/ProjectMemory';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -51,6 +54,9 @@ export default function App() {
             <Route path="/autofix" element={<AutoFix />} />
             <Route path="/judge-ops" element={<JudgeOps />} />
             <Route path="/context" element={<ContextWorkbench />} />
+            <Route path="/changes" element={<ChangeReview />} />
+            <Route path="/playbooks" element={<Playbooks />} />
+            <Route path="/memory" element={<ProjectMemory />} />
             <Route path="/registry" element={<Registry />} />
             <Route path="/blame" element={<BlameMap />} />
             <Route path="/scorer-studio" element={<ScorerStudio />} />

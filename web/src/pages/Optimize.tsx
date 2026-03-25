@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Play, Sparkles, Zap } from 'lucide-react';
+import { Play, Sparkles, Zap, Plus, Trash2 } from 'lucide-react';
 import { useOptimizeHistory, useStartOptimize, useTaskStatus } from '../lib/api';
 import { wsClient } from '../lib/websocket';
 import { EmptyState } from '../components/EmptyState';
@@ -11,8 +11,23 @@ import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { TimelineEntry } from '../components/TimelineEntry';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
-import { formatTimestamp, statusVariant } from '../lib/utils';
+import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
 import type { DiffLine } from '../lib/types';
+
+type OptimizeMode = 'standard' | 'advanced' | 'research';
+
+const modeDescriptions: Record<OptimizeMode, string> = {
+  standard: 'Default optimization with safety gates and regression checks.',
+  advanced: 'Advanced mode with adaptive bandit policies and curriculum learning.',
+  research: 'Research mode with full algorithm options, custom objectives, and guardrails.',
+};
+
+const researchAlgorithms = [
+  { key: 'bayesian', label: 'Bayesian Optimization' },
+  { key: 'evolutionary', label: 'Evolutionary Search' },
+  { key: 'mcts', label: 'Monte Carlo Tree Search' },
+  { key: 'gradient_free', label: 'Gradient-Free Methods' },
+];
 
 function parseDiffLines(diff: string): DiffLine[] {
   if (!diff) return [];
@@ -55,6 +70,13 @@ export function Optimize() {
   const [force, setForce] = useState(() => searchParams.get('new') === '1');
   const [expandedAttempt, setExpandedAttempt] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>('standard');
+  const [objective, setObjective] = useState('');
+  const [guardrails, setGuardrails] = useState<string[]>([]);
+  const [newGuardrail, setNewGuardrail] = useState('');
+  const [researchAlgorithm, setResearchAlgorithm] = useState('bayesian');
+  const [budgetCycles, setBudgetCycles] = useState(10);
+  const [budgetDollars, setBudgetDollars] = useState(50);
 
   const taskStatus = useTaskStatus(activeTaskId);
 
@@ -146,6 +168,135 @@ export function Optimize() {
           </button>
         }
       />
+
+      {/* Mode selector */}
+      <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <div className="mb-3 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
+          {(['standard', 'advanced', 'research'] as OptimizeMode[]).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setOptimizeMode(mode)}
+              className={classNames(
+                'rounded-md px-4 py-2 text-sm font-medium capitalize transition-colors',
+                optimizeMode === mode
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-600 hover:text-gray-900'
+              )}
+            >
+              {mode}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500">{modeDescriptions[optimizeMode]}</p>
+
+        {optimizeMode === 'research' && (
+          <div className="mt-4 space-y-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Algorithm</label>
+              <div className="flex flex-wrap gap-2">
+                {researchAlgorithms.map((algo) => (
+                  <button
+                    key={algo.key}
+                    onClick={() => setResearchAlgorithm(algo.key)}
+                    className={classNames(
+                      'rounded-md border px-3 py-1.5 text-xs font-medium transition-colors',
+                      researchAlgorithm === algo.key
+                        ? 'border-blue-500 bg-blue-100 text-blue-800'
+                        : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'
+                    )}
+                  >
+                    {algo.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">Objective</label>
+              <input
+                type="text"
+                placeholder="e.g. Maximize task_success_rate while maintaining safety > 0.99"
+                value={objective}
+                onChange={(e) => setObjective(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs font-medium text-gray-700">
+                Guardrails ({guardrails.length})
+              </label>
+              <div className="space-y-1.5">
+                {guardrails.map((g, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-1.5"
+                  >
+                    <span className="text-xs text-gray-700">{g}</span>
+                    <button
+                      onClick={() => setGuardrails(guardrails.filter((_, idx) => idx !== i))}
+                      className="text-gray-400 hover:text-red-500"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ))}
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="Add guardrail..."
+                    value={newGuardrail}
+                    onChange={(e) => setNewGuardrail(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && newGuardrail.trim()) {
+                        setGuardrails([...guardrails, newGuardrail.trim()]);
+                        setNewGuardrail('');
+                      }
+                    }}
+                    className="flex-1 rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs focus:border-blue-500 focus:outline-none"
+                  />
+                  <button
+                    onClick={() => {
+                      if (newGuardrail.trim()) {
+                        setGuardrails([...guardrails, newGuardrail.trim()]);
+                        setNewGuardrail('');
+                      }
+                    }}
+                    className="rounded-md border border-gray-200 bg-white p-1.5 text-gray-500 hover:bg-gray-50"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Budget (cycles)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={budgetCycles}
+                  onChange={(e) => setBudgetCycles(Number(e.target.value))}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Budget ($)</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={10000}
+                  value={budgetDollars}
+                  onChange={(e) => setBudgetDollars(Number(e.target.value))}
+                  className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+      </section>
 
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <div className="grid gap-3 sm:grid-cols-3">

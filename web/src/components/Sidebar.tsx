@@ -19,6 +19,9 @@ import {
   BookOpen,
   MapPin,
   Sparkles,
+  GitPullRequest,
+  Library,
+  Brain,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
@@ -31,13 +34,16 @@ const navItems = [
   { to: '/deploy', label: 'Deploy', icon: Rocket },
   { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
   { to: '/opportunities', label: 'Opportunities', icon: Flag },
+  { to: '/changes', label: 'Changes', icon: GitPullRequest },
   { to: '/experiments', label: 'Experiments', icon: TestTubes },
   { to: '/traces', label: 'Traces', icon: Activity },
   { to: '/events', label: 'Event Log', icon: ScrollText },
   { to: '/autofix', label: 'AutoFix', icon: Wrench },
   { to: '/judge-ops', label: 'Judge Ops', icon: Scale },
   { to: '/context', label: 'Context Workbench', icon: Layers },
+  { to: '/playbooks', label: 'Playbooks', icon: Library },
   { to: '/registry', label: 'Registry', icon: BookOpen },
+  { to: '/memory', label: 'Memory', icon: Brain },
   { to: '/blame', label: 'Blame Map', icon: MapPin },
   { to: '/scorer-studio', label: 'Scorer Studio', icon: Sparkles },
   { to: '/settings', label: 'Settings', icon: Settings },

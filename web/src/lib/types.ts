@@ -591,3 +591,69 @@ export interface PromotionRecord {
   started_at: string;
   completed_at?: string;
 }
+
+// ---------------------------------------------------------------------------
+// Change Review (Proposed Change Cards)
+// ---------------------------------------------------------------------------
+
+export interface DiffHunk {
+  file_path: string;
+  old_start: number;
+  old_count: number;
+  new_start: number;
+  new_count: number;
+  content: string;
+  status: 'pending' | 'accepted' | 'rejected';
+}
+
+export interface ConfidenceInfo {
+  score: number;
+  explanation: string;
+  evidence: string[];
+}
+
+export interface ChangeCard {
+  id: string;
+  title: string;
+  why: string;
+  status: 'pending' | 'applied' | 'rejected';
+  diff_hunks: DiffHunk[];
+  metrics_before: Record<string, number>;
+  metrics_after: Record<string, number>;
+  confidence: ConfidenceInfo;
+  risk: 'low' | 'medium' | 'high';
+  rollout_plan: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Playbooks
+// ---------------------------------------------------------------------------
+
+export interface Playbook {
+  name: string;
+  description: string;
+  tags: string[];
+  skills: string[];
+  policies: string[];
+  tool_contracts: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Project Memory (AUTOAGENT.md)
+// ---------------------------------------------------------------------------
+
+export interface ProjectMemorySection {
+  key: string;
+  title: string;
+  content: string;
+  notes: string[];
+}
+
+export interface ProjectMemory {
+  sections: ProjectMemorySection[];
+  updated_at: string;
+}
