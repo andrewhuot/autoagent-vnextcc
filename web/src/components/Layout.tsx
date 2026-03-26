@@ -24,6 +24,7 @@ const pageTitles: Record<string, string> = {
   '/autofix': 'AutoFix',
   '/judge-ops': 'Judge Ops',
   '/context': 'Context Workbench',
+  '/intelligence': 'Intelligence Studio',
   '/runbooks': 'Runbooks',
   '/skills': 'Skills',
   '/registry': 'Registry',
@@ -35,6 +36,7 @@ const pageTitles: Record<string, string> = {
   '/cx/import': 'CX Import',
   '/cx/deploy': 'CX Deploy',
   '/agent-skills': 'Agent Skills',
+  '/agent-studio': 'Agent Studio',
   '/settings': 'Settings',
 };
 

@@ -24,12 +24,14 @@ import { ChangeReview } from './pages/ChangeReview';
 import { Runbooks } from './pages/Runbooks';
 import { Skills } from './pages/Skills';
 import { ProjectMemory } from './pages/ProjectMemory';
+import { IntelligenceStudio } from './pages/IntelligenceStudio';
 import { CxImport } from './pages/CxImport';
 import { CxDeploy } from './pages/CxDeploy';
 import { LiveOptimize } from './pages/LiveOptimize';
 import { AdkImport } from './pages/AdkImport';
 import { AdkDeploy } from './pages/AdkDeploy';
 import { AgentSkills } from './pages/AgentSkills';
+import { AgentStudio } from './pages/AgentStudio';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -65,6 +67,7 @@ export default function App() {
             <Route path="/changes" element={<ChangeReview />} />
             <Route path="/runbooks" element={<Runbooks />} />
             <Route path="/skills" element={<Skills />} />
+            <Route path="/intelligence" element={<IntelligenceStudio />} />
             <Route path="/memory" element={<ProjectMemory />} />
             <Route path="/registry" element={<Registry />} />
             <Route path="/blame" element={<BlameMap />} />
@@ -74,6 +77,7 @@ export default function App() {
             <Route path="/adk/import" element={<AdkImport />} />
             <Route path="/adk/deploy" element={<AdkDeploy />} />
             <Route path="/agent-skills" element={<AgentSkills />} />
+            <Route path="/agent-studio" element={<AgentStudio />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

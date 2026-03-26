@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import {
+  type LucideIcon,
   LayoutDashboard,
   FlaskConical,
   Zap,
@@ -22,6 +23,7 @@ import {
   GitPullRequest,
   Library,
   Brain,
+  BrainCircuit,
   Download,
   Upload,
 } from 'lucide-react';
@@ -30,7 +32,7 @@ import { classNames } from '../lib/utils';
 interface NavItem {
   to: string;
   label: string;
-  icon: any;
+  icon: LucideIcon;
 }
 
 interface NavSection {
@@ -56,6 +58,7 @@ const navSections: NavSection[] = [
     items: [
       { to: '/optimize', label: 'Optimize', icon: Zap },
       { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
+      { to: '/agent-studio', label: 'Agent Studio', icon: Sparkles },
       { to: '/opportunities', label: 'Opportunities', icon: Flag },
       { to: '/changes', label: 'Changes', icon: GitPullRequest },
       { to: '/experiments', label: 'Experiments', icon: TestTubes },
@@ -85,6 +88,7 @@ const navSections: NavSection[] = [
     title: 'Analysis',
     items: [
       { to: '/context', label: 'Context Workbench', icon: Layers },
+      { to: '/intelligence', label: 'Intelligence Studio', icon: BrainCircuit },
       { to: '/skills', label: 'Skills', icon: Zap },
       { to: '/registry', label: 'Registry', icon: BookOpen },
       { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },
