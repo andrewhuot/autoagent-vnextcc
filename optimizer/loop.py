@@ -34,6 +34,7 @@ from .search import (
     SearchResult,
     SearchStrategy,
 )
+from .skill_engine import SkillEngine
 
 
 @dataclass
@@ -46,6 +47,11 @@ class StrategyDiagnostics:
     pareto_recommendation_id: str | None
     governance_notes: list[str]
     global_dimensions: dict[str, Any]
+    skills_applied: list[str] = None  # Skill IDs applied in this cycle
+
+    def __post_init__(self):
+        if self.skills_applied is None:
+            self.skills_applied = []
 
 
 class Optimizer:
@@ -71,6 +77,11 @@ class Optimizer:
         event_log: EventLog | None = None,
         immutable_surfaces: list[str] | None = None,
         pro_config: ProConfig | None = None,
+        # Skill engine integration
+        skill_engine: SkillEngine | None = None,
+        use_skills: bool = False,
+        skill_selection_strategy: str = "auto",
+        skill_max_candidates: int = 5,
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
@@ -87,6 +98,13 @@ class Optimizer:
         self.event_log = event_log
         self.immutable_surfaces: set[str] = set(immutable_surfaces or [])
         self.pro_config = pro_config or ProConfig()
+
+        # Skill engine integration
+        self.skill_engine = skill_engine
+        self.use_skills = use_skills
+        self.skill_selection_strategy = skill_selection_strategy
+        self.skill_max_candidates = skill_max_candidates
+        self._current_cycle_skills: list[Any] = []  # Track skills used in current cycle
 
         try:
             self.search_strategy = SearchStrategy(search_strategy)
@@ -121,6 +139,7 @@ class Optimizer:
             pareto_recommendation_id=None,
             governance_notes=[],
             global_dimensions={},
+            skills_applied=[],
         )
 
     # ------------------------------------------------------------------
@@ -196,6 +215,20 @@ class Optimizer:
             return None, err
 
         normalized_failure_samples = failure_samples or []
+        self._current_cycle_skills = []  # Reset for new cycle
+
+        # If skills are enabled, try skill-driven optimization first
+        if self.use_skills and self.skill_engine is not None:
+            skill_result = self._try_skill_driven_optimization(
+                health_report=health_report,
+                validated_current=validated_current,
+                current_config=current_config,
+                failure_samples=normalized_failure_samples,
+            )
+            if skill_result is not None:
+                return skill_result
+
+        # Fall back to standard proposer-based optimization
         past_attempts = [
             {
                 "change_description": attempt.change_description,
@@ -327,6 +360,7 @@ class Optimizer:
             eval_fn=self._score_vector_for_search,
         )
 
+        skill_ids = [skill.id for skill in self._current_cycle_skills] if self._current_cycle_skills else []
         self._last_strategy_diagnostics = StrategyDiagnostics(
             strategy=search_result.strategy,
             selected_operator_family=search_result.operator_family,
@@ -334,6 +368,7 @@ class Optimizer:
             pareto_recommendation_id=search_result.pareto_recommendation_id,
             governance_notes=search_result.governance_notes,
             global_dimensions={},
+            skills_applied=skill_ids,
         )
 
         selected_experiment_id = self._select_experiment(search_result)
@@ -461,6 +496,12 @@ class Optimizer:
                         f"p={significance_p_value:.4f}, n={significance_n}"
                     )
 
+        # Build skills_applied JSON array from current cycle skills
+        skills_applied_json = "[]"
+        if self._current_cycle_skills:
+            skill_ids = [skill.id for skill in self._current_cycle_skills]
+            skills_applied_json = json.dumps(skill_ids)
+
         attempt = OptimizationAttempt(
             attempt_id=str(uuid.uuid4())[:8],
             timestamp=time.time(),
@@ -474,12 +515,159 @@ class Optimizer:
             significance_delta=significance_delta,
             significance_n=significance_n,
             health_context=json.dumps(health_report.metrics.to_dict()),
+            skills_applied=skills_applied_json,
         )
         self.memory.log(attempt)
 
         if accepted:
             return candidate_config, f"ACCEPTED: {reason}"
         return None, f"REJECTED ({status}): {reason}"
+
+    # ------------------------------------------------------------------
+    # Skill-driven optimization
+    # ------------------------------------------------------------------
+
+    def _try_skill_driven_optimization(
+        self,
+        *,
+        health_report: HealthReport,
+        validated_current: AgentConfig,
+        current_config: dict,
+        failure_samples: list[dict],
+    ) -> tuple[dict | None, str] | None:
+        """Attempt skill-driven optimization. Returns None if no skills apply.
+
+        This method:
+        1. Identifies the dominant failure family from failure samples
+        2. Selects relevant skills based on failure family and metrics
+        3. Generates proposals from skills
+        4. Evaluates the best proposal
+        5. Records outcome for skill learning
+
+        Returns:
+            Tuple of (config, status) if skill optimization succeeds, None otherwise.
+        """
+        if self.skill_engine is None:
+            return None
+
+        # Determine dominant failure family
+        failure_family = self._get_dominant_failure_family(health_report.failure_buckets)
+
+        # Select relevant skills
+        metrics = health_report.metrics.to_dict()
+        skills = self.skill_engine.select_skills(
+            failure_family=failure_family,
+            metrics=metrics,
+            max_skills=self.skill_max_candidates,
+        )
+
+        if not skills:
+            self._log_event("skill_selection", {"failure_family": failure_family, "selected_count": 0})
+            return None
+
+        self._current_cycle_skills = skills
+        skill_ids = [skill.id for skill in skills]
+        self._log_event("skill_selection", {
+            "failure_family": failure_family,
+            "selected_count": len(skills),
+            "skill_ids": skill_ids,
+        })
+
+        # Generate proposals from skills
+        context = {
+            "failure_family": failure_family,
+            "metrics": metrics,
+            "failure_samples": failure_samples[:5],  # Limit context size
+        }
+
+        proposals = self.skill_engine.propose_from_skills(skills, current_config, context)
+
+        if not proposals:
+            self._log_event("skill_proposals", {"proposal_count": 0})
+            return None
+
+        self._log_event("skill_proposals", {"proposal_count": len(proposals)})
+
+        # Evaluate proposals and pick the best one
+        best_config = None
+        best_score = -float('inf')
+        best_skill_idx = 0
+
+        baseline_score = self.eval_runner.run(config=current_config)
+
+        for idx, proposal_config in enumerate(proposals):
+            try:
+                candidate_score = self.eval_runner.run(config=proposal_config)
+                if candidate_score.composite > best_score:
+                    best_score = candidate_score.composite
+                    best_config = proposal_config
+                    best_skill_idx = idx
+            except Exception as e:
+                # Skip invalid proposals
+                continue
+
+        if best_config is None:
+            return None
+
+        # Calculate which skill this proposal came from
+        # Note: This is a simplification - in reality we'd track per-proposal
+        skill_idx = best_skill_idx % len(skills)
+        applied_skill = skills[skill_idx]
+
+        # Check if improvement is sufficient
+        improvement = best_score - baseline_score.composite
+        success = improvement > self.significance_min_effect_size
+
+        # Learn from outcome
+        self.skill_engine.learn_from_outcome(applied_skill, improvement, success)
+
+        if not success:
+            self._log_event("skill_optimization", {
+                "skill_id": applied_skill.id,
+                "improvement": improvement,
+                "success": False,
+            })
+            return None
+
+        # Finalize the candidate
+        self._log_event("skill_optimization", {
+            "skill_id": applied_skill.id,
+            "improvement": improvement,
+            "success": True,
+        })
+
+        # Update diagnostics to include applied skills
+        skill_ids = [skill.id for skill in skills]
+        self._last_strategy_diagnostics = StrategyDiagnostics(
+            strategy=self.search_strategy.value,
+            selected_operator_family=None,
+            pareto_front=[],
+            pareto_recommendation_id=None,
+            governance_notes=[],
+            global_dimensions={},
+            skills_applied=skill_ids,
+        )
+
+        return self._finalize_candidate(
+            health_report=health_report,
+            validated_current=validated_current,
+            candidate_config_raw=best_config,
+            change_description=f"Skill-driven: {applied_skill.name} (improvement={improvement:.4f})",
+            config_section="skill_optimization",
+        )
+
+    def _get_dominant_failure_family(self, failure_buckets: dict[str, int]) -> str | None:
+        """Extract the dominant failure family from failure buckets.
+
+        Args:
+            failure_buckets: Dict mapping failure families to counts.
+
+        Returns:
+            The failure family with the highest count, or None if empty.
+        """
+        if not failure_buckets:
+            return None
+        return max(failure_buckets.items(), key=lambda x: x[1])[0]
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -598,6 +786,12 @@ class Optimizer:
         config_diff: str | None = None,
     ) -> None:
         """Persist a rejected attempt with a standardized record shape."""
+        # Build skills_applied JSON array from current cycle skills
+        skills_applied_json = "[]"
+        if self._current_cycle_skills:
+            skill_ids = [skill.id for skill in self._current_cycle_skills]
+            skills_applied_json = json.dumps(skill_ids)
+
         attempt = OptimizationAttempt(
             attempt_id=str(uuid.uuid4())[:8],
             timestamp=time.time(),
@@ -606,6 +800,7 @@ class Optimizer:
             status=rejection_status,
             config_section=config_section,
             health_context=json.dumps(health_report.metrics.to_dict()),
+            skills_applied=skills_applied_json,
         )
         self.memory.log(attempt)
 

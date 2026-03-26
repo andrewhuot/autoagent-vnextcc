@@ -1,62 +1,232 @@
 """SQLite-backed store for executable skills (Track A).
 
-Uses its own isolated SQLite connection and schema, separate from RegistryStore.
-All skill data is serialized as JSON blobs keyed by (name, version).
+MIGRATION NOTE: This is now a backward-compatible wrapper around core/skills/store.
+The old API surface is preserved for compatibility, but all data is stored in the
+unified skill store format under the hood.
 """
 
 from __future__ import annotations
 
-import json
-import sqlite3
-from datetime import datetime, timezone
 from typing import Any
 
-from registry.skill_types import Skill
-
-
-_DDL = """
-CREATE TABLE IF NOT EXISTS executable_skills (
-    name       TEXT    NOT NULL,
-    version    INTEGER NOT NULL,
-    data       TEXT    NOT NULL,
-    category   TEXT    NOT NULL,
-    platform   TEXT    NOT NULL,
-    status     TEXT    NOT NULL DEFAULT 'active',
-    created_at TEXT    NOT NULL,
-    PRIMARY KEY (name, version)
-);
-
-CREATE TABLE IF NOT EXISTS skill_outcomes (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    skill_name  TEXT    NOT NULL,
-    improvement REAL    NOT NULL,
-    success     INTEGER NOT NULL,
-    recorded_at TEXT    NOT NULL
-);
-"""
-
-_OPERATORS: dict[str, Any] = {
-    "gt": lambda v, t: v > t,
-    "lt": lambda v, t: v < t,
-    "gte": lambda v, t: v >= t,
-    "lte": lambda v, t: v <= t,
-    "eq": lambda v, t: v == t,
-}
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+from core.skills.store import SkillStore as UnifiedSkillStore
+from core.skills.types import (
+    EffectivenessMetrics,
+    EvalCriterion as UnifiedEvalCriterion,
+    MutationOperator,
+    Skill as UnifiedSkill,
+    SkillExample as UnifiedSkillExample,
+    SkillKind,
+    TriggerCondition as UnifiedTriggerCondition,
+)
+from registry.skill_types import (
+    EvalCriterion,
+    MutationTemplate,
+    Skill,
+    SkillExample,
+    TriggerCondition,
+)
 
 
 class SkillStore:
-    """SQLite-backed persistence for executable skills."""
+    """Backward-compatible wrapper around unified SkillStore.
+
+    This maintains the old Track A API while using the unified store underneath.
+    All old skills are converted to the BUILD kind in the unified format.
+    """
 
     def __init__(self, db_path: str = "registry.db") -> None:
+        """Initialize the skill store.
+
+        Args:
+            db_path: Path to SQLite database file.
+        """
         self._db_path = db_path
-        self._conn = sqlite3.connect(db_path)
-        self._conn.row_factory = sqlite3.Row
-        self._conn.executescript(_DDL)
-        self._conn.commit()
+        self._unified_store = UnifiedSkillStore(db_path)
+
+    # ------------------------------------------------------------------
+    # Conversion helpers
+    # ------------------------------------------------------------------
+
+    def _convert_to_unified(self, old_skill: Skill) -> UnifiedSkill:
+        """Convert old Track A skill format to unified format."""
+        # Convert mutations
+        mutations = [
+            MutationOperator(
+                name=m.name,
+                description=m.description,
+                target_surface=m.target_surface,
+                operator_type=m.mutation_type,
+                template=m.template,
+                parameters=m.parameters,
+                risk_level="low",  # Default, not in old schema
+            )
+            for m in old_skill.mutations
+        ]
+
+        # Convert triggers
+        triggers = [
+            UnifiedTriggerCondition(
+                failure_family=t.failure_family,
+                metric_name=t.metric_name,
+                threshold=t.threshold,
+                operator=t.operator,
+                blame_pattern=t.blame_pattern,
+            )
+            for t in old_skill.triggers
+        ]
+
+        # Convert eval criteria
+        eval_criteria = [
+            UnifiedEvalCriterion(
+                metric=e.metric,
+                target=e.target,
+                operator=e.operator,
+                weight=e.weight,
+            )
+            for e in old_skill.eval_criteria
+        ]
+
+        # Convert examples
+        examples = [
+            UnifiedSkillExample(
+                name=ex.name,
+                description=ex.context,
+                before=ex.before,
+                after=ex.after,
+                improvement=ex.improvement,
+                context=ex.context,
+            )
+            for ex in old_skill.examples
+        ]
+
+        # Convert effectiveness metrics
+        effectiveness = EffectivenessMetrics(
+            times_applied=old_skill.times_applied,
+            success_count=int(old_skill.success_rate * old_skill.times_applied)
+            if old_skill.times_applied > 0
+            else 0,
+            success_rate=old_skill.success_rate,
+            avg_improvement=old_skill.proven_improvement or 0.0,
+            total_improvement=(old_skill.proven_improvement or 0.0) * old_skill.times_applied
+            if old_skill.times_applied > 0
+            else 0.0,
+            last_applied=None,  # Not tracked in old schema
+        )
+
+        # Build unified skill
+        # Use name-version as ID for deterministic lookups
+        skill_id = f"{old_skill.name}-v{old_skill.version}"
+
+        return UnifiedSkill(
+            id=skill_id,
+            name=old_skill.name,
+            kind=SkillKind.BUILD,
+            version=str(old_skill.version),
+            description=old_skill.description,
+            capabilities=old_skill.target_surfaces,  # Map target_surfaces to capabilities
+            mutations=mutations,
+            triggers=triggers,
+            eval_criteria=eval_criteria,
+            guardrails=old_skill.guardrails,
+            examples=examples,
+            tools=[],  # No tools in old schema
+            instructions="",  # No instructions in old schema
+            policies=[],  # No policies in old schema
+            dependencies=[],  # No dependencies in old schema
+            test_cases=[],  # No test cases in old schema
+            tags=old_skill.tags,
+            domain=old_skill.category,  # Map category to domain
+            effectiveness=effectiveness,
+            metadata={
+                "platform": old_skill.platform,
+                "target_surfaces": old_skill.target_surfaces,
+            },
+            author=old_skill.author,
+            status=old_skill.status,
+            created_at=old_skill.created_at,
+            updated_at=old_skill.created_at,
+        )
+
+    def _convert_from_unified(self, unified_skill: UnifiedSkill) -> Skill:
+        """Convert unified skill format back to old Track A format."""
+        # Convert mutations
+        mutations = [
+            MutationTemplate(
+                name=m.name,
+                mutation_type=m.operator_type,
+                target_surface=m.target_surface,
+                description=m.description,
+                template=m.template,
+                parameters=m.parameters,
+            )
+            for m in unified_skill.mutations
+        ]
+
+        # Convert triggers
+        triggers = [
+            TriggerCondition(
+                failure_family=t.failure_family,
+                metric_name=t.metric_name,
+                threshold=t.threshold,
+                operator=t.operator,
+                blame_pattern=t.blame_pattern,
+            )
+            for t in unified_skill.triggers
+        ]
+
+        # Convert eval criteria
+        eval_criteria = [
+            EvalCriterion(
+                metric=e.metric,
+                target=e.target,
+                operator=e.operator,
+                weight=e.weight,
+            )
+            for e in unified_skill.eval_criteria
+        ]
+
+        # Convert examples
+        examples = [
+            SkillExample(
+                name=ex.name,
+                surface=unified_skill.metadata.get("target_surfaces", ["prompt"])[0]
+                if unified_skill.metadata.get("target_surfaces")
+                else "prompt",
+                before=ex.before,
+                after=ex.after,
+                improvement=ex.improvement,
+                context=ex.context,
+            )
+            for ex in unified_skill.examples
+        ]
+
+        # Extract old fields from metadata or use defaults
+        platform = unified_skill.metadata.get("platform", "universal")
+        target_surfaces = unified_skill.metadata.get("target_surfaces", unified_skill.capabilities)
+
+        return Skill(
+            name=unified_skill.name,
+            version=int(unified_skill.version),
+            description=unified_skill.description,
+            category=unified_skill.domain,
+            platform=platform,
+            target_surfaces=target_surfaces,
+            mutations=mutations,
+            examples=examples,
+            guardrails=unified_skill.guardrails,
+            eval_criteria=eval_criteria,
+            triggers=triggers,
+            author=unified_skill.author,
+            tags=unified_skill.tags,
+            created_at=unified_skill.created_at,
+            proven_improvement=unified_skill.effectiveness.avg_improvement
+            if unified_skill.effectiveness.avg_improvement > 0
+            else None,
+            times_applied=unified_skill.effectiveness.times_applied,
+            success_rate=unified_skill.effectiveness.success_rate,
+            status=unified_skill.status,
+        )
 
     # ------------------------------------------------------------------
     # Core CRUD
@@ -64,52 +234,40 @@ class SkillStore:
 
     def register(self, skill: Skill) -> tuple[str, int]:
         """Insert skill, auto-incrementing the version for the same name."""
-        cur = self._conn.execute(
-            "SELECT COALESCE(MAX(version), 0) FROM executable_skills WHERE name = ?",
-            (skill.name,),
-        )
-        next_version: int = cur.fetchone()[0] + 1
+        # Find the next version number for this skill name
+        existing_skills = self._unified_store.list(kind=SkillKind.BUILD)
+        max_version = 0
+        for s in existing_skills:
+            if s.name == skill.name:
+                try:
+                    v = int(s.version)
+                    if v > max_version:
+                        max_version = v
+                except ValueError:
+                    pass
+
+        next_version = max_version + 1
         skill.version = next_version
 
-        data_json = json.dumps(skill.to_dict())
-        self._conn.execute(
-            """
-            INSERT INTO executable_skills (name, version, data, category, platform, status, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                skill.name,
-                skill.version,
-                data_json,
-                skill.category,
-                skill.platform,
-                skill.status,
-                _now_iso(),
-            ),
-        )
-        self._conn.commit()
+        # Convert to unified format and store
+        unified_skill = self._convert_to_unified(skill)
+        self._unified_store.create(unified_skill)
+
         return (skill.name, skill.version)
 
     def get(self, name: str, version: int | None = None) -> Skill | None:
         """Return a skill by name, defaulting to the latest version."""
-        if version is None:
-            row = self._conn.execute(
-                """
-                SELECT data FROM executable_skills
-                WHERE name = ?
-                ORDER BY version DESC LIMIT 1
-                """,
-                (name,),
-            ).fetchone()
-        else:
-            row = self._conn.execute(
-                "SELECT data FROM executable_skills WHERE name = ? AND version = ?",
-                (name, version),
-            ).fetchone()
+        version_str = str(version) if version is not None else None
+        unified_skill = self._unified_store.get_by_name(name, version=version_str)
 
-        if row is None:
+        if unified_skill is None:
             return None
-        return Skill.from_dict(json.loads(row["data"]))
+
+        # Only return if it's a BUILD skill
+        if unified_skill.kind != SkillKind.BUILD:
+            return None
+
+        return self._convert_from_unified(unified_skill)
 
     # ------------------------------------------------------------------
     # Listing and search
@@ -121,26 +279,31 @@ class SkillStore:
         category: str | None = None,
         platform: str | None = None,
     ) -> list[Skill]:
-        """LIKE search on name and JSON data blob.  Returns latest version of each match."""
-        like_query = f"%{query}%"
-        sql = """
-            SELECT name, MAX(version) as max_version, data
-            FROM executable_skills
-            WHERE (name LIKE ? OR data LIKE ?)
-        """
-        params: list[Any] = [like_query, like_query]
+        """LIKE search on name and JSON data blob. Returns latest version of each match."""
+        # Search in unified store
+        all_matches = self._unified_store.search(query, kind=SkillKind.BUILD)
 
+        # Filter by category (domain in unified)
         if category is not None:
-            sql += " AND category = ?"
-            params.append(category)
+            all_matches = [s for s in all_matches if s.domain == category]
+
+        # Filter by platform (in metadata)
         if platform is not None:
-            sql += " AND platform = ?"
-            params.append(platform)
+            all_matches = [s for s in all_matches if s.metadata.get("platform") == platform]
 
-        sql += " GROUP BY name"
+        # Group by name and keep only latest version
+        latest_by_name: dict[str, UnifiedSkill] = {}
+        for skill in all_matches:
+            if skill.name not in latest_by_name:
+                latest_by_name[skill.name] = skill
+            else:
+                try:
+                    if int(skill.version) > int(latest_by_name[skill.name].version):
+                        latest_by_name[skill.name] = skill
+                except ValueError:
+                    pass
 
-        rows = self._conn.execute(sql, params).fetchall()
-        return [Skill.from_dict(json.loads(r["data"])) for r in rows]
+        return [self._convert_from_unified(s) for s in latest_by_name.values()]
 
     def list(
         self,
@@ -150,35 +313,29 @@ class SkillStore:
         status: str | None = None,
     ) -> list[Skill]:
         """Return latest version of each skill, with optional filters."""
-        sql = """
-            SELECT name, MAX(version) as max_version, data, category, platform, status
-            FROM executable_skills
-            WHERE 1=1
-        """
-        params: list[Any] = []
+        # List from unified store
+        domain = category  # category maps to domain
+        all_skills = self._unified_store.list(
+            kind=SkillKind.BUILD, domain=domain, tags=tags, status=status
+        )
 
-        if category is not None:
-            sql += " AND category = ?"
-            params.append(category)
+        # Filter by platform (in metadata)
         if platform is not None:
-            sql += " AND platform = ?"
-            params.append(platform)
-        if status is not None:
-            sql += " AND status = ?"
-            params.append(status)
+            all_skills = [s for s in all_skills if s.metadata.get("platform") == platform]
 
-        sql += " GROUP BY name"
+        # Group by name and keep only latest version
+        latest_by_name: dict[str, UnifiedSkill] = {}
+        for skill in all_skills:
+            if skill.name not in latest_by_name:
+                latest_by_name[skill.name] = skill
+            else:
+                try:
+                    if int(skill.version) > int(latest_by_name[skill.name].version):
+                        latest_by_name[skill.name] = skill
+                except ValueError:
+                    pass
 
-        rows = self._conn.execute(sql, params).fetchall()
-        skills: list[Skill] = []
-        for row in rows:
-            skill = Skill.from_dict(json.loads(row["data"]))
-            if tags is not None:
-                data_str = row["data"]
-                if not any(tag in data_str for tag in tags):
-                    continue
-            skills.append(skill)
-        return skills
+        return [self._convert_from_unified(s) for s in latest_by_name.values()]
 
     # ------------------------------------------------------------------
     # Recommendation engine
@@ -190,33 +347,13 @@ class SkillStore:
         metrics: dict[str, float] | None = None,
     ) -> list[Skill]:
         """Return skills whose triggers match the given failure family or metric thresholds."""
-        all_skills = self.list(status="active")
-        matched: list[Skill] = []
-
-        for skill in all_skills:
-            for trigger in skill.triggers:
-                # Match by failure family
-                if failure_family is not None and trigger.failure_family == failure_family:
-                    matched.append(skill)
-                    break
-
-                # Match by metric threshold
-                if (
-                    metrics is not None
-                    and trigger.metric_name is not None
-                    and trigger.threshold is not None
-                    and trigger.metric_name in metrics
-                ):
-                    op_fn = _OPERATORS.get(trigger.operator)
-                    if op_fn is not None and op_fn(metrics[trigger.metric_name], trigger.threshold):
-                        matched.append(skill)
-                        break
-
-        matched.sort(
-            key=lambda s: (s.success_rate * (s.proven_improvement or 0.0)),
-            reverse=True,
+        # Use unified store's recommendation engine
+        unified_skills = self._unified_store.recommend(
+            failure_family=failure_family, metrics=metrics, kind=SkillKind.BUILD
         )
-        return matched
+
+        # Convert to old format
+        return [self._convert_from_unified(s) for s in unified_skills]
 
     # ------------------------------------------------------------------
     # Outcome tracking
@@ -224,51 +361,16 @@ class SkillStore:
 
     def record_outcome(self, skill_name: str, improvement: float, success: bool) -> None:
         """Record an outcome and recalculate stats on the latest skill version."""
-        self._conn.execute(
-            """
-            INSERT INTO skill_outcomes (skill_name, improvement, success, recorded_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (skill_name, improvement, int(success), _now_iso()),
-        )
-        self._conn.commit()
-
-        # Recalculate aggregates from outcomes table
-        rows = self._conn.execute(
-            "SELECT improvement, success FROM skill_outcomes WHERE skill_name = ?",
-            (skill_name,),
-        ).fetchall()
-
-        times_applied = len(rows)
-        successes = [r["improvement"] for r in rows if r["success"]]
-        success_rate = len(successes) / times_applied if times_applied > 0 else 0.0
-        proven_improvement: float | None = (
-            sum(successes) / len(successes) if successes else None
-        )
-
-        # Update the latest version's JSON blob
+        # Get the latest version of this skill
         skill = self.get(skill_name)
         if skill is None:
             return
 
-        skill.times_applied = times_applied
-        skill.success_rate = success_rate
-        skill.proven_improvement = proven_improvement
+        # Get the unified skill ID
+        skill_id = f"{skill.name}-v{skill.version}"
 
-        self._conn.execute(
-            """
-            UPDATE executable_skills
-            SET data = ?, status = ?
-            WHERE name = ? AND version = ?
-            """,
-            (
-                json.dumps(skill.to_dict()),
-                skill.status,
-                skill.name,
-                skill.version,
-            ),
-        )
-        self._conn.commit()
+        # Record outcome in unified store
+        self._unified_store.record_outcome(skill_id, improvement, success)
 
     # ------------------------------------------------------------------
     # Analytics
@@ -276,17 +378,16 @@ class SkillStore:
 
     def top_performers(self, n: int = 10) -> list[Skill]:
         """Return top-n active skills by proven_improvement * success_rate."""
-        skills = self.list(status="active")
-        eligible = [s for s in skills if s.times_applied > 0]
-        eligible.sort(
-            key=lambda s: (s.proven_improvement or 0.0) * s.success_rate,
-            reverse=True,
-        )
-        return eligible[:n]
+        # Use unified store's top performers
+        unified_skills = self._unified_store.get_top_performers(n=n, kind=SkillKind.BUILD)
+
+        # Convert to old format
+        return [self._convert_from_unified(s) for s in unified_skills]
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def close(self) -> None:
-        self._conn.close()
+        """Close the underlying unified store."""
+        self._unified_store.close()

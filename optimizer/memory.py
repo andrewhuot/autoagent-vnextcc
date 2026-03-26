@@ -20,6 +20,7 @@ class OptimizationAttempt:
     significance_delta: float = 0.0
     significance_n: int = 0
     health_context: str = ""  # JSON string of health metrics that triggered this
+    skills_applied: str = ""  # JSON array of skill IDs used in this attempt
 
 
 class OptimizationMemory:
@@ -46,7 +47,8 @@ class OptimizationMemory:
                     significance_p_value REAL DEFAULT 1.0,
                     significance_delta REAL DEFAULT 0.0,
                     significance_n INTEGER DEFAULT 0,
-                    health_context TEXT DEFAULT ''
+                    health_context TEXT DEFAULT '',
+                    skills_applied TEXT DEFAULT ''
                 )
                 """
             )
@@ -71,6 +73,10 @@ class OptimizationMemory:
                 conn.execute(
                     "ALTER TABLE attempts ADD COLUMN significance_n INTEGER DEFAULT 0"
                 )
+            if "skills_applied" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN skills_applied TEXT DEFAULT ''"
+                )
             conn.commit()
 
     def log(self, attempt: OptimizationAttempt) -> None:
@@ -81,8 +87,8 @@ class OptimizationMemory:
                 INSERT OR REPLACE INTO attempts
                     (attempt_id, timestamp, change_description, config_diff, config_section, status,
                      score_before, score_after, significance_p_value, significance_delta,
-                     significance_n, health_context)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     significance_n, health_context, skills_applied)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.attempt_id,
@@ -97,6 +103,7 @@ class OptimizationMemory:
                     attempt.significance_delta,
                     attempt.significance_n,
                     attempt.health_context,
+                    attempt.skills_applied,
                 ),
             )
             conn.commit()
@@ -108,7 +115,7 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context
+                       significance_delta, significance_n, health_context, skills_applied
                 FROM attempts
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -124,7 +131,7 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context
+                       significance_delta, significance_n, health_context, skills_applied
                 FROM attempts
                 WHERE status = 'accepted'
                 ORDER BY timestamp DESC
@@ -141,7 +148,7 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context
+                       significance_delta, significance_n, health_context, skills_applied
                 FROM attempts
                 ORDER BY timestamp DESC
                 """
@@ -170,4 +177,5 @@ class OptimizationMemory:
             significance_delta=row[9],
             significance_n=row[10],
             health_context=row[11],
+            skills_applied=row[12] if len(row) > 12 else "",
         )

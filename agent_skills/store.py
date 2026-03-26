@@ -1,161 +1,121 @@
-"""SQLite persistence for generated agent skills."""
+"""SQLite persistence for generated agent skills.
+
+MIGRATION NOTE: This is now a backward-compatible wrapper around core/skills/store.
+The old API surface is preserved for compatibility, but all data is stored in the
+unified skill store format under the hood.
+"""
 from __future__ import annotations
 
 import json
-import sqlite3
 import time
 from typing import Any
 
+from core.skills.store import SkillStore as UnifiedSkillStore
+from core.skills.types import (
+    EffectivenessMetrics,
+    Skill as UnifiedSkill,
+    SkillKind,
+    ToolDefinition,
+)
 from agent_skills.types import GeneratedFile, GeneratedSkill
 
 
 class AgentSkillStore:
-    """SQLite-backed store for generated agent skills."""
+    """Backward-compatible wrapper around unified SkillStore.
+
+    This maintains the old agent skills API while using the unified store underneath.
+    All agent skills are converted to the RUNTIME kind in the unified format.
+    """
 
     def __init__(self, db_path: str = ".autoagent/agent_skills.db") -> None:
+        """Initialize the agent skill store.
+
+        Args:
+            db_path: Path to SQLite database file.
+        """
         self.db_path = db_path
-        self._init_db()
+        self._unified_store = UnifiedSkillStore(db_path)
+        # Keep a separate metadata store for gap data (not in unified schema)
+        self._gap_store: dict[str, dict[str, Any]] = {}
+        self._load_gaps()
 
-    def _init_db(self) -> None:
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS agent_skills (
-                    skill_id TEXT PRIMARY KEY,
-                    gap_id TEXT NOT NULL,
-                    platform TEXT NOT NULL,
-                    skill_type TEXT NOT NULL,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL DEFAULT '',
-                    source_code TEXT,
-                    config_yaml TEXT,
-                    files TEXT NOT NULL DEFAULT '[]',
-                    eval_criteria TEXT NOT NULL DEFAULT '[]',
-                    estimated_improvement REAL NOT NULL DEFAULT 0.0,
-                    confidence TEXT NOT NULL DEFAULT 'medium',
-                    status TEXT NOT NULL DEFAULT 'draft',
-                    review_notes TEXT NOT NULL DEFAULT '',
-                    created_at REAL NOT NULL
+    def _load_gaps(self) -> None:
+        """Load gaps from metadata if they exist."""
+        # Gaps are stored in skill metadata with a special prefix
+        all_skills = self._unified_store.list(kind=SkillKind.RUNTIME)
+        for skill in all_skills:
+            if "gap_data" in skill.metadata:
+                gap_id = skill.metadata.get("gap_id")
+                if gap_id:
+                    self._gap_store[gap_id] = skill.metadata["gap_data"]
+
+    # ------------------------------------------------------------------
+    # Conversion helpers
+    # ------------------------------------------------------------------
+
+    def _convert_to_unified(self, gen_skill: GeneratedSkill) -> UnifiedSkill:
+        """Convert GeneratedSkill to unified Skill format."""
+        # Build tools list if source_code exists
+        tools = []
+        if gen_skill.source_code:
+            tools.append(
+                ToolDefinition(
+                    name=gen_skill.name,
+                    description=gen_skill.description,
+                    parameters={},  # Would need to parse from source_code
+                    returns=None,
+                    implementation=gen_skill.source_code,
+                    sandbox_policy="read_only",
                 )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS skill_gaps (
-                    gap_id TEXT PRIMARY KEY,
-                    data TEXT NOT NULL,
-                    created_at REAL NOT NULL
-                )
-            """)
-            conn.commit()
-
-    def save(self, skill: GeneratedSkill) -> None:
-        """Store a generated skill."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """INSERT OR REPLACE INTO agent_skills
-                   (skill_id, gap_id, platform, skill_type, name, description,
-                    source_code, config_yaml, files, eval_criteria,
-                    estimated_improvement, confidence, status, review_notes, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    skill.skill_id,
-                    skill.gap_id,
-                    skill.platform,
-                    skill.skill_type,
-                    skill.name,
-                    skill.description,
-                    skill.source_code,
-                    skill.config_yaml,
-                    json.dumps([f.to_dict() for f in skill.files]),
-                    json.dumps(skill.eval_criteria),
-                    skill.estimated_improvement,
-                    skill.confidence,
-                    skill.status,
-                    skill.review_notes,
-                    skill.created_at,
-                ),
             )
-            conn.commit()
 
-    def get(self, skill_id: str) -> GeneratedSkill | None:
-        """Retrieve a skill by ID."""
-        with sqlite3.connect(self.db_path) as conn:
-            row = conn.execute(
-                "SELECT * FROM agent_skills WHERE skill_id = ?", (skill_id,)
-            ).fetchone()
-            if row is None:
-                return None
-            return self._row_to_skill(row)
+        # Convert instructions from config_yaml if exists
+        instructions = gen_skill.config_yaml or ""
 
-    def list(self, status: str | None = None, platform: str | None = None) -> list[GeneratedSkill]:
-        """List skills with optional filters."""
-        query = "SELECT * FROM agent_skills"
-        conditions: list[str] = []
-        params: list[Any] = []
-        if status:
-            conditions.append("status = ?")
-            params.append(status)
-        if platform:
-            conditions.append("platform = ?")
-            params.append(platform)
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY created_at DESC"
+        # Build metadata to store all the extra fields
+        metadata = {
+            "gap_id": gen_skill.gap_id,
+            "platform": gen_skill.platform,
+            "skill_type": gen_skill.skill_type,
+            "skill_name": gen_skill.name,  # Store the original name here
+            "source_code": gen_skill.source_code,
+            "config_yaml": gen_skill.config_yaml,
+            "files": [f.to_dict() for f in gen_skill.files],
+            "eval_criteria": gen_skill.eval_criteria,
+            "estimated_improvement": gen_skill.estimated_improvement,
+            "confidence": gen_skill.confidence,
+            "review_notes": gen_skill.review_notes,
+        }
 
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(query, params).fetchall()
-            return [self._row_to_skill(row) for row in rows]
+        # Use skill_id as name to avoid collisions (agent skills can have same name but different IDs)
+        # Store original name in metadata
+        return UnifiedSkill(
+            id=gen_skill.skill_id,
+            name=gen_skill.skill_id,  # Use skill_id as unique name
+            kind=SkillKind.RUNTIME,
+            version="1",  # Agent skills don't have explicit versions
+            description=gen_skill.description,
+            capabilities=[],
+            tools=tools,
+            instructions=instructions,
+            policies=[],
+            dependencies=[],
+            test_cases=[],
+            tags=[gen_skill.skill_type, gen_skill.platform],
+            domain=gen_skill.platform,
+            effectiveness=EffectivenessMetrics(),
+            metadata=metadata,
+            author="agent-generator",
+            status=gen_skill.status,
+            created_at=gen_skill.created_at,
+            updated_at=gen_skill.created_at,
+        )
 
-    def approve(self, skill_id: str) -> bool:
-        """Mark a skill as approved."""
-        return self._update_status(skill_id, "approved")
-
-    def reject(self, skill_id: str, reason: str = "") -> bool:
-        """Mark a skill as rejected."""
-        with sqlite3.connect(self.db_path) as conn:
-            result = conn.execute(
-                "UPDATE agent_skills SET status = 'rejected', review_notes = ? WHERE skill_id = ?",
-                (reason, skill_id),
-            )
-            conn.commit()
-            return result.rowcount > 0
-
-    def list_by_gap(self, gap_id: str) -> list[GeneratedSkill]:
-        """List all skills generated for a specific gap."""
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT * FROM agent_skills WHERE gap_id = ? ORDER BY created_at DESC",
-                (gap_id,),
-            ).fetchall()
-            return [self._row_to_skill(row) for row in rows]
-
-    def save_gap(self, gap: Any) -> None:
-        """Store a SkillGap for reference."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                "INSERT OR REPLACE INTO skill_gaps (gap_id, data, created_at) VALUES (?, ?, ?)",
-                (gap.gap_id, json.dumps(gap.to_dict()), time.time()),
-            )
-            conn.commit()
-
-    def list_gaps(self) -> list[dict[str, Any]]:
-        """List all stored skill gaps."""
-        with sqlite3.connect(self.db_path) as conn:
-            rows = conn.execute(
-                "SELECT data FROM skill_gaps ORDER BY created_at DESC"
-            ).fetchall()
-            return [json.loads(row[0]) for row in rows]
-
-    def _update_status(self, skill_id: str, status: str) -> bool:
-        with sqlite3.connect(self.db_path) as conn:
-            result = conn.execute(
-                "UPDATE agent_skills SET status = ? WHERE skill_id = ?",
-                (status, skill_id),
-            )
-            conn.commit()
-            return result.rowcount > 0
-
-    @staticmethod
-    def _row_to_skill(row: tuple) -> GeneratedSkill:
-        files_raw = json.loads(row[8])
+    def _convert_from_unified(self, unified_skill: UnifiedSkill) -> GeneratedSkill:
+        """Convert unified Skill back to GeneratedSkill format."""
+        # Extract metadata
+        meta = unified_skill.metadata
+        files_data = meta.get("files", [])
         files = [
             GeneratedFile(
                 path=f["path"],
@@ -163,22 +123,119 @@ class AgentSkillStore:
                 is_new=f["is_new"],
                 diff=f.get("diff"),
             )
-            for f in files_raw
+            for f in files_data
         ]
+
+        # Get the original skill name from metadata (skill_id was used as name in unified)
+        original_name = meta.get("skill_name", unified_skill.name)
+
         return GeneratedSkill(
-            skill_id=row[0],
-            gap_id=row[1],
-            platform=row[2],
-            skill_type=row[3],
-            name=row[4],
-            description=row[5],
-            source_code=row[6],
-            config_yaml=row[7],
+            skill_id=unified_skill.id,
+            gap_id=meta.get("gap_id", ""),
+            platform=meta.get("platform", "adk"),
+            skill_type=meta.get("skill_type", "tool"),
+            name=original_name,  # Use original name from metadata
+            description=unified_skill.description,
+            source_code=meta.get("source_code"),
+            config_yaml=meta.get("config_yaml"),
             files=files,
-            eval_criteria=json.loads(row[9]),
-            estimated_improvement=row[10],
-            confidence=row[11],
-            status=row[12],
-            review_notes=row[13],
-            created_at=row[14],
+            eval_criteria=meta.get("eval_criteria", []),
+            estimated_improvement=meta.get("estimated_improvement", 0.0),
+            confidence=meta.get("confidence", "medium"),
+            status=unified_skill.status,
+            review_notes=meta.get("review_notes", ""),
+            created_at=unified_skill.created_at,
         )
+
+    # ------------------------------------------------------------------
+    # Core CRUD
+    # ------------------------------------------------------------------
+
+    def save(self, skill: GeneratedSkill) -> None:
+        """Store a generated skill."""
+        unified_skill = self._convert_to_unified(skill)
+
+        # Try to get existing skill
+        existing = self._unified_store.get(skill.skill_id)
+        if existing:
+            # Update existing
+            self._unified_store.update(unified_skill)
+        else:
+            # Create new
+            self._unified_store.create(unified_skill)
+
+    def get(self, skill_id: str) -> GeneratedSkill | None:
+        """Retrieve a skill by ID."""
+        unified_skill = self._unified_store.get(skill_id)
+        if unified_skill is None:
+            return None
+
+        # Only return if it's a RUNTIME skill
+        if unified_skill.kind != SkillKind.RUNTIME:
+            return None
+
+        return self._convert_from_unified(unified_skill)
+
+    def list(self, status: str | None = None, platform: str | None = None) -> list[GeneratedSkill]:
+        """List skills with optional filters."""
+        # List from unified store
+        domain = platform  # platform maps to domain
+        unified_skills = self._unified_store.list(kind=SkillKind.RUNTIME, domain=domain, status=status)
+
+        # Convert to old format
+        return [self._convert_from_unified(s) for s in unified_skills]
+
+    def approve(self, skill_id: str) -> bool:
+        """Mark a skill as approved."""
+        return self._update_status(skill_id, "approved")
+
+    def reject(self, skill_id: str, reason: str = "") -> bool:
+        """Mark a skill as rejected."""
+        skill = self.get(skill_id)
+        if skill is None:
+            return False
+
+        skill.status = "rejected"
+        skill.review_notes = reason
+        self.save(skill)
+        return True
+
+    def list_by_gap(self, gap_id: str) -> list[GeneratedSkill]:
+        """List all skills generated for a specific gap."""
+        # Get all RUNTIME skills and filter by gap_id in metadata
+        all_skills = self._unified_store.list(kind=SkillKind.RUNTIME)
+        matching = [s for s in all_skills if s.metadata.get("gap_id") == gap_id]
+
+        # Sort by created_at descending
+        matching.sort(key=lambda s: s.created_at, reverse=True)
+
+        return [self._convert_from_unified(s) for s in matching]
+
+    def save_gap(self, gap: Any) -> None:
+        """Store a SkillGap for reference."""
+        gap_data = gap.to_dict()
+        self._gap_store[gap.gap_id] = gap_data
+
+        # Also store in any related skills
+        skills = self.list_by_gap(gap.gap_id)
+        for skill in skills:
+            unified_skill = self._convert_to_unified(skill)
+            unified_skill.metadata["gap_data"] = gap_data
+            self._unified_store.update(unified_skill)
+
+    def list_gaps(self) -> list[dict[str, Any]]:
+        """List all stored skill gaps."""
+        # Return gaps in reverse chronological order
+        gaps = list(self._gap_store.values())
+        gaps.sort(key=lambda g: g.get("created_at", 0), reverse=True)
+        return gaps
+
+    def _update_status(self, skill_id: str, status: str) -> bool:
+        """Update skill status."""
+        skill = self.get(skill_id)
+        if skill is None:
+            return False
+
+        skill.status = status
+        self.save(skill)
+        return True

@@ -93,6 +93,9 @@ class OptimizerConfig(BaseModel):
     curriculum_enabled: bool = False
     curriculum_min_experiments_per_tier: int = 3
     curriculum_stall_threshold: float = 0.01
+    use_skills: bool = False  # Enable skill-driven optimization
+    skill_selection_strategy: str = "auto"  # "auto" | "manual" | "all"
+    skill_max_candidates: int = 5  # Max skills to select per cycle
 
 
 class AgentConfig(BaseModel):

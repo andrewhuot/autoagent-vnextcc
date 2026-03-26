@@ -472,3 +472,38 @@ class AssistantActionResponse(BaseModel):
     action_id: str
     result: dict[str, Any] = Field(default_factory=dict)
     message: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Skills models (core.skills unified API)
+# ---------------------------------------------------------------------------
+
+class SkillCreateRequest(BaseModel):
+    """Request to create a new skill."""
+    skill: dict[str, Any] = Field(..., description="Skill definition as dict")
+
+
+class SkillUpdateRequest(BaseModel):
+    """Request to update an existing skill."""
+    skill: dict[str, Any] = Field(..., description="Updated skill definition as dict")
+
+
+class SkillComposeRequest(BaseModel):
+    """Request to compose a skill set."""
+    skill_ids: list[str] = Field(..., description="List of skill IDs to compose")
+    name: str = Field(..., description="Name for the composed skill set")
+    description: str = Field("", description="Description of the skill set")
+    resolve_conflicts: bool = Field(True, description="Attempt to resolve conflicts automatically")
+
+
+class SkillInstallRequest(BaseModel):
+    """Request to install a skill from marketplace."""
+    skill_id: str = Field(..., description="Marketplace skill ID, URL, or file path to install")
+
+
+class SkillSearchRequest(BaseModel):
+    """Request to search skills."""
+    query: str = Field(..., description="Search query text")
+    kind: Optional[str] = Field(None, description="Filter by kind: build or runtime")
+    domain: Optional[str] = Field(None, description="Filter by domain")
+    tags: Optional[str] = Field(None, description="Comma-separated tags filter")
