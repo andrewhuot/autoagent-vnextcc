@@ -33,6 +33,7 @@ from api.routes import (
     events,
     experiments,
     health,
+    intelligence,
     judges,
     loop,
     memory as memory_routes,
@@ -287,6 +288,7 @@ app.include_router(events.router)
 app.include_router(autofix.router)
 app.include_router(judges.router)
 app.include_router(context.router)
+app.include_router(intelligence.router)
 app.include_router(registry.router)
 app.include_router(scorers.router)
 app.include_router(changes.router)

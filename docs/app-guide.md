@@ -1,6 +1,6 @@
 # Web App Guide
 
-This guide walks through the AutoAgent VNextCC web console and explains what each page is for, what data it uses, and how operators typically use it in practice.
+This guide walks through all 31 pages in the AutoAgent VNextCC web console and explains what each page is for, what data it uses, and how operators typically use it in practice.
 
 The app is served by the FastAPI server at `http://localhost:8000` when you run:
 
@@ -8,41 +8,47 @@ The app is served by the FastAPI server at `http://localhost:8000` when you run:
 autoagent server
 ```
 
+**New in this release:**
+- **AgentStudio** — Interactive chat interface for natural language agent editing
+- **IntelligenceStudio** — Transcript archive analytics and Q&A with auto-generated insights
+
 ## Route Map
 
-All 29 pages in the web console:
+All 31 pages in the web console:
 
 | Page | Route | Primary job |
 |---|---|---|
-| Dashboard | `/` | System health snapshot and recent optimization activity |
-| Eval Runs | `/evals` | Start eval runs and compare run-level outcomes |
-| Eval Detail | `/evals/:id` | Investigate one run at per-case granularity |
-| Optimize | `/optimize` | Trigger optimization cycles and inspect gate outcomes |
-| Live Optimize | `/live-optimize` | Real-time optimization with streaming updates |
-| Configs | `/configs` | Browse versioned configs, inspect YAML, diff versions |
-| Conversations | `/conversations` | Explore user conversations, filters, and tool traces |
-| Deploy | `/deploy` | Manage active/canary versions, rollback, and history |
-| Loop Monitor | `/loop` | Run/stop continuous loop and watch cycle-by-cycle progress |
-| Opportunities | `/opportunities` | Optimization opportunities from failure analysis |
-| Experiments | `/experiments` | Experiment tracking and A/B test results |
-| Traces | `/traces` | Structured trace events and span analysis |
-| Event Log | `/events` | Real-time event stream from optimization loop |
-| AutoFix | `/autofix` | Reviewable fix proposals from failure patterns |
-| JudgeOps | `/judge-ops` | Judge versioning, calibration, and drift monitoring |
-| Context Workbench | `/context` | Context window analysis and compaction strategies |
-| Change Review | `/changes` | Review and approve proposed config changes |
-| Runbooks | `/runbooks` | Curated bundles of skills, policies, and tools |
-| Skills | `/skills` | Executable optimization strategies for the proposer |
-| Project Memory | `/memory` | Persistent project context (AUTOAGENT.md) |
-| Registry | `/registry` | Modular registry of skills, policies, tools, handoffs |
-| Blame Map | `/blame` | Failure clustering and root cause attribution |
-| Scorer Studio | `/scorer-studio` | Create and refine eval scorers from natural language |
-| CX Import | `/cx/import` | Import CX Agent Studio agents |
-| CX Deploy | `/cx/deploy` | Deploy to CX environments |
-| ADK Import | `/adk/import` | Import Agent Development Kit agents |
-| ADK Deploy | `/adk/deploy` | Deploy ADK agents |
-| Agent Skills | `/agent-skills` | Agent skill generation and gap analysis |
-| Settings | `/settings` | Operator shortcuts and runtime path reference |
+| **Dashboard** | `/` | System health snapshot with pulse indicator, journey timeline, recommendations |
+| **AgentStudio** | `/agent-studio` | Interactive chat for describing agent changes in natural language |
+| **IntelligenceStudio** | `/intelligence-studio` | Transcript archive ingestion, analytics, Q&A, agent generation |
+| **Eval Runs** | `/evals` | Start eval runs and compare run-level outcomes |
+| **Eval Detail** | `/evals/:id` | Investigate one run at per-case granularity |
+| **Optimize** | `/optimize` | Trigger optimization cycles and inspect gate outcomes |
+| **Live Optimize** | `/live-optimize` | Real-time optimization with Server-Sent Events streaming |
+| **Configs** | `/configs` | Browse versioned configs, inspect YAML, diff versions |
+| **Conversations** | `/conversations` | Explore user conversations, filters, and tool traces |
+| **Deploy** | `/deploy` | Manage active/canary versions, rollback, and history |
+| **Loop Monitor** | `/loop` | Run/stop continuous loop and watch cycle-by-cycle progress |
+| **Opportunities** | `/opportunities` | Optimization opportunities from failure analysis |
+| **Experiments** | `/experiments` | Experiment tracking and A/B test results |
+| **Traces** | `/traces` | Structured trace events and span analysis |
+| **Event Log** | `/events` | Real-time event stream from optimization loop |
+| **AutoFix** | `/autofix` | Reviewable fix proposals from failure patterns |
+| **JudgeOps** | `/judge-ops` | Judge versioning, calibration, and drift monitoring |
+| **Context Workbench** | `/context` | Context window analysis and compaction strategies |
+| **Change Review** | `/changes` | Review and approve proposed config changes |
+| **Runbooks** | `/runbooks` | Curated bundles of skills, policies, and tools |
+| **Skills** | `/skills` | Executable optimization strategies for the proposer |
+| **Project Memory** | `/memory` | Persistent project context (AUTOAGENT.md) with auto-update |
+| **Registry** | `/registry` | Modular registry of skills, policies, tools, handoffs |
+| **Blame Map** | `/blame` | Failure clustering and root cause attribution |
+| **Scorer Studio** | `/scorer-studio` | Create and refine eval scorers from natural language |
+| **CX Import** | `/cx/import` | Import Google Dialogflow CX Agent Studio agents |
+| **CX Deploy** | `/cx/deploy` | Deploy to CX environments with widget generation |
+| **ADK Import** | `/adk/import` | Import Google Agent Development Kit agents |
+| **ADK Deploy** | `/adk/deploy` | Deploy ADK agents to Cloud Run or Vertex AI |
+| **Agent Skills** | `/agent-skills` | Agent capability gap analysis and skill generation |
+| **Settings** | `/settings` | Operator shortcuts and runtime path reference |
 
 ## Global UX
 
@@ -99,20 +105,23 @@ Purpose: quickly answer “is the system healthy right now?”
 
 ### What you see
 
-- Health ring score (derived from success/error/safety/latency)
-- Metric cards:
-  - success rate
-  - average latency
-  - error rate
-  - safety violation rate
-  - average cost
-  - total conversations
-- Score trajectory chart from optimization history
-- Recent optimization timeline entries
+- **Health Pulse** — Living SVG health indicator with color-coded pulse speed (green 3s, amber 1.5s, red 0.8s)
+- **Metric cards:**
+  - Success rate
+  - Average latency
+  - Error rate
+  - Safety violation rate
+  - Average cost
+  - Total conversations
+- **Journey Timeline** — Horizontal scrollable optimization history with animated SVG line drawing
+- **Score trajectory chart** from optimization history
+- **Recent optimization timeline** entries with accept/reject status
+- **Recommended next actions** with exact CLI commands
 
 ### Data sources
 
 - `GET /api/health`
+- `GET /api/health/scorecard`
 - `GET /api/optimize/history`
 
 ### Typical actions
@@ -120,6 +129,105 @@ Purpose: quickly answer “is the system healthy right now?”
 - Run a fresh eval (`New Eval`)
 - Jump to optimization history/details
 - Refresh health data
+- Click timeline nodes to view config diffs
+- Follow recommended next actions
+
+---
+
+## AgentStudio (`/agent-studio`)
+
+Purpose: describe agent changes in plain language without writing config YAML.
+
+### What you see
+
+- **Chat interface** — Intercom-style conversational UI
+- **Sample prompts** — Quick-start examples:
+  - “Make BillingAgent verify invoices before answering”
+  - “Route shipping delays straight to RefundAgent”
+  - “Tighten orchestrator handoffs so specialists inherit context”
+  - “Add safety guardrails to prevent unauthorized PII disclosure”
+- **Live draft mutations** — Real-time change preview on each user input
+- **Change set cards** — Visual breakdown of proposed mutations:
+  - Surface (prompts, routing, tools, policies)
+  - Impact score (high/medium/low)
+  - Change description in plain English
+- **Metric impact visualization** — Before/after score estimates
+- **Focus area detection** — Automatically identifies which config area needs attention
+
+### Data sources
+
+- Client-side draft building (no API calls until apply)
+- `POST /api/edit` — When user confirms changes
+
+### Typical actions
+
+- Type natural language change request
+- Review proposed mutations in change set
+- Refine request in follow-up messages
+- Apply changes with one click
+- View diff in Configs page after apply
+
+**Example workflow:**
+1. Type: “Make the agent more empathetic in billing conversations”
+2. Review change card: “prompts.root - Add empathy instructions”
+3. Refine: “Also mention patience and acknowledgment”
+4. Apply → Config v13 created with new instructions
+
+---
+
+## IntelligenceStudio (`/intelligence-studio`)
+
+Purpose: upload conversation archives, get automatic analytics, and generate agent improvements from transcript data.
+
+### What you see
+
+- **Archive upload** — Drag-and-drop ZIP file ingestion
+- **Processing status** — Real-time progress (parsing, analyzing, extracting)
+- **Summary cards:**
+  - Total transcripts
+  - Language distribution (en, es, fr, etc.)
+  - Intent distribution (order tracking, refunds, cancellations, etc.)
+  - Transfer reasons (missing order number, policy gaps, escalations)
+- **Insights panel** — Automatically extracted opportunities:
+  - Severity (high/medium/low)
+  - Category (routing, safety, latency, etc.)
+  - Description with evidence count
+  - Recommended action
+- **Q&A interface** — Ask questions about transcript data:
+  - “Why are people transferring to live support?”
+  - “What should I change to improve this metric?”
+- **Procedures & FAQs** — Auto-extracted from successful conversations
+- **Missing intents** — Capabilities the agent lacks
+- **Workflow recommendations** — Suggested process improvements
+- **Test case generation** — Edge cases for eval suite
+- **One-click apply** — Create change card from insight
+
+### Data sources
+
+- `POST /api/intelligence/archive` — ZIP upload and processing
+- `GET /api/intelligence/reports` — List all reports
+- `GET /api/intelligence/reports/{id}` — Report details
+- `POST /api/intelligence/reports/{id}/ask` — Q&A over transcript data
+- `POST /api/intelligence/reports/{id}/apply` — Create change card from insight
+
+### Typical actions
+
+- Upload transcript archive (ZIP with JSON/CSV/TXT files)
+- Review summary metrics and intent distribution
+- Explore insights with high severity
+- Ask questions: “Why are refund requests failing?”
+- Apply top insight to create change card
+- Review drafted change in Change Review page
+- Approve and deploy fix
+
+**Example workflow:**
+1. Upload `march_2026_support.zip` (1,247 conversations)
+2. Review summary: 42% of refund requests routed to wrong agent
+3. Click insight: “Add 'refund' keywords to billing_agent routing rules”
+4. Ask: “What exact phrases are customers using?”
+5. Review evidence: “money back”, “reimbursement”, “refund my order”
+6. Apply insight → Change card created with keyword additions
+7. Approve in Change Review → Deploy with canary
 
 ## Eval Runs (`/evals`)
 

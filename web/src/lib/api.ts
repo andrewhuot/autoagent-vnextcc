@@ -4,6 +4,7 @@ import type {
   AdkDeployResult,
   AdkExportResult,
   AdkImportResult,
+  ApplyInsightResult,
   ArchiveEntry,
   AutoFixApplyOutcome,
   AutoFixHistoryEntry,
@@ -23,32 +24,35 @@ import type {
   CxExportResult,
   CxDeployResult,
   CxWidgetResult,
-
   ExecutableSkill,
-  SkillLeaderboardEntry,
   DeployHistoryEntry,
   DeployResponse,
   DeployStatus,
+  DiagnoseChatResponse,
   DiffLine,
   EvalResult,
   EvalRun,
   ExperimentCard,
+  HealthReport,
+  IntelligenceAnswer,
   JudgeCalibration,
   JudgeDriftReport,
   JudgeFeedbackRecord,
   JudgeOpsJudgeSummary,
-  ParetoFrontier,
-  Runbook,
-  ProjectMemory,
-  HealthReport,
   LoopStatus,
   OptimizationAttempt,
   OptimizationOpportunity,
   OptimizeResult,
+  ParetoFrontier,
+  ProjectMemory,
+  PromptBuildArtifact,
+  Runbook,
+  SkillLeaderboardEntry,
   TaskStatus,
   Trace,
   TraceEvent,
-  DiagnoseChatResponse,
+  TranscriptReport,
+  TranscriptReportSummary,
 } from './types';
 
 const API_BASE = '/api';
@@ -155,6 +159,80 @@ function parseDiffLines(diff: string): DiffLine[] {
   }
 
   return parsed;
+}
+
+interface RawChangeCard {
+  card_id: string;
+  title: string;
+  why: string;
+  status: 'pending' | 'applied' | 'rejected';
+  diff_hunks: Array<{
+    hunk_id: string;
+    surface: string;
+    old_value: string;
+    new_value: string;
+    status: 'pending' | 'accepted' | 'rejected';
+  }>;
+  metrics_before: Record<string, number>;
+  metrics_after: Record<string, number>;
+  confidence?: {
+    p_value?: number;
+    effect_size?: number;
+    judge_agreement?: number;
+  };
+  risk_class?: 'low' | 'medium' | 'high';
+  rollout_plan?: string;
+  created_at?: number;
+}
+
+function buildHunkContent(oldValue: string, newValue: string): string {
+  const lines: string[] = ['@@'];
+  if (oldValue) {
+    lines.push(...oldValue.split('\n').map((line) => `- ${line}`));
+  }
+  if (newValue) {
+    lines.push(...newValue.split('\n').map((line) => `+ ${line}`));
+  }
+  return lines.join('\n');
+}
+
+function mapChangeCard(raw: RawChangeCard): ChangeCard {
+  const pValue = raw.confidence?.p_value ?? 1;
+  const effectSize = raw.confidence?.effect_size ?? 0;
+  const judgeAgreement = raw.confidence?.judge_agreement ?? 0;
+  const confidenceScore = Math.max(0, Math.min(1, 1 - pValue));
+
+  return {
+    id: raw.card_id,
+    title: raw.title,
+    why: raw.why,
+    status: raw.status,
+    diff_hunks: raw.diff_hunks.map((hunk, index) => ({
+      hunk_id: hunk.hunk_id,
+      file_path: hunk.surface || `config.surface.${index + 1}`,
+      old_start: index + 1,
+      old_count: hunk.old_value ? Math.max(hunk.old_value.split('\n').length, 1) : 0,
+      new_start: index + 1,
+      new_count: hunk.new_value ? Math.max(hunk.new_value.split('\n').length, 1) : 0,
+      content: buildHunkContent(hunk.old_value, hunk.new_value),
+      status: hunk.status,
+    })),
+    metrics_before: raw.metrics_before ?? {},
+    metrics_after: raw.metrics_after ?? {},
+    confidence: {
+      score: confidenceScore,
+      explanation: raw.why,
+      evidence: [
+        `p-value ${pValue.toFixed(4)}`,
+        `effect size ${effectSize.toFixed(4)}`,
+        judgeAgreement > 0 ? `judge agreement ${(judgeAgreement * 100).toFixed(0)}%` : 'judge agreement unavailable',
+      ],
+    },
+    risk: raw.risk_class ?? 'low',
+    rollout_plan: raw.rollout_plan ?? '',
+    created_at: fromEpoch(raw.created_at),
+    updated_at: fromEpoch(raw.created_at),
+  };
 }
 
 interface EvalResultRaw {
@@ -1317,8 +1395,9 @@ export function useChanges() {
   return useQuery<ChangeCard[]>({
     queryKey: ['changes'],
     queryFn: async () => {
-      const payload = await fetchApi<{ changes: ChangeCard[] }>('/changes');
-      return payload.changes ?? [];
+      const payload = await fetchApi<{ cards?: RawChangeCard[]; changes?: RawChangeCard[] }>('/changes?status=all');
+      const cards = payload.cards ?? payload.changes ?? [];
+      return cards.map(mapChangeCard);
     },
     refetchInterval: 5000,
   });
@@ -1330,7 +1409,14 @@ export function useChangeDetail(id: string | undefined) {
     enabled: Boolean(id),
     queryFn: async () => {
       if (!id) throw new ApiRequestError('Missing change ID', 400);
-      return fetchApi<ChangeCard>(`/changes/${encodeURIComponent(id)}`);
+      const payload = await fetchApi<{ card?: RawChangeCard; change?: RawChangeCard }>(
+        `/changes/${encodeURIComponent(id)}`
+      );
+      const raw = payload.card ?? payload.change;
+      if (!raw) {
+        throw new ApiRequestError('Missing change payload', 500);
+      }
+      return mapChangeCard(raw);
     },
   });
 }
@@ -1368,7 +1454,7 @@ export function useUpdateHunkStatus() {
     mutationFn: ({ cardId, hunkId, status }) =>
       fetchApi(`/changes/${encodeURIComponent(cardId)}/hunks`, {
         method: 'PATCH',
-        body: JSON.stringify({ hunk_id: hunkId, status }),
+        body: JSON.stringify({ updates: [{ hunk_id: hunkId, status }] }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['changes'] });
@@ -1463,6 +1549,81 @@ export function useAddMemoryNote() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['memory'] });
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Intelligence Studio
+// ---------------------------------------------------------------------------
+
+export function useTranscriptReports() {
+  return useQuery<TranscriptReportSummary[]>({
+    queryKey: ['intelligence', 'reports'],
+    queryFn: async () => {
+      const payload = await fetchApi<{ reports: TranscriptReportSummary[] }>('/intelligence/reports');
+      return payload.reports ?? [];
+    },
+  });
+}
+
+export function useTranscriptReport(reportId: string | undefined) {
+  return useQuery<TranscriptReport>({
+    queryKey: ['intelligence', 'report', reportId],
+    enabled: Boolean(reportId),
+    queryFn: async () => {
+      if (!reportId) {
+        throw new ApiRequestError('Missing report ID', 400);
+      }
+      return fetchApi<TranscriptReport>(`/intelligence/reports/${encodeURIComponent(reportId)}`);
+    },
+  });
+}
+
+export function useImportTranscriptArchive() {
+  const queryClient = useQueryClient();
+  return useMutation<TranscriptReport, ApiRequestError, { archive_name: string; archive_base64: string }>({
+    mutationFn: (body) =>
+      fetchApi('/intelligence/archive', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['intelligence', 'reports'] });
+    },
+  });
+}
+
+export function useAskTranscriptReport() {
+  return useMutation<IntelligenceAnswer, ApiRequestError, { reportId: string; question: string }>({
+    mutationFn: ({ reportId, question }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/ask`, {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+      }),
+  });
+}
+
+export function useApplyTranscriptInsight() {
+  const queryClient = useQueryClient();
+  return useMutation<ApplyInsightResult, ApiRequestError, { reportId: string; insight_id: string }>({
+    mutationFn: ({ reportId, insight_id }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/apply`, {
+        method: 'POST',
+        body: JSON.stringify({ insight_id }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useBuildAgentArtifact() {
+  return useMutation<PromptBuildArtifact, ApiRequestError, { prompt: string; connectors: string[] }>({
+    mutationFn: (body) =>
+      fetchApi('/intelligence/build', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
   });
 }
 

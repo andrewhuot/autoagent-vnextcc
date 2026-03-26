@@ -629,6 +629,136 @@ export interface ChangeCard {
 }
 
 // ---------------------------------------------------------------------------
+// Intelligence Studio
+// ---------------------------------------------------------------------------
+
+export interface TranscriptConversation {
+  conversation_id: string;
+  session_id: string;
+  user_message: string;
+  agent_response: string;
+  outcome: string;
+  language: string;
+  intent: string;
+  transfer_reason: string | null;
+  source_file: string;
+  procedure_steps: string[];
+}
+
+export interface MissingIntent {
+  intent: string;
+  count: number;
+  reason: string;
+}
+
+export interface TranscriptInsight {
+  insight_id: string;
+  title: string;
+  summary: string;
+  recommendation: string;
+  drafted_change_prompt: string;
+  metric_name: string;
+  share: number;
+  count: number;
+  total: number;
+  evidence: string[];
+}
+
+export interface ProcedureSummary {
+  intent: string;
+  steps: string[];
+  source_conversation_id: string;
+}
+
+export interface FaqEntry {
+  intent: string;
+  question: string;
+  answer: string;
+}
+
+export interface WorkflowSuggestion {
+  title: string;
+  description: string;
+}
+
+export interface SuggestedTest {
+  name: string;
+  user_message: string;
+  expected_behavior: string;
+}
+
+export interface TranscriptReportSummary {
+  report_id: string;
+  archive_name: string;
+  created_at: number;
+  conversation_count: number;
+  languages: string[];
+}
+
+export interface TranscriptReport {
+  report_id: string;
+  archive_name: string;
+  created_at: number;
+  conversation_count: number;
+  languages: string[];
+  missing_intents: MissingIntent[];
+  procedure_summaries: ProcedureSummary[];
+  faq_entries: FaqEntry[];
+  workflow_suggestions: WorkflowSuggestion[];
+  suggested_tests: SuggestedTest[];
+  insights: TranscriptInsight[];
+  conversations: TranscriptConversation[];
+}
+
+export interface IntelligenceAnswer {
+  answer: string;
+  metrics: {
+    share: number;
+    count: number;
+    total: number;
+  };
+  evidence: string[];
+  recommended_insight_id: string | null;
+}
+
+export interface BuildIntent {
+  name: string;
+  description: string;
+}
+
+export interface BuildJourney {
+  name: string;
+  steps: string[];
+}
+
+export interface BuildTool {
+  name: string;
+  connector: string;
+  purpose: string;
+}
+
+export interface PromptBuildArtifact {
+  connectors: string[];
+  intents: BuildIntent[];
+  business_rules: string[];
+  auth_steps: string[];
+  escalation_conditions: string[];
+  channel_behavior: string[];
+  journeys: BuildJourney[];
+  tools: BuildTool[];
+  guardrails: string[];
+  suggested_tests: SuggestedTest[];
+}
+
+export interface ApplyInsightResult {
+  status: string;
+  drafted_change_prompt: string;
+  change_card: {
+    card_id: string;
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Runbooks
 // ---------------------------------------------------------------------------
 
@@ -779,7 +909,7 @@ export interface AdkAgent {
   instruction: string;
   tools: AdkTool[];
   sub_agents: AdkAgent[];
-  generate_config: Record<string, any>;
+  generate_config: Record<string, unknown>;
 }
 
 export interface AdkTool {
@@ -806,7 +936,7 @@ export interface AdkDeployResult {
   target: string;
   url: string;
   status: string;
-  deployment_info: Record<string, any>;
+  deployment_info: Record<string, unknown>;
 }
 
 // Diagnosis Chat types
@@ -826,6 +956,6 @@ export interface ChatMessage {
 export interface DiagnoseChatResponse {
   response: string;
   actions: { label: string; action: string }[];
-  clusters: any[];
+  clusters: Array<Record<string, unknown>>;
   session_id: string;
 }

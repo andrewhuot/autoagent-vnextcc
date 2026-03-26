@@ -305,7 +305,7 @@ class DiagnoseSession:
         self.pending_change = None
         desc = self.pending_description
         self.pending_description = ""
-        return f"Applied: {desc}\nMoving to next issue..."
+        return f"Applied fix: {desc}\nMoving to next issue..."
 
     def _handle_next(self) -> str:
         """Advance to the next cluster."""

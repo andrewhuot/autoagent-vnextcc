@@ -48,9 +48,9 @@ def _cluster_payload(session: DiagnoseSession) -> list[dict[str, Any]]:
         rows.append(
             {
                 "index": idx + 1,
-                "bucket": cluster.bucket,
+                "bucket": cluster.failure_type,
                 "count": cluster.count,
-                "focused": idx == session.focused_cluster,
+                "focused": idx == session.focused_index,
             }
         )
     return rows
@@ -142,10 +142,22 @@ async def diagnose_chat(request: Request) -> dict[str, Any]:
                 "session_id": session_id,
             }
 
-    before_applied = len(session.applied_changes)
+    had_pending_change = session.pending_change is not None
+    pending_description = session.pending_description
+    focused_bucket = session.focused_cluster.failure_type if session.focused_cluster is not None else "unknown"
     response = session.handle_input(message)
-    if len(session.applied_changes) > before_applied:
-        _record_applied_change(request, session, session.applied_changes[-1])
+    if had_pending_change and session.pending_change is None and response.lower().startswith("applied"):
+        _record_applied_change(
+            request,
+            session,
+            {
+                "description": pending_description or "diagnose fix",
+                "diff": pending_description or "diagnose fix",
+                "bucket": focused_bucket,
+                "score_before": 0.0,
+                "score_after": 0.0,
+            },
+        )
 
     return {
         "response": response,

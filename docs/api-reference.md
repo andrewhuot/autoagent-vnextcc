@@ -1,6 +1,6 @@
 # API Reference
 
-Complete reference for all 123 API endpoints. All endpoints are served under `/api/`. The server runs on `http://localhost:8000` by default.
+Complete reference for all 131 API endpoints. All endpoints are served under `/api/`. The server runs on `http://localhost:8000` by default.
 
 Start the server:
 
@@ -9,6 +9,8 @@ autoagent server
 ```
 
 Interactive docs: `http://localhost:8000/docs` (Swagger) or `http://localhost:8000/redoc` (ReDoc).
+
+**Route modules:** 30 total — `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`, `intelligence`.
 
 ---
 
@@ -569,13 +571,18 @@ GET /api/registry/search?q=order&type=skills
 
 ---
 
-## Natural Language
+## Natural Language & Intelligence
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/edit` | Apply natural language edits to config |
 | `POST` | `/api/diagnose` | Run failure diagnosis |
-| `POST` | `/api/diagnose/chat` | Chat-based diagnosis |
+| `POST` | `/api/diagnose/chat` | Chat-based diagnosis session |
+| `POST` | `/api/intelligence/archive` | Import transcript archive (ZIP) |
+| `GET` | `/api/intelligence/reports` | List intelligence reports |
+| `GET` | `/api/intelligence/reports/{id}` | Get intelligence report details |
+| `POST` | `/api/intelligence/reports/{id}/ask` | Ask questions about transcript data |
+| `POST` | `/api/intelligence/reports/{id}/apply` | Apply insight to create change card |
 
 ### POST `/api/edit`
 
@@ -597,6 +604,110 @@ GET /api/registry/search?q=order&type=skills
   ],
   "applied": true,
   "config_version": 42
+}
+```
+
+### POST `/api/intelligence/archive`
+
+Import a transcript archive (ZIP file with JSON/CSV/TXT conversations) for analytics.
+
+```json
+// Request
+{
+  "archive_name": "march_2026_support_transcripts.zip",
+  "archive_base64": "UEsDBBQACAAIAA..."
+}
+
+// Response (201 Created)
+{
+  "report_id": "rpt_abc123",
+  "archive_name": "march_2026_support_transcripts.zip",
+  "transcript_count": 1247,
+  "language_distribution": {
+    "en": 892,
+    "es": 245,
+    "fr": 110
+  },
+  "intent_distribution": {
+    "order_tracking": 423,
+    "refund_request": 287,
+    "cancellation": 198,
+    "address_change": 156,
+    "product_inquiry": 183
+  },
+  "transfer_reasons": {
+    "missing_order_number": 67,
+    "requires_human_verification": 42,
+    "policy_gap": 38,
+    "escalation_requested": 29
+  },
+  "procedures_extracted": 12,
+  "faqs_extracted": 18,
+  "missing_intents": ["exchange_request", "warranty_claim"],
+  "insights": [
+    {
+      "insight_id": "ins_001",
+      "category": "routing",
+      "severity": "high",
+      "description": "42% of refund requests routed to wrong agent",
+      "evidence_count": 120,
+      "recommended_action": "Add 'refund' keywords to billing_agent routing rules"
+    }
+  ]
+}
+```
+
+### POST `/api/intelligence/reports/{id}/ask`
+
+Ask questions about transcript data with natural language Q&A.
+
+```json
+// Request
+{
+  "question": "Why are people transferring to live support?"
+}
+
+// Response
+{
+  "answer": "The top 3 reasons are: (1) Missing order numbers (67 cases) — users don't have tracking info; (2) Policy gaps (38 cases) — agent can't handle return exceptions; (3) Escalation requests (29 cases) — users ask for managers.",
+  "evidence": [
+    {
+      "conversation_id": "conv_456",
+      "excerpt": "I don't have my order number, can you look it up by email?",
+      "reason": "missing_order_number"
+    }
+  ],
+  "confidence": 0.89
+}
+```
+
+### POST `/api/intelligence/reports/{id}/apply`
+
+Apply an insight to create a change card with drafted config edits.
+
+```json
+// Request
+{
+  "insight_id": "ins_001"
+}
+
+// Response (201 Created)
+{
+  "status": "pending_review",
+  "drafted_change_prompt": "Add keywords 'refund', 'reimbursement', 'money back' to billing_agent routing rules",
+  "change_card": {
+    "card_id": "cc_789",
+    "surface": "routing.rules",
+    "hypothesis": "Adding refund keywords will reduce misroutes by 42%",
+    "hunks": [
+      {
+        "path": "routing.rules[billing_agent].keywords",
+        "old": "[\"billing\", \"invoice\", \"charge\"]",
+        "new": "[\"billing\", \"invoice\", \"charge\", \"refund\", \"reimbursement\", \"money back\"]"
+      }
+    ],
+    "estimated_impact": "+42% routing accuracy"
+  }
 }
 ```
 
@@ -638,19 +749,23 @@ Message types:
 
 ## Summary
 
-Total API surface: **123 endpoints** across 29 route modules.
+Total API surface: **131 endpoints** across 30 route modules + WebSocket + SSE.
 
 Primary categories:
-- Eval & optimization (10 endpoints)
-- Config & deploy (7 endpoints)
-- Observability (traces, health, events) (18 endpoints)
-- Control & gates (6 endpoints)
-- Advanced features (judges, context, autofix) (15 endpoints)
-- Registry & skills (12 endpoints)
-- Change management (9 endpoints)
-- Integrations (CX, ADK) (11 endpoints)
-- Natural language (3 endpoints)
-- Core infrastructure (32 endpoints)
+- **Eval & optimization** (10 endpoints) — eval runs, optimize cycles, optimize stream (SSE)
+- **Config & deploy** (7 endpoints) — config versions, diffs, canary deployments
+- **Observability** (18 endpoints) — traces, health scorecard, events, blame map
+- **Control & gates** (7 endpoints) — pause/resume, pin/unpin, reject, inject
+- **Advanced features** (15 endpoints) — judges, context workbench, autofix proposals
+- **Registry & skills** (12 endpoints) — skills, runbooks, policies, tool contracts
+- **Change management** (6 endpoints) — change cards, review, apply/reject
+- **Integrations** (17 endpoints) — CX Agent Studio (7), ADK (5), Agent Skills (5)
+- **Natural language & intelligence** (9 endpoints) — edit, diagnose, transcript intelligence
+- **Core infrastructure** (30 endpoints) — conversations, experiments, opportunities, scorers, memory
+
+**Real-time communication:**
+- WebSocket (`WS /ws`) — Real-time updates for eval_complete, optimize_complete, loop_cycle, deploy_complete
+- Server-Sent Events (`GET /api/events`, `GET /api/optimize/stream`) — Event streams for live optimization progress
 
 All endpoints return JSON. Error responses follow standard HTTP status codes with structured error bodies.
 

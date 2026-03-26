@@ -69,9 +69,15 @@ _PROMPT_SUFFIX_MAP: list[tuple[list[str], str]] = [
 class NLEditor:
     """Translates natural language descriptions into config changes."""
 
-    def __init__(self, proposer: Any = None, eval_runner: Any = None) -> None:
+    def __init__(
+        self,
+        proposer: Any = None,
+        eval_runner: Any = None,
+        use_mock: bool = True,
+    ) -> None:
         self.proposer = proposer
         self.eval_runner = eval_runner
+        self.use_mock = use_mock
 
     # ------------------------------------------------------------------
     # Parse
@@ -161,6 +167,7 @@ class NLEditor:
         current_config: dict,
         eval_runner: Any = None,
         deployer: Any = None,
+        auto_apply: bool = False,
     ) -> EditResult:
         """Full pipeline: parse → generate → eval → present."""
         intent = self.parse_intent(description, current_config)
@@ -184,6 +191,16 @@ class NLEditor:
 
         diff_summary = self._build_diff_summary(current_config, new_config)
         accepted = score_after >= score_before
+
+        if auto_apply and accepted and deployer is not None:
+            try:
+                deployer.version_manager.save_version(
+                    new_config,
+                    scores={"composite": score_after},
+                    status="canary",
+                )
+            except Exception:
+                pass
 
         return EditResult(
             original_config=current_config,

@@ -1,8 +1,16 @@
 # CLI Reference
 
-Complete reference for all 102 `autoagent` commands. All commands support `--help` for inline documentation.
+Complete reference for all 87 `autoagent` commands. All commands support `--help` for inline documentation.
 
-Quick index: `init`, `server`, `status`, `doctor`, `logs`, `eval`, `optimize`, `config`, `deploy`, `loop`, `pause`, `resume`, `pin`, `unpin`, `reject`, `autofix`, `judges`, `context`, `registry`, `trace`, `scorer`, `quickstart`, `demo`, `edit`, `explain`, `diagnose`, `replay`, `review`, `runbook`, `memory`, `skill`, `cx`, `adk`, `mcp-server`.
+Quick index: `init`, `server`, `mcp-server`, `full-auto`, `status`, `doctor`, `logs`, `eval`, `optimize`, `config`, `deploy`, `loop`, `pause`, `resume`, `pin`, `unpin`, `reject`, `autofix`, `judges`, `context`, `registry`, `trace`, `scorer`, `quickstart`, `demo`, `edit`, `explain`, `diagnose`, `replay`, `review`, `runbook`, `memory`, `skill`, `cx`, `adk`.
+
+**New in this release:**
+- `full-auto` — Dangerous full-auto mode with auto-promotion gates
+- `mcp-server` — Model Context Protocol server for AI coding tool integration
+- `edit`, `explain`, `diagnose` — Natural language intelligence layer with `--json` output modes
+- `cx` group — Dialogflow CX Agent Studio bidirectional integration
+- `adk` group — Google Agent Development Kit Python source integration
+- All major commands now support `--json` flag for structured output
 
 ## Core Commands
 
@@ -35,12 +43,67 @@ autoagent server [--host HOST] [--port PORT] [--reload]
 | `--port` | `8000` | Port |
 | `--reload` | off | Auto-reload on code changes |
 
+Serves 31 web pages and 131 API endpoints at `http://localhost:8000`.
+
+### `autoagent full-auto`
+
+**DANGEROUS:** Run full autonomous optimization with auto-promotion gates. Requires explicit acknowledgment flag.
+
+```bash
+autoagent full-auto [--cycles N] [--max-loop-cycles N] [--acknowledge]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--cycles` | `3` | Initial optimization cycles |
+| `--max-loop-cycles` | `10` | Maximum loop cycles |
+| `--acknowledge` | required | Must pass to confirm you understand risks |
+
+This mode runs optimize → eval → auto-promote → loop with minimal human oversight. Only use in safe, sandboxed environments.
+
 ### `autoagent status`
 
 Show current system status -- active config version, loop state, recent eval scores, and budget usage.
 
 ```bash
-autoagent status
+autoagent status [--db PATH] [--configs-dir DIR] [--memory-db PATH] [--json]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--db` | Conversation database path |
+| `--configs-dir` | Config versions directory |
+| `--memory-db` | Optimizer memory database path |
+| `--json` | Output structured JSON for integration |
+
+**Example output:**
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Agent Status
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Overall Score:     0.87 ███████████░░░  GOOD
+Safety Score:      1.00 ██████████████  ✓
+Routing Accuracy:  0.94 █████████████░  ✓
+Avg Latency:       2.1s ██████████████  ✓
+Resolution Rate:   0.88 ████████████░░
+
+Active Config:     v12 (deployed 2h ago)
+Loop Status:       Running (cycle 4/20)
+Budget Used:       $2.40 / $10.00 daily
+
+Failure Breakdown:
+  tool_timeout:    █░░░░░░░░░ 8%
+  routing_error:   ░░░░░░░░░░ 2%
+
+→ Next: Continue monitoring loop progress
+  autoagent loop --max-cycles 20
+```
+
+**JSON mode:**
+```bash
+autoagent status --json | jq '.score'
+0.87
 ```
 
 ### `autoagent doctor`
@@ -511,7 +574,7 @@ autoagent demo vp [--agent-name NAME] [--company NAME] [--no-pause] [--web]
 
 ### `autoagent edit`
 
-Apply natural language edits to agent config.
+Apply natural language edits to agent config using keyword-to-surface mapping.
 
 ```bash
 autoagent edit [DESCRIPTION] [--interactive] [--dry-run] [--json]
@@ -521,22 +584,87 @@ autoagent edit [DESCRIPTION] [--interactive] [--dry-run] [--json]
 |------|-------------|
 | `--interactive` | Interactive mode with confirmation prompts |
 | `--dry-run` | Show what would change without applying |
-| `--json` | Output results as JSON |
+| `--json` | Output results as JSON for piping |
+
+**Examples:**
+```bash
+autoagent edit "Make the agent more empathetic in billing conversations"
+autoagent edit "Add safety guardrails to prevent PII disclosure" --dry-run
+autoagent edit "Reduce response latency by tuning timeouts" --json
+```
+
+The editor detects keywords (billing, safety, latency, routing, tone, etc.) and maps them to config surfaces (routing.rules, prompts.root, thresholds, tools). Changes are evaluated before applying.
 
 ### `autoagent explain`
 
-Generate a plain-English summary of the agent's current state.
+Generate a plain-English summary of the agent's current state with health assessment.
 
 ```bash
-autoagent explain [--verbose] [--json]
+autoagent explain [--verbose] [--json] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--verbose` | Include detailed breakdown of all metrics |
+| `--json` | Output structured JSON for integration |
+| `--db` | Conversation database path |
+| `--configs-dir` | Config versions directory |
+| `--memory-db` | Optimizer memory database path |
+
+**Example output:**
+```
+Agent Health: GOOD (0.82/1.00)
+
+Strengths:
+  ✓ Safety score is excellent (1.00)
+  ✓ Routing accuracy is strong (0.94)
+
+Weaknesses:
+  ⚠ Latency is above SLA (4.2s avg, target: 3.0s)
+  ⚠ 12% of conversations are abandoned
+
+Recommendations:
+  1. Reduce tool timeout from 10s to 4s
+  2. Add retry logic with exponential backoff
+  3. Review escalation patterns for abandonment triggers
 ```
 
 ### `autoagent diagnose`
 
-Run failure diagnosis and optionally fix issues interactively.
+Run failure diagnosis with interactive chat-based root cause exploration.
 
 ```bash
-autoagent diagnose [--interactive] [--json]
+autoagent diagnose [--interactive] [--json] [--db PATH] [--configs-dir DIR] [--memory-db PATH]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--interactive` | Interactive chat mode with fix proposals |
+| `--json` | Output clusters and insights as JSON |
+| `--db` | Conversation database path |
+| `--configs-dir` | Config versions directory |
+| `--memory-db` | Optimizer memory database path |
+
+**Interactive mode:**
+- Clusters failures by root cause
+- Provides example conversations for each cluster
+- Proposes fixes with confidence scores
+- Applies fixes on user confirmation
+- Updates AUTOAGENT.md with issue tracking
+
+**Example workflow:**
+```bash
+autoagent diagnose --interactive
+
+> Issue #1: Billing Misroutes (23 failures)
+> Root cause: Missing keywords "invoice", "refund", "charge"
+> Fix: Add keywords to routing.rules[billing_agent]
+>
+> Commands: fix | examples | next | skip
+>
+> You: fix
+>
+> ✓ Applied fix. Score: 0.62 → 0.74 (+0.12)
 ```
 
 ### `autoagent replay`

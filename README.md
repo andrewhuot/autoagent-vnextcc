@@ -748,11 +748,94 @@ SQLite-backed per-cycle and daily budget tracking. The loop halts when spend lim
 - **Drift detection** — monitors tuning vs. validation gap, flags overfitting
 - **Judge variance estimation** — accounts for LLM judge noise in significance testing
 
+### Natural Language Intelligence Layer
+
+**AgentStudio** — Interactive chat interface for describing agent changes in plain language. Real-time draft mutations, metric impact visualization, and sample prompt library. No DSL required.
+
+**IntelligenceStudio** — Upload transcript archives (ZIP with JSON/CSV/TXT), get automatic analytics:
+- Intent classification and transfer reason analysis
+- Procedure extraction and FAQ generation from successful conversations
+- Missing capability detection and workflow recommendations
+- Q&A over transcript data ("Why are people transferring to live support?")
+- One-click change card generation from insights
+
+**NL Edit** — `autoagent edit "Make the agent more empathetic in billing conversations"` — keyword-to-surface mapping translates requests into config mutations, evaluates, and applies if score improves.
+
+**NL Diagnose** — `autoagent diagnose --interactive` — failure clustering with chat-based root cause exploration. Proposes fixes, shows examples, applies interactively.
+
+**JSON Output Modes** — All major commands support `--json` flag for piping and integration: `autoagent status --json | jq '.score'`
+
+**AUTOAGENT.md Auto-Update** — Project memory file automatically updated with current health, active issues, recent changes, skill gaps, and optimization history after every optimize/quickstart/edit cycle.
+
+### Magic UX Features
+
+**Health Pulse** — Living SVG health indicator with color-coded pulse speed (green 3s, amber 1.5s, red 0.8s). ECG-style animated line.
+
+**Journey Timeline** — Horizontal scrollable optimization history with animated SVG line drawing, color-coded nodes (green=accepted, red=rejected), pulsing ring on latest.
+
+**Confetti Celebration** — CSS-only particle burst animation on score improvements and personal bests.
+
+**One-Click Fix Buttons** — Dashboard failure families mapped to runbooks with confirmation modal and real-time feedback.
+
+**Live Optimization Streaming** — Server-Sent Events for real-time cycle progress (7 event types: cycle_start, diagnosis, proposal, evaluation, decision, cycle_complete, optimization_complete).
+
+**Natural Language Command Palette** — Fuzzy keyword search with 9 smart shortcuts ("why routing failing" → Diagnose routing, "fix safety" → Fix safety violations).
+
+**Chat Panel** — Fixed bottom-right Intercom-style diagnosis chat widget with session state, action buttons (Apply Fix, Show Examples, Next Issue).
+
+**Animated Metrics** — Slot-machine style number counter animations, glow pulse on improvements, "New personal best!" badges with sparkles.
+
+**Rich CLI Status** — Git-style health summary with Unicode bar charts (█░), failure breakdown, top recommended action with exact command.
+
+### Integration Ecosystem
+
+**CX Agent Studio** — Bidirectional Dialogflow CX integration:
+- Import: CX agent → AutoAgent schema (generativeSettings, tools, examples, flows, test cases)
+- Export: Optimized config → CX format with snapshot preservation
+- Deploy: One-click deploy to CX environments with widget generation
+- CLI: `autoagent cx import|export|deploy|status|widget`
+
+**ADK (Agent Development Kit)** — Python source integration:
+- Import: Parse ADK agent directory via AST, extract instruction, tools, routing, generation_settings
+- Export: Patch Python source while preserving developer style and comments
+- Deploy: Cloud Run or Vertex AI deployment from optimized config
+- Diff: Show config-to-source delta before export
+- CLI: `autoagent adk import|export|deploy|status|diff`
+
+**MCP Server** — Model Context Protocol for AI coding assistants:
+- 12 tools exposed: status, explain, diagnose, get_failures, suggest_fix, edit, eval, eval_compare, skill_gaps, skill_recommend, replay, diff
+- Stdio mode for Claude Code, Cursor, Windsurf
+- HTTP/SSE mode planned for future release
+- CLI: `autoagent mcp-server`
+
+**Transcript Intelligence** — Archive-to-agent pipeline:
+- ZIP ingestion with multi-format parsing (JSON, CSV, TXT)
+- Language detection, intent classification, transfer reason analysis
+- Procedure/FAQ extraction, workflow/test case generation
+- Q&A over conversation data with evidence collection
+- Change card generation from insights
+- API: `POST /api/intelligence/archive`, `POST /api/intelligence/reports/{id}/ask`
+
+### Executable Skills & Runbooks
+
+**Skills Registry** — Versioned executable optimization strategies:
+- Skill definitions with mutation templates, examples, trigger conditions, eval criteria
+- Platform and category tagging (cx_agent_studio, adk, general_purpose)
+- Skill gap analysis from failure blame clusters
+- Skill recommendation engine based on patterns
+- CLI: `autoagent skill list|recommend|apply|install|export|stats|learn`
+
+**Runbooks** — Curated bundles of skills, policies, and tools:
+- 7 default runbooks (routing, safety, latency, empathy, tool_errors, escalations, abandonment)
+- One-click apply from web console or CLI
+- Versioned playbook execution with deprecation support
+- CLI: `autoagent runbook list|show|apply|create`
+
 ---
 
 ## CLI Reference
 
-102 commands across 34 top-level groups.
+87 commands across 30+ top-level groups.
 
 ```
 autoagent <group> <command> [options]
@@ -762,9 +845,11 @@ autoagent <group> <command> [options]
 |-------|----------|---------|
 | `init` | - | Scaffold new project |
 | `quickstart` | - | Run full golden path |
+| `full-auto` | - | Dangerous full-auto mode with auto-promotion |
 | `demo` | `quickstart`, `vp` | Presentation demos |
 | `server` | - | Start API + web console |
-| `status` | - | System health and metrics |
+| `mcp-server` | - | Model Context Protocol server for AI coding tools |
+| `status` | - | System health and metrics (JSON mode available) |
 | `doctor` | - | Configuration diagnostics |
 | `logs` | - | View structured logs |
 | `eval` | `run`, `results`, `list` | Evaluation suite |
@@ -783,15 +868,16 @@ autoagent <group> <command> [options]
 | `scorer` | `create`, `list`, `show`, `refine`, `test` | NL scorer studio |
 | `review` | `list`, `show`, `apply`, `reject`, `export` | Change review |
 | `runbook` | `list`, `show`, `apply`, `create` | Runbook management |
-| `memory` | `show`, `add` | Project memory |
+| `memory` | `show`, `add` | Project memory (AUTOAGENT.md) |
 | `skill` | `list`, `show`, `recommend`, `apply`, `install`, `export`, `stats`, `learn` | Executable skills |
-| `edit` | - | Natural language config edits |
-| `explain` | - | Plain-English agent summary |
-| `diagnose` | - | Failure diagnosis |
-| `replay` | - | Optimization history |
+| `edit` | - | Natural language config edits (JSON mode available) |
+| `explain` | - | Plain-English agent summary (JSON mode available) |
+| `diagnose` | - | Interactive failure diagnosis with chat panel (JSON mode available) |
+| `replay` | - | Optimization history (JSON mode available) |
 | `cx` | `list`, `import`, `export`, `deploy`, `status`, `widget` | CX Agent Studio integration |
 | `adk` | `import`, `export`, `deploy`, `status`, `diff` | Agent Development Kit integration |
-| `mcp-server` | - | Model Context Protocol server |
+
+All commands support `--help` for inline documentation. Major commands support `--json` for structured output.
 
 See [docs/cli-reference.md](docs/cli-reference.md) for full details.
 
@@ -799,65 +885,75 @@ See [docs/cli-reference.md](docs/cli-reference.md) for full details.
 
 ## Web Console
 
-29 pages served at `http://localhost:8000`:
+31 pages served at `http://localhost:8000`:
 
 | Page | Purpose |
 |------|---------|
-| Dashboard | 2 hard gates + 4 primary metrics, cost controls, event timeline |
-| Eval Runs | Sortable table of all evaluations |
-| Eval Detail | Per-case results with pass/fail breakdown |
-| Optimize | Trigger optimization, view attempt history |
-| Live Optimize | Real-time optimization with streaming updates |
-| Experiments | Reviewable experiment cards with hypothesis and diff |
-| Opportunities | Ranked optimization opportunity queue |
-| Traces | ADK event traces and spans |
-| Blame Map | Span-level failure clustering and root cause |
-| Configs | Version list, YAML diff viewer |
-| Conversations | Browse logged agent conversations |
-| Deploy | Canary status, promote/rollback controls |
-| Loop Monitor | Live loop status, cycle history, watchdog health |
-| Event Log | Append-only system event timeline |
-| AutoFix | Improvement proposals with apply/reject |
-| Judge Ops | Judge versions, drift, calibration |
-| Context Workbench | Context analysis, compaction simulation |
-| Registry | Skills, policies, tools, handoff schemas |
-| Scorer Studio | NL scorer creation and testing |
-| Change Review | Review and approve proposed config changes |
-| Runbooks | Curated bundles of skills, policies, and tools |
-| Skills | Executable optimization strategies |
-| Project Memory | Persistent project context (AUTOAGENT.md) |
-| CX Import | Import CX Agent Studio agents |
-| CX Deploy | Deploy to CX environments |
-| ADK Import | Import Agent Development Kit agents |
-| ADK Deploy | Deploy ADK agents |
-| Agent Skills | Agent skill generation and gap analysis |
-| Settings | Runtime configuration |
+| **Dashboard** | 2 hard gates + 4 primary metrics, health pulse, journey timeline, recommendations |
+| **AgentStudio** | Interactive conversational interface for describing agent changes in natural language |
+| **IntelligenceStudio** | Transcript archive ingestion, analytics, Q&A, and agent generation from conversations |
+| **Eval Runs** | Sortable table of all evaluations with comparison mode |
+| **Eval Detail** | Per-case results with pass/fail breakdown and category filtering |
+| **Optimize** | Trigger optimization cycles, view attempt history with diffs |
+| **Live Optimize** | Real-time optimization with Server-Sent Events streaming and phase indicators |
+| **Experiments** | Reviewable experiment cards with hypothesis, diff, and statistical significance |
+| **Opportunities** | Ranked optimization opportunity queue with impact scoring |
+| **Traces** | ADK event traces and spans with filtering |
+| **Blame Map** | Span-level failure clustering and root cause attribution |
+| **Configs** | Version list, YAML viewer, side-by-side diff comparison |
+| **Conversations** | Browse logged agent conversations with outcome filtering |
+| **Deploy** | Canary status, promote/rollback controls, deployment history |
+| **Loop Monitor** | Live loop status, cycle-by-cycle progress, watchdog health |
+| **Event Log** | Append-only system event timeline with real-time updates |
+| **AutoFix** | AI-generated improvement proposals with apply/reject workflow |
+| **Judge Ops** | Judge versions, calibration tracking, drift monitoring |
+| **Context Workbench** | Context window analysis and compaction strategy simulation |
+| **Registry** | Modular registry for skills, policies, tool contracts, handoff schemas |
+| **Scorer Studio** | Natural language to eval scorer generation and testing |
+| **Change Review** | Review and approve proposed config changes with diff hunks |
+| **Runbooks** | Curated bundles of skills, policies, and tools with one-click apply |
+| **Skills** | Executable optimization strategies with recommendation engine |
+| **Project Memory** | Persistent project context (AUTOAGENT.md) with auto-update sections |
+| **CX Import** | Import Google Dialogflow CX Agent Studio agents |
+| **CX Deploy** | Deploy to CX environments with widget generation |
+| **ADK Import** | Import Google Agent Development Kit agents from Python source |
+| **ADK Deploy** | Deploy ADK agents to Cloud Run or Vertex AI |
+| **Agent Skills** | Agent capability gap analysis and skill generation |
+| **Settings** | Runtime configuration and keyboard shortcuts reference |
 
 ---
 
 ## API
 
-123 endpoints across 29 route modules. Representative endpoints:
+131 endpoints across 30 route modules + WebSocket + SSE. Representative endpoints:
 
 ```
-GET    /api/health                        Health check
+GET    /api/health                        Health check with scorecard
 POST   /api/eval/run                      Trigger evaluation run
 GET    /api/eval/history                  List past evaluations
 GET    /api/eval/{run_id}                 Get evaluation detail
-POST   /api/optimize/run                  Trigger optimization
+POST   /api/optimize/run                  Trigger optimization cycle
+GET    /api/optimize/stream               Server-Sent Events for live optimization
 GET    /api/experiments                    List experiment cards
-POST   /api/experiments/{id}/approve       Approve experiment for deploy
-POST   /api/deploy/canary                 Start canary deployment
-GET    /api/traces                        List traces
-GET    /api/traces/{id}/blame-map         Get blame map for trace
-GET    /api/judges                        List judge versions
+POST   /api/deploy/deploy                 Deploy config version (canary or immediate)
+GET    /api/traces/blame                  Failure clustering and blame map
+GET    /api/judges/calibration            Judge calibration report
 GET    /api/registry/{type}               List registry entries by type
-POST   /api/scorers/generate              Generate scorer from NL description
+POST   /api/scorers/create                Generate scorer from NL description
 GET    /api/loop/status                   Current loop state
 POST   /api/control/pause                 Pause the loop
+POST   /api/edit                          Apply NL config edit
+POST   /api/diagnose/chat                 Interactive diagnosis chat
+POST   /api/intelligence/archive          Import transcript archive (ZIP)
+GET    /api/intelligence/reports          List intelligence reports
+POST   /api/intelligence/reports/{id}/ask  Ask questions about transcript data
+POST   /api/cx/import                     Import CX Agent Studio agent
+POST   /api/adk/import                    Import ADK agent from Python source
+WS     /ws                                WebSocket for real-time updates
+GET    /api/events                        Server-Sent Events stream
 ```
 
-Full route modules: `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`.
+Full route modules: `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`, `intelligence`.
 
 ---
 
@@ -985,10 +1081,10 @@ Configure multiple models in `autoagent.yaml`. The optimizer uses them for judge
 
 ```
 agent/          Agent framework, config, tools, specialists
-api/            FastAPI server, 123 endpoints across 29 route modules
+api/            FastAPI server, 131 endpoints across 30 route modules
 context/        Context Engineering Workbench (analyzer, simulator, metrics)
 control/        Governance wrapper for promotion decisions
-core/           10 first-class domain objects
+core/           10 first-class domain objects (config, trace, experiment, etc.)
 data/           Protocol-based repositories, event log
 deployer/       Canary deployment, release manager, config versioning
 evals/          Runner, scorer, data engine, replay, anti-Goodhart, statistics, NL scorer
@@ -996,9 +1092,13 @@ graders/        Tiered grading pipeline (deterministic, similarity, binary rubri
 judges/         Judge subsystem (versioning, drift, calibration, human feedback)
 logger/         Structured logging
 observer/       Traces, anomaly detection, failure clustering, blame map, trace grading
-optimizer/      Loop, search, mutations, bandit, Pareto, cost tracker, prompt_opt/
+optimizer/      Loop, search, mutations, bandit, Pareto, cost tracker, prompt_opt/, nl_editor, diagnose_session, transcript_intelligence
 registry/       Modular registry (skills, policies, tool contracts, handoff schemas)
-web/            React console, 29 pages, TypeScript + React
+mcp_server/     Model Context Protocol server for AI coding tool integration
+cx_studio/      Dialogflow CX Agent Studio bidirectional integration
+adk/            Google Agent Development Kit Python source integration
+agent_skills/   Capability gap analysis and skill generation
+web/            React console, 31 pages, TypeScript + React + Tailwind CSS
 ```
 
 ---
@@ -1007,15 +1107,18 @@ web/            React console, 29 pages, TypeScript + React
 
 | | |
 |---|---|
-| Test suite | **1,131 tests** |
-| Python backend | ~46,600 lines |
-| React frontend | ~8,800 lines |
-| API endpoints | 75 |
-| Frontend pages | 19 |
-| Reusable components | 29 |
-| Judge/grader modules | 9 |
-| Python packages | 14 |
-| Test files | 59 |
+| **Test suite** | **1,131 tests** |
+| **Python backend** | ~46,600 lines |
+| **React frontend** | ~8,800 lines |
+| **CLI commands** | **87** across 30+ command groups |
+| **API endpoints** | **131** across 30 route modules |
+| **Web pages** | **31** (AgentStudio, IntelligenceStudio, Dashboard, etc.) |
+| **Reusable components** | 40+ (HealthPulse, JourneyTimeline, Confetti, etc.) |
+| **Judge/grader modules** | 9 |
+| **Route modules** | 30 (health, eval, optimize, intelligence, cx_studio, adk, etc.) |
+| **Python packages** | 14 |
+| **Test files** | 59 |
+| **Integrations** | 6 (CX Agent Studio, ADK, MCP Server, Transcript Intelligence, Skills Registry, Judges) |
 
 ---
 
