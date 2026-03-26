@@ -152,7 +152,7 @@ Set API keys via environment variables referenced in the config (`OPENAI_API_KEY
 
 - [Core Concepts](concepts.md) -- understand the eval loop, metric hierarchy, and search strategies
 - [CLI Reference](cli-reference.md) -- every command and flag
-- [API Reference](api-reference.md) -- all 75 REST endpoints
+- [API Reference](api-reference.md) -- complete REST API surface
 - [AutoFix Copilot](features/autofix.md) -- automated failure repair
 - [Judge Ops](features/judge-ops.md) -- judge versioning and drift monitoring
 - [Context Workbench](features/context-workbench.md) -- context window analysis

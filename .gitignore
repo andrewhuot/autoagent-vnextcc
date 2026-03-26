@@ -7,17 +7,26 @@ dist/
 build/
 .venv/
 .pytest_cache/
+.coverage
+htmlcov/
 
 # Node / Frontend
 node_modules/
 web/dist/
 .next/
+web/screenshots/
 
 # Data
 *.db
+.autoagent/
 configs/manifest.json
 configs/v[0-9]*.yaml
 !configs/v001_base.yaml
+
+# Session planning artifacts
+task_plan.md
+findings.md
+progress.md
 
 # IDE
 .vscode/

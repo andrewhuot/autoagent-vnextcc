@@ -1,16 +1,12 @@
 # AutoAgent VNextCC
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)
-![1131 tests](https://img.shields.io/badge/tests-1131_passing-22C55E)
+![Tests](https://img.shields.io/badge/tests-pytest-22C55E)
 ![License](https://img.shields.io/badge/license-Apache%202.0-111827)
 
 Continuous evaluation and optimization for AI agents. Trace every invocation, diagnose failures, search for improvements, evaluate with statistical rigor, gate on hard constraints, deploy with canaries, learn from outcomes. Repeat.
 
 CLI-first. Gemini-first, multi-model capable. Research-grade.
-
-![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)
-![1131 tests](https://img.shields.io/badge/tests-1131_passing-22C55E)
-![License](https://img.shields.io/badge/license-Apache%202.0-111827)
 
 ---
 
@@ -42,6 +38,28 @@ autoagent eval run --output results.json
 autoagent server  # → http://localhost:8000
 autoagent loop --max-cycles 20 --stop-on-plateau
 ```
+
+---
+
+## Repository Structure
+
+Core source lives in these top-level directories:
+
+```text
+api/                FastAPI server and route modules
+assistant/          Assistant builder/intelligence pipeline
+optimizer/          Optimization loop, mutations, prompt-opt strategies
+observer/           Trace analysis, grading, opportunities, knowledge mining
+evals/              Eval runner, scoring, datasets, replay/what-if
+registry/           Runtime registry (skills, policies, runbooks, contracts)
+core/               Shared domain types and project-memory primitives
+notifications/      Notification manager and channels
+web/                React + Vite frontend
+docs/               User guides, architecture, API/CLI references
+examples/assistant/ Demo scripts (for example `builder_demo.py`)
+```
+
+Repository-local runtime outputs are intentionally ignored (for example `.autoagent/`, `web/screenshots/`, `*.db`, and session planning artifacts).
 
 ---
 

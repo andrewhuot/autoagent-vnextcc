@@ -1,6 +1,6 @@
 # API Reference
 
-Complete reference for all 131 API endpoints. All endpoints are served under `/api/`. The server runs on `http://localhost:8000` by default.
+Comprehensive reference for the FastAPI surface under `/api/`. The server runs on `http://localhost:8000` by default.
 
 Start the server:
 
@@ -10,7 +10,7 @@ autoagent server
 
 Interactive docs: `http://localhost:8000/docs` (Swagger) or `http://localhost:8000/redoc` (ReDoc).
 
-**Route modules:** 30 total — `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`, `intelligence`.
+**Route modules (registered in `api/server.py`):** `adk`, `agent_skills`, `assistant`, `autofix`, `changes`, `cicd`, `collaboration`, `config`, `context`, `control`, `conversations`, `cx_studio`, `deploy`, `diagnose`, `edit`, `eval`, `events`, `experiments`, `health`, `impact`, `intelligence`, `judges`, `knowledge`, `loop`, `memory`, `notifications`, `opportunities`, `optimize`, `optimize_stream`, `quickfix`, `registry`, `runbooks`, `sandbox`, `scorers`, `skills`, `traces`, `what_if`.
 
 ---
 
@@ -768,4 +768,3 @@ Primary categories:
 - Server-Sent Events (`GET /api/events`, `GET /api/optimize/stream`) — Event streams for live optimization progress
 
 All endpoints return JSON. Error responses follow standard HTTP status codes with structured error bodies.
-
