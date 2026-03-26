@@ -1,50 +1,67 @@
 # Findings & Decisions
 
 ## Requirements
-- Execute `CODEX_PRODUCT_REVIEW_PROMPT.md` completely.
-- Review required surfaces: `README.md`, `ARCHITECTURE_OVERVIEW.md`, all `docs/` files, all product pages in `web/src/pages/`, CLI surface in `runner.py`, API surface in `api/routes/`, and key backend directories (`optimizer/`, `observer/`, `evals/`, `registry/`, `cx_studio/`, `adk/`, `agent_skills/`).
-- Produce `CODEX_PRODUCT_VISION_REVIEW.md` with all 10 required sections.
-- Run completion command exactly: `openclaw system event --text "Done: Codex product vision review — CODEX_PRODUCT_VISION_REVIEW.md written" --mode now`.
+- Execute `JOURNEY_REVIEW_PROMPT.md` completely using real browser interactions.
+- Ensure Playwright is installed and usable.
+- Start backend + frontend locally and test against live app behavior.
+- Test all 14 journeys listed in the prompt, including attempted interactions.
+- Capture screenshots for every page/step into `~/Desktop/AutoAgent-Journey-Screenshots/`.
+- Produce `JOURNEY_AUDIT_REPORT.md` with all required sections:
+  - Executive summary + top 5 issues
+  - Journey-by-journey analysis with ratings
+  - Cross-journey issues
+  - Navigation audit
+  - Naming consistency audit
+  - Visual consistency audit
+  - Simplification opportunities
+  - Priority-ordered improvements with file paths + effort estimates
+- Run completion command exactly:
+  `openclaw system event --text "Done: Journey audit report with Playwright testing — JOURNEY_AUDIT_REPORT.md written" --mode now`
 
 ## Coverage Checklist
-- Prompt file: done
-- Root docs (`README.md`, `ARCHITECTURE_OVERVIEW.md`): in_progress
-- `docs/` directory (19 files): pending
-- `web/src/pages/` product pages (31 pages + 1 test file present): pending
-- `runner.py` CLI command surface: pending
-- `api/routes/` route modules + endpoint map: pending
-- Key backend packages (`optimizer`, `observer`, `evals`, `registry`, `cx_studio`, `adk`, `agent_skills`): pending
+- Prompt file parsed: complete
+- Skill/workflow setup: complete
+- Playwright readiness: complete
+- Backend/frontend startup: complete (frontend started successfully; backend startup from repo fails with schema collision)
+- 14 journey executions with screenshots: complete
+- `JOURNEY_AUDIT_REPORT.md` authoring: complete
+- Completion event command: complete (`openclaw ... --mode now` returned `ok`)
 
-## Research Findings
-- Repository already contains a prior `PRODUCT_VISION_REVIEW.md` draft and an unsynced session hint indicates similar work was started previously.
-- Current inventory confirms large scope:
-  - `docs/`: 19 files
-  - `web/src/pages/`: 32 files (31 pages + `AgentStudio.test.tsx`)
-  - `api/routes/`: 29 active `.py` route modules (plus `__pycache__` artifacts)
-  - Key backend file counts: `optimizer` 39 py, `observer` 9 py, `evals` 16 py, `registry` 12 py, `cx_studio` 9 py, `adk` 8 py, `agent_skills` 6 py
-- `README.md` and `ARCHITECTURE_OVERVIEW.md` position the product as continuous agent evaluation + optimization with extensive research-grade capabilities.
+## Environment Findings
+- Repo root contains `JOURNEY_REVIEW_PROMPT.md` and existing planning files from a prior task.
+- Prior-session catchup shows unrelated unsynced context; this audit is proceeding as a fresh task.
+- `python runner.py server` and direct `uvicorn api.server:app` startup fail during lifespan initialization with:
+  `sqlite3.OperationalError: no such column: kind`.
+- API availability from web runtime shows widespread 404s for core endpoints (`/api/health`, `/api/eval/*`, `/api/optimize/*`, `/api/skills*`, `/api/notifications*`, `/api/agent-skills*`).
 
 ## Technical Decisions
 | Decision | Rationale |
 |----------|-----------|
-| Keep a strict coverage checklist and mark status per surface | Ensures full prompt compliance without skipping requested areas |
-| Exclude `__pycache__` files from route-surface analysis | They are build artifacts, not source-of-truth product API definitions |
-| Use concrete file/function/page references in final critique | Prompt explicitly asks for specificity and actionable product critique |
+| Use browser automation evidence (screenshots + interaction attempts) as primary source of truth | Prompt explicitly requires real navigation and concrete findings |
+| Keep screenshot naming deterministic per journey + step | Enables easy report cross-referencing and traceability |
+| Include both successful and failed/blocked flow evidence | "Brutally honest" requirement needs visible blockers, not only happy paths |
 
 ## Issues Encountered
 | Issue | Resolution |
 |-------|------------|
-| Prior unsynced review draft exists | Treat this run as fresh execution and produce requested filename/output |
+| Planning files were scoped to a previous task | Rewrote planning files for this audit to avoid mixed context |
+| Backend startup crash (`no such column: kind`) blocks expected API surface | Continued with full journey execution; captured explicit API/network evidence and code-level root cause references in final report |
+| Early screenshots captured loading placeholders before terminal page states | Added long-wait (`10s`) validation run and targeted action checks to validate final states and action outcomes |
 
 ## Resources
-- `CODEX_PRODUCT_REVIEW_PROMPT.md`
-- `README.md`
-- `ARCHITECTURE_OVERVIEW.md`
-- `docs/`
-- `web/src/pages/`
-- `runner.py`
-- `api/routes/`
-- `optimizer/`, `observer/`, `evals/`, `registry/`, `cx_studio/`, `adk/`, `agent_skills/`
+- `JOURNEY_REVIEW_PROMPT.md`
+- `task_plan.md`
+- `findings.md`
+- `progress.md`
+- `web/` (frontend)
+- `api/` (backend)
 
 ## Visual/Browser Findings
-- Not applicable; this review is repository-source based.
+- Main evidence run captured **47 journey screenshots** and structured logs:
+  - `~/Desktop/AutoAgent-Journey-Screenshots/journey_audit_results.json`
+- Long-wait validation set captured post-load states:
+  - `~/Desktop/AutoAgent-Journey-Screenshots/longwait_checks/`
+- Action-level probes captured click/submit outcomes and post-action screenshots:
+  - `~/Desktop/AutoAgent-Journey-Screenshots/action_checks/`
+- New-feature frontend routes requested by prompt are missing in `web/src/App.tsx`:
+  - `/sandbox`, `/knowledge`, `/what-if`, `/reviews` render blank main content.
