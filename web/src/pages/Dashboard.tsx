@@ -1,6 +1,6 @@
 import { useMemo, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck } from 'lucide-react';
+import { AlertTriangle, ArrowRight, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck, Sparkles } from 'lucide-react';
 import {
   useControlState,
   useCostHealth,
@@ -72,8 +72,17 @@ export function Dashboard() {
   const [showConfetti, setShowConfetti] = useState(false);
   const [allTimeBest, setAllTimeBest] = useState(0);
   const [viewMode, setViewMode] = useState<'simple' | 'advanced'>('simple');
+  const [demoStatus, setDemoStatus] = useState<{ has_demo_data: boolean } | null>(null);
 
   const loading = health.isLoading || controlState.isLoading;
+
+  // Check for demo data
+  useEffect(() => {
+    fetch('/api/demo/status')
+      .then((res) => res.json())
+      .then((data) => setDemoStatus(data))
+      .catch(() => setDemoStatus(null));
+  }, []);
 
   const spendTrend = useMemo(() => {
     return (costHealth.data?.recent_cycles || []).map((row: { cycle_id: string; spent_dollars: number }) => ({
@@ -172,6 +181,33 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <Confetti trigger={showConfetti} />
+
+      {/* Demo Data Banner */}
+      {demoStatus?.has_demo_data && (
+        <div className="rounded-lg border border-blue-200 bg-gradient-to-r from-blue-50 to-purple-50 p-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="rounded-full bg-gradient-to-br from-blue-500 to-purple-600 p-2">
+                <Sparkles className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-gray-900">Demo scenario available</p>
+                <p className="text-sm text-gray-600">
+                  Explore the VP demo: E-commerce bot optimization from 0.62 → 0.87 health
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => navigate('/demo')}
+              className="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-600 to-purple-600 px-4 py-2 text-sm font-medium text-white shadow-lg transition hover:from-blue-700 hover:to-purple-700"
+            >
+              Explore Demo
+              <ArrowRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
       <PageHeader
         title="Karpathy Loop Scorecard"
         description="Simplicity-first: 2 hard gates + 4 primary metrics. Diagnostics in collapsible panel. Human overrides always visible."

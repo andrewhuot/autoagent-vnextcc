@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -29,6 +30,7 @@ from api.routes import (
     control as control_routes,
     conversations as conversations_routes,
     cx_studio as cx_studio_routes,
+    demo as demo_routes,
     deploy as deploy_routes,
     diagnose as diagnose_routes,
     edit as edit_routes,
@@ -66,6 +68,27 @@ CONVERSATIONS_DB = os.environ.get("AUTOAGENT_DB", "conversations.db")
 CONFIGS_DIR = os.environ.get("AUTOAGENT_CONFIGS", "configs")
 OPTIMIZER_MEMORY_DB = os.environ.get("AUTOAGENT_MEMORY_DB", "optimizer_memory.db")
 WEB_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
+
+
+# ---------------------------------------------------------------------------
+# Demo data seeding helper
+# ---------------------------------------------------------------------------
+def _seed_demo_data_if_empty(conversation_store) -> None:
+    """Seed VP demo data if the conversation store is empty."""
+    # Check if conversations DB is empty
+    with sqlite3.connect(conversation_store.db_path) as conn:
+        cursor = conn.execute("SELECT COUNT(*) FROM conversations")
+        count = cursor.fetchone()[0]
+
+    if count == 0:
+        from evals.vp_demo_data import generate_vp_demo_dataset
+        print("🌱 Seeding VP demo data (first boot detected)...")
+        dataset = generate_vp_demo_dataset(seed=42)
+        for conversation in dataset.conversations:
+            conversation_store.log(conversation)
+        print(f"✅ Seeded {len(dataset.conversations)} demo conversations")
+    else:
+        print(f"📊 Found {count} existing conversations, skipping demo seed")
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +276,9 @@ async def lifespan(app: FastAPI):
         db_path=".autoagent/notifications.db"
     )
 
+    # Auto-seed demo data on first boot if DB is empty
+    _seed_demo_data_if_empty(conversation_store)
+
     yield
     # No explicit cleanup needed — SQLite connections are context-managed
 
@@ -285,6 +311,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # API routes
 # ---------------------------------------------------------------------------
+app.include_router(demo_routes.router)
 app.include_router(eval_routes.router)
 app.include_router(optimize_routes.router)
 app.include_router(optimize_stream_routes.router)

@@ -47,6 +47,7 @@ const navSections: NavSection[] = [
     title: 'Operate',
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/demo', label: 'Demo', icon: Sparkles },
       { to: '/assistant', label: 'Assistant', icon: Bot },
       { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
       { to: '/conversations', label: 'Conversations', icon: MessageSquare },
