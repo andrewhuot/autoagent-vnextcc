@@ -28,8 +28,8 @@ from core.skills.types import (
 
 
 _DDL = """
--- Core skills table: all skill data stored as JSON blob with indexed metadata
-CREATE TABLE IF NOT EXISTS skills (
+-- Core executable skills table: all skill data stored as JSON blob with indexed metadata
+CREATE TABLE IF NOT EXISTS executable_skills (
     id          TEXT    PRIMARY KEY,
     name        TEXT    NOT NULL,
     kind        TEXT    NOT NULL,
@@ -49,15 +49,15 @@ CREATE TABLE IF NOT EXISTS skill_outcomes (
     improvement REAL    NOT NULL,
     success     INTEGER NOT NULL,
     recorded_at REAL    NOT NULL,
-    FOREIGN KEY (skill_id) REFERENCES skills(id) ON DELETE CASCADE
+    FOREIGN KEY (skill_id) REFERENCES executable_skills(id) ON DELETE CASCADE
 );
 
 -- Indexes for fast lookups
-CREATE INDEX IF NOT EXISTS idx_skills_name_version ON skills(name, version);
-CREATE INDEX IF NOT EXISTS idx_skills_kind ON skills(kind);
-CREATE INDEX IF NOT EXISTS idx_skills_domain ON skills(domain);
-CREATE INDEX IF NOT EXISTS idx_skills_status ON skills(status);
-CREATE INDEX IF NOT EXISTS idx_skills_kind_status ON skills(kind, status);
+CREATE INDEX IF NOT EXISTS idx_executable_skills_name_version ON executable_skills(name, version);
+CREATE INDEX IF NOT EXISTS idx_executable_skills_kind ON executable_skills(kind);
+CREATE INDEX IF NOT EXISTS idx_executable_skills_domain ON executable_skills(domain);
+CREATE INDEX IF NOT EXISTS idx_executable_skills_status ON executable_skills(status);
+CREATE INDEX IF NOT EXISTS idx_executable_skills_kind_status ON executable_skills(kind, status);
 CREATE INDEX IF NOT EXISTS idx_outcomes_skill_id ON skill_outcomes(skill_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_recorded_at ON skill_outcomes(recorded_at DESC);
 """
@@ -131,7 +131,7 @@ class SkillStore:
             try:
                 self._conn.execute(
                     """
-                    INSERT INTO skills (id, name, kind, version, data, domain, status, created_at, updated_at)
+                    INSERT INTO executable_skills (id, name, kind, version, data, domain, status, created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
@@ -167,7 +167,7 @@ class SkillStore:
         """
         with self._lock:
             row = self._conn.execute(
-                "SELECT data FROM skills WHERE id = ?",
+                "SELECT data FROM executable_skills WHERE id = ?",
                 (skill_id,),
             ).fetchone()
 
@@ -191,7 +191,7 @@ class SkillStore:
                 # Get the latest version by updated_at timestamp
                 row = self._conn.execute(
                     """
-                    SELECT data FROM skills
+                    SELECT data FROM executable_skills
                     WHERE name = ?
                     ORDER BY updated_at DESC
                     LIMIT 1
@@ -200,7 +200,7 @@ class SkillStore:
                 ).fetchone()
             else:
                 row = self._conn.execute(
-                    "SELECT data FROM skills WHERE name = ? AND version = ?",
+                    "SELECT data FROM executable_skills WHERE name = ? AND version = ?",
                     (name, version),
                 ).fetchone()
 
@@ -227,7 +227,7 @@ class SkillStore:
         with self._lock:
             # Verify skill exists
             existing = self._conn.execute(
-                "SELECT id FROM skills WHERE id = ?",
+                "SELECT id FROM executable_skills WHERE id = ?",
                 (skill.id,),
             ).fetchone()
 
@@ -239,7 +239,7 @@ class SkillStore:
 
             self._conn.execute(
                 """
-                UPDATE skills
+                UPDATE executable_skills
                 SET name = ?, kind = ?, version = ?, data = ?, domain = ?, status = ?, updated_at = ?
                 WHERE id = ?
                 """,
@@ -270,7 +270,7 @@ class SkillStore:
         """
         with self._lock:
             cursor = self._conn.execute(
-                "DELETE FROM skills WHERE id = ?",
+                "DELETE FROM executable_skills WHERE id = ?",
                 (skill_id,),
             )
             self._conn.commit()
@@ -301,7 +301,7 @@ class SkillStore:
             List of matching skills, most recently updated first.
         """
         with self._lock:
-            sql = "SELECT data FROM skills WHERE 1=1"
+            sql = "SELECT data FROM executable_skills WHERE 1=1"
             params: list[Any] = []
 
             if kind is not None:
@@ -361,7 +361,7 @@ class SkillStore:
         with self._lock:
             like_query = f"%{query.lower()}%"
             sql = """
-                SELECT data FROM skills
+                SELECT data FROM executable_skills
                 WHERE (
                     LOWER(name) LIKE ?
                     OR LOWER(data) LIKE ?
@@ -475,7 +475,7 @@ class SkillStore:
         data_json = json.dumps(skill.to_dict())
 
         self._conn.execute(
-            "UPDATE skills SET data = ?, updated_at = ? WHERE id = ?",
+            "UPDATE executable_skills SET data = ?, updated_at = ? WHERE id = ?",
             (data_json, skill.updated_at, skill.id),
         )
         self._conn.commit()
@@ -583,20 +583,20 @@ class SkillStore:
             Dictionary with counts, averages, and other aggregate stats.
         """
         with self._lock:
-            total_skills = self._conn.execute("SELECT COUNT(*) FROM skills").fetchone()[0]
+            total_skills = self._conn.execute("SELECT COUNT(*) FROM executable_skills").fetchone()[0]
 
             build_skills = self._conn.execute(
-                "SELECT COUNT(*) FROM skills WHERE kind = ?",
+                "SELECT COUNT(*) FROM executable_skills WHERE kind = ?",
                 (SkillKind.BUILD.value,),
             ).fetchone()[0]
 
             runtime_skills = self._conn.execute(
-                "SELECT COUNT(*) FROM skills WHERE kind = ?",
+                "SELECT COUNT(*) FROM executable_skills WHERE kind = ?",
                 (SkillKind.RUNTIME.value,),
             ).fetchone()[0]
 
             active_skills = self._conn.execute(
-                "SELECT COUNT(*) FROM skills WHERE status = 'active'",
+                "SELECT COUNT(*) FROM executable_skills WHERE status = 'active'",
             ).fetchone()[0]
 
             total_outcomes = self._conn.execute(
@@ -630,5 +630,5 @@ class SkillStore:
         """
         with self._lock:
             self._conn.execute("DELETE FROM skill_outcomes")
-            self._conn.execute("DELETE FROM skills")
+            self._conn.execute("DELETE FROM executable_skills")
             self._conn.commit()

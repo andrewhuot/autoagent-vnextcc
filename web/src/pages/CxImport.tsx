@@ -57,7 +57,7 @@ export function CxImport() {
             }`}>
               {step > s ? <Check className="w-3 h-3" /> : s}
             </div>
-            <span className={step >= s ? 'text-gray-200' : 'text-gray-500'}>
+            <span className={step >= s ? 'text-gray-900' : 'text-gray-500'}>
               {s === 1 ? 'Project' : s === 2 ? 'Select Agent' : s === 3 ? 'Preview' : 'Done'}
             </span>
             {s < 4 && <ArrowRight className="w-3 h-3 text-gray-600 mx-1" />}
@@ -67,22 +67,22 @@ export function CxImport() {
 
       {/* Step 1: Project */}
       {step >= 1 && step < 4 && (
-        <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
-          <h3 className="text-sm font-medium text-gray-200">GCP Project</h3>
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <h3 className="text-sm font-medium text-gray-900">GCP Project</h3>
           <div className="flex gap-2">
             <input
               type="text"
               placeholder="my-gcp-project"
               value={project}
               onChange={(e) => setProject(e.target.value)}
-              className="flex-1 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              className="flex-1 bg-white border border-gray-300 rounded px-3 py-1.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
             />
             <input
               type="text"
               placeholder="global"
               value={location}
               onChange={(e) => setLocation(e.target.value)}
-              className="w-32 bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+              className="w-32 bg-white border border-gray-300 rounded px-3 py-1.5 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
             />
             <button
               onClick={handleFetchAgents}
@@ -97,8 +97,8 @@ export function CxImport() {
 
       {/* Step 2: Agent list */}
       {step === 2 && (
-        <div className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-          <h3 className="text-sm font-medium text-gray-200 mb-3">Select Agent</h3>
+        <div className="bg-white rounded-lg border border-gray-200 p-4">
+          <h3 className="text-sm font-medium text-gray-900 mb-3">Select Agent</h3>
           {agentsLoading && <LoadingSkeleton rows={3} />}
           {isError && (
             <div className="flex items-center gap-2 text-red-400 text-sm">
@@ -115,9 +115,9 @@ export function CxImport() {
                 <button
                   key={agent.name}
                   onClick={() => handleSelectAgent(agent)}
-                  className="w-full text-left px-3 py-2 rounded hover:bg-gray-700 transition-colors"
+                  className="w-full text-left px-3 py-2 rounded hover:bg-gray-50 transition-colors"
                 >
-                  <div className="text-sm font-medium text-gray-200">{agent.display_name}</div>
+                  <div className="text-sm font-medium text-gray-900">{agent.display_name}</div>
                   <div className="text-xs text-gray-400">{agent.description || 'No description'} · {agent.default_language_code}</div>
                 </button>
               ))}
@@ -128,9 +128,9 @@ export function CxImport() {
 
       {/* Step 3: Preview + confirm */}
       {step === 3 && selectedAgent && (
-        <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
-          <h3 className="text-sm font-medium text-gray-200">Import Preview</h3>
-          <div className="text-sm text-gray-300 space-y-1">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 space-y-3">
+          <h3 className="text-sm font-medium text-gray-900">Import Preview</h3>
+          <div className="text-sm text-gray-700 space-y-1">
             <p><span className="text-gray-500">Agent:</span> {selectedAgent.display_name}</p>
             <p><span className="text-gray-500">Language:</span> {selectedAgent.default_language_code}</p>
             <p><span className="text-gray-500">Description:</span> {selectedAgent.description || '—'}</p>
@@ -142,7 +142,7 @@ export function CxImport() {
           <div className="flex gap-2">
             <button
               onClick={() => setStep(2)}
-              className="px-4 py-1.5 bg-gray-700 text-gray-200 text-sm rounded hover:bg-gray-600"
+              className="px-4 py-1.5 bg-gray-700 text-gray-900 text-sm rounded hover:bg-gray-100"
             >
               Back
             </button>
@@ -159,12 +159,12 @@ export function CxImport() {
 
       {/* Step 4: Done */}
       {step === 4 && importMutation.data && (
-        <div className="bg-gray-800 rounded-lg border border-green-800 p-4 space-y-2">
+        <div className="bg-white rounded-lg border border-green-200 p-4 space-y-2">
           <div className="flex items-center gap-2 text-green-400">
             <Check className="w-5 h-5" />
             <h3 className="text-sm font-medium">Import Complete</h3>
           </div>
-          <div className="text-sm text-gray-300 space-y-1">
+          <div className="text-sm text-gray-700 space-y-1">
             <p><span className="text-gray-500">Agent:</span> {importMutation.data.agent_name}</p>
             <p><span className="text-gray-500">Config:</span> {importMutation.data.config_path}</p>
             {importMutation.data.eval_path && (

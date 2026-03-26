@@ -108,7 +108,7 @@ export function EvalRuns() {
             className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
           >
             <Plus className="h-4 w-4" />
-            New Eval Run
+            New Evaluation
           </button>
         }
       />
@@ -122,7 +122,7 @@ export function EvalRuns() {
       {showCreateForm && (
         <section className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Start New Evaluation</h3>
+            <h3 className="text-sm font-semibold text-gray-900">New Evaluation</h3>
             <button onClick={closeForm} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700">
               <X className="h-4 w-4" />
             </button>
@@ -260,7 +260,7 @@ export function EvalRuns() {
           title="No eval runs yet"
           description="Launch your first evaluation to baseline quality, safety, latency, and cost."
           cliHint="autoagent eval run"
-          actionLabel="Create Eval Run"
+          actionLabel="New Evaluation"
           onAction={() => setShowForm(true)}
         />
       )}

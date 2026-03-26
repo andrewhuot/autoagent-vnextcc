@@ -33,7 +33,7 @@ const sections = [
 
 const shortcuts = [
   { key: 'Cmd+K', action: 'Open command palette' },
-  { key: 'N', action: 'Open New Eval Run' },
+  { key: 'N', action: 'Open New Evaluation' },
   { key: 'O', action: 'Open Optimize page' },
   { key: 'D', action: 'Open Deploy page' },
 ];

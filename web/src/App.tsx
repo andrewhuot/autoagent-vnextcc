@@ -34,6 +34,10 @@ import { AgentSkills } from './pages/AgentSkills';
 import { AgentStudio } from './pages/AgentStudio';
 import { Assistant } from './pages/Assistant';
 import { Notifications } from './pages/Notifications';
+import { Sandbox } from './pages/Sandbox';
+import { Knowledge } from './pages/Knowledge';
+import { WhatIf } from './pages/WhatIf';
+import { Reviews } from './pages/Reviews';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -82,6 +86,10 @@ export default function App() {
             <Route path="/agent-studio" element={<AgentStudio />} />
             <Route path="/assistant" element={<Assistant />} />
             <Route path="/notifications" element={<Notifications />} />
+            <Route path="/sandbox" element={<Sandbox />} />
+            <Route path="/knowledge" element={<Knowledge />} />
+            <Route path="/what-if" element={<WhatIf />} />
+            <Route path="/reviews" element={<Reviews />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

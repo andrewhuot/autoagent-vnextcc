@@ -18,7 +18,7 @@ const pageTitles: Record<string, string> = {
   '/deploy': 'Deploy',
   '/loop': 'Loop Monitor',
   '/opportunities': 'Opportunities',
-  '/changes': 'Change Review',
+  '/changes': 'Changes',
   '/experiments': 'Experiments',
   '/traces': 'Traces',
   '/events': 'Event Log',
@@ -38,6 +38,11 @@ const pageTitles: Record<string, string> = {
   '/cx/deploy': 'CX Deploy',
   '/agent-skills': 'Agent Skills',
   '/agent-studio': 'Agent Studio',
+  '/notifications': 'Notifications',
+  '/sandbox': 'Sandbox',
+  '/knowledge': 'Knowledge',
+  '/what-if': 'What-If Replay',
+  '/reviews': 'Collaborative Review',
   '/settings': 'Settings',
 };
 

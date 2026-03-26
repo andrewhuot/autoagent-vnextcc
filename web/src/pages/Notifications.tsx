@@ -142,7 +142,7 @@ export function Notifications() {
       <div className="flex justify-end">
         <button
           onClick={() => setShowAddForm(!showAddForm)}
-          className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          className="flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-blue-700"
         >
           <Plus className="h-4 w-4" />
           Add Subscription
@@ -151,12 +151,12 @@ export function Notifications() {
 
       {/* Add Subscription Form */}
       {showAddForm && (
-        <div className="rounded-lg border border-gray-700 bg-gray-800 p-6">
-          <h3 className="mb-4 text-lg font-semibold text-white">Add Notification Subscription</h3>
+        <div className="rounded-lg border border-gray-200 bg-white p-6">
+          <h3 className="mb-4 text-lg font-semibold text-gray-900">Add Notification Subscription</h3>
 
           {/* Channel Type Selector */}
           <div className="mb-4">
-            <label className="mb-2 block text-sm font-medium text-gray-300">Channel Type</label>
+            <label className="mb-2 block text-sm font-medium text-gray-700">Channel Type</label>
             <div className="flex gap-4">
               {(['webhook', 'slack', 'email'] as ChannelType[]).map((type) => (
                 <button
@@ -164,8 +164,8 @@ export function Notifications() {
                   onClick={() => setChannelType(type)}
                   className={`flex items-center gap-2 rounded-md px-4 py-2 text-sm font-medium ${
                     channelType === type
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      ? 'bg-blue-600 text-gray-900'
+                      : 'bg-gray-700 text-gray-700 hover:bg-gray-100'
                   }`}
                 >
                   {channelIcon(type)}
@@ -178,7 +178,7 @@ export function Notifications() {
           {/* URL/Email Input */}
           {(channelType === 'webhook' || channelType === 'slack') && (
             <div className="mb-4">
-              <label className="mb-2 block text-sm font-medium text-gray-300">
+              <label className="mb-2 block text-sm font-medium text-gray-700">
                 {channelType === 'webhook' ? 'Webhook URL' : 'Slack Webhook URL'}
               </label>
               <input
@@ -186,27 +186,27 @@ export function Notifications() {
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
                 placeholder={`https://${channelType === 'slack' ? 'hooks.slack.com' : 'example.com'}/...`}
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
               />
             </div>
           )}
 
           {channelType === 'email' && (
             <div className="mb-4">
-              <label className="mb-2 block text-sm font-medium text-gray-300">Email Address</label>
+              <label className="mb-2 block text-sm font-medium text-gray-700">Email Address</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="user@example.com"
-                className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
               />
             </div>
           )}
 
           {/* Event Type Checkboxes */}
           <div className="mb-4">
-            <label className="mb-2 block text-sm font-medium text-gray-300">Event Types</label>
+            <label className="mb-2 block text-sm font-medium text-gray-700">Event Types</label>
             <div className="grid grid-cols-2 gap-2">
               {EVENT_TYPES.map((event) => (
                 <label key={event.value} className="flex items-center gap-2">
@@ -214,9 +214,9 @@ export function Notifications() {
                     type="checkbox"
                     checked={selectedEvents.includes(event.value)}
                     onChange={() => toggleEvent(event.value)}
-                    className="h-4 w-4 rounded border-gray-600 bg-gray-900 text-blue-600 focus:ring-blue-500"
+                    className="h-4 w-4 rounded border-gray-300 bg-white text-blue-600 focus:ring-blue-500"
                   />
-                  <span className="text-sm text-gray-300">{event.label}</span>
+                  <span className="text-sm text-gray-700">{event.label}</span>
                 </label>
               ))}
             </div>
@@ -224,13 +224,13 @@ export function Notifications() {
 
           {/* Severity Filter */}
           <div className="mb-4">
-            <label className="mb-2 block text-sm font-medium text-gray-300">
+            <label className="mb-2 block text-sm font-medium text-gray-700">
               Minimum Severity Level
             </label>
             <select
               value={severityFilter}
               onChange={(e) => setSeverityFilter(e.target.value)}
-              className="w-full rounded-md border border-gray-600 bg-gray-900 px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 focus:border-blue-500 focus:outline-none"
             >
               {SEVERITY_LEVELS.map((level) => (
                 <option key={level} value={level}>
@@ -244,14 +244,14 @@ export function Notifications() {
           <div className="flex justify-end gap-2">
             <button
               onClick={() => setShowAddForm(false)}
-              className="rounded-md border border-gray-600 px-4 py-2 text-sm font-medium text-gray-300 hover:bg-gray-700"
+              className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               Cancel
             </button>
             <button
               onClick={handleAddSubscription}
               disabled={registerWebhook.isPending || registerSlack.isPending || registerEmail.isPending}
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-blue-700 disabled:opacity-50"
             >
               Add Subscription
             </button>
@@ -260,9 +260,9 @@ export function Notifications() {
       )}
 
       {/* Active Subscriptions */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800">
-        <div className="border-b border-gray-700 p-4">
-          <h3 className="text-lg font-semibold text-white">Active Subscriptions</h3>
+      <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="border-b border-gray-200 p-4">
+          <h3 className="text-lg font-semibold text-gray-900">Active Subscriptions</h3>
         </div>
 
         {subscriptions.data?.subscriptions.length === 0 ? (
@@ -274,14 +274,14 @@ export function Notifications() {
             />
           </div>
         ) : (
-          <div className="divide-y divide-gray-700">
+          <div className="divide-y divide-gray-200">
             {subscriptions.data?.subscriptions.map((sub) => (
               <div key={sub.id} className="p-4">
                 <div className="flex items-start justify-between">
                   <div className="flex items-start gap-3">
                     {channelIcon(sub.channel_type)}
                     <div>
-                      <div className="font-medium text-white">
+                      <div className="font-medium text-gray-900">
                         {sub.channel_type.charAt(0).toUpperCase() + sub.channel_type.slice(1)}
                       </div>
                       <div className="mt-1 text-sm text-gray-400">
@@ -293,7 +293,7 @@ export function Notifications() {
                         {sub.events.map((event) => (
                           <span
                             key={event}
-                            className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-300"
+                            className="rounded bg-gray-700 px-2 py-1 text-xs text-gray-700"
                           >
                             {event}
                           </span>
@@ -313,7 +313,7 @@ export function Notifications() {
                     <button
                       onClick={() => handleTest(sub.id)}
                       disabled={testSubscription.isPending}
-                      className="flex items-center gap-1 rounded-md border border-gray-600 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-700 disabled:opacity-50"
+                      className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
                     >
                       <Send className="h-4 w-4" />
                       Test
@@ -335,9 +335,9 @@ export function Notifications() {
       </div>
 
       {/* Notification History */}
-      <div className="rounded-lg border border-gray-700 bg-gray-800">
-        <div className="border-b border-gray-700 p-4">
-          <h3 className="text-lg font-semibold text-white">Recent Notifications</h3>
+      <div className="rounded-lg border border-gray-200 bg-white">
+        <div className="border-b border-gray-200 p-4">
+          <h3 className="text-lg font-semibold text-gray-900">Recent Notifications</h3>
         </div>
 
         {history.isLoading ? (
@@ -353,7 +353,7 @@ export function Notifications() {
             />
           </div>
         ) : (
-          <div className="divide-y divide-gray-700">
+          <div className="divide-y divide-gray-200">
             {history.data?.history.map((entry, idx) => (
               <div key={idx} className="p-4">
                 <div className="flex items-start justify-between">
@@ -368,7 +368,7 @@ export function Notifications() {
                       >
                         {entry.success ? '✓' : '✗'} {entry.success ? 'Sent' : 'Failed'}
                       </span>
-                      <span className="text-sm font-medium text-white">{entry.event_type}</span>
+                      <span className="text-sm font-medium text-gray-900">{entry.event_type}</span>
                     </div>
                     <div className="mt-1 text-sm text-gray-400">
                       Subscription: {entry.subscription_id}
