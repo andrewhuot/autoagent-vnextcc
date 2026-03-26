@@ -26,6 +26,8 @@ import {
   BrainCircuit,
   Download,
   Upload,
+  Bot,
+  Bell,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
@@ -45,6 +47,7 @@ const navSections: NavSection[] = [
     title: 'Operate',
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard },
+      { to: '/assistant', label: 'Assistant', icon: Bot },
       { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
       { to: '/conversations', label: 'Conversations', icon: MessageSquare },
       { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
@@ -82,6 +85,7 @@ const navSections: NavSection[] = [
       { to: '/memory', label: 'Memory', icon: Brain },
       { to: '/runbooks', label: 'Runbooks', icon: Library },
       { to: '/scorer-studio', label: 'Scorer Studio', icon: Sparkles },
+      { to: '/notifications', label: 'Notifications', icon: Bell },
     ],
   },
   {

@@ -9,6 +9,7 @@ import { wsClient } from '../lib/websocket';
 
 const pageTitles: Record<string, string> = {
   '/': 'Dashboard',
+  '/assistant': 'Assistant',
   '/evals': 'Eval Runs',
   '/optimize': 'Optimize',
   '/live-optimize': 'Live Optimize',

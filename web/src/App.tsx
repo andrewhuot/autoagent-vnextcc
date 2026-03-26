@@ -32,6 +32,8 @@ import { AdkImport } from './pages/AdkImport';
 import { AdkDeploy } from './pages/AdkDeploy';
 import { AgentSkills } from './pages/AgentSkills';
 import { AgentStudio } from './pages/AgentStudio';
+import { Assistant } from './pages/Assistant';
+import { Notifications } from './pages/Notifications';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -78,6 +80,8 @@ export default function App() {
             <Route path="/adk/deploy" element={<AdkDeploy />} />
             <Route path="/agent-skills" element={<AgentSkills />} />
             <Route path="/agent-studio" element={<AgentStudio />} />
+            <Route path="/assistant" element={<Assistant />} />
+            <Route path="/notifications" element={<Notifications />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

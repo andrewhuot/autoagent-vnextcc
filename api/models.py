@@ -424,3 +424,51 @@ class PromotionRecordResponse(BaseModel):
     status: str = Field("in_progress", description="Overall promotion status")
     started_at: str = Field("", description="ISO timestamp of start")
     completed_at: Optional[str] = Field(None, description="ISO timestamp of completion")
+
+
+# ---------------------------------------------------------------------------
+# Assistant models
+# ---------------------------------------------------------------------------
+
+class AssistantMessageRequest(BaseModel):
+    """Request to send a message to the assistant."""
+    message: str = Field(..., description="User message text", min_length=1)
+    session_id: Optional[str] = Field(None, description="Session ID for conversation continuity")
+    context: dict[str, Any] = Field(default_factory=dict, description="Additional context for the message")
+
+
+class AssistantHistoryItem(BaseModel):
+    """Single turn in conversation history."""
+    turn_id: str
+    user_message: str
+    assistant_response: list[dict[str, Any]]  # List of events (thinking, card, text, etc.)
+    timestamp: float
+    session_id: str
+
+
+class AssistantHistoryResponse(BaseModel):
+    """Conversation history response."""
+    session_id: str
+    turns: list[AssistantHistoryItem]
+    total: int
+
+
+class AssistantSuggestionsResponse(BaseModel):
+    """Contextual suggestions response."""
+    session_id: str
+    suggestions: list[str]
+    quick_actions: list[dict[str, Any]]
+
+
+class AssistantActionRequest(BaseModel):
+    """Request to execute a card action."""
+    session_id: str = Field(..., description="Session ID for the conversation")
+    action_data: dict[str, Any] = Field(default_factory=dict, description="Action-specific data")
+
+
+class AssistantActionResponse(BaseModel):
+    """Response from executing an action."""
+    success: bool
+    action_id: str
+    result: dict[str, Any] = Field(default_factory=dict)
+    message: str = ""

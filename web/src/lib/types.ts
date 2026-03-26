@@ -959,3 +959,137 @@ export interface DiagnoseChatResponse {
   clusters: Array<Record<string, unknown>>;
   session_id: string;
 }
+
+// ---------------------------------------------------------------------------
+// Assistant Feature Types
+// ---------------------------------------------------------------------------
+
+export interface AssistantMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content?: string;
+  timestamp: number;
+  thinking_steps?: AssistantThinkingStep[];
+  cards?: AssistantCard[];
+  suggestions?: string[];
+}
+
+export interface AssistantThinkingStep {
+  step: string;
+  progress: number;
+  details?: unknown;
+  completed?: boolean;
+}
+
+export type AssistantCardType =
+  | 'agent_preview'
+  | 'diagnosis'
+  | 'diff'
+  | 'metrics'
+  | 'conversation'
+  | 'progress'
+  | 'deploy'
+  | 'cluster';
+
+export interface AssistantCard {
+  type: AssistantCardType;
+  data: unknown;
+}
+
+export interface AgentPreviewCardData {
+  specialists: Array<{
+    name: string;
+    description: string;
+    coverage_pct: number;
+  }>;
+  routing_summary: string;
+  coverage_pct: number;
+  intent_count: number;
+  tool_count: number;
+}
+
+export interface DiagnosisCardData {
+  title: string;
+  description: string;
+  impact_score: number;
+  affected_conversations: number;
+  trend?: 'increasing' | 'stable' | 'decreasing';
+}
+
+export interface DiffCardData {
+  before: string;
+  after: string;
+  description: string;
+  risk_level: 'low' | 'medium' | 'high';
+}
+
+export interface MetricsCardData {
+  before: Record<string, number>;
+  after: Record<string, number>;
+  confidence_interval?: number;
+  p_value?: number;
+}
+
+export interface ConversationCardData {
+  conversation_id: string;
+  turns: ConversationTurn[];
+  outcome: string;
+  highlights?: Array<{ turn_index: number; reason: string }>;
+}
+
+export interface ProgressCardData {
+  steps: Array<{
+    name: string;
+    status: 'pending' | 'running' | 'completed' | 'failed';
+    details?: string;
+  }>;
+}
+
+export interface DeployCardData {
+  status: 'pending' | 'deploying' | 'deployed' | 'failed';
+  canary_progress?: number;
+  can_rollback: boolean;
+}
+
+export interface ClusterCardData {
+  rank: number;
+  title: string;
+  description: string;
+  count: number;
+  impact: number;
+  trend: 'increasing' | 'stable' | 'decreasing';
+  example_ids: string[];
+}
+
+export interface AssistantHistoryEntry {
+  user_message: string;
+  assistant_response: AssistantMessage;
+  timestamp: number;
+}
+
+export interface UploadedFile {
+  name: string;
+  size: number;
+  type: string;
+  url?: string;
+}
+
+// Notification types
+export interface NotificationSubscription {
+  id: string;
+  channel_type: 'webhook' | 'slack' | 'email';
+  config: Record<string, string>;
+  events: string[];
+  filters: Record<string, string>;
+  enabled: boolean;
+  created_at: number;
+}
+
+export interface NotificationHistoryEntry {
+  subscription_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  sent_at: number;
+  success: boolean;
+  error: string | null;
+}

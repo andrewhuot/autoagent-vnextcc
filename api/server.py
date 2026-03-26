@@ -19,8 +19,10 @@ from fastapi.staticfiles import StaticFiles
 from api.routes import (
     adk as adk_routes,
     agent_skills as agent_skills_routes,
+    assistant as assistant_routes,
     autofix,
     changes,
+    collaboration,
     config,
     context,
     control,
@@ -33,19 +35,24 @@ from api.routes import (
     events,
     experiments,
     health,
+    impact,
     intelligence,
     judges,
+    knowledge,
     loop,
     memory as memory_routes,
+    notifications,
     opportunities,
     optimize,
     optimize_stream,
     quickfix,
     runbooks,
     registry,
+    sandbox,
     scorers,
     skills as skills_routes,
     traces,
+    what_if,
 )
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
@@ -239,6 +246,12 @@ async def lifespan(app: FastAPI):
     from agent_skills.store import AgentSkillStore
     app.state.agent_skill_store = AgentSkillStore()
 
+    # Notification manager
+    from notifications.manager import NotificationManager
+    app.state.notification_manager = NotificationManager(
+        db_path=".autoagent/notifications.db"
+    )
+
     yield
     # No explicit cleanup needed — SQLite connections are context-managed
 
@@ -300,6 +313,13 @@ app.include_router(skills_routes.router)
 app.include_router(agent_skills_routes.router)
 app.include_router(edit_routes.router)
 app.include_router(diagnose_routes.router)
+app.include_router(assistant_routes.router)
+app.include_router(notifications.router)
+app.include_router(sandbox.router)
+app.include_router(knowledge.router)
+app.include_router(what_if.router)
+app.include_router(impact.router)
+app.include_router(collaboration.router)
 
 
 # ---------------------------------------------------------------------------

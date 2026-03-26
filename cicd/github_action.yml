@@ -1,0 +1,74 @@
+# AutoAgent Quality Gate GitHub Action
+# Reusable action for running agent quality gates in CI/CD
+
+name: 'AutoAgent Quality Gate'
+description: 'Run AutoAgent quality gate to detect agent regressions'
+author: 'AutoAgent'
+
+inputs:
+  config_path:
+    description: 'Path to agent configuration file'
+    required: true
+  baseline_path:
+    description: 'Path to baseline results for comparison'
+    required: false
+  fail_threshold:
+    description: 'Maximum allowed regression threshold (e.g., 0.05 for 5%)'
+    required: false
+    default: '0.0'
+  fail_on_regression:
+    description: 'Fail build on any score decrease'
+    required: false
+    default: 'true'
+  output_path:
+    description: 'Path to write results JSON'
+    required: false
+    default: 'gate-results.json'
+  python_version:
+    description: 'Python version to use'
+    required: false
+    default: '3.11'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install AutoAgent
+      shell: bash
+      run: |
+        pip install autoagent
+
+    - name: Run Quality Gate
+      shell: bash
+      run: |
+        ARGS="--output ${{ inputs.output_path }}"
+
+        if [ -n "${{ inputs.baseline_path }}" ]; then
+          ARGS="$ARGS --baseline ${{ inputs.baseline_path }}"
+        fi
+
+        if [ "${{ inputs.fail_on_regression }}" = "true" ]; then
+          ARGS="$ARGS --fail-on-regression"
+        fi
+
+        if [ -n "${{ inputs.fail_threshold }}" ]; then
+          ARGS="$ARGS --threshold ${{ inputs.fail_threshold }}"
+        fi
+
+        python -m cicd.gate ${{ inputs.config_path }} $ARGS
+
+    - name: Upload Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: autoagent-gate-results
+        path: ${{ inputs.output_path }}
+        retention-days: 30
+
+branding:
+  icon: 'shield'
+  color: 'blue'

@@ -1802,3 +1802,85 @@ export function useDiagnoseChat() {
       }),
   });
 }
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+export function useNotificationSubscriptions() {
+  return useQuery({
+    queryKey: ['notifications', 'subscriptions'],
+    queryFn: () => fetchApi<{ subscriptions: import('./types').NotificationSubscription[] }>('/notifications/subscriptions'),
+  });
+}
+
+export function useNotificationHistory(limit = 100) {
+  return useQuery({
+    queryKey: ['notifications', 'history', limit],
+    queryFn: () => fetchApi<{ history: import('./types').NotificationHistoryEntry[] }>(`/notifications/history?limit=${limit}`),
+  });
+}
+
+export function useRegisterWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { url: string; events: string[]; filters?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/webhook', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useRegisterSlack() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { webhook_url: string; events: string[]; filters?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/slack', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useRegisterEmail() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { address: string; events: string[]; filters?: Record<string, string>; smtp_config?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/email', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useDeleteSubscription() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      fetchApi<{ status: string }>(`/notifications/subscriptions/${subscriptionId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useTestSubscription() {
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      fetchApi<{ status: string; message: string }>(`/notifications/test/${subscriptionId}`, {
+        method: 'POST',
+      }),
+  });
+}

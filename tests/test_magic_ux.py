@@ -9,6 +9,7 @@ from runner import (
     _stream_cycle_output,
     _generate_recommendations,
     _bar_chart,
+)
 
 
 @pytest.fixture
