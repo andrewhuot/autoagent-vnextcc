@@ -4,14 +4,24 @@ import {
   useApplyTranscriptInsight,
   useAskTranscriptReport,
   useBuildAgentArtifact,
+  useDeepResearchReport,
   useImportTranscriptArchive,
+  useKnowledgeAsset,
+  useRunAutonomousLoop,
   useTranscriptReport,
   useTranscriptReports,
 } from '../lib/api';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
-import type { IntelligenceAnswer, PromptBuildArtifact, TranscriptReport } from '../lib/types';
+import type {
+  ApplyInsightResult,
+  AutonomousLoopResult,
+  DeepResearchReport,
+  IntelligenceAnswer,
+  PromptBuildArtifact,
+  TranscriptReport,
+} from '../lib/types';
 import { formatPercent, formatTimestamp } from '../lib/utils';
 
 async function fileToBase64(file: File): Promise<string> {
@@ -90,7 +100,7 @@ function ReportHighlights({
         <SummaryCard label="Archive Conversations" value={report.conversation_count} tone="accent" />
         <SummaryCard label="Languages" value={report.languages.join(', ')} />
         <SummaryCard label="Insights" value={report.insights.length} />
-        <SummaryCard label="Missing Intents" value={report.missing_intents.length} />
+        <SummaryCard label="Knowledge Entries" value={report.knowledge_asset.entry_count} />
       </section>
 
       <div className="grid gap-5 xl:grid-cols-[1.3fr_0.7fr]">
@@ -228,6 +238,14 @@ function ReportHighlights({
 }
 
 function BuilderResult({ artifact }: { artifact: PromptBuildArtifact }) {
+  const workspaceCapabilities = [
+    ['Journeys', artifact.workspace_access.journeys],
+    ['Integrations', artifact.workspace_access.integrations],
+    ['Simulations', artifact.workspace_access.simulations],
+    ['Knowledge Base', artifact.workspace_access.knowledge_base],
+    ['Triage', artifact.workspace_access.triage],
+  ] as const;
+
   return (
     <div className="space-y-5">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -310,6 +328,47 @@ function BuilderResult({ artifact }: { artifact: PromptBuildArtifact }) {
           </div>
         </div>
       </ListPanel>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <ListPanel title="Integration Templates" eyebrow="System Integration">
+          <div className="space-y-3">
+            {artifact.integration_templates.map((template) => (
+              <div
+                key={`${template.connector}-${template.name}`}
+                className="rounded-2xl border border-gray-200 bg-gray-50 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-gray-900">{template.name}</p>
+                  <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">
+                    {template.method} {template.endpoint}
+                  </span>
+                </div>
+                <p className="mt-1 text-sm text-gray-600">{template.connector} · {template.auth_strategy}</p>
+                <p className="mt-2 text-sm text-gray-600">{template.error_handling}</p>
+              </div>
+            ))}
+          </div>
+        </ListPanel>
+
+        <ListPanel title="Workspace Access" eyebrow="Platform Architecture">
+          <div className="space-y-3">
+            {workspaceCapabilities.map(([label, enabled]) => (
+              <div key={label} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold text-gray-900">{label}</p>
+                  <span
+                    className={`rounded-full px-2 py-1 text-xs font-medium ${
+                      enabled ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-200 text-gray-600'
+                    }`}
+                  >
+                    {enabled ? 'Enabled' : 'Disabled'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </ListPanel>
+      </div>
     </div>
   );
 }
@@ -318,6 +377,9 @@ export function IntelligenceStudio() {
   const [selectedReportId, setSelectedReportId] = useState<string | undefined>(undefined);
   const [question, setQuestion] = useState(starterQuestions[0]);
   const [answer, setAnswer] = useState<IntelligenceAnswer | null>(null);
+  const [deepResearch, setDeepResearch] = useState<DeepResearchReport | null>(null);
+  const [autonomousResult, setAutonomousResult] = useState<AutonomousLoopResult | null>(null);
+  const [lastApplyResult, setLastApplyResult] = useState<ApplyInsightResult | null>(null);
   const [builderPrompt, setBuilderPrompt] = useState(
     'Build a customer service agent for order tracking, cancellation, and shipping-address changes. Escalate when the customer lacks the order number.'
   );
@@ -328,13 +390,24 @@ export function IntelligenceStudio() {
   const importMutation = useImportTranscriptArchive();
   const askMutation = useAskTranscriptReport();
   const applyMutation = useApplyTranscriptInsight();
+  const deepResearchMutation = useDeepResearchReport();
+  const autonomousMutation = useRunAutonomousLoop();
   const buildMutation = useBuildAgentArtifact();
+  const knowledgeAssetId = (reportQuery.data ?? importMutation.data)?.knowledge_asset?.asset_id;
+  const knowledgeAssetQuery = useKnowledgeAsset(knowledgeAssetId);
 
   useEffect(() => {
     if (!selectedReportId && reportsQuery.data && reportsQuery.data.length > 0) {
       setSelectedReportId(reportsQuery.data[0].report_id);
     }
   }, [reportsQuery.data, selectedReportId]);
+
+  useEffect(() => {
+    setAnswer(null);
+    setDeepResearch(null);
+    setAutonomousResult(null);
+    setLastApplyResult(null);
+  }, [selectedReportId]);
 
   async function onArchiveSelected(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -366,8 +439,48 @@ export function IntelligenceStudio() {
     askMutation.mutate(
       { reportId: selectedReportId, question },
       {
-        onSuccess: (result) => setAnswer(result),
+        onSuccess: (result) => {
+          setAnswer(result);
+          setDeepResearch(result.deep_research ?? null);
+        },
         onError: (error) => toastError('Question failed', error.message),
+      }
+    );
+  }
+
+  function onDeepResearch() {
+    if (!selectedReportId || !question.trim()) {
+      toastError('Question required', 'Import an archive and enter a research question.');
+      return;
+    }
+    deepResearchMutation.mutate(
+      { reportId: selectedReportId, question },
+      {
+        onSuccess: (result) => {
+          setDeepResearch(result);
+          toastSuccess('Deep research complete', `${result.root_causes.length} quantified root causes identified.`);
+        },
+        onError: (error) => toastError('Deep research failed', error.message),
+      }
+    );
+  }
+
+  function onRunAutonomousLoop() {
+    if (!selectedReportId) {
+      toastError('Report required', 'Import an archive before running the autonomous loop.');
+      return;
+    }
+    autonomousMutation.mutate(
+      { reportId: selectedReportId, auto_ship: false },
+      {
+        onSuccess: (result) => {
+          setAutonomousResult(result);
+          toastSuccess(
+            'Autonomous loop complete',
+            `Change card ${result.change_card_id} created with ${formatPercent(result.pipeline.test.pass_rate)} sandbox pass rate.`
+          );
+        },
+        onError: (error) => toastError('Autonomous loop failed', error.message),
       }
     );
   }
@@ -378,6 +491,7 @@ export function IntelligenceStudio() {
       { reportId: selectedReportId, insight_id: insightId },
       {
         onSuccess: (result) => {
+          setLastApplyResult(result);
           toastSuccess('Change card drafted', `Insight converted into review card ${result.change_card.card_id}.`);
         },
         onError: (error) => toastError('Apply insight failed', error.message),
@@ -452,6 +566,20 @@ export function IntelligenceStudio() {
               >
                 {buildMutation.isPending ? 'Drafting...' : 'Start From Prompt'}
               </button>
+              <button
+                onClick={onDeepResearch}
+                disabled={!selectedReportId || deepResearchMutation.isPending}
+                className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
+              >
+                {deepResearchMutation.isPending ? 'Analyzing...' : 'Deep Research'}
+              </button>
+              <button
+                onClick={onRunAutonomousLoop}
+                disabled={!selectedReportId || autonomousMutation.isPending}
+                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
+              >
+                {autonomousMutation.isPending ? 'Running Loop...' : 'Run Autonomous Loop'}
+              </button>
             </div>
           </div>
 
@@ -524,14 +652,21 @@ export function IntelligenceStudio() {
               className="min-h-[96px] flex-1 rounded-2xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
               placeholder="Why are people transferring to live support?"
             />
-            <button
-              onClick={onAsk}
-              disabled={!selectedReportId || askMutation.isPending}
-              className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-            >
-              {askMutation.isPending ? 'Researching...' : 'Run Analysis'}
-            </button>
-          </div>
+              <button
+                onClick={onAsk}
+                disabled={!selectedReportId || askMutation.isPending}
+                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
+              >
+                {askMutation.isPending ? 'Researching...' : 'Run Analysis'}
+              </button>
+              <button
+                onClick={onDeepResearch}
+                disabled={!selectedReportId || deepResearchMutation.isPending}
+                className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
+              >
+                {deepResearchMutation.isPending ? 'Analyzing...' : 'Run Deep Research'}
+              </button>
+            </div>
 
           <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
             {!answer && (
@@ -619,6 +754,104 @@ export function IntelligenceStudio() {
 
       {reportQuery.isLoading && <LoadingSkeleton rows={8} />}
       {activeReport && <ReportHighlights report={activeReport} onApplyInsight={onApplyInsight} applyPending={applyMutation.isPending} />}
+      {lastApplyResult && (
+        <ListPanel title="Auto-Generated Simulation Bundle" eyebrow="Change Validation">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="space-y-3">
+              {lastApplyResult.auto_simulation.generated_tests.map((test) => (
+                <div key={test.name} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-gray-900">{test.name}</p>
+                    <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">{test.difficulty}</span>
+                  </div>
+                  <p className="mt-2 text-sm text-gray-600">Prompt: {test.user_message}</p>
+                  <p className="mt-1 text-sm text-gray-600">Expected: {test.expected_behavior}</p>
+                </div>
+              ))}
+            </div>
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-sm font-semibold text-gray-900">Sandbox Validation</p>
+              <div className="mt-3 space-y-2 text-sm text-gray-600">
+                <p>Pass Rate: {formatPercent(lastApplyResult.auto_simulation.sandbox_validation.pass_rate)}</p>
+                <p>Total: {lastApplyResult.auto_simulation.sandbox_validation.total_conversations}</p>
+                <p>Passed: {lastApplyResult.auto_simulation.sandbox_validation.passed}</p>
+                <p>Failed: {lastApplyResult.auto_simulation.sandbox_validation.failed}</p>
+                <p>Avg Latency: {lastApplyResult.auto_simulation.sandbox_validation.avg_latency_ms.toFixed(1)}ms</p>
+              </div>
+            </div>
+          </div>
+        </ListPanel>
+      )}
+
+      {knowledgeAssetQuery.data && (
+        <ListPanel title="Durable Knowledge Asset" eyebrow="Knowledge Base">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs uppercase tracking-[0.16em] text-gray-400">Asset</p>
+              <p className="mt-2 text-sm font-semibold text-gray-900">{knowledgeAssetQuery.data.asset_id}</p>
+              <p className="mt-1 text-sm text-gray-600">{knowledgeAssetQuery.data.archive_name}</p>
+              <p className="mt-1 text-sm text-gray-600">{knowledgeAssetQuery.data.entry_count} entries</p>
+            </div>
+            <div className="space-y-3">
+              {knowledgeAssetQuery.data.entries.slice(0, 5).map((entry, index) => (
+                <div key={`${entry.type}-${index}`} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <p className="text-xs uppercase tracking-[0.16em] text-gray-400">{entry.type}</p>
+                  <p className="mt-2 text-sm text-gray-700">
+                    {entry.question || entry.title || entry.example || entry.intent || 'Knowledge entry'}
+                  </p>
+                  {(entry.answer || entry.description || entry.response) && (
+                    <p className="mt-1 text-sm text-gray-600">{entry.answer || entry.description || entry.response}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        </ListPanel>
+      )}
+
+      {deepResearch && (
+        <ListPanel title="Deep Research Findings" eyebrow="Explorer">
+          <div className="grid gap-4 xl:grid-cols-2">
+            <div className="space-y-3">
+              {deepResearch.root_causes.slice(0, 5).map((cause) => (
+                <div key={cause.reason} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-gray-900">{cause.reason}</p>
+                    <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">
+                      {cause.attribution_pct.toFixed(1)}%
+                    </span>
+                  </div>
+                  <p className="mt-1 text-sm text-gray-600">{cause.count} conversations</p>
+                  {cause.evidence.length > 0 && <p className="mt-2 text-sm text-gray-600">“{cause.evidence[0]}”</p>}
+                </div>
+              ))}
+            </div>
+            <div className="space-y-3">
+              {deepResearch.recommendations.map((recommendation) => (
+                <div key={recommendation} className="rounded-2xl border border-sky-100 bg-sky-50/70 p-3 text-sm text-slate-700">
+                  {recommendation}
+                </div>
+              ))}
+            </div>
+          </div>
+        </ListPanel>
+      )}
+
+      {autonomousResult && (
+        <ListPanel title="Autonomous Improvement Pipeline" eyebrow="Analyze -> Improve -> Test -> Ship">
+          <div className="grid gap-4 xl:grid-cols-4">
+            <SummaryCard label="Analyze" value={autonomousResult.pipeline.analyze.status} />
+            <SummaryCard label="Improve" value={autonomousResult.pipeline.improve.status} />
+            <SummaryCard label="Test" value={formatPercent(autonomousResult.pipeline.test.pass_rate)} />
+            <SummaryCard label="Ship" value={autonomousResult.pipeline.ship.status} />
+          </div>
+          <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+            <p>Change Card: {autonomousResult.change_card_id}</p>
+            <p className="mt-1">Drafted Prompt: {autonomousResult.drafted_change_prompt}</p>
+          </div>
+        </ListPanel>
+      )}
+
       {buildMutation.data && <BuilderResult artifact={buildMutation.data} />}
     </div>
   );

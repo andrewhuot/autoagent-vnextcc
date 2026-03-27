@@ -20,6 +20,7 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from core.types import JudgeVerdict
@@ -182,6 +183,9 @@ class OperatorPerformanceTracker:
 
     def __init__(self, db_path: str = ".autoagent/operator_performance.db") -> None:
         self.db_path = db_path
+        # Ensure the backing directory exists so SQLite can always create the DB file.
+        db_parent = Path(db_path).expanduser().resolve().parent
+        db_parent.mkdir(parents=True, exist_ok=True)
         self._successes: dict[tuple[str, str], int] = defaultdict(int)
         self._totals: dict[tuple[str, str], int] = defaultdict(int)
         self._init_db()

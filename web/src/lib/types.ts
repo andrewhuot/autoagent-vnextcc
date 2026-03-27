@@ -687,12 +687,98 @@ export interface SuggestedTest {
   expected_behavior: string;
 }
 
+export interface KnowledgeAssetSummary {
+  asset_id: string;
+  entry_count: number;
+}
+
+export interface KnowledgeAssetEntry {
+  type: string;
+  intent?: string;
+  question?: string;
+  answer?: string;
+  steps?: string[];
+  title?: string;
+  description?: string;
+  example?: string;
+  response?: string;
+}
+
+export interface KnowledgeAsset {
+  asset_id: string;
+  archive_name: string;
+  created_at: number;
+  entry_count: number;
+  entries: KnowledgeAssetEntry[];
+}
+
+export interface DeepResearchRootCause {
+  reason: string;
+  count: number;
+  attribution_pct: number;
+  evidence: string[];
+}
+
+export interface DeepResearchReport {
+  report_id: string;
+  question: string;
+  conversation_count: number;
+  languages: string[];
+  root_causes: DeepResearchRootCause[];
+  recommendations: string[];
+  knowledge_asset: KnowledgeAssetSummary;
+}
+
+export interface AutoSimulationGeneratedTest {
+  name: string;
+  user_message: string;
+  expected_behavior: string;
+  difficulty: string;
+  source: string;
+}
+
+export interface AutoSimulationValidation {
+  test_id: string;
+  total_conversations: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+  avg_latency_ms: number;
+  failures_by_category: Record<string, number>;
+  failure_examples: string[];
+}
+
+export interface AutoSimulationBundle {
+  generated_tests: AutoSimulationGeneratedTest[];
+  sandbox_validation: AutoSimulationValidation;
+}
+
+export interface IntegrationTemplate {
+  connector: string;
+  name: string;
+  method: string;
+  endpoint: string;
+  auth_strategy: string;
+  payload_template: Record<string, unknown>;
+  response_mapping: Record<string, unknown>;
+  error_handling: string;
+}
+
+export interface WorkspaceAccess {
+  journeys: boolean;
+  integrations: boolean;
+  simulations: boolean;
+  knowledge_base: boolean;
+  triage: boolean;
+}
+
 export interface TranscriptReportSummary {
   report_id: string;
   archive_name: string;
   created_at: number;
   conversation_count: number;
   languages: string[];
+  knowledge_asset?: KnowledgeAssetSummary;
 }
 
 export interface TranscriptReport {
@@ -707,6 +793,7 @@ export interface TranscriptReport {
   workflow_suggestions: WorkflowSuggestion[];
   suggested_tests: SuggestedTest[];
   insights: TranscriptInsight[];
+  knowledge_asset: KnowledgeAssetSummary;
   conversations: TranscriptConversation[];
 }
 
@@ -719,6 +806,7 @@ export interface IntelligenceAnswer {
   };
   evidence: string[];
   recommended_insight_id: string | null;
+  deep_research?: DeepResearchReport;
 }
 
 export interface BuildIntent {
@@ -748,6 +836,8 @@ export interface PromptBuildArtifact {
   tools: BuildTool[];
   guardrails: string[];
   suggested_tests: SuggestedTest[];
+  integration_templates: IntegrationTemplate[];
+  workspace_access: WorkspaceAccess;
 }
 
 export interface ApplyInsightResult {
@@ -755,6 +845,32 @@ export interface ApplyInsightResult {
   drafted_change_prompt: string;
   change_card: {
     card_id: string;
+  };
+  auto_simulation: AutoSimulationBundle;
+}
+
+export interface AutonomousLoopResult {
+  report_id: string;
+  change_card_id: string;
+  drafted_change_prompt: string;
+  auto_simulation: AutoSimulationBundle;
+  deployment_result: unknown;
+  pipeline: {
+    analyze: {
+      status: string;
+      insight_id: string;
+    };
+    improve: {
+      status: string;
+      change_card_id: string;
+    };
+    test: {
+      status: string;
+      pass_rate: number;
+    };
+    ship: {
+      status: string;
+    };
   };
 }
 

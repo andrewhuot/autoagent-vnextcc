@@ -7,6 +7,9 @@ unified skill store format under the hood.
 
 from __future__ import annotations
 
+import json
+import sqlite3
+from pathlib import Path
 
 from core.skills.store import SkillStore as UnifiedSkillStore
 from core.skills.types import (
@@ -41,7 +44,54 @@ class SkillStore:
             db_path: Path to SQLite database file.
         """
         self._db_path = db_path
+        legacy_skills = self._extract_legacy_registry_skills(db_path)
         self._unified_store = UnifiedSkillStore(db_path)
+        for old_skill in legacy_skills:
+            unified_skill = self._convert_to_unified(old_skill)
+            existing = self._unified_store.get_by_name(unified_skill.name, version=unified_skill.version)
+            if existing is None:
+                self._unified_store.create(unified_skill)
+
+    def _extract_legacy_registry_skills(self, db_path: str) -> list[Skill]:
+        """Read and clear legacy Track A rows if the DB uses the old schema.
+
+        WHY: Older registry databases used an `executable_skills` table without
+        the unified columns (`id`, `kind`, `domain`, `updated_at`). The unified
+        store expects the new schema name, so we stage legacy rows in memory,
+        drop the old table, then let unified initialization recreate tables.
+        """
+        path = Path(db_path)
+        if not path.exists():
+            return []
+
+        conn = sqlite3.connect(db_path)
+        try:
+            table_exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='executable_skills' LIMIT 1"
+            ).fetchone()
+            if table_exists is None:
+                return []
+
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(executable_skills)").fetchall()}
+            is_legacy = "kind" not in columns and {"name", "version", "data", "category", "platform"}.issubset(columns)
+            if not is_legacy:
+                return []
+
+            skills: list[Skill] = []
+            rows = conn.execute("SELECT data FROM executable_skills").fetchall()
+            for (payload,) in rows:
+                try:
+                    data = json.loads(payload)
+                    skills.append(Skill.from_dict(data))
+                except Exception:
+                    # Ignore malformed legacy rows; keep migration best-effort.
+                    continue
+
+            conn.execute("DROP TABLE IF EXISTS executable_skills")
+            conn.commit()
+            return skills
+        finally:
+            conn.close()
 
     # ------------------------------------------------------------------
     # Conversion helpers

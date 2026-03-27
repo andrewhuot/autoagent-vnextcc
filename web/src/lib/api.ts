@@ -4,6 +4,7 @@ import type {
   AdkDeployResult,
   AdkExportResult,
   AdkImportResult,
+  AutonomousLoopResult,
   ApplyInsightResult,
   ArchiveEntry,
   AutoFixApplyOutcome,
@@ -34,7 +35,9 @@ import type {
   EvalRun,
   ExperimentCard,
   HealthReport,
+  KnowledgeAsset,
   IntelligenceAnswer,
+  DeepResearchReport,
   JudgeCalibration,
   JudgeDriftReport,
   JudgeFeedbackRecord,
@@ -1610,6 +1613,43 @@ export function useApplyTranscriptInsight() {
       fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/apply`, {
         method: 'POST',
         body: JSON.stringify({ insight_id }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useKnowledgeAsset(assetId: string | undefined) {
+  return useQuery<KnowledgeAsset>({
+    queryKey: ['intelligence', 'knowledge', assetId],
+    enabled: Boolean(assetId),
+    queryFn: async () => {
+      if (!assetId) {
+        throw new ApiRequestError('Missing knowledge asset ID', 400);
+      }
+      return fetchApi<KnowledgeAsset>(`/intelligence/knowledge/${encodeURIComponent(assetId)}`);
+    },
+  });
+}
+
+export function useDeepResearchReport() {
+  return useMutation<DeepResearchReport, ApiRequestError, { reportId: string; question: string }>({
+    mutationFn: ({ reportId, question }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/deep-research`, {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+      }),
+  });
+}
+
+export function useRunAutonomousLoop() {
+  const queryClient = useQueryClient();
+  return useMutation<AutonomousLoopResult, ApiRequestError, { reportId: string; auto_ship: boolean }>({
+    mutationFn: ({ reportId, auto_ship }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/autonomous-loop`, {
+        method: 'POST',
+        body: JSON.stringify({ auto_ship }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['changes'] });

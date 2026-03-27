@@ -30,6 +30,14 @@ class BuildAgentRequest(BaseModel):
     connectors: list[str] = Field(default_factory=list)
 
 
+class DeepResearchRequest(BaseModel):
+    question: str = Field(..., min_length=1)
+
+
+class AutonomousLoopRequest(BaseModel):
+    auto_ship: bool = Field(False, description="Whether to auto-deploy canary when sandbox validation passes")
+
+
 def _get_service(request: Request) -> TranscriptIntelligenceService:
     service = getattr(request.app.state, "transcript_intelligence_service", None)
     if service is None:
@@ -81,7 +89,7 @@ async def apply_insight(report_id: str, body: ApplyInsightRequest, request: Requ
     current_config = deployer.get_active_config() or {}
 
     try:
-        card, drafted_change_prompt = service.create_change_card_from_insight(
+        card, drafted_change_prompt, auto_simulation = service.create_change_card_from_insight(
             report_id=report_id,
             insight_id=body.insight_id,
             current_config=current_config,
@@ -95,6 +103,7 @@ async def apply_insight(report_id: str, body: ApplyInsightRequest, request: Requ
         "status": "pending_review",
         "drafted_change_prompt": drafted_change_prompt,
         "change_card": card.to_dict(),
+        "auto_simulation": auto_simulation,
     }
 
 
@@ -102,3 +111,51 @@ async def apply_insight(report_id: str, body: ApplyInsightRequest, request: Requ
 async def build_agent_from_prompt(body: BuildAgentRequest, request: Request) -> dict[str, Any]:
     service = _get_service(request)
     return service.build_agent_artifact(body.prompt, body.connectors)
+
+
+@router.get("/knowledge/{asset_id}")
+async def get_knowledge_asset(asset_id: str, request: Request) -> dict[str, Any]:
+    service = _get_service(request)
+    asset = service.get_knowledge_asset(asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail=f"Unknown knowledge asset: {asset_id}")
+    return asset
+
+
+@router.post("/reports/{report_id}/deep-research")
+async def deep_research_report(
+    report_id: str,
+    body: DeepResearchRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = _get_service(request)
+    try:
+        return service.deep_research(report_id=report_id, question=body.question)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.post("/reports/{report_id}/autonomous-loop")
+async def run_autonomous_loop(
+    report_id: str,
+    body: AutonomousLoopRequest,
+    request: Request,
+) -> dict[str, Any]:
+    service = _get_service(request)
+    deployer = getattr(request.app.state, "deployer", None)
+    eval_runner = request.app.state.eval_runner
+    change_card_store = request.app.state.change_card_store
+    current_config = deployer.get_active_config() if deployer is not None else {}
+    current_config = current_config or {}
+
+    try:
+        return service.run_autonomous_cycle(
+            report_id=report_id,
+            eval_runner=eval_runner,
+            change_card_store=change_card_store,
+            current_config=current_config,
+            auto_ship=body.auto_ship,
+            deployer=deployer,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))

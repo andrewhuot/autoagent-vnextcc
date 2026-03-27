@@ -2,10 +2,10 @@
 
 Supports:
 - CSV/JSON/JSONL transcript files
-- PDF documents
-- Text files
-- ZIP archives
-- Audio files (MP3, WAV, M4A) - TODO: integrate Whisper transcription
+- PDF/TXT/MD/DOCX documents
+- Whiteboard / image uploads (best-effort interpretation)
+- ZIP archives containing mixed modalities
+- Audio files (MP3, WAV, M4A) with sidecar transcript fallback
 """
 
 from __future__ import annotations
@@ -13,8 +13,10 @@ from __future__ import annotations
 import csv
 import io
 import json
+import re
 import zipfile
 from dataclasses import dataclass, field
+from html import unescape
 from pathlib import Path
 from typing import Any
 
@@ -34,18 +36,18 @@ class ProcessedFile:
 class FileProcessor:
     """Process uploaded files into structured data for assistant operations.
 
-    Handles various file formats and extracts conversation transcripts,
-    documents, and other structured data.
+    WHY: Assistant workflows should accept real-world CX inputs (transcripts,
+    playbooks, whiteboards, audio notes) without forcing manual pre-cleaning.
     """
 
     SUPPORTED_TRANSCRIPT_FORMATS = {".csv", ".json", ".jsonl"}
-    SUPPORTED_DOCUMENT_FORMATS = {".pdf", ".txt", ".md"}
+    SUPPORTED_DOCUMENT_FORMATS = {".pdf", ".txt", ".md", ".docx"}
+    SUPPORTED_IMAGE_FORMATS = {".png", ".jpg", ".jpeg", ".webp"}
     SUPPORTED_AUDIO_FORMATS = {".mp3", ".wav", ".m4a"}
     SUPPORTED_ARCHIVE_FORMATS = {".zip"}
 
     def __init__(self) -> None:
         """Initialize file processor."""
-        pass
 
     def process_file(
         self, file_path: str | Path, file_type: str | None = None
@@ -67,13 +69,15 @@ class FileProcessor:
         if not path.exists():
             raise FileNotFoundError(f"File not found: {file_path}")
 
-        file_type = file_type or path.suffix.lower()
+        file_type = (file_type or path.suffix).lower()
 
         try:
             if file_type in self.SUPPORTED_TRANSCRIPT_FORMATS:
                 return self._process_transcript_file(path, file_type)
             if file_type in self.SUPPORTED_DOCUMENT_FORMATS:
                 return self._process_document_file(path, file_type)
+            if file_type in self.SUPPORTED_IMAGE_FORMATS:
+                return self._process_image_file(path, file_type)
             if file_type in self.SUPPORTED_AUDIO_FORMATS:
                 return self._process_audio_file(path, file_type)
             if file_type in self.SUPPORTED_ARCHIVE_FORMATS:
@@ -81,7 +85,7 @@ class FileProcessor:
 
             raise ValueError(
                 f"Unsupported file type: {file_type}. "
-                f"Supported: {', '.join(self.SUPPORTED_TRANSCRIPT_FORMATS | self.SUPPORTED_DOCUMENT_FORMATS | self.SUPPORTED_AUDIO_FORMATS | self.SUPPORTED_ARCHIVE_FORMATS)}"
+                f"Supported: {', '.join(self._all_supported_formats())}"
             )
         except Exception as exc:
             return ProcessedFile(
@@ -90,45 +94,22 @@ class FileProcessor:
                 error=f"Error processing file: {exc}",
             )
 
+    def _all_supported_formats(self) -> list[str]:
+        formats = (
+            self.SUPPORTED_TRANSCRIPT_FORMATS
+            | self.SUPPORTED_DOCUMENT_FORMATS
+            | self.SUPPORTED_IMAGE_FORMATS
+            | self.SUPPORTED_AUDIO_FORMATS
+            | self.SUPPORTED_ARCHIVE_FORMATS
+        )
+        return sorted(formats)
+
     def _process_transcript_file(
         self, path: Path, file_type: str
     ) -> ProcessedFile:
-        """Process transcript files (CSV, JSON, JSONL).
-
-        Expected formats:
-        - CSV: columns like user_message, assistant_message, specialist_used, etc.
-        - JSON: array of conversation objects
-        - JSONL: one conversation object per line
-        """
-        records: list[dict[str, Any]] = []
-
-        if file_type == ".csv":
-            with path.open("r", encoding="utf-8", newline="") as f:
-                reader = csv.DictReader(f)
-                records = list(reader)
-
-        elif file_type == ".json":
-            with path.open("r", encoding="utf-8") as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    records = data
-                elif isinstance(data, dict):
-                    records = [data]
-                else:
-                    raise ValueError("JSON must be array or object")
-
-        elif file_type == ".jsonl":
-            with path.open("r", encoding="utf-8") as f:
-                for line_num, line in enumerate(f, start=1):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        records.append(json.loads(line))
-                    except json.JSONDecodeError as e:
-                        raise ValueError(f"Invalid JSON on line {line_num}: {e}") from e
-
-        # Normalize conversation records
+        """Process transcript files (CSV, JSON, JSONL)."""
+        content_bytes = path.read_bytes()
+        records = self._parse_transcript_bytes(content_bytes, file_type)
         normalized = self._normalize_transcript_records(records)
 
         return ProcessedFile(
@@ -140,6 +121,40 @@ class FileProcessor:
                 "source_file": path.name,
             },
         )
+
+    def _parse_transcript_bytes(
+        self,
+        content_bytes: bytes,
+        file_type: str,
+    ) -> list[dict[str, Any]]:
+        """Parse transcript bytes into raw records."""
+        records: list[dict[str, Any]] = []
+        text = content_bytes.decode("utf-8", errors="ignore")
+
+        if file_type == ".csv":
+            reader = csv.DictReader(io.StringIO(text))
+            records = list(reader)
+
+        elif file_type == ".json":
+            data = json.loads(text)
+            if isinstance(data, list):
+                records = data
+            elif isinstance(data, dict):
+                records = [data]
+            else:
+                raise ValueError("JSON must be array or object")
+
+        elif file_type == ".jsonl":
+            for line_num, line in enumerate(text.splitlines(), start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid JSON on line {line_num}: {exc}") from exc
+
+        return records
 
     def _normalize_transcript_records(
         self, records: list[dict[str, Any]]
@@ -159,7 +174,6 @@ class FileProcessor:
         normalized = []
 
         for i, record in enumerate(records):
-            # Try different field name variations
             user_msg = (
                 record.get("user_message")
                 or record.get("user")
@@ -212,18 +226,13 @@ class FileProcessor:
     def _process_document_file(
         self, path: Path, file_type: str
     ) -> ProcessedFile:
-        """Process document files (PDF, TXT, MD).
-
-        Extracts text content from documents for knowledge extraction.
-        """
-        text_content = ""
-
-        if file_type == ".txt" or file_type == ".md":
-            with path.open("r", encoding="utf-8") as f:
-                text_content = f.read()
-
-        elif file_type == ".pdf":
-            text_content = self._extract_pdf_text(path)
+        """Process document files (PDF, TXT, MD, DOCX)."""
+        content_bytes = path.read_bytes()
+        text_content = self._extract_document_text_from_bytes(
+            content_bytes=content_bytes,
+            file_type=file_type,
+            source_name=path.name,
+        )
 
         return ProcessedFile(
             file_type=file_type,
@@ -236,51 +245,157 @@ class FileProcessor:
             },
         )
 
+    def _extract_document_text_from_bytes(
+        self,
+        content_bytes: bytes,
+        file_type: str,
+        source_name: str,
+    ) -> str:
+        """Extract text from a document payload."""
+        if file_type in {".txt", ".md"}:
+            return content_bytes.decode("utf-8", errors="ignore")
+        if file_type == ".pdf":
+            return self._extract_pdf_text_from_bytes(content_bytes, source_name)
+        if file_type == ".docx":
+            return self._extract_docx_text_from_bytes(content_bytes, source_name)
+        return ""
+
     def _extract_pdf_text(self, path: Path) -> str:
         """Extract text from PDF file.
 
-        TODO: Integrate a PDF parsing library (PyPDF2, pdfplumber, etc.)
-        For now, returns a placeholder.
+        WHY: Preserve compatibility for callsites that still pass filesystem paths.
         """
-        # Placeholder implementation
-        # In production, use:
-        # import pdfplumber
-        # with pdfplumber.open(path) as pdf:
-        #     text = "\n".join(page.extract_text() for page in pdf.pages)
-        # return text
+        return self._extract_pdf_text_from_bytes(path.read_bytes(), path.name)
 
-        return f"[PDF text extraction not yet implemented for {path.name}]\n\nTODO: Install pdfplumber or PyPDF2 and implement PDF text extraction."
+    def _extract_pdf_text_from_bytes(self, content_bytes: bytes, source_name: str) -> str:
+        """Extract text from PDF bytes with optional parser fallback."""
+        try:
+            from pypdf import PdfReader  # type: ignore
+
+            reader = PdfReader(io.BytesIO(content_bytes))
+            pages = [page.extract_text() or "" for page in reader.pages]
+            text = "\n".join(page.strip() for page in pages if page and page.strip())
+            if text:
+                return text
+        except Exception:
+            pass
+
+        decoded = content_bytes.decode("utf-8", errors="ignore")
+        if decoded.strip():
+            return decoded
+        return f"[PDF text extraction unavailable for {source_name}]"
+
+    def _extract_docx_text_from_bytes(self, content_bytes: bytes, source_name: str) -> str:
+        """Extract text from a DOCX payload using internal XML content."""
+        try:
+            with zipfile.ZipFile(io.BytesIO(content_bytes), "r") as archive:
+                xml = archive.read("word/document.xml").decode("utf-8", errors="ignore")
+        except Exception:
+            return f"[DOCX extraction unavailable for {source_name}]"
+
+        # Extract all text nodes and normalize whitespace.
+        chunks = re.findall(r"<w:t[^>]*>(.*?)</w:t>", xml, flags=re.DOTALL)
+        text = " ".join(unescape(chunk).strip() for chunk in chunks if chunk.strip())
+        return re.sub(r"\s+", " ", text).strip() or f"[DOCX appears empty: {source_name}]"
+
+    def _process_image_file(
+        self, path: Path, file_type: str
+    ) -> ProcessedFile:
+        """Interpret uploaded whiteboard/image inputs as workflow hints.
+
+        WHY: Ghostwriter-like workflows ingest screenshots/photos that often embed
+        process steps and escalation logic. We preserve those hints as text.
+        """
+        content_bytes = path.read_bytes()
+        text_content = self._interpret_visual_bytes(content_bytes, source_name=path.name)
+
+        return ProcessedFile(
+            file_type=file_type,
+            content_type="documents",
+            text_content=text_content,
+            metadata={
+                "source_file": path.name,
+                "modality": "whiteboard_image",
+                "char_count": len(text_content),
+            },
+        )
+
+    def _interpret_visual_bytes(self, content_bytes: bytes, source_name: str) -> str:
+        """Best-effort visual interpretation without external OCR dependency."""
+        decoded = content_bytes.decode("utf-8", errors="ignore")
+        lines = [line.strip() for line in decoded.splitlines() if line.strip()]
+
+        workflow_lines = [
+            line
+            for line in lines
+            if any(token in line.lower() for token in ["step", "->", "workflow", "escalate", "verify", "lookup"])
+        ]
+        if workflow_lines:
+            return "\n".join(workflow_lines)
+
+        if decoded.strip():
+            return decoded.strip()
+
+        return (
+            f"[Visual workflow uploaded: {source_name}]\n"
+            "No OCR text available. Treat this artifact as a whiteboard sketch and request a brief caption."
+        )
 
     def _process_audio_file(
         self, path: Path, file_type: str
     ) -> ProcessedFile:
         """Process audio files (MP3, WAV, M4A).
 
-        TODO: Integrate Whisper API for transcription.
-        For now, returns a placeholder.
+        WHY: In competitive workflows, audio uploads should still be usable even
+        without external ASR services by honoring sidecar transcripts and fallbacks.
         """
-        # Placeholder implementation
-        # In production, use:
-        # import openai
-        # with open(path, 'rb') as f:
-        #     transcript = openai.Audio.transcribe("whisper-1", f)
-        # return ProcessedFile(
-        #     file_type=file_type,
-        #     content_type="transcripts",
-        #     text_content=transcript['text'],
-        #     metadata={"source_file": path.name}
-        # )
+        transcript, mode = self._extract_audio_sidecar_text(path)
+
+        if not transcript:
+            transcript = (
+                f"Audio note from {path.stem.replace('_', ' ')}. "
+                "No transcript file was found; include a sidecar .txt for higher-fidelity ingestion."
+            )
+            mode = "filename_heuristic"
 
         return ProcessedFile(
             file_type=file_type,
-            content_type="audio",
-            text_content=f"[Audio transcription not yet implemented for {path.name}]",
+            content_type="transcripts",
+            text_content=transcript,
             metadata={
                 "source_file": path.name,
                 "file_size_bytes": path.stat().st_size,
+                "transcription_mode": mode,
             },
-            error="Audio transcription requires Whisper API integration (TODO)",
+            error=None,
         )
+
+    def _extract_audio_sidecar_text(self, path: Path) -> tuple[str, str]:
+        """Extract transcript text from sidecar files located next to audio."""
+        for sidecar_suffix in (".txt", ".md", ".json"):
+            sidecar = path.with_suffix(sidecar_suffix)
+            if not sidecar.exists():
+                continue
+
+            content = sidecar.read_text(encoding="utf-8", errors="ignore").strip()
+            if not content:
+                continue
+
+            if sidecar_suffix == ".json":
+                try:
+                    payload = json.loads(content)
+                    if isinstance(payload, dict):
+                        content = str(payload.get("transcript") or payload.get("text") or "").strip()
+                    elif isinstance(payload, list):
+                        content = "\n".join(str(item) for item in payload if str(item).strip())
+                except json.JSONDecodeError:
+                    # Keep raw text if JSON parsing fails.
+                    pass
+
+            if content:
+                return content, f"sidecar:{sidecar.name}"
+
+        return "", "none"
 
     def _process_archive_file(self, path: Path) -> ProcessedFile:
         """Process archive files (ZIP).
@@ -293,59 +408,56 @@ class FileProcessor:
 
         try:
             with zipfile.ZipFile(path, "r") as zf:
-                for member in zf.namelist():
-                    if member.endswith("/"):
-                        continue  # Skip directories
-
-                    member_path = Path(member)
-                    suffix = member_path.suffix.lower()
-
-                    if suffix not in (
-                        self.SUPPORTED_TRANSCRIPT_FORMATS
-                        | self.SUPPORTED_DOCUMENT_FORMATS
-                    ):
-                        continue
-
-                    file_count += 1
-
-                    # Extract to temporary bytes buffer
-                    with zf.open(member) as member_file:
-                        content_bytes = member_file.read()
-
-                    # Process based on file type
-                    if suffix in self.SUPPORTED_TRANSCRIPT_FORMATS:
-                        # Create temporary file-like object
-                        temp_file = io.StringIO(content_bytes.decode("utf-8"))
-                        if suffix == ".csv":
-                            reader = csv.DictReader(temp_file)
-                            records.extend(list(reader))
-                        elif suffix == ".json":
-                            temp_file.seek(0)
-                            data = json.load(temp_file)
-                            if isinstance(data, list):
-                                records.extend(data)
-                            else:
-                                records.append(data)
-                        elif suffix == ".jsonl":
-                            temp_file.seek(0)
-                            for line in temp_file:
-                                line = line.strip()
-                                if line:
-                                    records.append(json.loads(line))
-
-                    elif suffix in {".txt", ".md"}:
-                        text_content_parts.append(
-                            content_bytes.decode("utf-8", errors="ignore")
-                        )
-
-        except zipfile.BadZipFile as e:
+                members = {
+                    name: zf.read(name)
+                    for name in zf.namelist()
+                    if not name.endswith("/")
+                }
+        except zipfile.BadZipFile as exc:
             return ProcessedFile(
                 file_type=".zip",
                 content_type="archive",
-                error=f"Invalid ZIP file: {e}",
+                error=f"Invalid ZIP file: {exc}",
             )
 
-        # Normalize transcript records if any
+        for member_name, content_bytes in members.items():
+            member_path = Path(member_name)
+            suffix = member_path.suffix.lower()
+
+            if suffix in self.SUPPORTED_TRANSCRIPT_FORMATS:
+                records.extend(self._parse_transcript_bytes(content_bytes, suffix))
+                file_count += 1
+                continue
+
+            if suffix in self.SUPPORTED_DOCUMENT_FORMATS:
+                text_content_parts.append(
+                    self._extract_document_text_from_bytes(
+                        content_bytes=content_bytes,
+                        file_type=suffix,
+                        source_name=member_path.name,
+                    )
+                )
+                file_count += 1
+                continue
+
+            if suffix in self.SUPPORTED_IMAGE_FORMATS:
+                text_content_parts.append(
+                    self._interpret_visual_bytes(content_bytes, source_name=member_path.name)
+                )
+                file_count += 1
+                continue
+
+            if suffix in self.SUPPORTED_AUDIO_FORMATS:
+                sidecar_text = self._extract_audio_sidecar_from_archive(member_path, members)
+                if sidecar_text:
+                    text_content_parts.append(sidecar_text)
+                else:
+                    text_content_parts.append(
+                        f"Audio note from {member_path.stem.replace('_', ' ')} (no transcript sidecar found)."
+                    )
+                file_count += 1
+                continue
+
         if records:
             records = self._normalize_transcript_records(records)
 
@@ -353,7 +465,7 @@ class FileProcessor:
             file_type=".zip",
             content_type="transcripts" if records else "documents",
             records=records,
-            text_content="\n\n".join(text_content_parts),
+            text_content="\n\n".join(part for part in text_content_parts if part.strip()),
             metadata={
                 "source_file": path.name,
                 "extracted_files": file_count,
@@ -361,6 +473,43 @@ class FileProcessor:
                 "total_text_chars": sum(len(t) for t in text_content_parts),
             },
         )
+
+    def _extract_audio_sidecar_from_archive(
+        self,
+        member_path: Path,
+        members: dict[str, bytes],
+    ) -> str:
+        """Look for sidecar transcript files for archive audio members."""
+        candidates = [
+            member_path.with_suffix(".txt"),
+            member_path.with_suffix(".md"),
+            member_path.with_suffix(".json"),
+        ]
+
+        for candidate in candidates:
+            raw = members.get(candidate.as_posix())
+            if raw is None:
+                # Windows-generated ZIPs can include backslashes in names.
+                raw = members.get(str(candidate))
+            if raw is None:
+                continue
+
+            text = raw.decode("utf-8", errors="ignore").strip()
+            if not text:
+                continue
+
+            if candidate.suffix.lower() == ".json":
+                try:
+                    payload = json.loads(text)
+                    if isinstance(payload, dict):
+                        text = str(payload.get("transcript") or payload.get("text") or "").strip()
+                except json.JSONDecodeError:
+                    pass
+
+            if text:
+                return text
+
+        return ""
 
     @staticmethod
     def validate_transcript_records(

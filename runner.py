@@ -43,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import time
 import traceback
 from datetime import datetime, timezone
@@ -149,7 +150,7 @@ def _ts(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
-def _auto_open_console(port: int = 8080) -> None:
+def _auto_open_console(port: int = 8080, block: bool | None = None) -> None:
     """Start API server in background and open browser."""
     import threading
     import webbrowser
@@ -158,8 +159,9 @@ def _auto_open_console(port: int = 8080) -> None:
         import uvicorn
         try:
             uvicorn.run("api.server:app", host="0.0.0.0", port=port, log_level="warning")
-        except Exception:
-            pass  # Port in use or other error
+        except BaseException:
+            # uvicorn may raise SystemExit on bind failures; suppress in helper thread.
+            pass
 
     server_thread = threading.Thread(target=_run_server, daemon=True)
     server_thread.start()
@@ -176,16 +178,23 @@ def _auto_open_console(port: int = 8080) -> None:
         sock.close()
         # Server is running — open browser
         webbrowser.open(f"http://localhost:{port}")
+        should_block = block
+        if should_block is None:
+            # In non-interactive environments (e.g., test runners), avoid hanging.
+            should_block = sys.stdin.isatty() and sys.stdout.isatty()
         click.echo(click.style(
             f"\n  Web console running at http://localhost:{port} — press Ctrl+C to stop",
             fg="cyan",
         ))
-        # Block until Ctrl+C
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            click.echo("\n  Shutting down web console...")
+        if should_block:
+            # Block until Ctrl+C only during interactive terminal sessions.
+            try:
+                while True:
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                click.echo("\n  Shutting down web console...")
+        else:
+            click.echo("  Continuing in non-blocking mode.")
     except (socket.timeout, ConnectionRefusedError, OSError):
         sock.close()
         click.echo(

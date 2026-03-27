@@ -219,3 +219,153 @@ class TestPromptToAgentBuilder:
         assert len(data["journeys"]) >= 1
         assert len(data["guardrails"]) >= 1
         assert len(data["suggested_tests"]) >= 1
+
+
+def _build_multimodal_archive_base64() -> str:
+    """Build a ZIP payload with transcripts + SOP + whiteboard + audio sidecar."""
+    transcripts_json = [
+        {
+            "conversation_id": "mm-001",
+            "session_id": "mm-1",
+            "user_message": "I need to update my shipping address but I do not have the order number.",
+            "agent_response": "I cannot verify that right now, so I will transfer you to live support.",
+            "outcome": "transfer",
+        },
+        {
+            "conversation_id": "mm-002",
+            "session_id": "mm-2",
+            "user_message": "Please cancel my order before it ships.",
+            "agent_response": "I can help with that once we verify your identity.",
+            "outcome": "success",
+        },
+    ]
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as zf:
+        zf.writestr("transcripts.json", json.dumps(transcripts_json))
+        zf.writestr(
+            "ops_playbook.txt",
+            "Step 1: Verify customer identity.\nStep 2: Attempt fallback lookup by email.\nStep 3: Escalate with context if unresolved.",
+        )
+        zf.writestr(
+            "whiteboard.png",
+            "Intent triage -> verify identity -> fallback order lookup -> escalate with context",
+        )
+        zf.writestr("expert_note.m4a", b"fake-audio-bytes")
+        zf.writestr(
+            "expert_note.txt",
+            "If the customer lacks the order number, collect email and zip then query Shopify before escalation.",
+        )
+
+    return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+class TestGhostwriterCompetitiveCapabilities:
+    def test_multimodal_archive_generates_durable_knowledge_asset(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "multimodal-support-history.zip",
+                "archive_base64": _build_multimodal_archive_base64(),
+            },
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["conversation_count"] >= 3
+        assert data.get("knowledge_asset")
+        assert data["knowledge_asset"]["asset_id"]
+        assert data["knowledge_asset"]["entry_count"] >= 3
+
+        asset_resp = client.get(f"/api/intelligence/knowledge/{data['knowledge_asset']['asset_id']}")
+        assert asset_resp.status_code == 200
+        asset = asset_resp.json()
+        assert asset["asset_id"] == data["knowledge_asset"]["asset_id"]
+        assert len(asset["entries"]) >= 3
+
+    def test_prompt_to_agent_build_includes_integration_templates(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/intelligence/build",
+            json={
+                "connectors": ["Shopify", "Zendesk"],
+                "prompt": (
+                    "Build an order-support agent that can track orders, cancel eligible orders, "
+                    "and create escalation tickets when verification fails."
+                ),
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data.get("integration_templates", [])) >= 2
+        assert any(template["connector"].lower() == "shopify" for template in data["integration_templates"])
+        assert any("method" in template and "endpoint" in template for template in data["integration_templates"])
+
+    def test_apply_insight_returns_auto_generated_simulations(self, client: TestClient) -> None:
+        imported = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "support-history.zip",
+                "archive_base64": _build_archive_base64(),
+            },
+        )
+        report = imported.json()
+        insight_id = report["insights"][0]["insight_id"]
+
+        resp = client.post(
+            f"/api/intelligence/reports/{report['report_id']}/apply",
+            json={"insight_id": insight_id},
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data.get("auto_simulation")
+        assert len(data["auto_simulation"]["generated_tests"]) >= 2
+        validation = data["auto_simulation"]["sandbox_validation"]
+        assert validation["total_conversations"] > 0
+        assert 0.0 <= validation["pass_rate"] <= 1.0
+
+    def test_deep_research_endpoint_returns_quantified_root_cause_attribution(self, client: TestClient) -> None:
+        imported = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "support-history.zip",
+                "archive_base64": _build_archive_base64(),
+            },
+        )
+        report_id = imported.json()["report_id"]
+
+        resp = client.post(
+            f"/api/intelligence/reports/{report_id}/deep-research",
+            json={"question": "Why are live-support transfers increasing?"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["question"]
+        assert len(data["root_causes"]) >= 1
+        assert all("attribution_pct" in item for item in data["root_causes"])
+        assert len(data["recommendations"]) >= 1
+
+    def test_autonomous_pipeline_runs_analyze_improve_test_ship_cycle(self, client: TestClient) -> None:
+        imported = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "support-history.zip",
+                "archive_base64": _build_archive_base64(),
+            },
+        )
+        report_id = imported.json()["report_id"]
+
+        resp = client.post(
+            f"/api/intelligence/reports/{report_id}/autonomous-loop",
+            json={"auto_ship": False},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["pipeline"]["analyze"]["status"] == "completed"
+        assert data["pipeline"]["improve"]["status"] == "completed"
+        assert data["pipeline"]["test"]["status"] == "completed"
+        assert data["pipeline"]["ship"]["status"] in {"recommended", "ready_for_review"}
+        assert data["change_card_id"]
