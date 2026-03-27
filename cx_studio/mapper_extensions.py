@@ -147,3 +147,59 @@ def guardrails_to_cx_safety_settings(
             for cat in set(safety_categories)
         ],
     }
+
+
+def skills_to_cx_playbooks(
+    skills: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert AutoAgent runtime skills to CX Playbook definitions.
+
+    Maps runtime skills to CX Agent Studio playbooks, tools, and generators.
+
+    Args:
+        skills: List of Skill dicts from core.skills
+
+    Returns:
+        List of CX playbook/tool definitions ready for export.
+    """
+    playbooks: list[dict[str, Any]] = []
+
+    for skill in skills:
+        skill_kind = skill.get("kind", "runtime")
+
+        # Only export runtime skills to CX
+        if skill_kind != "runtime":
+            continue
+
+        # Map to playbook if skill has instructions
+        if skill.get("instructions"):
+            playbooks.append({
+                "type": "playbook",
+                "name": skill.get("name", ""),
+                "description": skill.get("description", ""),
+                "instructions": skill.get("instructions", ""),
+                "triggers": [t.get("failure_family") for t in skill.get("triggers", []) if t.get("failure_family")],
+            })
+
+        # Map to tools if skill has tool definitions
+        for tool in skill.get("tools", []):
+            playbooks.append({
+                "type": "tool",
+                "name": tool.get("name", ""),
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {}),
+                "sandbox_policy": tool.get("sandbox_policy", "read_only"),
+            })
+
+        # Map policies to safety settings
+        for policy in skill.get("policies", []):
+            playbooks.append({
+                "type": "policy",
+                "name": policy.get("name", ""),
+                "description": policy.get("description", ""),
+                "rule_type": policy.get("rule_type", ""),
+                "condition": policy.get("condition", ""),
+                "action": policy.get("action", ""),
+            })
+
+    return playbooks

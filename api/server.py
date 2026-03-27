@@ -114,6 +114,8 @@ async def lifespan(app: FastAPI):
         LoopWatchdog,
         ResourceMonitor,
     )
+    from core.skills import SkillStore
+    from optimizer.skill_engine import SkillEngine
 
     runtime = load_runtime_config()
     startup_epoch = time.time()
@@ -139,6 +141,11 @@ async def lifespan(app: FastAPI):
         use_mock=runtime.optimizer.use_mock,
         llm_router=build_router_from_runtime_config(runtime.optimizer),
     )
+
+    # Initialize skills system
+    skill_store = SkillStore(db_path=".autoagent/core_skills.db")
+    skill_engine = SkillEngine(store=skill_store)
+
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=optimization_memory,
@@ -146,6 +153,10 @@ async def lifespan(app: FastAPI):
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=conversation_store)
 
@@ -167,6 +178,8 @@ async def lifespan(app: FastAPI):
     app.state.dead_letter_queue = dead_letter_queue
     app.state.checkpoint_store = checkpoint_store
     app.state.loop_watchdog = loop_watchdog
+    app.state.core_skill_store = skill_store
+    app.state.skill_engine = skill_engine
     app.state.resource_monitor = resource_monitor
     app.state.structured_logger = structured_logger
     app.state.started_at = startup_epoch

@@ -23,6 +23,7 @@ from agent.config.schema import (
     ToolsConfig,
 )
 from assistant.intent_extractor import FailureMode, Intent, RoutingPattern
+from core.skills import SkillStore, SkillKind
 
 
 @dataclass
@@ -47,6 +48,7 @@ class GeneratedAgentConfig:
     coverage_pct: float
     estimated_intents: int
     failure_modes_addressed: list[str] = field(default_factory=list)
+    suggested_skills: list[dict[str, Any]] = field(default_factory=list)
 
     def to_preview(self) -> dict[str, Any]:
         """Convert to preview card format."""
@@ -65,6 +67,7 @@ class GeneratedAgentConfig:
             "coverage_pct": self.coverage_pct,
             "estimated_intents": self.estimated_intents,
             "failure_modes_addressed": self.failure_modes_addressed,
+            "suggested_skills": self.suggested_skills,
             "config_summary": {
                 "model": self.config.model,
                 "routing_rules": len(self.config.routing.rules),
@@ -76,9 +79,13 @@ class GeneratedAgentConfig:
 class AgentGenerator:
     """Generate agent configurations from intent extraction results."""
 
-    def __init__(self):
-        """Initialize agent generator."""
-        pass
+    def __init__(self, skill_store: SkillStore | None = None):
+        """Initialize agent generator.
+
+        Args:
+            skill_store: Optional SkillStore for suggesting runtime skills.
+        """
+        self.skill_store = skill_store
 
     def generate_config(
         self,
@@ -134,6 +141,9 @@ class AgentGenerator:
         # Identify addressed failure modes
         addressed_failures = self._identify_addressed_failures(failure_modes, specialists)
 
+        # Suggest runtime skills based on intents and tools
+        suggested_skills = self._suggest_runtime_skills(intents, required_tools)
+
         return GeneratedAgentConfig(
             config=config,
             specialists=specialists,
@@ -141,6 +151,7 @@ class AgentGenerator:
             coverage_pct=coverage_pct,
             estimated_intents=len(intents),
             failure_modes_addressed=addressed_failures,
+            suggested_skills=suggested_skills,
         )
 
     def _build_specialists(
@@ -437,3 +448,80 @@ Route customer requests to the appropriate specialist based on their needs. If u
                 addressed.append(failure.failure_type)
 
         return addressed
+
+    def _suggest_runtime_skills(
+        self, intents: list[Intent], required_tools: list[str]
+    ) -> list[dict[str, Any]]:
+        """Suggest runtime skills based on discovered intents and tools.
+
+        Args:
+            intents: Discovered user intents
+            required_tools: Required tool integrations
+
+        Returns:
+            List of suggested skill metadata dicts
+        """
+        if not self.skill_store:
+            return []
+
+        suggested = []
+
+        # Get all runtime skills from the store
+        runtime_skills = self.skill_store.list(kind=SkillKind.RUNTIME, status="active")
+
+        # Build intent and tool keywords for matching
+        intent_keywords = set()
+        for intent in intents:
+            # Extract keywords from intent name and description
+            intent_keywords.add(intent.name.lower())
+            intent_keywords.update(intent.name.lower().split("_"))
+            if intent.description:
+                intent_keywords.update(intent.description.lower().split())
+
+        tool_keywords = set(tool.lower() for tool in required_tools)
+
+        # Score skills based on relevance
+        scored_skills = []
+        for skill in runtime_skills:
+            score = 0
+
+            # Check if skill tags match intent keywords
+            for tag in skill.tags:
+                if tag.lower() in intent_keywords:
+                    score += 2
+
+            # Check if skill domain matches
+            if skill.domain in ["customer-support", "general"]:
+                score += 1
+
+            # Check if skill tools match required tools
+            for tool_def in skill.tools:
+                if tool_def.name.lower() in tool_keywords:
+                    score += 3
+
+            # Check if skill name/description contains intent keywords
+            skill_text = f"{skill.name} {skill.description}".lower()
+            for keyword in intent_keywords:
+                if keyword in skill_text:
+                    score += 1
+
+            if score > 0:
+                scored_skills.append((score, skill))
+
+        # Sort by score descending and take top 5
+        scored_skills.sort(key=lambda x: x[0], reverse=True)
+        top_skills = scored_skills[:5]
+
+        # Format as metadata dicts
+        for score, skill in top_skills:
+            suggested.append({
+                "id": skill.id,
+                "name": skill.name,
+                "version": skill.version,
+                "description": skill.description,
+                "relevance_score": score,
+                "tools": [t.name for t in skill.tools],
+                "tags": skill.tags,
+            })
+
+        return suggested

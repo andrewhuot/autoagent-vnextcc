@@ -21,6 +21,8 @@ from agent.config.loader import load_config, load_config_with_canary
 from agent.config.schema import validate_config
 from agent.dashboard_data import DashboardDataService
 from agent.root_agent import create_root_agent
+from agent.skill_runtime import SkillRuntime
+from core.skills import SkillStore
 from deployer import Deployer
 from evals import EvalRunner
 from logger.middleware import log_conversation
@@ -123,7 +125,22 @@ async def startup() -> None:
         current_config_provider=lambda: _loaded_config or {},
     )
 
-    validated = validate_config(_loaded_config or {})
+    # Initialize skill system and apply runtime skills
+    skill_store = SkillStore(db_path=".autoagent/core_skills.db")
+    skill_runtime = SkillRuntime(store=skill_store)
+
+    # Check if config has skill references and apply them
+    config_with_skills = _loaded_config or {}
+    skill_refs = config_with_skills.get("metadata", {}).get("skill_refs", [])
+    if skill_refs:
+        try:
+            skills = skill_runtime.load_skills(skill_refs)
+            config_with_skills = skill_runtime.apply_to_config(skills, config_with_skills)
+        except Exception as e:
+            # Log error but continue with config without skills
+            print(f"Warning: Failed to load skills: {e}")
+
+    validated = validate_config(config_with_skills)
     agent = create_root_agent(validated)
 
     _session_service = InMemorySessionService()

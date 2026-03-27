@@ -73,6 +73,8 @@ from optimizer.reliability import (
     LoopWatchdog,
     ResourceMonitor,
 )
+from core.skills import SkillStore
+from optimizer.skill_engine import SkillEngine
 
 
 # ---------------------------------------------------------------------------
@@ -377,13 +379,21 @@ def _stream_cycle_output(
         click.echo(click.style(f"    → {proposal_desc}", fg="cyan"))
 
 
-def _build_runtime_components() -> tuple[object, EvalRunner, Proposer]:
-    """Create runtime-configured eval runner and multi-model proposer."""
+def _build_skill_components() -> tuple[SkillStore, SkillEngine]:
+    """Create skill store and skill engine for optimization."""
+    skill_store = SkillStore(db_path=".autoagent/core_skills.db")
+    skill_engine = SkillEngine(store=skill_store)
+    return skill_store, skill_engine
+
+
+def _build_runtime_components() -> tuple[object, EvalRunner, Proposer, SkillEngine]:
+    """Create runtime-configured eval runner, multi-model proposer, and skill engine."""
     runtime = load_runtime_config()
     eval_runner = EvalRunner(history_db_path=runtime.eval.history_db_path)
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
-    return runtime, eval_runner, proposer
+    _, skill_engine = _build_skill_components()
+    return runtime, eval_runner, proposer, skill_engine
 
 
 def _sleep_interruptibly(seconds: float, shutdown: GracefulShutdown) -> None:
@@ -758,7 +768,7 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
         click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
                    f"candidates={resolved.max_candidates})")
 
-    runtime, eval_runner, proposer = _build_runtime_components()
+    runtime, eval_runner, proposer, skill_engine = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -770,6 +780,10 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
 
     # Track all-time best score
@@ -1134,7 +1148,7 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
       autoagent loop
       autoagent loop --max-cycles 100 --stop-on-plateau
     """
-    runtime, eval_runner, proposer = _build_runtime_components()
+    runtime, eval_runner, proposer, skill_engine = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -1146,6 +1160,10 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
 
     effective_schedule = schedule_mode or runtime.loop.schedule_mode
@@ -2531,7 +2549,7 @@ def run_observe(db: str, window: int) -> None:
 @click.option("--memory-db", default=MEMORY_DB, show_default=True)
 def run_optimize(db: str, configs_dir: str, memory_db: str) -> None:
     """Run optimize (legacy). Use: autoagent optimize"""
-    runtime, eval_runner, proposer = _build_runtime_components()
+    runtime, eval_runner, proposer, skill_engine = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -2543,6 +2561,10 @@ def run_optimize(db: str, configs_dir: str, memory_db: str) -> None:
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
     report = observer.observe()
     click.echo(f"Observed success={report.metrics.success_rate:.2%} error={report.metrics.error_rate:.2%}")
@@ -2567,7 +2589,7 @@ def run_optimize(db: str, configs_dir: str, memory_db: str) -> None:
 @click.option("--delay", default=1.0, show_default=True, type=float)
 def run_loop(cycles: int, db: str, configs_dir: str, memory_db: str, delay: float) -> None:
     """Run loop (legacy). Use: autoagent loop"""
-    runtime, eval_runner, proposer = _build_runtime_components()
+    runtime, eval_runner, proposer, skill_engine = _build_runtime_components()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -2579,6 +2601,10 @@ def run_loop(cycles: int, db: str, configs_dir: str, memory_db: str, delay: floa
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
     click.echo(f"Starting optimization loop ({cycles} cycles)")
     for cycle_num in range(1, cycles + 1):
@@ -3200,6 +3226,7 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     memory = OptimizationMemory(db_path=MEMORY_DB)
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    _, skill_engine = _build_skill_components()
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -3207,6 +3234,10 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
 
     # Track all-time best score for quickstart
@@ -3344,6 +3375,7 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     memory = OptimizationMemory(db_path=MEMORY_DB)
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    _, skill_engine = _build_skill_components()
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -3351,6 +3383,10 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
         significance_alpha=runtime.eval.significance_alpha,
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
     )
 
     # Track all-time best score for demo
