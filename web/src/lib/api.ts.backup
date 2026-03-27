@@ -4,13 +4,12 @@ import type {
   AdkDeployResult,
   AdkExportResult,
   AdkImportResult,
+  AutonomousLoopResult,
   ApplyInsightResult,
   ArchiveEntry,
   AutoFixApplyOutcome,
   AutoFixHistoryEntry,
   AutoFixProposal,
-  ChangeAuditDetail,
-  ChangeAuditSummary,
   CanaryStatus,
   ChangeCard,
   ContextHealthReport,
@@ -26,8 +25,6 @@ import type {
   CxExportResult,
   CxDeployResult,
   CxWidgetResult,
-  CurriculumBatchSummary,
-  CurriculumDifficultyPoint,
   ExecutableSkill,
   DeployHistoryEntry,
   DeployResponse,
@@ -38,7 +35,9 @@ import type {
   EvalRun,
   ExperimentCard,
   HealthReport,
+  KnowledgeAsset,
   IntelligenceAnswer,
+  DeepResearchReport,
   JudgeCalibration,
   JudgeDriftReport,
   JudgeFeedbackRecord,
@@ -52,15 +51,11 @@ import type {
   PromptBuildArtifact,
   Runbook,
   SkillLeaderboardEntry,
-  SkillMarketplaceListing,
-  SkillCompositionResult,
-  DraftSkillReview,
   TaskStatus,
   Trace,
   TraceEvent,
   TranscriptReport,
   TranscriptReportSummary,
-  UnifiedSkill,
 } from './types';
 
 const API_BASE = '/api';
@@ -1396,57 +1391,6 @@ export function useScorecard(window = 100) {
 }
 
 // ---------------------------------------------------------------------------
-// Curriculum
-// ---------------------------------------------------------------------------
-
-interface CurriculumBatchesResponse {
-  batches: CurriculumBatchSummary[];
-  count: number;
-  progression: CurriculumDifficultyPoint[];
-}
-
-export function useCurriculumBatches(limit = 20) {
-  return useQuery<CurriculumBatchesResponse>({
-    queryKey: ['curriculum', 'batches', limit],
-    queryFn: () => fetchApi(`/curriculum/batches?limit=${limit}`),
-    refetchInterval: 10000,
-  });
-}
-
-export function useGenerateCurriculum() {
-  const queryClient = useQueryClient();
-  return useMutation<{ batch: { batch_id: string; prompt_count: number } }, ApiRequestError, {
-    clusters?: Array<Record<string, unknown>>;
-    historical_pass_rates?: Record<string, number>;
-    prompts_per_cluster?: number;
-  }>({
-    mutationFn: (body) =>
-      fetchApi('/curriculum/generate', {
-        method: 'POST',
-        body: JSON.stringify(body || {}),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['curriculum', 'batches'] });
-    },
-  });
-}
-
-export function useApplyCurriculum() {
-  const queryClient = useQueryClient();
-  return useMutation<{ batch_id: string; applied_count: number }, ApiRequestError, { batch_id: string }>({
-    mutationFn: (body) =>
-      fetchApi('/curriculum/apply', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['curriculum', 'batches'] });
-      queryClient.invalidateQueries({ queryKey: ['evalRuns'] });
-    },
-  });
-}
-
-// ---------------------------------------------------------------------------
 // Change Review (Proposed Change Cards)
 // ---------------------------------------------------------------------------
 
@@ -1477,22 +1421,6 @@ export function useChangeDetail(id: string | undefined) {
       }
       return mapChangeCard(raw);
     },
-  });
-}
-
-export function useChangeAudit(id: string | null) {
-  return useQuery<ChangeAuditDetail>({
-    queryKey: ['changes', 'audit', id],
-    enabled: Boolean(id),
-    queryFn: () => fetchApi(`/changes/${encodeURIComponent(id || '')}/audit`),
-  });
-}
-
-export function useChangeAuditSummary() {
-  return useQuery<ChangeAuditSummary>({
-    queryKey: ['changes', 'audit-summary'],
-    queryFn: () => fetchApi('/changes/audit-summary'),
-    refetchInterval: 10000,
   });
 }
 
@@ -1692,6 +1620,43 @@ export function useApplyTranscriptInsight() {
   });
 }
 
+export function useKnowledgeAsset(assetId: string | undefined) {
+  return useQuery<KnowledgeAsset>({
+    queryKey: ['intelligence', 'knowledge', assetId],
+    enabled: Boolean(assetId),
+    queryFn: async () => {
+      if (!assetId) {
+        throw new ApiRequestError('Missing knowledge asset ID', 400);
+      }
+      return fetchApi<KnowledgeAsset>(`/intelligence/knowledge/${encodeURIComponent(assetId)}`);
+    },
+  });
+}
+
+export function useDeepResearchReport() {
+  return useMutation<DeepResearchReport, ApiRequestError, { reportId: string; question: string }>({
+    mutationFn: ({ reportId, question }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/deep-research`, {
+        method: 'POST',
+        body: JSON.stringify({ question }),
+      }),
+  });
+}
+
+export function useRunAutonomousLoop() {
+  const queryClient = useQueryClient();
+  return useMutation<AutonomousLoopResult, ApiRequestError, { reportId: string; auto_ship: boolean }>({
+    mutationFn: ({ reportId, auto_ship }) =>
+      fetchApi(`/intelligence/reports/${encodeURIComponent(reportId)}/autonomous-loop`, {
+        method: 'POST',
+        body: JSON.stringify({ auto_ship }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
 export function useBuildAgentArtifact() {
   return useMutation<PromptBuildArtifact, ApiRequestError, { prompt: string; connectors: string[] }>({
     mutationFn: (body) =>
@@ -1816,201 +1781,6 @@ export function useApplySkill() {
   });
 }
 
-export function useUnifiedSkills(params?: {
-  kind?: 'build' | 'runtime';
-  domain?: string;
-  tags?: string[];
-}) {
-  const query = new URLSearchParams();
-  if (params?.kind) query.set('kind', params.kind);
-  if (params?.domain) query.set('domain', params.domain);
-  if (params?.tags && params.tags.length > 0) query.set('tags', params.tags.join(','));
-  const qs = query.toString();
-  return useQuery<{ skills: UnifiedSkill[]; count: number }>({
-    queryKey: ['skills', 'unified', params?.kind, params?.domain, (params?.tags || []).join(',')],
-    queryFn: () =>
-      fetchApi<{ skills: UnifiedSkill[]; count: number }>(
-        `/skills${qs ? `?${qs}` : ''}`
-      ),
-  });
-}
-
-export function useSkillDrafts(limit = 100) {
-  return useQuery<{ drafts: DraftSkillReview[]; count: number }>({
-    queryKey: ['skills', 'drafts', limit],
-    queryFn: () => fetchApi(`/skills/drafts?limit=${limit}`),
-    refetchInterval: 10000,
-  });
-}
-
-export function useEditDraftSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ skill: UnifiedSkill }, ApiRequestError, {
-    id: string;
-    updates: Record<string, unknown>;
-  }>({
-    mutationFn: ({ id, updates }) =>
-      fetchApi(`/skills/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        body: JSON.stringify(updates),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'drafts'] });
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function usePromoteSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ skill: UnifiedSkill }, ApiRequestError, {
-    id: string;
-    approved_by?: string;
-    change_notes?: string;
-  }>({
-    mutationFn: ({ id, approved_by, change_notes }) =>
-      fetchApi(`/skills/${encodeURIComponent(id)}/promote`, {
-        method: 'POST',
-        body: JSON.stringify({ approved_by, change_notes }),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'drafts'] });
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function useArchiveSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ skill: UnifiedSkill }, ApiRequestError, {
-    id: string;
-    reason: string;
-    reviewed_by?: string;
-  }>({
-    mutationFn: ({ id, reason, reviewed_by }) =>
-      fetchApi(`/skills/${encodeURIComponent(id)}/archive`, {
-        method: 'POST',
-        body: JSON.stringify({ reason, reviewed_by }),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'drafts'] });
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function useCreateSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ skill: UnifiedSkill }, ApiRequestError, Partial<UnifiedSkill>>({
-    mutationFn: (body) =>
-      fetchApi<{ skill: UnifiedSkill }>('/skills', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function useUpdateSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ skill: UnifiedSkill }, ApiRequestError, { id: string; updates: Record<string, unknown> }>({
-    mutationFn: ({ id, updates }) =>
-      fetchApi<{ skill: UnifiedSkill }>(`/skills/${encodeURIComponent(id)}`, {
-        method: 'PUT',
-        body: JSON.stringify(updates),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function useDeleteSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ deleted: boolean }, ApiRequestError, string>({
-    mutationFn: (id) =>
-      fetchApi<{ deleted: boolean }>(`/skills/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-    },
-  });
-}
-
-export function useTestSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{
-    skill_id: string;
-    results: Array<{ name: string; passed: boolean; message: string }>;
-    passed: boolean;
-    pass_rate: number;
-  }, ApiRequestError, string>({
-    mutationFn: (id) =>
-      fetchApi(`/skills/${encodeURIComponent(id)}/test`, {
-        method: 'POST',
-      }),
-    onSuccess: (_data, id) => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-      queryClient.invalidateQueries({ queryKey: ['skills', 'effectiveness', id] });
-    },
-  });
-}
-
-export function useComposeSkills() {
-  return useMutation<SkillCompositionResult, ApiRequestError, { skills: string[] }>({
-    mutationFn: (body) =>
-      fetchApi<SkillCompositionResult>('/skills/compose', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-  });
-}
-
-export function useSkillMarketplace(params?: { kind?: 'build' | 'runtime' }) {
-  const query = new URLSearchParams();
-  if (params?.kind) query.set('kind', params.kind);
-  const qs = query.toString();
-  return useQuery<{ listings: SkillMarketplaceListing[]; count: number }>({
-    queryKey: ['skills', 'marketplace', params?.kind || 'all'],
-    queryFn: () =>
-      fetchApi<{ listings: SkillMarketplaceListing[]; count: number }>(
-        `/skills/marketplace${qs ? `?${qs}` : ''}`
-      ),
-  });
-}
-
-export function useInstallMarketplaceSkill() {
-  const queryClient = useQueryClient();
-  return useMutation<{ installed: UnifiedSkill; name: string }, ApiRequestError, { name: string }>({
-    mutationFn: (body) =>
-      fetchApi<{ installed: UnifiedSkill; name: string }>('/skills/install', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['skills', 'unified'] });
-      queryClient.invalidateQueries({ queryKey: ['skills', 'marketplace'] });
-    },
-  });
-}
-
-export function useSkillEffectiveness(skillId: string | null) {
-  return useQuery<{
-    effectiveness: {
-      skill_id: string;
-      metrics: Record<string, unknown>;
-      history: Array<Record<string, unknown>>;
-    };
-  }>({
-    queryKey: ['skills', 'effectiveness', skillId],
-    queryFn: () => fetchApi(`/skills/${encodeURIComponent(skillId || '')}/effectiveness`),
-    enabled: !!skillId,
-  });
-}
-
 // ---------------------------------------------------------------------------
 // ADK Integration
 // ---------------------------------------------------------------------------
@@ -2069,6 +1839,88 @@ export function useDiagnoseChat() {
       fetchApi<DiagnoseChatResponse>('/diagnose/chat', {
         method: 'POST',
         body: JSON.stringify(data),
+      }),
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+export function useNotificationSubscriptions() {
+  return useQuery({
+    queryKey: ['notifications', 'subscriptions'],
+    queryFn: () => fetchApi<{ subscriptions: import('./types').NotificationSubscription[] }>('/notifications/subscriptions'),
+  });
+}
+
+export function useNotificationHistory(limit = 100) {
+  return useQuery({
+    queryKey: ['notifications', 'history', limit],
+    queryFn: () => fetchApi<{ history: import('./types').NotificationHistoryEntry[] }>(`/notifications/history?limit=${limit}`),
+  });
+}
+
+export function useRegisterWebhook() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { url: string; events: string[]; filters?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/webhook', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useRegisterSlack() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { webhook_url: string; events: string[]; filters?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/slack', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useRegisterEmail() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (data: { address: string; events: string[]; filters?: Record<string, string>; smtp_config?: Record<string, string> }) =>
+      fetchApi<{ subscription_id: string; status: string }>('/notifications/email', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useDeleteSubscription() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      fetchApi<{ status: string }>(`/notifications/subscriptions/${subscriptionId}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['notifications', 'subscriptions'] });
+    },
+  });
+}
+
+export function useTestSubscription() {
+  return useMutation({
+    mutationFn: (subscriptionId: string) =>
+      fetchApi<{ status: string; message: string }>(`/notifications/test/${subscriptionId}`, {
+        method: 'POST',
       }),
   });
 }

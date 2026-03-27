@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 
 from core.types import MetricLayer, METRIC_REGISTRY, get_metrics_by_layer
@@ -106,6 +107,10 @@ class CompositeScore:
     optimization_mode: str = "weighted"
     dimensions: DimensionScores | None = None
     per_agent_scores: list[PerAgentScores] = field(default_factory=list)
+    confidence_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
+    total_tokens: int = 0
+    estimated_cost_usd: float = 0.0
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def global_dimensions(self) -> dict[str, float]:
@@ -197,6 +202,9 @@ class CompositeScorer:
 
     MAX_LATENCY_MS = 5000.0  # latency above this gets score 0
     MAX_TOKENS = 2000         # tokens above this gets cost score 0
+    CI_ALPHA = 0.05
+    CI_ITERATIONS = 400
+    CI_SEED = 7
 
     def score(self, results: list[EvalResult]) -> CompositeScore:
         """Compute composite score from eval results."""
@@ -219,10 +227,29 @@ class CompositeScorer:
         # Latency: 1 - (avg_latency / MAX_LATENCY), clamped to [0, 1]
         avg_latency = sum(r.latency_ms for r in results) / total
         latency = max(0.0, min(1.0, 1.0 - (avg_latency / self.MAX_LATENCY_MS)))
+        latency_values = [
+            max(0.0, min(1.0, 1.0 - (r.latency_ms / self.MAX_LATENCY_MS)))
+            for r in results
+        ]
 
         # Cost: 1 - (avg_tokens / MAX_TOKENS), clamped to [0, 1]
         avg_tokens = sum(r.token_count for r in results) / total
         cost = max(0.0, min(1.0, 1.0 - (avg_tokens / self.MAX_TOKENS)))
+        cost_values = [
+            max(0.0, min(1.0, 1.0 - (r.token_count / self.MAX_TOKENS)))
+            for r in results
+        ]
+        safety_values = [1.0 if r.safety_passed else 0.0 for r in results]
+        quality_values = [r.quality_score for r in results]
+        composite_values = [
+            (
+                self.QUALITY_WEIGHT * r.quality_score
+                + self.SAFETY_WEIGHT * (1.0 if r.safety_passed else 0.0)
+                + self.LATENCY_WEIGHT * latency_values[idx]
+                + self.COST_WEIGHT * cost_values[idx]
+            )
+            for idx, r in enumerate(results)
+        ]
 
         # Composite: weighted sum
         composite = (
@@ -245,6 +272,13 @@ class CompositeScorer:
                 sum(result.custom_scores.get(name, 0.0) for result in results) / total,
                 4,
             )
+        confidence_intervals = {
+            "quality": self._bootstrap_mean_ci(quality_values),
+            "safety": self._bootstrap_mean_ci(safety_values),
+            "latency": self._bootstrap_mean_ci(latency_values),
+            "cost": self._bootstrap_mean_ci(cost_values),
+            "composite": self._bootstrap_mean_ci(composite_values),
+        }
 
         return CompositeScore(
             quality=round(quality, 4),
@@ -259,7 +293,30 @@ class CompositeScorer:
             passed_cases=passed_cases,
             results=results,
             optimization_mode="weighted",
+            confidence_intervals=confidence_intervals,
+            total_tokens=sum(r.token_count for r in results),
         )
+
+    def _bootstrap_mean_ci(self, values: list[float]) -> tuple[float, float]:
+        """Estimate a mean confidence interval via bootstrap resampling."""
+        if not values:
+            return (0.0, 0.0)
+        if len(values) == 1:
+            single = round(float(values[0]), 4)
+            return (single, single)
+
+        rng = random.Random(self.CI_SEED)
+        n = len(values)
+        means: list[float] = []
+        rounds = max(100, int(self.CI_ITERATIONS))
+        for _ in range(rounds):
+            sample = [values[rng.randrange(n)] for _ in range(n)]
+            means.append(sum(sample) / n)
+        means.sort()
+
+        lo_idx = max(0, int(rounds * (self.CI_ALPHA / 2)))
+        hi_idx = min(rounds - 1, int(rounds * (1 - self.CI_ALPHA / 2)) - 1)
+        return (round(means[lo_idx], 4), round(means[hi_idx], 4))
 
 
 class ConstrainedScorer:

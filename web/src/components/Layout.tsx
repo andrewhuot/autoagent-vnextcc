@@ -97,6 +97,7 @@ function breadcrumbs(pathname: string): Array<{ label: string; href?: string }> 
 export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const title = getPageTitle(location.pathname);
+  const isAssistantRoute = location.pathname === '/assistant';
   const crumbItems = useMemo(() => breadcrumbs(location.pathname), [location.pathname]);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -112,18 +113,22 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="flex min-h-screen bg-[var(--color-surface)] text-gray-900">
       <MockModeBanner />
-      <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
+      {isAssistantRoute ? null : (
+        <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
+      )}
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-gray-200 bg-white/80 px-5 py-3 backdrop-blur-sm">
           <div className="flex min-w-0 items-center gap-3">
-            <button
-              onClick={() => setMobileSidebarOpen(true)}
-              className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
-              aria-label="Open navigation"
-            >
-              <Menu className="h-4 w-4" />
-            </button>
+            {isAssistantRoute ? null : (
+              <button
+                onClick={() => setMobileSidebarOpen(true)}
+                className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+                aria-label="Open navigation"
+              >
+                <Menu className="h-4 w-4" />
+              </button>
+            )}
 
             <div className="min-w-0">
               <h1 className="truncate text-[15px] font-semibold text-gray-900">{title}</h1>
@@ -159,8 +164,15 @@ export function Layout({ children }: { children: ReactNode }) {
           </button>
         </header>
 
-        <main className="flex-1 px-5 py-6 sm:px-6">
-          <div key={location.pathname} className="mx-auto max-w-6xl animate-[fadeIn_150ms_ease-out]">
+        <main className={isAssistantRoute ? 'flex-1' : 'flex-1 px-5 py-6 sm:px-6'}>
+          <div
+            key={location.pathname}
+            className={
+              isAssistantRoute
+                ? 'h-full w-full animate-[fadeIn_150ms_ease-out]'
+                : 'mx-auto max-w-6xl animate-[fadeIn_150ms_ease-out]'
+            }
+          >
             {children}
           </div>
         </main>

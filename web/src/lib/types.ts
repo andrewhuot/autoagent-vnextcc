@@ -92,6 +92,32 @@ export interface CurriculumStatus {
   should_advance: boolean;
 }
 
+export interface CurriculumPromptItem {
+  prompt_id: string;
+  cluster_id: string;
+  failure_family: string;
+  prompt_text: string;
+  difficulty_tier: 'easy' | 'medium' | 'hard' | 'adversarial';
+  difficulty_score: number;
+  is_adversarial: boolean;
+  evidence: string[];
+  created_at: number;
+}
+
+export interface CurriculumBatchSummary {
+  batch_id: string;
+  created_at: number;
+  prompt_count: number;
+  applied_count: number;
+  difficulty_distribution: Record<string, number>;
+}
+
+export interface CurriculumDifficultyPoint {
+  batch_id: string;
+  created_at: number;
+  average_difficulty: number;
+}
+
 // Holdout Status
 export interface HoldoutStatus {
   experiment_count: number;
@@ -628,6 +654,42 @@ export interface ChangeCard {
   updated_at: string;
 }
 
+export interface ChangeGateDecision {
+  gate: string;
+  passed: boolean;
+  reason: string;
+}
+
+export interface ChangeTimelineItem {
+  stage: string;
+  timestamp: number;
+  detail: string;
+}
+
+export interface ChangeAuditDetail {
+  change_id: string;
+  status: string;
+  score_deltas: Record<string, number>;
+  gate_decisions: ChangeGateDecision[];
+  adversarial_results: {
+    executed: number;
+    failures: number;
+  };
+  composite_breakdown: Record<string, number>;
+  timeline: ChangeTimelineItem[];
+  failure_reason: string;
+}
+
+export interface ChangeAuditSummary {
+  total_changes: number;
+  accepted_changes: number;
+  rejected_changes: number;
+  accept_rate: number;
+  top_rejection_reasons: Array<{ reason: string; count: number }>;
+  improvement_trend: Array<{ change_id: string; created_at: number; composite_delta: number }>;
+  change_ids: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Intelligence Studio
 // ---------------------------------------------------------------------------
@@ -1009,6 +1071,142 @@ export interface SkillLeaderboardEntry {
   times_applied: number;
   success_rate: number;
   proven_improvement: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Unified Core Skills (build-time + run-time)
+// ---------------------------------------------------------------------------
+
+export type UnifiedSkillKind = 'build' | 'runtime';
+
+export interface UnifiedSkillOutcome {
+  timestamp: string;
+  improvement: number;
+  success: boolean;
+}
+
+export interface UnifiedSkillEffectiveness {
+  times_applied: number;
+  success_rate: number;
+  average_improvement: number;
+  successful_runs: number;
+  failed_runs: number;
+  last_updated: string | null;
+  outcomes: UnifiedSkillOutcome[];
+}
+
+export interface UnifiedSkillMutation {
+  name: string;
+  mutation_type: string;
+  target_surface: string;
+  description: string;
+  template?: string | null;
+  parameters?: Record<string, unknown>;
+}
+
+export interface UnifiedSkillTrigger {
+  failure_family?: string | null;
+  metric_name?: string | null;
+  threshold?: number | null;
+  operator?: string;
+  blame_pattern?: string | null;
+}
+
+export interface UnifiedSkillTool {
+  name: string;
+  description: string;
+  input_schema?: Record<string, unknown>;
+  output_schema?: Record<string, unknown>;
+  required?: boolean;
+  timeout_ms?: number | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UnifiedSkillPolicy {
+  name: string;
+  rules: string[];
+  enforcement?: string;
+  scope?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface UnifiedSkillExample {
+  name: string;
+  surface: string;
+  before: unknown;
+  after: unknown;
+  improvement: number;
+  context: string;
+}
+
+export interface UnifiedSkillTestCase {
+  name: string;
+  input: Record<string, unknown>;
+  expected: Record<string, unknown>;
+  description?: string;
+}
+
+export interface UnifiedSkill {
+  id: string;
+  name: string;
+  kind: UnifiedSkillKind;
+  version: string;
+  description: string;
+  capabilities: string[];
+  mutations: UnifiedSkillMutation[];
+  triggers: UnifiedSkillTrigger[];
+  eval_criteria: string[];
+  guardrails: string[];
+  examples: UnifiedSkillExample[];
+  tools: UnifiedSkillTool[];
+  instructions: string;
+  policies: UnifiedSkillPolicy[];
+  dependencies: string[];
+  test_cases: UnifiedSkillTestCase[];
+  tags: string[];
+  domain: string;
+  effectiveness: UnifiedSkillEffectiveness;
+  metadata: Record<string, unknown>;
+  status: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DraftSkillReview {
+  skill: UnifiedSkill;
+  source_optimization: string;
+  metrics: UnifiedSkillEffectiveness;
+}
+
+export interface SkillMarketplaceListing {
+  listing_id: string;
+  skill_id: string;
+  version: string;
+  kind: UnifiedSkillKind;
+  name: string;
+  description: string;
+  domain: string;
+  tags: string[];
+  source: string;
+  score: number;
+  usage_count: number;
+  published_at: string;
+}
+
+export interface SkillCompositionConflict {
+  surface: string;
+  reason: string;
+  skills: string[];
+}
+
+export interface SkillCompositionResult {
+  valid: boolean;
+  requested_refs: string[];
+  skills: UnifiedSkill[];
+  missing_dependencies: string[];
+  unresolved_refs: string[];
+  conflicts: SkillCompositionConflict[];
+  warnings: string[];
 }
 
 // ---------------------------------------------------------------------------

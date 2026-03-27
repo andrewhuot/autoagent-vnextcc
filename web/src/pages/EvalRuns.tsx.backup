@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { FlaskConical, Plus, X } from 'lucide-react';
-import { useApplyCurriculum, useConfigs, useCurriculumBatches, useEvalRuns, useGenerateCurriculum, useStartEval } from '../lib/api';
+import { useConfigs, useEvalRuns, useStartEval } from '../lib/api';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
@@ -16,10 +16,7 @@ export function EvalRuns() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { data: runs, isLoading, isError, refetch } = useEvalRuns();
   const { data: configs } = useConfigs();
-  const { data: curriculumData } = useCurriculumBatches();
   const startEval = useStartEval();
-  const generateCurriculum = useGenerateCurriculum();
-  const applyCurriculum = useApplyCurriculum();
 
   const [showForm, setShowForm] = useState(false);
   const [configVersion, setConfigVersion] = useState<string>('');
@@ -91,33 +88,6 @@ export function EvalRuns() {
     setSearchParams(next);
   }
 
-  function handleGenerateCurriculum() {
-    generateCurriculum.mutate(
-      {},
-      {
-        onSuccess: (payload) => {
-          toastSuccess(
-            'Curriculum generated',
-            `Created batch ${payload.batch.batch_id.slice(0, 8)} with ${payload.batch.prompt_count} prompts.`
-          );
-        },
-        onError: (err) => toastError('Curriculum generation failed', err.message),
-      }
-    );
-  }
-
-  function handleApplyCurriculum(batchId: string) {
-    applyCurriculum.mutate(
-      { batch_id: batchId },
-      {
-        onSuccess: (payload) => {
-          toastSuccess('Curriculum applied', `${payload.applied_count} prompts added to active eval set.`);
-        },
-        onError: (err) => toastError('Apply failed', err.message),
-      }
-    );
-  }
-
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -138,7 +108,7 @@ export function EvalRuns() {
             className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
           >
             <Plus className="h-4 w-4" />
-            New Eval Run
+            New Evaluation
           </button>
         }
       />
@@ -149,85 +119,10 @@ export function EvalRuns() {
         </div>
       )}
 
-      <section className="rounded-lg border border-gray-200 bg-white p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-900">Curriculum</h3>
-            <p className="mt-1 text-xs text-gray-600">
-              Self-play prompts synthesized from recent failures to continuously harden evaluations.
-            </p>
-          </div>
-          <button
-            onClick={handleGenerateCurriculum}
-            disabled={generateCurriculum.isPending}
-            className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
-          >
-            {generateCurriculum.isPending ? 'Generating…' : 'Generate Harder Tests'}
-          </button>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-[1.4fr,1fr]">
-          <div className="space-y-2">
-            {(curriculumData?.batches || []).length === 0 && (
-              <p className="rounded-md border border-dashed border-gray-200 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-                No curriculum batches yet. Generate one from recent failure clusters.
-              </p>
-            )}
-            {(curriculumData?.batches || []).slice(0, 5).map((batch) => (
-              <div key={batch.batch_id} className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="font-mono text-xs text-gray-700">{batch.batch_id}</p>
-                  <button
-                    onClick={() => handleApplyCurriculum(batch.batch_id)}
-                    disabled={applyCurriculum.isPending}
-                    className="rounded-md border border-gray-300 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-700 hover:bg-gray-100"
-                  >
-                    Apply
-                  </button>
-                </div>
-                <p className="mt-1 text-[11px] text-gray-600">
-                  prompts={batch.prompt_count} · active={batch.applied_count}
-                </p>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {Object.entries(batch.difficulty_distribution).map(([tier, count]) => (
-                    <span key={tier} className="rounded bg-white px-1.5 py-0.5 text-[10px] text-gray-600">
-                      {tier}: {count}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
-            <p className="text-xs font-semibold text-gray-700">Difficulty progression</p>
-            <div className="mt-2 space-y-2">
-              {(curriculumData?.progression || []).slice(0, 6).map((point) => (
-                <div key={point.batch_id} className="space-y-1">
-                  <div className="flex items-center justify-between text-[11px] text-gray-500">
-                    <span className="font-mono">{point.batch_id.slice(0, 8)}</span>
-                    <span>{(point.average_difficulty * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="h-1.5 overflow-hidden rounded-full bg-gray-200">
-                    <div
-                      className="h-full rounded-full bg-gray-700"
-                      style={{ width: `${Math.min(point.average_difficulty * 100, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-              {(curriculumData?.progression || []).length === 0 && (
-                <p className="text-[11px] text-gray-500">Difficulty progression appears after the first generated batch.</p>
-              )}
-            </div>
-          </div>
-        </div>
-      </section>
-
       {showCreateForm && (
         <section className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Start New Evaluation</h3>
+            <h3 className="text-sm font-semibold text-gray-900">New Evaluation</h3>
             <button onClick={closeForm} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700">
               <X className="h-4 w-4" />
             </button>
@@ -365,7 +260,7 @@ export function EvalRuns() {
           title="No eval runs yet"
           description="Launch your first evaluation to baseline quality, safety, latency, and cost."
           cliHint="autoagent eval run"
-          actionLabel="Create Eval Run"
+          actionLabel="New Evaluation"
           onAction={() => setShowForm(true)}
         />
       )}
