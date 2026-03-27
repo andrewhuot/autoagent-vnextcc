@@ -1,12 +1,12 @@
 # AutoAgent VNextCC
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)
-![Tests](https://img.shields.io/badge/tests-pytest-22C55E)
+![Tests](https://img.shields.io/badge/tests-951%2B%20passing-22C55E)
 ![License](https://img.shields.io/badge/license-Apache%202.0-111827)
 
 Continuous evaluation and optimization for AI agents. Trace every invocation, diagnose failures, search for improvements, evaluate with statistical rigor, gate on hard constraints, deploy with canaries, learn from outcomes. Repeat.
 
-CLI-first. Gemini-first, multi-model capable. Research-grade.
+CLI-first. Gemini-first, multi-model capable. Research-grade with production-ready integrations.
 
 ---
 
@@ -34,29 +34,55 @@ Each cycle produces a reviewable experiment card. Hard safety gates are never tr
 ```bash
 pip install -e ".[dev]"
 autoagent init
-autoagent eval run --output results.json
+autoagent quickstart
 autoagent server  # → http://localhost:8000
 autoagent loop --max-cycles 20 --stop-on-plateau
+```
+
+**Try the VP demo** (5-minute presentation-ready scenario):
+```bash
+autoagent demo vp --company "Acme Corp" --web
 ```
 
 ---
 
 ## Repository Structure
 
-Core source lives in these top-level directories:
+Core source lives in these top-level directories (32 total):
 
 ```text
-api/                FastAPI server and route modules
-assistant/          Assistant builder/intelligence pipeline
-optimizer/          Optimization loop, mutations, prompt-opt strategies
-observer/           Trace analysis, grading, opportunities, knowledge mining
-evals/              Eval runner, scoring, datasets, replay/what-if
-registry/           Runtime registry (skills, policies, runbooks, contracts)
-core/               Shared domain types and project-memory primitives
-notifications/      Notification manager and channels
-web/                React + Vite frontend
+agent/              Agent framework, config, tools, specialists
+agent_skills/       Agent-specific skills with templates and generators
+api/                FastAPI server and 39 route modules
+assistant/          Assistant builder, file processor, intelligence pipeline
+adk/                Google Agent Development Kit integration (import/export/deploy)
+cicd/               CI/CD gate integration for GitHub Actions
+cli/                Modular CLI commands (skills, registry, etc.)
+collaboration/      Team collaboration features
+configs/            Configuration storage and versioning
+context/            Context Engineering Workbench (analyzer, simulator, metrics)
+control/            Human control points and approval workflows
+core/               Shared domain types, unified skills system, handoff logic
+cx_studio/          Google Cloud Contact Center AI bidirectional integration
+data/               Data models and storage layer
+deploy/             Deployment infrastructure (Docker, Cloud Run, scripts)
+deployer/           Deployment orchestration, canary strategies, release manager
 docs/               User guides, architecture, API/CLI references
-examples/assistant/ Demo scripts (for example `builder_demo.py`)
+evals/              Evaluation runner, scoring, datasets, replay, what-if
+examples/           Demo scripts and sample agents
+graders/            Tiered grading pipeline (deterministic, similarity, rubric, LLM)
+judges/             Judge stack (versioning, drift, calibration, human feedback)
+logger/             Structured logging, conversation store, event tracking
+mcp_server/         Model Context Protocol server for AI coding tool integration
+multi_agent/        Multi-agent orchestration
+notifications/      Notification system and channels
+observer/           Trace analysis, blame maps, knowledge mining, anomaly detection
+optimizer/          Optimization loop, mutations, skill engine, transcript intelligence
+registry/           Runtime registry (skills, policies, tools, handoffs)
+simulator/          Simulation sandbox, persona generation, stress testing
+tests/              131 test files with 951+ passing tests
+web/                React + Vite frontend (39 pages, TypeScript + Tailwind CSS)
+.autoagent/         Runtime logs and state (ignored in git)
 ```
 
 Repository-local runtime outputs are intentionally ignored (for example `.autoagent/`, `web/screenshots/`, `*.db`, and session planning artifacts).
@@ -365,72 +391,6 @@ Total web console demo: 60 seconds.
    - "This isn't mocked. Same optimization loop you'd run in production."
    - "The data is curated for demo purposes, but the algorithms are real."
 
-### FAQ / Objection Handling
-
-#### "How does it know what to fix?"
-
-**Answer:**
-"AutoAgent traces every agent invocation and grades each step — routing, tool selection, safety, outcome. When it sees failures clustering around routing accuracy, it knows the routing config needs attention. It uses a typed mutation library — 9 built-in mutation operators like 'instruction_rewrite', 'routing_rule', 'tool_hint'. Each mutation targets a specific config surface. Then it generates candidates, evaluates them statistically, and applies the one with the highest lift."
-
-**Show them:** The diagnosis output. Point out "Fix confidence: HIGH" and explain that's based on failure clustering, not guessing.
-
-#### "Is this real or mocked?"
-
-**Answer:**
-"The optimization algorithms are 100% real — same code that runs in production. The evaluation runner, the statistical tests, the mutation operators — all real. What's curated is the synthetic dataset. We crafted 40 conversations with specific failure patterns so the demo is predictable and fast. In production, you'd point this at your real conversation logs and let it run for days."
-
-**Show them:** The experiment cards. "These confidence intervals came from real bootstrap sampling. 2,000 iterations per test."
-
-#### "Can it break my production agent?"
-
-**Answer:**
-"No. Three layers of protection. First: every change is evaluated on a held-out test set before it's applied. If it doesn't improve the score, it's rejected. Second: hard safety gates. If any change trips a safety constraint, it's rejected regardless of performance gain. Third: canary deployments. When you promote a change to production, AutoAgent deploys it as a canary — 10% traffic first, monitor for regressions, then ramp to 100%. You can rollback any change with one command."
-
-**Show them:** The Changes page. "See this 'Rollback' button? One click and you're back to the previous config."
-
-#### "How long does optimization take in production?"
-
-**Answer:**
-"Depends on your dataset size and how many cycles you run. For a dataset of 100 conversations, one cycle takes 30-90 seconds depending on your eval complexity. Most teams run 10-20 cycles overnight. You can set a daily budget — say $10 — and AutoAgent stops when it hits that limit. Or you can run continuously with diminishing returns detection — it stops when the Pareto frontier stalls for 5+ cycles."
-
-**Show them:** The loop config. "You set max_cycles, stop_on_plateau, and budget caps. The loop respects all three."
-
-#### "What if the judge is wrong?"
-
-**Answer:**
-"Great question. AutoAgent uses a tiered grading pipeline. Layer 1: deterministic checks (regex, state invariants). Layer 2: similarity scoring (token overlap). Layer 3: LLM judge with a binary rubric. Layer 4: audit judge (different model family for cross-validation). You can also provide human feedback — grade 10-20 traces manually, and AutoAgent calibrates the judge against your labels. Plus judge drift monitoring: if the judge's scores start drifting, you get an alert."
-
-**Show them:** The Judge Ops page. "This is the judge calibration suite. Agreement scores, position bias detection, verbosity bias detection."
-
-#### "Does this work with our existing agents?"
-
-**Answer:**
-"Yes, if your agent produces structured traces. AutoAgent integrates with any framework that emits ADK-compatible events or OpenTelemetry spans. If you're using Google Vertex AI Agent Builder, Dialogflow CX, or any framework with structured conversation logs, you can pipe those traces into AutoAgent. There's also a CX Agent Studio integration — import your agent, optimize, export back to CX in minutes."
-
-**Show them:** The CX Deploy page. "This is the one-click deploy to Dialogflow CX."
-
-### Tips for a Great Demo
-
-1. **Practice the script twice** before presenting. Know what to say at each pause.
-
-2. **Run with `--no-pause` once** to verify it works end-to-end, then run with pauses for the live demo.
-
-3. **Maximize your terminal font** for visibility. 16-20pt font if presenting on Zoom or in a conference room.
-
-4. **Use a clean terminal** (clear history, plain prompt). No distractions.
-
-5. **Prepare for questions** by reading the FAQ section above. VPs will ask "how does this work?" and "what if it breaks?" — have crisp answers ready.
-
-6. **Time yourself**. The full demo (CLI + web console) should take 6-7 minutes including your narration. If you're over 8 minutes, you're talking too much.
-
-7. **End with a call to action**. "Want to try this on your agent? I can set up a pilot with your team this week."
-
-8. **Have the web console open in another tab** before you start. After the CLI demo completes, switch tabs immediately — don't make them wait while it starts up.
-
-9. **If something breaks**, stay calm. The demo is deterministic — if it worked in rehearsal, it'll work live. If the terminal crashes, have a recording ready as backup.
-
-10. **Emphasize the 'why'**, not the 'what'. Don't say "AutoAgent improves routing accuracy." Say "40% of your customers are getting routed to the wrong team. AutoAgent finds the gap in your routing rules and fixes it automatically."
-
 ---
 
 ## Deploy
@@ -655,6 +615,93 @@ Railway auto-detects the Dockerfile, builds, and deploys. Set env vars in the Ra
 
 ## Key Features
 
+### Ghostwriter-Competitive Capabilities
+
+AutoAgent implements **15 of 15** features from Sierra's Ghostwriter (agent building from conversations):
+
+| Feature | What It Does | Where |
+|---------|--------------|-------|
+| **1. Prompt-to-Agent** | Build agent from natural language description — outputs intents, journeys, tools, guardrails, auth/escalation logic | `IntelligenceStudio`, `assistant/` |
+| **2. System Integration** | Connector-aware scaffolding for Shopify, Zendesk, Amazon Connect, Salesforce + generic HTTP | `optimizer/transcript_intelligence.py` |
+| **3. Guardrail Definition** | Natural language → business rules + safety policies | `IntelligenceStudio` |
+| **4. Escalation Logic** | Auto-generate escalation conditions from conversation patterns | `IntelligenceStudio` |
+| **5. Multi-Modal Ingestion** | Upload ZIP archives with transcripts, SOPs, whiteboards, audio, images — generates agent from any format | `assistant/file_processor.py` |
+| **6. Auto KB Generation** | Durable knowledge assets extracted from successful conversations | `optimizer/transcript_intelligence.py` |
+| **7. Auto-Simulations** | Every insight generates sandbox test suite automatically | `simulator/sandbox.py` |
+| **8. Iterative Modification** | Chat-based refinement + insight-driven change cards | `AgentStudio`, `IntelligenceStudio` |
+| **9. Deep Research** | Quantified research over conversation data with root-cause ranking | `IntelligenceStudio` deep research tab |
+| **10. Root Cause Analysis** | Attribution with counts, shares, evidence, transfer-reason tracking | `BlameMap`, `observer/` |
+| **11. Automated Improvements** | Workflow suggestions, drafted tests, change prompts | `Opportunities`, `AutoFix` |
+| **12. Closed-Loop Optimization** | Analyze → Improve → Test → Ship pipeline with explicit stage tracking | `LiveOptimize` SSE stream |
+| **13. Autonomous Pipeline** | Auto-select top insight → draft change → simulate → optional canary deploy | `IntelligenceStudio` autonomous loop |
+| **14. Sandboxed Validation** | Simulation stress tests before production | `Sandbox` page |
+| **15. Full Workspace Access** | Workspace capability map: journeys, integrations, KB, simulations, triage | `IntelligenceStudio` workspace view |
+
+### Unified Skills System
+
+**Build-Time + Run-Time Skills** — One abstraction for both optimization strategies and agent capabilities:
+
+- **Build-Time Skills:** Mutation templates for optimization (routing fixes, safety patches, latency tuning)
+- **Run-Time Skills:** Executable agent capabilities (API integrations, handoffs, specialized tools)
+- **Typed Surfaces:** instruction, few_shot, tool_description, model, escalation_logic, policy, tool_contract, handoff_schema
+- **Composition Engine:** Combine skills with automatic dependency resolution and conflict detection
+- **Marketplace:** Discover, install, publish skills with effectiveness tracking
+- **NL Generation:** Describe agent behavior in English → compile to executable skill
+- **Skill Optimizer:** Learn which skills work (track effectiveness, auto-retire low-performing skills)
+
+**CLI:**
+```bash
+autoagent skill list [--kind build|runtime]
+autoagent skill search "customer refund workflow"
+autoagent skill compose order_lookup refund_policy --output combined_skill
+autoagent skill effectiveness <skill-id>
+autoagent skill publish <skill-id>
+```
+
+### CX Agent Studio Integration
+
+**Bidirectional Dialogflow CX integration** — import agents, optimize, export back:
+
+- **Import:** CX agent → AutoAgent schema (generativeSettings, tools, examples, flows, test cases)
+- **Export:** Optimized config → CX format with snapshot preservation
+- **Deploy:** One-click deploy to CX environments with widget generation
+- **Widget Builder:** Generate embeddable chat widgets for CX agents
+
+**CLI:**
+```bash
+autoagent cx import --project my-project --location us-central1
+autoagent optimize --cycles 10
+autoagent cx export
+autoagent cx deploy --environment PROD
+autoagent cx widget --title "Support Bot" --color "#4285F4"
+```
+
+### Assistant (Conversational AI Builder)
+
+**Chat-based agent building** — describe your agent in natural language:
+
+- Multi-modal ingestion: upload transcripts, SOPs, audio recordings, whiteboards
+- Intent extraction and journey mapping
+- Auto-generated tools and escalation logic
+- Real-time artifact preview
+- Sample prompt library
+
+**Access:** `http://localhost:8000/assistant`
+
+### Intelligence Studio (Transcript → Agent)
+
+**Build agents from conversation data:**
+
+- **Archive Ingestion:** Upload ZIP with JSON/CSV/TXT transcripts
+- **Analytics:** Intent classification, transfer reason analysis, procedure extraction, FAQ generation
+- **Deep Research:** Quantified root-cause analysis with evidence ranking
+- **Q&A:** Ask questions about conversation data ("Why are people transferring to live support?")
+- **Artifact Builder:** One-click agent generation from conversation patterns
+- **Autonomous Loop:** Auto-select insight → draft change → simulate → deploy
+- **Knowledge Assets:** Durable KB articles extracted from successful conversations
+
+**Access:** `http://localhost:8000/intelligence`
+
 ### 4-Layer Metric Hierarchy
 
 Every decision flows through four layers, evaluated in order:
@@ -821,7 +868,7 @@ SQLite-backed per-cycle and daily budget tracking. The loop halts when spend lim
 - CLI: `autoagent adk import|export|deploy|status|diff`
 
 **MCP Server** — Model Context Protocol for AI coding assistants:
-- 12 tools exposed: status, explain, diagnose, get_failures, suggest_fix, edit, eval, eval_compare, skill_gaps, skill_recommend, replay, diff
+- 10 tools exposed: status, eval_run, optimize, config_list, config_show, config_diff, deploy, conversations_list, trace_grade, memory_show
 - Stdio mode for Claude Code, Cursor, Windsurf
 - HTTP/SSE mode planned for future release
 - CLI: `autoagent mcp-server`
@@ -841,7 +888,7 @@ SQLite-backed per-cycle and daily budget tracking. The loop halts when spend lim
 - Platform and category tagging (cx_agent_studio, adk, general_purpose)
 - Skill gap analysis from failure blame clusters
 - Skill recommendation engine based on patterns
-- CLI: `autoagent skill list|recommend|apply|install|export|stats|learn`
+- CLI: `autoagent skill list|show|create|install|test|compose|publish|search|effectiveness`
 
 **Runbooks** — Curated bundles of skills, policies, and tools:
 - 7 default runbooks (routing, safety, latency, empathy, tool_errors, escalations, abandonment)
@@ -853,7 +900,7 @@ SQLite-backed per-cycle and daily budget tracking. The loop halts when spend lim
 
 ## CLI Reference
 
-87 commands across 30+ top-level groups.
+70+ commands across 30+ top-level groups.
 
 ```
 autoagent <group> <command> [options]
@@ -887,7 +934,7 @@ autoagent <group> <command> [options]
 | `review` | `list`, `show`, `apply`, `reject`, `export` | Change review |
 | `runbook` | `list`, `show`, `apply`, `create` | Runbook management |
 | `memory` | `show`, `add` | Project memory (AUTOAGENT.md) |
-| `skill` | `list`, `show`, `recommend`, `apply`, `install`, `export`, `stats`, `learn` | Executable skills |
+| `skill` | `list`, `show`, `create`, `install`, `test`, `compose`, `publish`, `search`, `effectiveness` | Executable skills |
 | `edit` | - | Natural language config edits (JSON mode available) |
 | `explain` | - | Plain-English agent summary (JSON mode available) |
 | `diagnose` | - | Interactive failure diagnosis with chat panel (JSON mode available) |
@@ -903,13 +950,14 @@ See [docs/cli-reference.md](docs/cli-reference.md) for full details.
 
 ## Web Console
 
-31 pages served at `http://localhost:8000`:
+39 pages served at `http://localhost:8000`:
 
 | Page | Purpose |
 |------|---------|
 | **Dashboard** | 2 hard gates + 4 primary metrics, health pulse, journey timeline, recommendations |
 | **AgentStudio** | Interactive conversational interface for describing agent changes in natural language |
-| **IntelligenceStudio** | Transcript archive ingestion, analytics, Q&A, and agent generation from conversations |
+| **IntelligenceStudio** | Transcript archive ingestion, analytics, Q&A, agent generation, autonomous loop |
+| **Assistant** | Chat-based assistant for natural language agent building |
 | **Eval Runs** | Sortable table of all evaluations with comparison mode |
 | **Eval Detail** | Per-case results with pass/fail breakdown and category filtering |
 | **Optimize** | Trigger optimization cycles, view attempt history with diffs |
@@ -931,47 +979,59 @@ See [docs/cli-reference.md](docs/cli-reference.md) for full details.
 | **Change Review** | Review and approve proposed config changes with diff hunks |
 | **Runbooks** | Curated bundles of skills, policies, and tools with one-click apply |
 | **Skills** | Executable optimization strategies with recommendation engine |
+| **Agent Skills** | Agent-specific skill assignment and composition |
 | **Project Memory** | Persistent project context (AUTOAGENT.md) with auto-update sections |
+| **Knowledge** | Knowledge base mining from successful conversations |
 | **CX Import** | Import Google Dialogflow CX Agent Studio agents |
 | **CX Deploy** | Deploy to CX environments with widget generation |
 | **ADK Import** | Import Google Agent Development Kit agents from Python source |
 | **ADK Deploy** | Deploy ADK agents to Cloud Run or Vertex AI |
-| **Agent Skills** | Agent capability gap analysis and skill generation |
+| **Sandbox** | Synthetic conversation generation and stress testing |
+| **WhatIf** | Scenario planning and counterfactual testing |
+| **Reviews** | Review queue for agent changes |
+| **Demo** | Interactive demo scenario runner with act-by-act progression |
+| **Notifications** | Alert management and notification preferences |
 | **Settings** | Runtime configuration and keyboard shortcuts reference |
 
 ---
 
 ## API
 
-131 endpoints across 30 route modules + WebSocket + SSE. Representative endpoints:
+200+ endpoints across 39 route modules + WebSocket + SSE. Representative endpoints:
 
 ```
-GET    /api/health                        Health check with scorecard
-POST   /api/eval/run                      Trigger evaluation run
-GET    /api/eval/history                  List past evaluations
-GET    /api/eval/{run_id}                 Get evaluation detail
-POST   /api/optimize/run                  Trigger optimization cycle
-GET    /api/optimize/stream               Server-Sent Events for live optimization
-GET    /api/experiments                    List experiment cards
-POST   /api/deploy/deploy                 Deploy config version (canary or immediate)
-GET    /api/traces/blame                  Failure clustering and blame map
-GET    /api/judges/calibration            Judge calibration report
-GET    /api/registry/{type}               List registry entries by type
-POST   /api/scorers/create                Generate scorer from NL description
-GET    /api/loop/status                   Current loop state
-POST   /api/control/pause                 Pause the loop
-POST   /api/edit                          Apply NL config edit
-POST   /api/diagnose/chat                 Interactive diagnosis chat
-POST   /api/intelligence/archive          Import transcript archive (ZIP)
-GET    /api/intelligence/reports          List intelligence reports
-POST   /api/intelligence/reports/{id}/ask  Ask questions about transcript data
-POST   /api/cx/import                     Import CX Agent Studio agent
-POST   /api/adk/import                    Import ADK agent from Python source
-WS     /ws                                WebSocket for real-time updates
-GET    /api/events                        Server-Sent Events stream
+GET    /api/health                                Health check with scorecard
+POST   /api/eval/run                              Trigger evaluation run
+GET    /api/eval/history                          List past evaluations
+GET    /api/eval/{run_id}                         Get evaluation detail
+POST   /api/optimize/run                          Trigger optimization cycle
+GET    /api/optimize/stream                       Server-Sent Events for live optimization
+GET    /api/experiments                           List experiment cards
+POST   /api/deploy/deploy                         Deploy config version (canary or immediate)
+GET    /api/traces/blame                          Failure clustering and blame map
+GET    /api/judges/calibration                    Judge calibration report
+GET    /api/registry/{type}                       List registry entries by type
+POST   /api/scorers/create                        Generate scorer from NL description
+GET    /api/loop/status                           Current loop state
+POST   /api/control/pause                         Pause the loop
+POST   /api/edit                                  Apply NL config edit
+POST   /api/diagnose/chat                         Interactive diagnosis chat
+POST   /api/intelligence/archive                  Import transcript archive (ZIP)
+GET    /api/intelligence/reports                  List intelligence reports
+POST   /api/intelligence/reports/{id}/ask         Ask questions about transcript data
+POST   /api/intelligence/reports/{id}/deep-research  Deep research over conversations
+POST   /api/intelligence/reports/{id}/autonomous-loop  Run autonomous optimization
+GET    /api/intelligence/knowledge/{asset_id}     Get knowledge asset
+POST   /api/cx/import                             Import CX Agent Studio agent
+POST   /api/adk/import                            Import ADK agent from Python source
+POST   /api/skills/compose                        Compose multiple skills
+GET    /api/skills/effectiveness/{skill_id}       Get skill effectiveness metrics
+POST   /api/skills/publish                        Publish skill to marketplace
+WS     /ws                                        WebSocket for real-time updates
+GET    /api/events                                Server-Sent Events stream
 ```
 
-Full route modules: `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`, `intelligence`.
+Full route modules: `health`, `eval`, `optimize`, `optimize_stream`, `quickfix`, `experiments`, `opportunities`, `deploy`, `config`, `control`, `traces`, `conversations`, `events`, `loop`, `autofix`, `judges`, `context`, `registry`, `scorers`, `changes`, `runbooks`, `memory`, `cx_studio`, `adk`, `skills`, `agent_skills`, `edit`, `diagnose`, `intelligence`, `sandbox`, `what_if`, `reviews`, `demo`, `notifications`, `knowledge`, `collaboration`, `cicd`, `project_memory`, `data_engine`, `enhanced_scorer`, `explain_replay`, `impact`.
 
 ---
 
@@ -1095,48 +1155,22 @@ Configure multiple models in `autoagent.yaml`. The optimizer uses them for judge
 
 ---
 
-## Architecture
-
-```
-agent/          Agent framework, config, tools, specialists
-api/            FastAPI server, 131 endpoints across 30 route modules
-context/        Context Engineering Workbench (analyzer, simulator, metrics)
-control/        Governance wrapper for promotion decisions
-core/           10 first-class domain objects (config, trace, experiment, etc.)
-data/           Protocol-based repositories, event log
-deployer/       Canary deployment, release manager, config versioning
-evals/          Runner, scorer, data engine, replay, anti-Goodhart, statistics, NL scorer
-graders/        Tiered grading pipeline (deterministic, similarity, binary rubric)
-judges/         Judge subsystem (versioning, drift, calibration, human feedback)
-logger/         Structured logging
-observer/       Traces, anomaly detection, failure clustering, blame map, trace grading
-optimizer/      Loop, search, mutations, bandit, Pareto, cost tracker, prompt_opt/, nl_editor, diagnose_session, transcript_intelligence
-registry/       Modular registry (skills, policies, tool contracts, handoff schemas)
-mcp_server/     Model Context Protocol server for AI coding tool integration
-cx_studio/      Dialogflow CX Agent Studio bidirectional integration
-adk/            Google Agent Development Kit Python source integration
-agent_skills/   Capability gap analysis and skill generation
-web/            React console, 31 pages, TypeScript + React + Tailwind CSS
-```
-
----
-
 ## By the Numbers
 
 | | |
 |---|---|
-| **Test suite** | **1,131 tests** |
-| **Python backend** | ~46,600 lines |
-| **React frontend** | ~8,800 lines |
-| **CLI commands** | **87** across 30+ command groups |
-| **API endpoints** | **131** across 30 route modules |
-| **Web pages** | **31** (AgentStudio, IntelligenceStudio, Dashboard, etc.) |
-| **Reusable components** | 40+ (HealthPulse, JourneyTimeline, Confetti, etc.) |
+| **Test suite** | **951+ tests** across 131 test files |
+| **Python backend** | ~47,000 lines |
+| **React frontend** | ~9,200 lines |
+| **CLI commands** | **70+** across 30+ command groups |
+| **API endpoints** | **200+** across 39 route modules |
+| **Web pages** | **39** (Dashboard, AgentStudio, IntelligenceStudio, etc.) |
+| **Reusable components** | 45+ (HealthPulse, JourneyTimeline, Confetti, etc.) |
 | **Judge/grader modules** | 9 |
-| **Route modules** | 30 (health, eval, optimize, intelligence, cx_studio, adk, etc.) |
-| **Python packages** | 14 |
-| **Test files** | 59 |
+| **Route modules** | 39 (health, eval, optimize, intelligence, cx_studio, adk, skills, etc.) |
+| **Python packages** | 32 top-level directories |
 | **Integrations** | 6 (CX Agent Studio, ADK, MCP Server, Transcript Intelligence, Skills Registry, Judges) |
+| **Sierra feature parity** | **15/15** Ghostwriter features |
 
 ---
 
@@ -1164,7 +1198,7 @@ It is **not** a hosted product. There is no auth, no multi-tenancy, no billing. 
 - **Backend:** Python 3.11+, FastAPI, Uvicorn, SQLite
 - **CLI:** Click
 - **Frontend:** React, Vite, TypeScript, Tailwind CSS
-- **Tests:** pytest (1,131 passing)
+- **Tests:** pytest (951+ passing across 131 files)
 
 ---
 

@@ -11,12 +11,12 @@
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
 │                            Operator Interfaces                                │
-│   CLI (autoagent ...)       REST API (/api/*)        Web Console (19 pages)   │
+│   CLI (autoagent ...)       REST API (/api/*)        Web Console (39 pages)   │
 └──────────────────────────────────────┬───────────────────────────────────────┘
                                        │
                          ┌─────────────▼─────────────┐
                          │  FastAPI + TaskManager     │
-                         │  75 endpoints, 18 modules  │
+                         │  200+ endpoints, 39 modules│
                          └─────────────┬─────────────┘
                                        │
      ┌──────────┬──────────┬───────────┼───────────┬──────────┬──────────┐
@@ -88,22 +88,36 @@ Each cycle is wrapped in exception handling. Failures go to a dead letter queue 
 ```
 autoagent/
 ├── agent/                  — ADK agent wrapper, graph construction
-├── api/                    — FastAPI app, 18 route modules, 75 endpoints
+├── agent_skills/           — Agent-specific skill templates, generators, gap analyzer
+├── api/                    — FastAPI app, 39 route modules, 200+ endpoints
+├── assistant/              — Assistant builder, file processor, intelligence pipeline
+├── adk/                    — Google Agent Development Kit integration (import/export/deploy)
+├── cicd/                   — CI/CD gate integration for GitHub Actions
+├── cli/                    — Modular CLI commands (skills, registry, etc.)
+├── collaboration/          — Team collaboration features
 ├── context/                — Context Engineering Workbench (analyzer, simulator, metrics)
 ├── control/                — Human escape hatches, governance wrapper
-├── core/                   — First-class domain objects (10 types)
+├── core/                   — First-class domain objects, unified skills system
+├── cx_studio/              — Google Cloud Contact Center AI bidirectional integration
 ├── data/                   — Repositories, event log, persistence layer
 ├── deployer/               — Canary deployment, release manager
 ├── evals/                  — Data engine, replay harness, scorer, statistics
 │   └── nl_scorer.py        — NL Scorer Generation (natural language → ScorerSpec)
 ├── graders/                — Deterministic, similarity, binary rubric judges
 ├── judges/                 — Grader stack, calibration, audit judge
-├── observer/               — Trace engine, opportunity queue
+├── logger/                 — Structured logging, conversation store, event tracking
+├── mcp_server/             — Model Context Protocol server for AI coding tools
+├── multi_agent/            — Multi-agent orchestration
+├── notifications/          — Notification system and channels
+├── observer/               — Trace engine, opportunity queue, knowledge mining
 │   ├── blame_map.py        — Blame Map (cluster impact scoring, trend detection)
 │   └── trace_grading.py    — Trace Grading (7 span-level graders)
 ├── optimizer/              — Mutations, search, experiments, cost, reliability
-│   └── prompt_opt/         — Pro-mode (MIPROv2, BootstrapFewShot, GEPA, SIMBA)
-└── registry/               — Modular Registry (skills, policies, tool contracts, handoff schemas)
+│   ├── prompt_opt/         — Pro-mode (MIPROv2, BootstrapFewShot, GEPA, SIMBA)
+│   └── transcript_intelligence.py — Ghostwriter-competitive features (multi-modal ingestion, autonomous loop)
+├── registry/               — Modular Registry (skills, policies, tool contracts, handoff schemas)
+├── simulator/              — Simulation sandbox, persona generation, stress testing
+└── web/                    — React console, 39 pages, TypeScript + Tailwind CSS
 ```
 
 ---
@@ -301,33 +315,55 @@ All registries share a common `RegistryStore` backend with search, diff, import/
 
 ### Web Console (`web/src/`)
 
-React + Vite + TypeScript + Tailwind. Apple/Linear-inspired design.
+React + Vite + TypeScript + Tailwind. Apple/Linear-inspired design. **39 pages total**.
 
+**Core Pages:**
 | Page | Purpose |
 |------|---------|
-| Dashboard | Hero metrics + recent eval runs |
+| Dashboard | Hero metrics, health pulse, journey timeline, recommendations |
+| AgentStudio | Interactive chat interface for agent building in natural language |
+| IntelligenceStudio | Transcript archive ingestion, analytics, Q&A, autonomous loop |
+| Assistant | Chat-based assistant for agent building |
+
+**Analysis & Diagnostics:**
+| Page | Purpose |
+|------|---------|
+| Traces | ADK event traces and spans with filtering |
+| BlameMap | Span-level failure clustering and root cause attribution |
+| EventLog | Append-only system event timeline |
+| LoopMonitor | Live loop status, cycle-by-cycle progress |
+| AutoFix | AI-generated improvement proposals |
+
+**Quality & Evaluation:**
+| Page | Purpose |
+|------|---------|
 | Eval Runs | Sortable table of all evaluations |
 | Eval Detail | Per-case results with pass/fail breakdown |
-| Optimize | Trigger optimization, view attempt history |
-| Configs | Version list, YAML diff viewer |
-| Conversations | Browse logged agent conversations |
+| Experiments | Reviewable experiment cards with hypothesis and diff |
+| Sandbox | Synthetic conversation generation and stress testing |
+| JudgeOps | Judge versioning, calibration, drift monitoring |
+
+**Skills & Registry:**
+| Page | Purpose |
+|------|---------|
+| Skills | Skill marketplace with search and filtering |
+| AgentSkills | Agent-specific skill assignment |
+| Registry | Browse/search/import registry components |
+
+**Deployment & Integration:**
+| Page | Purpose |
+|------|---------|
 | Deploy | Canary status, promote/rollback controls |
-| Loop Monitor | Live loop status, cycle history, watchdog/DLQ health |
-| **Opportunities** | Ranked optimization opportunity queue |
-| **Experiments** | Reviewable experiment cards with hypothesis and diff |
-| **Traces** | ADK event traces and spans for diagnosis |
-| **Event Log** | Append-only system event timeline |
-| **AutoFix** | Fix proposals, apply/reject workflow, suggestion history |
-| **BlameMap** | Blame cluster visualization, impact scores, trend graphs |
-| **ContextWorkbench** | Context composition analysis, compaction simulation |
-| **JudgeOps** | Judge versioning, drift monitoring, human feedback review |
-| **Registry** | Browse/search/import registry components across all types |
-| **ScorerStudio** | Create, refine, and test NL-generated scorers |
-| Settings | Runtime configuration |
+| CxDeploy | Google Cloud Contact Center AI deployment |
+| AdkDeploy | Agent Development Kit deployment |
+| CxImport | Import from Dialogflow CX |
+| AdkImport | Import from ADK Python source |
+
+**Plus:** Knowledge, Configs, Conversations, ProjectMemory, ContextWorkbench, ScorerStudio, ChangeReview, Runbooks, WhatIf, Reviews, Demo, Notifications, Settings
 
 ### REST API
 
-75 endpoints across 18 route modules.
+200+ endpoints across 39 route modules.
 
 ```
 # Core
