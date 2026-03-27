@@ -1,4 +1,5 @@
 import { startTransition, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Sparkles, MessageSquare, GitBranch, Play, Check } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { buildStudioDraft, type StudioDraft, type StudioMetricTone } from '../lib/agentStudio';
@@ -37,6 +38,7 @@ function buildAssistantReply(draft: StudioDraft): string {
 }
 
 export function AgentStudio() {
+  const navigate = useNavigate();
   const [composer, setComposer] = useState(INITIAL_PROMPT);
   const [draft, setDraft] = useState<StudioDraft>(INITIAL_DRAFT);
   const [messages, setMessages] = useState<StudioMessage[]>([
@@ -90,6 +92,17 @@ export function AgentStudio() {
         description="Update an agent in natural language and watch the draft mutate live."
         icon={Sparkles}
       />
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        Agent Studio is a rapid draft sandbox. For the full production journey (build to eval to optimize to deploy),
+        use{' '}
+        <button
+          onClick={() => navigate('/intelligence')}
+          className="font-semibold underline decoration-amber-400 underline-offset-2 hover:text-amber-950"
+        >
+          Intelligence Studio
+        </button>
+        .
+      </div>
 
       {/* Metrics */}
       <section className="grid gap-3 sm:grid-cols-3">

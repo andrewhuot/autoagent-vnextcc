@@ -136,7 +136,7 @@ export function CxImport() {
             <p><span className="text-gray-500">Description:</span> {selectedAgent.description || '—'}</p>
           </div>
           <p className="text-xs text-gray-400">
-            This will fetch the agent's playbooks, tools, flows, intents, and test cases,
+            This will fetch the agent's instructions, tools, examples, and test cases,
             then map them to AutoAgent config format.
           </p>
           <div className="flex gap-2">

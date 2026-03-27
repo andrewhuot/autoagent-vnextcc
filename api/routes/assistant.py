@@ -29,7 +29,7 @@ import json
 import uuid
 from typing import Any, AsyncGenerator
 
-from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 
 from api.models import (
@@ -70,6 +70,32 @@ def _clear_session(session_id: str) -> None:
     """Clear a session from memory."""
     if session_id in _sessions:
         del _sessions[session_id]
+
+
+def _latest_session_id() -> str | None:
+    """Return the newest session ID, or None when no sessions exist."""
+    if not _sessions:
+        return None
+    return max(_sessions.items(), key=lambda item: item[1].get("created_at", 0.0))[0]
+
+
+def _resolve_session(session_id: str | None, *, create_if_missing: bool) -> tuple[str, dict[str, Any]]:
+    """Resolve an explicit/implicit session and optionally create one."""
+    if session_id:
+        if session_id in _sessions:
+            return session_id, _sessions[session_id]
+        if create_if_missing:
+            return _get_or_create_session(session_id)
+        raise HTTPException(status_code=404, detail=f"Session not found: {session_id}")
+
+    latest = _latest_session_id()
+    if latest is not None:
+        return latest, _sessions[latest]
+
+    if create_if_missing:
+        return _get_or_create_session(None)
+
+    raise HTTPException(status_code=404, detail="No assistant session found")
 
 
 # ---------------------------------------------------------------------------
@@ -360,10 +386,32 @@ async def send_message(
     )
 
 
+@router.get("/message")
+async def send_message_eventsource(
+    request: Request,
+    message: str = Query(..., min_length=1, description="User message text"),
+    session_id: str | None = Query(None, description="Optional session ID"),
+    files: str | None = Query(None, description="JSON-encoded uploaded files metadata"),
+) -> StreamingResponse:
+    """EventSource-compatible GET variant of `/message` used by the web UI."""
+    context: dict[str, Any] = {}
+    if files:
+        try:
+            decoded = json.loads(files)
+            if isinstance(decoded, list):
+                context["files"] = decoded
+        except json.JSONDecodeError:
+            context["files_raw"] = files
+
+    body = AssistantMessageRequest(message=message, session_id=session_id, context=context)
+    return await send_message(request=request, body=body)
+
+
 @router.post("/upload")
 async def upload_files(
     request: Request,
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] | None = File(None),
+    file: UploadFile | None = File(None),
     session_id: str | None = Form(None),
     description: str | None = Form(None),
 ) -> dict[str, Any]:
@@ -387,7 +435,7 @@ async def upload_files(
     Raises:
         HTTPException: If files are invalid or processing fails
     """
-    session_id, session_data = _get_or_create_session(session_id)
+    session_id, session_data = _resolve_session(session_id, create_if_missing=True)
 
     # Validate file types
     allowed_extensions = {
@@ -397,9 +445,17 @@ async def upload_files(
         ".yaml", ".yml"
     }
 
+    normalized_files: list[UploadFile] = []
+    if files:
+        normalized_files.extend(files)
+    if file is not None:
+        normalized_files.append(file)
+    if not normalized_files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
     uploaded_files = []
-    for file in files:
-        filename = file.filename or "unknown"
+    for uploaded in normalized_files:
+        filename = uploaded.filename or "unknown"
         extension = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
         if extension not in allowed_extensions:
@@ -409,7 +465,7 @@ async def upload_files(
             )
 
         # Read file content
-        content = await file.read()
+        content = await uploaded.read()
         file_size = len(content)
 
         # Limit file size (50MB max)
@@ -426,7 +482,7 @@ async def upload_files(
             "filename": filename,
             "extension": extension,
             "size_bytes": file_size,
-            "content_type": file.content_type,
+            "content_type": uploaded.content_type,
         })
 
         # Store in session context for processing
@@ -440,19 +496,22 @@ async def upload_files(
             "description": description,
         })
 
-    return {
+    payload: dict[str, Any] = {
         "success": True,
         "session_id": session_id,
         "files": uploaded_files,
         "total_files": len(uploaded_files),
         "message": f"Uploaded {len(uploaded_files)} file(s). Use the message endpoint to process them.",
     }
+    if uploaded_files:
+        payload["url"] = f"/api/assistant/uploads/{uploaded_files[0]['file_id']}"
+    return payload
 
 
 @router.get("/history")
 async def get_history(
     request: Request,
-    session_id: str,
+    session_id: str | None = None,
 ) -> AssistantHistoryResponse:
     """Get conversation history for a session.
 
@@ -466,13 +525,10 @@ async def get_history(
     Raises:
         HTTPException: If session not found
     """
-    if session_id not in _sessions:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Session not found: {session_id}"
-        )
-
-    session_data = _sessions[session_id]
+    if session_id is None and not _sessions:
+        session_id, session_data = _resolve_session(None, create_if_missing=True)
+    else:
+        session_id, session_data = _resolve_session(session_id, create_if_missing=False)
     turns = [
         AssistantHistoryItem(**turn)
         for turn in session_data["history"]
@@ -488,7 +544,7 @@ async def get_history(
 @router.delete("/history")
 async def clear_history(
     request: Request,
-    session_id: str,
+    session_id: str | None = None,
 ) -> dict[str, Any]:
     """Clear conversation history for a session.
 
@@ -502,12 +558,14 @@ async def clear_history(
     Raises:
         HTTPException: If session not found
     """
-    if session_id not in _sessions:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Session not found: {session_id}"
-        )
+    if session_id is None and not _sessions:
+        return {
+            "success": True,
+            "session_id": "",
+            "message": "No session to clear",
+        }
 
+    session_id, _ = _resolve_session(session_id, create_if_missing=False)
     _clear_session(session_id)
 
     return {
@@ -520,7 +578,7 @@ async def clear_history(
 @router.get("/suggestions")
 async def get_suggestions(
     request: Request,
-    session_id: str,
+    session_id: str | None = None,
 ) -> AssistantSuggestionsResponse:
     """Get contextual suggestions for the next action.
 
@@ -537,13 +595,10 @@ async def get_suggestions(
     Raises:
         HTTPException: If session not found
     """
-    if session_id not in _sessions:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Session not found: {session_id}"
-        )
-
-    session_data = _sessions[session_id]
+    if session_id is None and not _sessions:
+        session_id, session_data = _resolve_session(None, create_if_missing=True)
+    else:
+        session_id, session_data = _resolve_session(session_id, create_if_missing=False)
 
     # Get suggestions based on recent history and context
     # TODO: Make this smarter based on actual conversation state

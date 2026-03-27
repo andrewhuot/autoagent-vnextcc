@@ -48,7 +48,7 @@ const navSections: NavSection[] = [
     items: [
       { to: '/', label: 'Dashboard', icon: LayoutDashboard },
       { to: '/demo', label: 'Demo', icon: Sparkles },
-      { to: '/assistant', label: 'Assistant', icon: Bot },
+      { to: '/assistant', label: 'Assistant Chat', icon: Bot },
       { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
       { to: '/conversations', label: 'Conversations', icon: MessageSquare },
       { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
@@ -62,7 +62,7 @@ const navSections: NavSection[] = [
     items: [
       { to: '/optimize', label: 'Optimize', icon: Zap },
       { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
-      { to: '/agent-studio', label: 'Agent Studio', icon: Sparkles },
+      { to: '/agent-studio', label: 'Agent Studio Draft', icon: Sparkles },
       { to: '/opportunities', label: 'Opportunities', icon: Flag },
       { to: '/changes', label: 'Changes', icon: GitPullRequest },
       { to: '/experiments', label: 'Experiments', icon: TestTubes },
@@ -93,7 +93,7 @@ const navSections: NavSection[] = [
     title: 'Analysis',
     items: [
       { to: '/context', label: 'Context Workbench', icon: Layers },
-      { to: '/intelligence', label: 'Intelligence Studio', icon: BrainCircuit },
+      { to: '/intelligence', label: 'Build Agent', icon: BrainCircuit },
       { to: '/skills', label: 'Skills', icon: Zap },
       { to: '/registry', label: 'Registry', icon: BookOpen },
       { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },

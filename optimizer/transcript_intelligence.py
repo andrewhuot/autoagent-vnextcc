@@ -1165,6 +1165,10 @@ class TranscriptIntelligenceService:
             "report_id": report_id,
             "cycles_run": len(cycles),
             "max_cycles": max_cycles,
+            # Backward-compatible summary fields consumed by existing UI/tests.
+            "change_card_id": final_cycle.get("change_card_id"),
+            "pass_rate": final_cycle.get("pass_rate", 0.0),
+            "ship_status": final_cycle.get("ship_status", "pending"),
             "final_cycle": final_cycle,
             "all_cycles": cycles,
             "pipeline": {

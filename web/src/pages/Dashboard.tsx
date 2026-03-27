@@ -238,6 +238,12 @@ export function Dashboard() {
               </button>
             </div>
             <button
+              onClick={() => navigate('/intelligence')}
+              className="rounded-lg border border-sky-300 bg-sky-50 px-3.5 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-100"
+            >
+              Build Agent
+            </button>
+            <button
               onClick={() => navigate('/evals?new=1')}
               className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
             >

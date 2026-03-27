@@ -54,7 +54,7 @@ class TestCLIStructure:
     def test_top_level_commands(self, runner):
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        for cmd in ["init", "eval", "optimize", "config", "deploy", "loop", "status", "logs", "server", "full-auto"]:
+        for cmd in ["init", "build", "eval", "optimize", "config", "deploy", "loop", "status", "logs", "server", "full-auto", "changes"]:
             assert cmd in result.output, f"Missing command: {cmd}"
 
     def test_legacy_run_group_hidden(self, runner):
@@ -86,6 +86,57 @@ class TestInitCommand:
         cases_dir = Path(tmp_dir) / "evals" / "cases"
         yaml_files = list(cases_dir.glob("*.yaml"))
         assert len(yaml_files) > 0
+
+
+class TestJourneyCommands:
+    """Tests for CLI commands required by the end-to-end user journey."""
+
+    def test_build_json_includes_required_artifact_sections(self, runner):
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    "Build a customer service agent for order tracking with Shopify integration",
+                    "--json",
+                ],
+            )
+            assert result.exit_code == 0, result.output
+            payload = json.loads(result.output)
+            for key in ["intents", "tools", "guardrails", "skills", "integration_templates"]:
+                assert key in payload
+
+    def test_build_generates_config_and_eval_handoff_files(self, runner):
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli,
+                ["build", "Build a customer service agent for order tracking with Shopify integration"],
+            )
+            assert result.exit_code == 0, result.output
+            assert Path("configs").is_dir()
+            assert list(Path("configs").glob("v*_built_*.yaml"))
+            assert Path("evals/cases/generated_build.yaml").exists()
+
+    def test_changes_group_exists_and_lists_cards(self, runner):
+        result_help = runner.invoke(cli, ["changes", "--help"])
+        assert result_help.exit_code == 0
+        assert "list" in result_help.output
+        assert "approve" in result_help.output
+
+        with runner.isolated_filesystem():
+            result_list = runner.invoke(cli, ["changes", "list"])
+            assert result_list.exit_code == 0, result_list.output
+            assert "No pending change cards." in result_list.output
+
+    def test_deploy_supports_cx_target_without_remote_credentials(self, runner):
+        with runner.isolated_filesystem():
+            init_result = runner.invoke(cli, ["init", "--dir", "."])
+            assert init_result.exit_code == 0, init_result.output
+
+            result = runner.invoke(cli, ["deploy", "--target", "cx-studio"])
+            assert result.exit_code == 0, result.output
+            assert "CX export package" in result.output
+            assert list(Path(".autoagent").glob("cx_export_v*.json"))
 
 
 class TestEvalCommands:

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Brain, FileArchive, MessageSquareText, Sparkles, UploadCloud, WandSparkles } from 'lucide-react';
 import {
   useApplyTranscriptInsight,
@@ -11,7 +12,7 @@ import {
   useTranscriptReport,
   useTranscriptReports,
 } from '../lib/api';
-import { BuilderResult, ReportHighlights } from '../components/IntelligenceComponents';
+import { BuilderResult, ListPanel, ReportHighlights } from '../components/IntelligenceComponents';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
@@ -46,6 +47,7 @@ const starterQuestions = [
 const connectorOptions = ['Shopify', 'Amazon Connect', 'Salesforce', 'Zendesk'];
 
 export function IntelligenceStudio() {
+  const navigate = useNavigate();
   const [selectedReportId, setSelectedReportId] = useState<string | undefined>(undefined);
   const [question, setQuestion] = useState(starterQuestions[0]);
   const [answer, setAnswer] = useState<IntelligenceAnswer | null>(null);
@@ -198,6 +200,9 @@ export function IntelligenceStudio() {
         title="Intelligence Studio"
         description="Operationalize transcript archives, ask natural-language questions about conversation failure, and turn insights into reviewable agent changes."
       />
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+        Canonical build path: create your agent artifact here, then run evaluation, optimization, review, and CX deployment.
+      </div>
 
       <section className="relative overflow-hidden rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_35%),linear-gradient(135deg,#f8fbff_0%,#ffffff_52%,#f8fafc_100%)] p-6 shadow-sm shadow-slate-200/70">
         <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,_rgba(15,23,42,0.06),_transparent_60%)] xl:block" />
@@ -524,7 +529,39 @@ export function IntelligenceStudio() {
         </ListPanel>
       )}
 
-      {buildMutation.data && <BuilderResult artifact={buildMutation.data} />}
+      {buildMutation.data && (
+        <>
+          <ListPanel title="Golden Path Next Steps" eyebrow="Build -> Eval -> Optimize -> Deploy">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <button
+                onClick={() => navigate('/evals?new=1')}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
+              >
+                1. Run Evaluation
+              </button>
+              <button
+                onClick={() => navigate('/optimize?new=1')}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
+              >
+                2. Start Optimization
+              </button>
+              <button
+                onClick={() => navigate('/changes')}
+                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
+              >
+                3. Review Changes
+              </button>
+              <button
+                onClick={() => navigate('/cx/deploy')}
+                className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100"
+              >
+                4. Deploy to CX
+              </button>
+            </div>
+          </ListPanel>
+          <BuilderResult artifact={buildMutation.data} />
+        </>
+      )}
     </div>
   );
 }

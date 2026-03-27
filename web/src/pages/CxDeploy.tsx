@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Code2, Copy, Check } from 'lucide-react';
-import { useCxDeploy, useCxWidget } from '../lib/api';
+import { useConfigShow, useConfigs, useCxDeploy, useCxExport, useCxWidget } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
 
@@ -10,14 +10,26 @@ export function CxDeploy() {
   const [location, setLocation] = useState('global');
   const [agentId, setAgentId] = useState('');
   const [environment, setEnvironment] = useState('production');
+  const [snapshotPath, setSnapshotPath] = useState('');
+  const [configVersion, setConfigVersion] = useState('');
 
   // Widget state
   const [chatTitle, setChatTitle] = useState('Agent');
   const [primaryColor, setPrimaryColor] = useState('#1a73e8');
   const [copied, setCopied] = useState(false);
 
+  const { data: configs } = useConfigs();
+  const selectedVersion = configVersion ? Number(configVersion) : null;
+  const selectedConfig = useConfigShow(selectedVersion);
   const deployMutation = useCxDeploy();
+  const exportMutation = useCxExport();
   const widgetMutation = useCxWidget();
+
+  useEffect(() => {
+    if (!configVersion && configs && configs.length > 0) {
+      setConfigVersion(String(configs[0].version));
+    }
+  }, [configVersion, configs]);
 
   function handleDeploy() {
     if (!project || !agentId) return;
@@ -26,6 +38,43 @@ export function CxDeploy() {
       {
         onSuccess: (result) => toastSuccess('Deploy successful', `Deployed to ${result.environment}`),
         onError: (err) => toastError('Deploy failed', err.message),
+      }
+    );
+  }
+
+  function handlePreviewExport() {
+    if (!project || !agentId || !snapshotPath || !selectedConfig.data?.config) return;
+    exportMutation.mutate(
+      {
+        project,
+        location,
+        agent_id: agentId,
+        config: selectedConfig.data.config,
+        snapshot_path: snapshotPath,
+        dry_run: true,
+      },
+      {
+        onSuccess: (result) => toastSuccess('Preview ready', `${result.changes.length} change(s) identified.`),
+        onError: (err) => toastError('Preview failed', err.message),
+      }
+    );
+  }
+
+  function handlePushExport() {
+    if (!project || !agentId || !snapshotPath || !selectedConfig.data?.config) return;
+    exportMutation.mutate(
+      {
+        project,
+        location,
+        agent_id: agentId,
+        config: selectedConfig.data.config,
+        snapshot_path: snapshotPath,
+        dry_run: false,
+      },
+      {
+        onSuccess: (result) =>
+          toastSuccess('Export completed', result.pushed ? `Updated ${result.resources_updated} resource(s).` : 'No changes pushed.'),
+        onError: (err) => toastError('Export failed', err.message),
       }
     );
   }
@@ -76,6 +125,70 @@ export function CxDeploy() {
             className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
         </div>
+      </div>
+
+      {/* Deploy section */}
+      <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
+        <h3 className="text-sm font-medium text-gray-200">Preview & Export to CX</h3>
+        <p className="text-xs text-gray-400">
+          Select the optimized AutoAgent config + CX snapshot, preview exact changes, then push when ready.
+        </p>
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-3">
+          <select
+            value={configVersion}
+            onChange={(e) => setConfigVersion(e.target.value)}
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+          >
+            <option value="">Select config version</option>
+            {(configs || []).map((config) => (
+              <option key={config.version} value={config.version}>
+                v{config.version} · {config.status}
+              </option>
+            ))}
+          </select>
+          <input
+            type="text"
+            placeholder="Snapshot path from CX import"
+            value={snapshotPath}
+            onChange={(e) => setSnapshotPath(e.target.value)}
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none md:col-span-2"
+          />
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            onClick={handlePreviewExport}
+            disabled={!project || !agentId || !snapshotPath || !selectedConfig.data?.config || exportMutation.isPending}
+            className="px-4 py-1.5 bg-gray-600 text-white text-sm rounded hover:bg-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {exportMutation.isPending ? 'Previewing...' : 'Preview Export'}
+          </button>
+          <button
+            onClick={handlePushExport}
+            disabled={!project || !agentId || !snapshotPath || !selectedConfig.data?.config || exportMutation.isPending}
+            className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {exportMutation.isPending ? 'Pushing...' : 'Push to CX Agent Studio'}
+          </button>
+        </div>
+        {exportMutation.data && (
+          <div className="rounded border border-gray-700 bg-gray-900 p-3">
+            <p className="text-xs text-gray-400 mb-2">Planned Changes ({exportMutation.data.changes.length})</p>
+            {exportMutation.data.changes.length === 0 ? (
+              <p className="text-sm text-gray-300">No changes detected.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {exportMutation.data.changes.map((change, index) => (
+                  <p key={`${change.resource}-${change.action}-${index}`} className="text-xs text-gray-300">
+                    {change.action.toUpperCase()} {change.resource}/{change.name || change.field || 'resource'}
+                  </p>
+                ))}
+              </div>
+            )}
+            {exportMutation.data.pushed && (
+              <p className="mt-2 text-xs text-green-400">Pushed {exportMutation.data.resources_updated} resource(s).</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Deploy section */}

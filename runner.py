@@ -415,6 +415,184 @@ def _promote_latest_version(deployer: Deployer) -> int | None:
     return latest_version
 
 
+def _infer_connectors_from_prompt(prompt: str) -> list[str]:
+    """Infer well-known connector names from a natural-language prompt."""
+    lower = prompt.lower()
+    mapping = [
+        ("shopify", "Shopify"),
+        ("amazon connect", "Amazon Connect"),
+        ("salesforce", "Salesforce"),
+        ("zendesk", "Zendesk"),
+    ]
+    connectors: list[str] = []
+    for needle, label in mapping:
+        if needle in lower and label not in connectors:
+            connectors.append(label)
+    return connectors
+
+
+def _build_skill_recommendations(artifact: dict) -> list[dict[str, str]]:
+    """Recommend starter skills based on generated artifact surfaces."""
+    skills: list[dict[str, str]] = [
+        {
+            "id": "routing_keyword_expansion",
+            "reason": "Expand routing coverage for intent phrases discovered in prompt-to-agent synthesis.",
+        },
+        {
+            "id": "safety_policy_hardening",
+            "reason": "Enforce stronger safety posture for newly introduced flows and escalation paths.",
+        },
+    ]
+    tool_names = [str(tool.get("name", "")) for tool in artifact.get("tools", [])]
+    if any("shopify" in name for name in tool_names):
+        skills.append(
+            {
+                "id": "shopify_order_workflow",
+                "reason": "Harden Shopify order retrieval/cancel/address workflows and fallback handling.",
+            }
+        )
+    if any("amazon_connect" in name for name in tool_names):
+        skills.append(
+            {
+                "id": "live_handoff_context_bridge",
+                "reason": "Preserve customer context when escalating to Amazon Connect live agents.",
+            }
+        )
+    return skills
+
+
+def _next_built_config_path(configs_dir: Path) -> Path:
+    """Return the next versioned config path for build-generated configs."""
+    highest = 0
+    for path in configs_dir.glob("v*_*.yaml"):
+        head = path.name.split("_", 1)[0]
+        if not head.startswith("v"):
+            continue
+        try:
+            highest = max(highest, int(head[1:]))
+        except ValueError:
+            continue
+    next_version = highest + 1
+    return configs_dir / f"v{next_version:03d}_built_from_prompt.yaml"
+
+
+def _artifact_to_seed_config(prompt: str, artifact: dict) -> dict:
+    """Map a prompt-built artifact into an AutoAgent config scaffold."""
+    base_path = Path(__file__).parent / "agent" / "config" / "base_config.yaml"
+    config = load_config(str(base_path)).model_dump()
+
+    intents = artifact.get("intents", [])
+    guardrails = artifact.get("guardrails", [])
+    connectors = artifact.get("connectors", [])
+    tools = artifact.get("tools", [])
+    skills = artifact.get("skills", [])
+    integration_templates = artifact.get("integration_templates", [])
+
+    intent_names = [str(item.get("name", "")) for item in intents if item.get("name")]
+    intent_human = ", ".join(name.replace("_", " ") for name in intent_names)
+    guardrail_text = " ".join(str(item) for item in guardrails)
+
+    config["prompts"]["root"] = (
+        "You are AutoAgent, a production customer support orchestrator. "
+        f"Primary intents: {intent_human or 'general support'}. "
+        f"Follow these guardrails: {guardrail_text or 'standard policy controls'}. "
+        "Escalate with verified context when self-service cannot resolve safely."
+    )
+
+    order_keywords = {"order", "tracking", "cancel", "cancellation", "shipping", "address", "refund"}
+    for intent in intent_names:
+        order_keywords.update(intent.replace("_", " ").split())
+    rules = config.get("routing", {}).get("rules", [])
+    for rule in rules:
+        if rule.get("specialist") == "orders":
+            current = set(rule.get("keywords", []))
+            merged = sorted(current.union(order_keywords))
+            rule["keywords"] = merged
+
+    if any(str(conn).lower() == "shopify" for conn in connectors):
+        config["tools"]["orders_db"]["enabled"] = True
+    if any(str(conn).lower() == "zendesk" for conn in connectors):
+        config["tools"]["faq"]["enabled"] = True
+    if tools:
+        config["tools"]["catalog"]["enabled"] = True
+
+    config["optimizer"]["use_skills"] = True
+    config["optimizer"]["skill_selection_strategy"] = "auto"
+    config["optimizer"]["skill_max_candidates"] = max(3, len(skills))
+
+    # Extra metadata is intentionally embedded for downstream UI/CLI handoff.
+    config["journey_build"] = {
+        "source_prompt": prompt,
+        "intents": intents,
+        "guardrails": guardrails,
+        "skills": skills,
+        "integration_templates": integration_templates,
+    }
+    return config
+
+
+def _write_generated_eval_cases(path: Path, artifact: dict) -> None:
+    """Write eval cases derived from build artifact suggested tests."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tests = artifact.get("suggested_tests", [])
+    cases: list[dict[str, object]] = []
+    for idx, test in enumerate(tests, start=1):
+        user_message = str(test.get("user_message", "")).strip()
+        expected_behavior = str(test.get("expected_behavior", "")).strip()
+        lowered = user_message.lower()
+        expected_specialist = "orders" if any(token in lowered for token in ["order", "shipping", "cancel", "address"]) else "support"
+        expected_keywords = ["order"] if expected_specialist == "orders" else ["help"]
+        cases.append(
+            {
+                "id": f"build_{idx:03d}",
+                "category": "generated_build",
+                "user_message": user_message or f"Generated build test #{idx}",
+                "expected_specialist": expected_specialist,
+                "expected_behavior": "answer",
+                "expected_keywords": expected_keywords,
+                "expected_notes": expected_behavior,
+            }
+        )
+    if not cases:
+        cases = [
+            {
+                "id": "build_001",
+                "category": "generated_build",
+                "user_message": "Can you help me with my order status?",
+                "expected_specialist": "orders",
+                "expected_behavior": "answer",
+                "expected_keywords": ["order"],
+                "expected_notes": "Fallback generated case when no suggested tests are available.",
+            }
+        ]
+    path.write_text(yaml.safe_dump({"cases": cases}, sort_keys=False), encoding="utf-8")
+
+
+def _load_versioned_config(configs_dir: str, config_version: int | None) -> tuple[int, dict, Path]:
+    """Load a config by version from `configs_dir`, defaulting to the highest version."""
+    cfg_dir = Path(configs_dir)
+    version_to_path: dict[int, Path] = {}
+    for path in cfg_dir.glob("v*_*.yaml"):
+        head = path.name.split("_", 1)[0]
+        if not head.startswith("v"):
+            continue
+        try:
+            version = int(head[1:])
+        except ValueError:
+            continue
+        version_to_path[version] = path
+
+    if not version_to_path:
+        raise FileNotFoundError(f"No versioned config files found in {configs_dir}")
+
+    selected_version = config_version if config_version is not None else max(version_to_path.keys())
+    selected_path = version_to_path.get(selected_version)
+    if selected_path is None:
+        raise FileNotFoundError(f"Version {selected_version} not found in {configs_dir}")
+    config = yaml.safe_load(selected_path.read_text(encoding="utf-8"))
+    return selected_version, config, selected_path
+
+
 # ---------------------------------------------------------------------------
 # Root CLI group
 # ---------------------------------------------------------------------------
@@ -528,6 +706,76 @@ def init_project(template: str, target_dir: str, agent_name: str,
     click.echo("    autoagent server            # Start API + web console")
     click.echo("    autoagent quickstart        # Run the full loop automatically")
     click.echo("")
+
+
+# ---------------------------------------------------------------------------
+# autoagent build
+# ---------------------------------------------------------------------------
+
+@cli.command("build")
+@click.argument("prompt")
+@click.option(
+    "--connector",
+    "connectors",
+    multiple=True,
+    help="Connector to include (repeatable). Example: --connector Shopify",
+)
+@click.option("--output-dir", default=".", show_default=True, help="Directory for generated build artifacts.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output artifact as JSON only.")
+def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_output: bool = False) -> None:
+    """Build an agent artifact from natural language and scaffold eval/deploy handoff files."""
+    from optimizer.transcript_intelligence import TranscriptIntelligenceService
+
+    target = Path(output_dir).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    (target / ".autoagent").mkdir(parents=True, exist_ok=True)
+    (target / "configs").mkdir(parents=True, exist_ok=True)
+    (target / "evals" / "cases").mkdir(parents=True, exist_ok=True)
+
+    resolved_connectors = [item.strip() for item in connectors if item.strip()]
+    if not resolved_connectors:
+        resolved_connectors = _infer_connectors_from_prompt(prompt)
+
+    service = TranscriptIntelligenceService()
+    artifact = service.build_agent_artifact(prompt, resolved_connectors)
+    artifact["skills"] = _build_skill_recommendations(artifact)
+    artifact["source_prompt"] = prompt
+
+    config = _artifact_to_seed_config(prompt, artifact)
+    config_path = _next_built_config_path(target / "configs")
+    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+    eval_path = target / "evals" / "cases" / "generated_build.yaml"
+    _write_generated_eval_cases(eval_path, artifact)
+
+    artifact_path = target / ".autoagent" / "build_artifact_latest.json"
+    artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
+    if json_output:
+        click.echo(json.dumps(artifact, indent=2))
+        return
+
+    click.echo(click.style("\n✦ AutoAgent Build", fg="cyan", bold=True))
+    click.echo(f"Prompt: {prompt}")
+    click.echo(f"Connectors: {', '.join(artifact.get('connectors', [])) or 'None'}")
+    click.echo("")
+    click.echo(click.style("Artifact coverage", bold=True))
+    click.echo(f"  Intents:               {len(artifact.get('intents', []))}")
+    click.echo(f"  Tools:                 {len(artifact.get('tools', []))}")
+    click.echo(f"  Guardrails:            {len(artifact.get('guardrails', []))}")
+    click.echo(f"  Skills:                {len(artifact.get('skills', []))}")
+    click.echo(f"  Integration templates: {len(artifact.get('integration_templates', []))}")
+    click.echo("")
+    click.echo(click.style("Generated handoff files", bold=True))
+    click.echo(f"  Config:   {config_path}")
+    click.echo(f"  Evals:    {eval_path}")
+    click.echo(f"  Artifact: {artifact_path}")
+    click.echo("")
+    click.echo(click.style("Next steps:", bold=True))
+    click.echo(f"  autoagent eval run --config {config_path}")
+    click.echo("  autoagent diagnose --interactive")
+    click.echo("  autoagent loop --max-cycles 5")
+    click.echo("  autoagent deploy --target cx-studio")
 
 
 # ---------------------------------------------------------------------------
@@ -1066,13 +1314,107 @@ def config_migrate(input_file: str, output: str | None) -> None:
               default="canary", show_default=True, help="Deployment strategy.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
-def deploy(config_version: int | None, strategy: str, configs_dir: str, db: str) -> None:
+@click.option(
+    "--target",
+    type=click.Choice(["autoagent", "cx-studio"]),
+    default="autoagent",
+    show_default=True,
+    help="Deployment target.",
+)
+@click.option("--project", default=None, help="GCP project ID (required for CX push).")
+@click.option("--location", default="global", show_default=True, help="CX agent location.")
+@click.option("--agent-id", default=None, help="CX agent ID (required for CX push).")
+@click.option("--snapshot", default=None, help="CX snapshot JSON path from `autoagent cx import`.")
+@click.option("--credentials", default=None, help="Path to service account JSON for CX calls.")
+@click.option("--output", default=None, help="Output path for CX export package JSON.")
+@click.option("--push/--no-push", default=False, show_default=True, help="Push to CX now (otherwise package only).")
+def deploy(
+    config_version: int | None,
+    strategy: str,
+    configs_dir: str,
+    db: str,
+    target: str,
+    project: str | None,
+    location: str,
+    agent_id: str | None,
+    snapshot: str | None,
+    credentials: str | None,
+    output: str | None,
+    push: bool,
+) -> None:
     """Deploy a config version.
 
     Examples:
       autoagent deploy --config-version 5 --strategy canary
       autoagent deploy --strategy immediate
+      autoagent deploy --target cx-studio
     """
+    if target == "cx-studio":
+        try:
+            selected_version, config, selected_path = _load_versioned_config(configs_dir, config_version)
+        except FileNotFoundError as exc:
+            click.echo(str(exc))
+            click.echo("Run: autoagent build \"Describe your agent\" or autoagent init")
+            return
+
+        package_dir = Path(".autoagent")
+        package_dir.mkdir(parents=True, exist_ok=True)
+        output_path = Path(output) if output else package_dir / f"cx_export_v{selected_version:03d}.json"
+        package = {
+            "generated_at": datetime.now(tz=timezone.utc).isoformat(),
+            "target": "cx-studio",
+            "config_version": selected_version,
+            "project": project,
+            "location": location,
+            "agent_id": agent_id,
+            "config": config,
+        }
+        output_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
+        click.echo(f"CX export package written: {output_path}")
+
+        if snapshot:
+            try:
+                from cx_studio import CxAuth, CxClient, CxExporter
+
+                auth = CxAuth.__new__(CxAuth)
+                auth._token = None
+                auth._token_expiry = 0.0
+                auth._project_id = project
+                auth._credentials_path = credentials
+                client = CxClient.__new__(CxClient)
+                client._auth = auth
+                client._timeout = 30.0
+                client._max_retries = 3
+                exporter = CxExporter(client)
+                changes = exporter.preview_changes(config, snapshot)
+                click.echo(f"Preview: {len(changes)} change(s) ready for CX export")
+            except Exception as exc:
+                click.echo(click.style(f"Warning: CX preview unavailable ({exc})", fg="yellow"))
+
+        if not push:
+            click.echo("No remote CX push performed (`--no-push`).")
+            click.echo("Next step:")
+            click.echo(
+                "  autoagent cx export --project <project> --location "
+                f"{location} --agent <agent-id> --config {selected_path} --snapshot <snapshot>"
+            )
+            return
+
+        if not project or not agent_id or not snapshot:
+            click.echo("CX push requires --project, --agent-id, and --snapshot.")
+            raise SystemExit(2)
+
+        from cx_studio import CxAuth, CxClient, CxExporter
+        from cx_studio.types import CxAgentRef
+
+        auth = CxAuth(credentials_path=credentials)
+        client = CxClient(auth)
+        exporter = CxExporter(client)
+        ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+        result = exporter.export_agent(config, ref, snapshot_path=snapshot, dry_run=False)
+        click.echo(f"CX export pushed: {result.resources_updated} resource(s) updated")
+        return
+
     store = ConversationStore(db_path=db)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     history = deployer.version_manager.get_version_history()
@@ -2233,6 +2575,111 @@ def review_export(card_id: str) -> None:
     """
     from optimizer.change_card import ChangeCardStore
 
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    click.echo(card.to_markdown())
+
+
+# ---------------------------------------------------------------------------
+# autoagent changes (aliases for review)
+# ---------------------------------------------------------------------------
+
+@cli.group("changes", invoke_without_command=True)
+@click.pass_context
+def changes_group(ctx: click.Context) -> None:
+    """Changes — aliases for reviewable optimizer change cards."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(changes_list)
+
+
+@changes_group.command("list")
+@click.option("--limit", default=20, show_default=True, type=int, help="Number of cards to show.")
+def changes_list(limit: int = 20) -> None:
+    """List pending change cards (alias for `autoagent review list`)."""
+    from optimizer.change_card import ChangeCardStore
+
+    Path(".autoagent").mkdir(parents=True, exist_ok=True)
+    store = ChangeCardStore()
+    cards = store.list_pending(limit=limit)
+
+    if not cards:
+        click.echo("No pending change cards.")
+        return
+
+    click.echo(f"\nPending change cards ({len(cards)}):\n")
+    click.echo(f"{'ID':<10}  {'Title':<35}  {'Risk':<8}  {'Status'}")
+    click.echo(f"{'─' * 10}  {'─' * 35}  {'─' * 8}  {'─' * 10}")
+    for card in cards:
+        title = (card.title[:32] + "...") if len(card.title) > 35 else card.title
+        click.echo(f"{card.card_id:<10}  {title:<35}  {card.risk_class:<8}  {card.status}")
+
+
+@changes_group.command("show")
+@click.argument("card_id")
+def changes_show(card_id: str) -> None:
+    """Show a specific change card (alias for `autoagent review show`)."""
+    from optimizer.change_card import ChangeCardStore
+
+    Path(".autoagent").mkdir(parents=True, exist_ok=True)
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    click.echo(card.to_terminal())
+
+
+@changes_group.command("approve")
+@click.argument("card_id")
+def changes_approve(card_id: str) -> None:
+    """Approve/apply a change card (alias for `autoagent review apply`)."""
+    from optimizer.change_card import ChangeCardStore
+
+    Path(".autoagent").mkdir(parents=True, exist_ok=True)
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    if card.status != "pending":
+        click.echo(f"Card is not pending (status={card.status})")
+        raise SystemExit(1)
+    store.update_status(card_id, "applied")
+    click.echo(f"Applied change card {card_id}: {card.title}")
+
+
+@changes_group.command("reject")
+@click.argument("card_id")
+@click.option("--reason", default="", help="Reason for rejection.")
+def changes_reject(card_id: str, reason: str) -> None:
+    """Reject a change card (alias for `autoagent review reject`)."""
+    from optimizer.change_card import ChangeCardStore
+
+    Path(".autoagent").mkdir(parents=True, exist_ok=True)
+    store = ChangeCardStore()
+    card = store.get(card_id)
+    if card is None:
+        click.echo(f"Change card not found: {card_id}")
+        raise SystemExit(1)
+    if card.status != "pending":
+        click.echo(f"Card is not pending (status={card.status})")
+        raise SystemExit(1)
+    store.update_status(card_id, "rejected", reason=reason)
+    click.echo(f"Rejected change card {card_id}: {card.title}")
+    if reason:
+        click.echo(f"  Reason: {reason}")
+
+
+@changes_group.command("export")
+@click.argument("card_id")
+def changes_export(card_id: str) -> None:
+    """Export a change card markdown (alias for `autoagent review export`)."""
+    from optimizer.change_card import ChangeCardStore
+
+    Path(".autoagent").mkdir(parents=True, exist_ok=True)
     store = ChangeCardStore()
     card = store.get(card_id)
     if card is None:

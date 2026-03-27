@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Paperclip, Send, Trash2, Loader2 } from 'lucide-react';
 import { ChatMessage } from '../components/assistant/ChatMessage';
 import { FileUpload } from '../components/assistant/FileUpload';
@@ -20,6 +21,7 @@ const WELCOME_SUGGESTIONS = [
 ];
 
 export function Assistant() {
+  const navigate = useNavigate();
   const [inputMessage, setInputMessage] = useState('');
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
@@ -113,6 +115,15 @@ export function Assistant() {
           <p className="mt-1 text-sm text-gray-600">
             Build, optimize, and debug AI agents through natural language
           </p>
+          <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            Recommended builder:
+            <button
+              onClick={() => navigate('/intelligence')}
+              className="font-semibold text-sky-800 underline decoration-sky-400 underline-offset-2 hover:text-sky-900"
+            >
+              Intelligence Studio
+            </button>
+          </div>
         </div>
 
         {hasMessages && (

@@ -203,6 +203,19 @@ class TestAssistantMessage:
         )
         assert response.status_code == 422  # Validation error
 
+    def test_get_message_eventsource_compatibility(self, client: TestClient) -> None:
+        """Frontend uses EventSource GET; endpoint should stream SSE successfully."""
+        response = client.get(
+            "/api/assistant/message?message=Hello%20from%20eventsource",
+            headers={"Accept": "text/event-stream"},
+        )
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+        assert "X-Session-ID" in response.headers
+        events = self._parse_sse_events(response.text)
+        assert len(events) > 0
+        assert any(event["event"] == "suggestions" for event in events)
+
     @staticmethod
     def _parse_sse_events(sse_text: str) -> list[dict]:
         """Parse SSE text into list of event dictionaries."""
@@ -262,6 +275,17 @@ class TestAssistantUpload:
         assert len(data["files"]) == 1
         assert data["files"][0]["filename"] == "transcripts.csv"
         assert data["files"][0]["extension"] == ".csv"
+
+    def test_upload_single_file_frontend_contract(self, client: TestClient) -> None:
+        """Frontend uploads `file` and expects a `url` in response payload."""
+        files = {"file": ("transcripts.csv", BytesIO(b"conversation,outcome\n1,success"), "text/csv")}
+
+        response = client.post("/api/assistant/upload", files=files)
+        assert response.status_code == 200
+        data = response.json()
+        assert "url" in data
+        assert isinstance(data["url"], str)
+        assert data["url"] != ""
 
     def test_upload_multiple_files(self, client: TestClient) -> None:
         """Test uploading multiple files."""
@@ -398,6 +422,21 @@ class TestAssistantHistory:
         assert len(turn["assistant_response"]) > 0
         assert any(e["event"] == "thinking" for e in turn["assistant_response"])
 
+    def test_get_history_without_session_defaults_to_latest(self, client: TestClient) -> None:
+        """If session_id is omitted, API should return latest session for UI compatibility."""
+        resp = client.post(
+            "/api/assistant/message",
+            json={"message": "Create a session for history fallback"},
+            headers={"Accept": "text/event-stream"},
+        )
+        session_id = resp.headers["X-Session-ID"]
+
+        history_resp = client.get("/api/assistant/history")
+        assert history_resp.status_code == 200
+        data = history_resp.json()
+        assert data["session_id"] == session_id
+        assert data["total"] >= 1
+
 
 # ---------------------------------------------------------------------------
 # DELETE /api/assistant/history — Clear conversation
@@ -432,6 +471,21 @@ class TestAssistantClearHistory:
         """Test clearing nonexistent session returns 404."""
         response = client.delete("/api/assistant/history?session_id=nonexistent")
         assert response.status_code == 404
+
+    def test_clear_history_without_session_uses_latest(self, client: TestClient) -> None:
+        """If session_id is omitted, clear should target latest session."""
+        resp = client.post(
+            "/api/assistant/message",
+            json={"message": "Create a session for clear fallback"},
+            headers={"Accept": "text/event-stream"},
+        )
+        session_id = resp.headers["X-Session-ID"]
+        assert session_id in assistant_routes._sessions
+
+        clear_resp = client.delete("/api/assistant/history")
+        assert clear_resp.status_code == 200
+        assert clear_resp.json()["success"] is True
+        assert session_id not in assistant_routes._sessions
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +525,14 @@ class TestAssistantSuggestions:
         """Test getting suggestions for nonexistent session returns 404."""
         response = client.get("/api/assistant/suggestions?session_id=nonexistent")
         assert response.status_code == 404
+
+    def test_get_suggestions_without_session_returns_defaults(self, client: TestClient) -> None:
+        """If no session_id is provided, endpoint should return a default/latest suggestion set."""
+        response = client.get("/api/assistant/suggestions")
+        assert response.status_code == 200
+        payload = response.json()
+        assert "session_id" in payload
+        assert len(payload["suggestions"]) > 0
 
 
 # ---------------------------------------------------------------------------
