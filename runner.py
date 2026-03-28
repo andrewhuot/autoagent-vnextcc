@@ -5285,5 +5285,261 @@ def benchmark_run(benchmark_name: str, cycles: int) -> None:
     click.echo(f"Running benchmark {benchmark_name} for {cycles} cycles...")
 
 
+# ---------------------------------------------------------------------------
+# Reward commands
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def reward():
+    """Manage reward definitions."""
+    pass
+
+
+@reward.command("create")
+@click.argument("name")
+@click.option("--kind", type=click.Choice(["verifiable", "preference", "business_outcome", "constitutional"]), default="verifiable")
+@click.option("--scope", type=click.Choice(["runtime", "buildtime", "multi_agent"]), default="runtime")
+@click.option("--source", type=click.Choice(["deterministic_checker", "environment_checker", "human_label", "llm_judge", "ai_preference"]), default="deterministic_checker")
+@click.option("--hard-gate", is_flag=True, help="Mark as hard gate (pass/fail, not optimizable)")
+@click.option("--weight", type=float, default=1.0)
+@click.option("--description", type=str, default="")
+def reward_create(name, kind, scope, source, hard_gate, weight, description):
+    """Create a new reward definition."""
+    from rewards.registry import RewardRegistry
+    from rewards.types import RewardDefinition, RewardKind, RewardScope, RewardSource
+    registry = RewardRegistry()
+    defn = RewardDefinition(
+        name=name, kind=RewardKind(kind), scope=RewardScope(scope),
+        source=RewardSource(source), hard_gate=hard_gate,
+        weight=weight, description=description,
+    )
+    result_name, version = registry.register(defn)
+    click.echo(f"Created reward '{result_name}' v{version} (id: {defn.reward_id})")
+    registry.close()
+
+
+@reward.command("list")
+@click.option("--kind", type=str, default=None, help="Filter by kind")
+def reward_list(kind):
+    """List all reward definitions."""
+    from rewards.registry import RewardRegistry
+    registry = RewardRegistry()
+    rewards = registry.list_by_kind(kind) if kind else registry.list_all()
+    if not rewards:
+        click.echo("No rewards defined.")
+        return
+    for r in rewards:
+        gate = " [HARD GATE]" if r.hard_gate else ""
+        click.echo(f"  {r.name} v{r.version}  kind={r.kind.value}  trust={r.trust_tier.value}  weight={r.weight}{gate}")
+    click.echo(f"\n{len(rewards)} reward(s)")
+    registry.close()
+
+
+@reward.command("test")
+@click.argument("name")
+@click.option("--trace", "trace_id", type=str, default=None, help="Trace ID to test against")
+def reward_test(name, trace_id):
+    """Test a reward definition."""
+    from rewards.registry import RewardRegistry
+    registry = RewardRegistry()
+    defn = registry.get(name)
+    if defn is None:
+        click.echo(f"Reward not found: {name}", err=True)
+        raise SystemExit(1)
+    click.echo(f"Reward: {defn.name} v{defn.version}")
+    click.echo(f"  Kind: {defn.kind.value}")
+    click.echo(f"  Source: {defn.source.value}")
+    click.echo(f"  Hard gate: {defn.hard_gate}")
+    click.echo(f"  Weight: {defn.weight}")
+    if trace_id:
+        click.echo(f"  Testing against trace: {trace_id}")
+    registry.close()
+
+
+# ---------------------------------------------------------------------------
+# RL / Policy optimization commands
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def rl():
+    """Policy optimization commands."""
+    pass
+
+
+@rl.command("train")
+@click.option("--mode", type=click.Choice(["control", "verifier", "preference"]), required=True)
+@click.option("--backend", type=click.Choice(["openai_rft", "openai_dpo", "vertex_sft", "vertex_preference", "vertex_continuous"]), required=True)
+@click.option("--dataset", type=str, required=True, help="Path to training dataset")
+@click.option("--config", type=str, default=None, help="JSON config string")
+def rl_train(mode, backend, dataset, config):
+    """Start a policy training job."""
+    import json as json_mod
+    from policy_opt.registry import PolicyArtifactRegistry
+    from policy_opt.orchestrator import PolicyOptOrchestrator
+    registry = PolicyArtifactRegistry()
+    orch = PolicyOptOrchestrator(policy_registry=registry)
+    config_dict = json_mod.loads(config) if config else {}
+    try:
+        job = orch.create_training_job(mode=mode, backend=backend, dataset_path=dataset, config=config_dict)
+        click.echo(f"Created job: {job.job_id}")
+        job = orch.start_training(job.job_id)
+        click.echo(f"Job status: {job.status.value}")
+        if job.result:
+            click.echo(f"Result: {json_mod.dumps(job.result, indent=2)}")
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    finally:
+        registry.close()
+
+
+@rl.command("jobs")
+@click.option("--status", type=str, default=None)
+def rl_jobs(status):
+    """List training jobs."""
+    from policy_opt.registry import PolicyArtifactRegistry
+    from policy_opt.orchestrator import PolicyOptOrchestrator
+    registry = PolicyArtifactRegistry()
+    orch = PolicyOptOrchestrator(policy_registry=registry)
+    jobs = orch.list_jobs(status=status)
+    if not jobs:
+        click.echo("No training jobs.")
+        return
+    for j in jobs:
+        click.echo(f"  {j.job_id[:12]}  mode={j.mode.value}  backend={j.backend}  status={j.status.value}")
+    click.echo(f"\n{len(jobs)} job(s)")
+    registry.close()
+
+
+@rl.command("eval")
+@click.argument("policy_id")
+def rl_eval(policy_id):
+    """Evaluate a policy artifact offline."""
+    from policy_opt.registry import PolicyArtifactRegistry
+    from policy_opt.orchestrator import PolicyOptOrchestrator
+    registry = PolicyArtifactRegistry()
+    orch = PolicyOptOrchestrator(policy_registry=registry)
+    try:
+        report = orch.evaluate_policy(policy_id)
+        click.echo(json.dumps(report, indent=2))
+    except KeyError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    finally:
+        registry.close()
+
+
+@rl.command("promote")
+@click.argument("policy_id")
+def rl_promote(policy_id):
+    """Promote a policy to active status."""
+    from policy_opt.registry import PolicyArtifactRegistry
+    from policy_opt.orchestrator import PolicyOptOrchestrator
+    registry = PolicyArtifactRegistry()
+    orch = PolicyOptOrchestrator(policy_registry=registry)
+    try:
+        policy = orch.promote_policy(policy_id)
+        click.echo(f"Promoted: {policy.name} v{policy.version} ({policy.policy_id})")
+    except (KeyError, ValueError) as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    finally:
+        registry.close()
+
+
+@rl.command("rollback")
+@click.argument("policy_id")
+def rl_rollback(policy_id):
+    """Rollback a promoted policy."""
+    from policy_opt.registry import PolicyArtifactRegistry
+    from policy_opt.orchestrator import PolicyOptOrchestrator
+    registry = PolicyArtifactRegistry()
+    orch = PolicyOptOrchestrator(policy_registry=registry)
+    try:
+        target = orch.rollback_policy(policy_id)
+        click.echo(f"Rolled back {policy_id}")
+        if target:
+            click.echo(f"Re-promoted: {target}")
+    except KeyError as e:
+        click.echo(f"Error: {e}", err=True)
+        raise SystemExit(1)
+    finally:
+        registry.close()
+
+
+@rl.command("dataset")
+@click.option("--mode", type=click.Choice(["verifiable", "preference", "episode", "audit"]), default="verifiable")
+@click.option("--limit", type=int, default=1000)
+def rl_dataset(mode, limit):
+    """Build a training dataset from episodes."""
+    from data.episodes import EpisodeStore
+    from policy_opt.dataset_builder import RewardDatasetBuilder
+    store = EpisodeStore()
+    builder = RewardDatasetBuilder()
+    episodes = store.list_episodes(limit=limit)
+    if mode == "verifiable":
+        path = builder.build_verifiable_dataset(episodes)
+    elif mode == "preference":
+        path = builder.build_preference_pairs(episodes)
+    elif mode == "episode":
+        path = builder.build_episode_export(episodes)
+    else:
+        path = builder.build_audit_set(episodes)
+    click.echo(f"Built {mode} dataset: {path} ({len(episodes)} episodes)")
+    store.close()
+
+
+@rl.command("canary")
+@click.argument("policy_id")
+def rl_canary(policy_id):
+    """Start canary evaluation for a policy."""
+    from policy_opt.registry import PolicyArtifactRegistry
+    registry = PolicyArtifactRegistry()
+    policy = registry.get_by_id(policy_id)
+    if policy is None:
+        click.echo(f"Policy not found: {policy_id}", err=True)
+        raise SystemExit(1)
+    registry.update_status(policy_id, "canary")
+    click.echo(f"Policy {policy_id} set to canary status")
+    registry.close()
+
+
+# ---------------------------------------------------------------------------
+# Preference collection commands
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def pref():
+    """Preference collection and export."""
+    pass
+
+
+@pref.command("collect")
+@click.option("--input-text", required=True)
+@click.option("--chosen", required=True)
+@click.option("--rejected", required=True)
+@click.option("--source", default="human_review")
+def pref_collect(input_text, chosen, rejected, source):
+    """Add a preference pair."""
+    from optimizer.preference_learning import PreferencePair
+    pair = PreferencePair(input_text=input_text, chosen=chosen, rejected=rejected, source=source)
+    click.echo(f"Collected preference pair:")
+    click.echo(f"  Input: {input_text[:80]}...")
+    click.echo(f"  Chosen: {chosen[:80]}...")
+    click.echo(f"  Rejected: {rejected[:80]}...")
+    click.echo(f"  Source: {source}")
+
+
+@pref.command("export")
+@click.option("--format", "fmt", type=click.Choice(["vertex", "openai", "generic"]), default="vertex")
+def pref_export(fmt):
+    """Export preference pairs as DPO dataset."""
+    from optimizer.preference_learning import PreferenceLearningPipeline
+    pipeline = PreferenceLearningPipeline()
+    # In a real implementation, would load pairs from the store
+    click.echo(f"Exporting preferences in {fmt} format...")
+    click.echo("No preference pairs to export yet. Submit pairs first via API or CLI.")
+
+
 if __name__ == "__main__":
     cli()

@@ -28,6 +28,10 @@ import {
   Upload,
   Bot,
   Bell,
+  Award,
+  Inbox,
+  Target,
+  ShieldCheck,
 } from 'lucide-react';
 import { classNames } from '../lib/utils';
 
@@ -98,6 +102,15 @@ const navSections: NavSection[] = [
       { to: '/registry', label: 'Registry', icon: BookOpen },
       { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },
       { to: '/blame', label: 'Blame Map', icon: MapPin },
+    ],
+  },
+  {
+    title: 'Policy Optimization',
+    items: [
+      { to: '/reward-studio', label: 'Reward Studio', icon: Award },
+      { to: '/preference-inbox', label: 'Preference Inbox', icon: Inbox },
+      { to: '/policy-candidates', label: 'Policy Candidates', icon: Target },
+      { to: '/reward-audit', label: 'Reward Audit', icon: ShieldCheck },
     ],
   },
 ];

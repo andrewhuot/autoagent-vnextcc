@@ -60,6 +60,9 @@ from api.routes import (
     skills as skills_routes,
     traces as traces_routes,
     what_if as what_if_routes,
+    rewards as rewards_routes,
+    policy_opt as policy_opt_routes,
+    preferences as preferences_routes,
 )
 from api.tasks import TaskManager
 from api.websocket import ConnectionManager
@@ -397,6 +400,9 @@ app.include_router(collaboration_routes.router)
 app.include_router(datasets_routes.router)
 app.include_router(outcomes_routes.router)
 app.include_router(a2a_routes.router)
+app.include_router(rewards_routes.router)
+app.include_router(policy_opt_routes.router)
+app.include_router(preferences_routes.router)
 # Check if a2a_routes has a well-known endpoint and wire it up
 # The a2a router registers /.well-known/agent-card.json directly (no prefix)
 # so we include the router without an additional prefix to keep the path correct.

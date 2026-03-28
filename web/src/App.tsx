@@ -39,6 +39,10 @@ import { Sandbox } from './pages/Sandbox';
 import { Knowledge } from './pages/Knowledge';
 import { WhatIf } from './pages/WhatIf';
 import { Reviews } from './pages/Reviews';
+import { RewardStudio } from './pages/RewardStudio';
+import { PreferenceInbox } from './pages/PreferenceInbox';
+import { PolicyCandidates } from './pages/PolicyCandidates';
+import { RewardAudit } from './pages/RewardAudit';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -92,6 +96,10 @@ export default function App() {
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/what-if" element={<WhatIf />} />
             <Route path="/reviews" element={<Reviews />} />
+            <Route path="/reward-studio" element={<RewardStudio />} />
+            <Route path="/preference-inbox" element={<PreferenceInbox />} />
+            <Route path="/policy-candidates" element={<PolicyCandidates />} />
+            <Route path="/reward-audit" element={<RewardAudit />} />
             <Route path="/settings" element={<Settings />} />
           </Routes>
         </Layout>

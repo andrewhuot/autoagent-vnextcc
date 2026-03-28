@@ -44,6 +44,10 @@ const pageTitles: Record<string, string> = {
   '/knowledge': 'Knowledge',
   '/what-if': 'What-If Replay',
   '/reviews': 'Collaborative Review',
+  '/reward-studio': 'Reward Studio',
+  '/preference-inbox': 'Preference Inbox',
+  '/policy-candidates': 'Policy Candidates',
+  '/reward-audit': 'Reward Audit',
   '/settings': 'Settings',
 };
 
