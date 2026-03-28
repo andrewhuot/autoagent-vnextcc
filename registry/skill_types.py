@@ -146,6 +146,20 @@ class Skill:
     times_applied: int = 0
     success_rate: float = 0.0
     status: str = "active"      # "active", "draft", "deprecated"
+    # SKILL.md portable format fields
+    kind: str = "runtime"       # "runtime" or "buildtime"
+    dependencies: list[str] = field(default_factory=list)
+    allowed_tools: list[str] = field(default_factory=list)
+    supported_frameworks: list[str] = field(default_factory=list)
+    required_approvals: list[str] = field(default_factory=list)
+    eval_contract: dict[str, Any] = field(default_factory=dict)
+    rollout_policy: str = "gradual"
+    provenance: str = ""
+    trust_level: str = "unverified"   # unverified, community-tested, benchmark-validated, enterprise-certified
+    instructions: str = ""            # Full instructions (Layer 2 content)
+    references: str = ""              # Reference material (Layer 3 content)
+    runtime_effectiveness: float = 0.0    # Track runtime behaviour improvement
+    buildtime_effectiveness: float = 0.0  # Track builder output improvement
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -167,6 +181,20 @@ class Skill:
             "times_applied": self.times_applied,
             "success_rate": self.success_rate,
             "status": self.status,
+            # SKILL.md portable format fields
+            "kind": self.kind,
+            "dependencies": self.dependencies,
+            "allowed_tools": self.allowed_tools,
+            "supported_frameworks": self.supported_frameworks,
+            "required_approvals": self.required_approvals,
+            "eval_contract": self.eval_contract,
+            "rollout_policy": self.rollout_policy,
+            "provenance": self.provenance,
+            "trust_level": self.trust_level,
+            "instructions": self.instructions,
+            "references": self.references,
+            "runtime_effectiveness": self.runtime_effectiveness,
+            "buildtime_effectiveness": self.buildtime_effectiveness,
         }
 
     @classmethod
@@ -190,4 +218,18 @@ class Skill:
             times_applied=data.get("times_applied", 0),
             success_rate=data.get("success_rate", 0.0),
             status=data.get("status", "active"),
+            # SKILL.md portable format fields
+            kind=data.get("kind", "runtime"),
+            dependencies=data.get("dependencies", []),
+            allowed_tools=data.get("allowed_tools", []),
+            supported_frameworks=data.get("supported_frameworks", []),
+            required_approvals=data.get("required_approvals", []),
+            eval_contract=data.get("eval_contract", {}),
+            rollout_policy=data.get("rollout_policy", "gradual"),
+            provenance=data.get("provenance", ""),
+            trust_level=data.get("trust_level", "unverified"),
+            instructions=data.get("instructions", ""),
+            references=data.get("references", ""),
+            runtime_effectiveness=data.get("runtime_effectiveness", 0.0),
+            buildtime_effectiveness=data.get("buildtime_effectiveness", 0.0),
         )

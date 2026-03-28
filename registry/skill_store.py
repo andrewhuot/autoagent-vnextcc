@@ -434,6 +434,74 @@ class SkillStore:
         return [self._convert_from_unified(s) for s in unified_skills]
 
     # ------------------------------------------------------------------
+    # SKILL.md import / export
+    # ------------------------------------------------------------------
+
+    def import_from_md(self, path: str) -> Skill:
+        """Import a skill from a SKILL.md file or directory and register it.
+
+        If a skill with the same name already exists in the store it will **not**
+        be overwritten; the existing skill is returned instead.
+
+        Args:
+            path: Path to a ``.md`` file or a directory containing ``SKILL.md``.
+
+        Returns:
+            The imported (or already-existing) :class:`~registry.skill_types.Skill`.
+
+        Raises:
+            FileNotFoundError: If *path* does not exist or contains no SKILL.md.
+        """
+        from registry.skill_loader import load_from_skill_md  # noqa: PLC0415
+
+        skill = load_from_skill_md(path)
+
+        # Only register if the skill isn't already present
+        existing = self.get(skill.name)
+        if existing is None:
+            self.register(skill)
+            # Re-fetch to get the auto-assigned version
+            registered = self.get(skill.name)
+            return registered or skill
+
+        return existing
+
+    def export_to_md(self, skill_name: str, output_path: str) -> str:
+        """Export a skill to SKILL.md format.
+
+        Args:
+            skill_name: Name of the skill to export (latest version used).
+            output_path: Destination file path (e.g. ``/tmp/my-skill.md``).
+                If the path ends with a path separator or names an existing
+                directory a ``SKILL.md`` file is written inside that directory.
+
+        Returns:
+            The absolute path of the written file.
+
+        Raises:
+            KeyError: If no skill with *skill_name* is found in the store.
+        """
+        from registry.skill_md import SkillMdSerializer  # noqa: PLC0415
+
+        skill = self.get(skill_name)
+        if skill is None:
+            raise KeyError(f"Skill not found: {skill_name!r}")
+
+        import os  # noqa: PLC0415
+
+        # Resolve directory vs. file path
+        if os.path.isdir(output_path) or output_path.endswith(os.sep):
+            os.makedirs(output_path, exist_ok=True)
+            output_path = os.path.join(output_path, "SKILL.md")
+        else:
+            parent = os.path.dirname(os.path.abspath(output_path))
+            os.makedirs(parent, exist_ok=True)
+
+        serializer = SkillMdSerializer()
+        serializer.serialize_to_file(skill, output_path)
+        return os.path.abspath(output_path)
+
+    # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 

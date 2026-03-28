@@ -9,6 +9,7 @@ API Reference: https://docs.cloud.google.com/customer-engagement-ai/conversation
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -178,3 +179,72 @@ class DeployResult(BaseModel):
     environment: str
     status: str
     version_info: dict = Field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# New types for CX Agent Studio deployment parity (R1.11-R1.23)
+# ---------------------------------------------------------------------------
+
+
+class CxToolType(str, Enum):
+    """Tool types supported by CX Agent Studio."""
+
+    OPENAPI = "OPEN_API"
+    MCP = "MCP"
+    PYTHON_CODE = "PYTHON_CODE"
+    DATA_STORE = "DATA_STORE"
+    CLIENT_FUNCTION = "CLIENT_FUNCTION"
+    INTEGRATION_CONNECTOR = "INTEGRATION_CONNECTOR"
+    WIDGET = "WIDGET"
+    SYSTEM = "SYSTEM"
+
+
+class CxDeploymentTarget(str, Enum):
+    """Supported deployment targets for CX Agent Studio agents."""
+
+    WEB_WIDGET = "web_widget"
+    TELEPHONY_TWILIO = "telephony_twilio"
+    TELEPHONY_GTP = "telephony_gtp"
+    TELEPHONY_AUDIOCODES = "telephony_audiocodes"
+    TELEPHONY_FIVE9 = "telephony_five9"
+    CCAAS = "ccaas"
+    API = "api"
+
+
+class CxToolResource(BaseModel):
+    """CX Tool resource with typed tool_type and configuration.
+
+    Extends the basic ``CxTool`` with a strongly-typed ``tool_type`` enum and
+    a separate ``description`` field.  Use this model for creating new CX tools
+    via the deployment pipeline.
+    """
+
+    name: str = ""
+    tool_type: CxToolType = CxToolType.OPENAPI
+    config: dict = Field(default_factory=dict)
+    description: str = ""
+
+
+class CxTransferRule(BaseModel):
+    """CX transfer rule — routes conversation from one agent to another.
+
+    Transfer rules are CX-only constructs that define explicit conditions
+    under which a parent agent hands off to a child agent.
+    """
+
+    source_agent: str
+    target_agent: str
+    condition: str = ""
+    description: str = ""
+
+
+class CxDeployment(BaseModel):
+    """CX deployment configuration for a specific target channel.
+
+    Represents a deployment of a CX agent to a channel such as the web widget,
+    telephony, CCaaS, or the REST API.
+    """
+
+    target: CxDeploymentTarget
+    config: dict = Field(default_factory=dict)
+    status: str = "draft"

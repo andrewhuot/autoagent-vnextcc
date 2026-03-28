@@ -78,3 +78,13 @@ budget:
 human_control:
   immutable_surfaces: ["safety_instructions"]
   state_path: .autoagent/human_control.json
+  permission_profile: dev
+  audit_db_path: .autoagent/audit.db
+  side_effect_isolation: true
+
+observability:
+  otel_enabled: false
+  otel_exporter: otlp_http
+  otel_endpoint: ""
+  otel_service_name: autoagent
+  cloud_trace_project_id: ""

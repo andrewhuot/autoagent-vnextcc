@@ -15,7 +15,18 @@ from .mapper_extensions import (
     integration_templates_to_cx_tools,
     knowledge_asset_to_cx_datastore,
 )
-from .types import CxAgentRef, CxWidgetConfig, DeployResult
+from .types import CxAgentRef, CxDeployment, CxDeploymentTarget, CxWidgetConfig, DeployResult
+
+# Ordered list of all supported deployment target identifiers
+_DEPLOYMENT_TARGETS: list[str] = [
+    CxDeploymentTarget.WEB_WIDGET.value,
+    CxDeploymentTarget.TELEPHONY_TWILIO.value,
+    CxDeploymentTarget.TELEPHONY_GTP.value,
+    CxDeploymentTarget.TELEPHONY_AUDIOCODES.value,
+    CxDeploymentTarget.TELEPHONY_FIVE9.value,
+    CxDeploymentTarget.CCAAS.value,
+    CxDeploymentTarget.API.value,
+]
 
 
 class CxDeployer:
@@ -178,6 +189,157 @@ class CxDeployer:
 
         except Exception as exc:
             raise CxStudioError(f"Failed to deploy artifact to CX Studio: {exc}") from exc
+
+
+    def deploy_to_target(
+        self,
+        agent_id: str,
+        target: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Deploy a CX agent to a specific deployment target (channel).
+
+        Supported targets: ``web_widget``, ``telephony_twilio``,
+        ``telephony_gtp``, ``telephony_audiocodes``, ``telephony_five9``,
+        ``ccaas``, ``api``.
+
+        Args:
+            agent_id: Fully-qualified CX agent or app resource name.
+            target: Deployment target string (see ``list_deployment_targets()``).
+            config: Target-specific configuration dict (e.g. widget styling,
+                telephony SIP trunk settings, CCaaS connector settings).
+
+        Returns:
+            Dict with ``"target"``, ``"status"``, and ``"deployment"`` keys.
+
+        Raises:
+            CxStudioError: If the target is unsupported or the API call fails.
+        """
+        if target not in _DEPLOYMENT_TARGETS:
+            raise CxStudioError(
+                f"Unsupported deployment target '{target}'. "
+                f"Valid targets: {', '.join(_DEPLOYMENT_TARGETS)}"
+            )
+
+        try:
+            deployment_payload = self._build_target_payload(target, config)
+
+            # CX deployment is an app-level resource
+            # The app name is extracted from the agent_id if it contains '/agents/'
+            app_name = agent_id.split("/agents/")[0] if "/agents/" in agent_id else agent_id
+
+            deployment_name = f"{app_name}/deployments/{target}"
+            result = self._client.deploy_to_environment(deployment_name, [])
+
+            return {
+                "target": target,
+                "status": "deployed",
+                "deployment": deployment_payload,
+                "operation": result,
+            }
+        except CxStudioError:
+            raise
+        except Exception as exc:
+            raise CxStudioError(
+                f"Failed to deploy to target '{target}': {exc}"
+            ) from exc
+
+    @staticmethod
+    def list_deployment_targets() -> list[str]:
+        """Return the list of all supported CX deployment target identifiers.
+
+        Returns:
+            Sorted list of target name strings, e.g.
+            ``["api", "ccaas", "telephony_twilio", "web_widget", …]``.
+        """
+        return list(_DEPLOYMENT_TARGETS)
+
+    def get_deployment_status(self, agent_id: str, target: str) -> dict[str, Any]:
+        """Get the current deployment status for a specific target channel.
+
+        Args:
+            agent_id: Fully-qualified CX agent or app resource name.
+            target: Deployment target string.
+
+        Returns:
+            Dict with ``"target"``, ``"status"``, and ``"version_configs"`` keys.
+            Status is ``"not_deployed"`` when no deployment is found for the target.
+
+        Raises:
+            CxStudioError: If the API call fails.
+        """
+        try:
+            app_name = agent_id.split("/agents/")[0] if "/agents/" in agent_id else agent_id
+            envs = self._client.list_environments(app_name)
+
+            for env in envs:
+                if env.display_name.lower() == target.lower() or (
+                    env.name and env.name.endswith(f"/{target}")
+                ):
+                    return {
+                        "target": target,
+                        "status": "deployed",
+                        "display_name": env.display_name,
+                        "description": env.description,
+                        "version_configs": env.version_configs,
+                    }
+
+            return {
+                "target": target,
+                "status": "not_deployed",
+                "version_configs": [],
+            }
+        except Exception as exc:
+            raise CxStudioError(
+                f"Failed to get deployment status for '{target}': {exc}"
+            ) from exc
+
+    @staticmethod
+    def _build_target_payload(
+        target: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build a target-specific deployment payload from a config dict.
+
+        Args:
+            target: Deployment target identifier.
+            config: Raw user-supplied config for the target.
+
+        Returns:
+            Structured payload dict.
+        """
+        if target == CxDeploymentTarget.WEB_WIDGET.value:
+            return {
+                "type": "WEB_WIDGET",
+                "widgetConfig": {
+                    "chatTitle": config.get("chat_title", "Agent"),
+                    "primaryColor": config.get("primary_color", "#1a73e8"),
+                    "languageCode": config.get("language_code", "en"),
+                    **config,
+                },
+            }
+
+        if target.startswith("telephony_"):
+            provider = target[len("telephony_"):].upper()
+            return {
+                "type": "TELEPHONY",
+                "provider": provider,
+                "telephonyConfig": config,
+            }
+
+        if target == CxDeploymentTarget.CCAAS.value:
+            return {
+                "type": "CCAAS",
+                "ccaasConfig": config,
+            }
+
+        if target == CxDeploymentTarget.API.value:
+            return {
+                "type": "API",
+                "apiConfig": config,
+            }
+
+        return {"type": target.upper(), "config": config}
 
 
 def _build_widget_html(config: CxWidgetConfig) -> str:

@@ -19,6 +19,7 @@ from .types import (
     CxIntent,
     CxPlaybook,
     CxTool,
+    CxToolType,
 )
 
 
@@ -383,6 +384,253 @@ class CxMapper:
                         for kw in keywords[:5]
                     )
                 default_flow.transition_routes.append(new_route)
+
+    # ------------------------------------------------------------------
+    # Tool mapping — ADK ↔ CX
+    # ------------------------------------------------------------------
+
+    def map_adk_tool_to_cx(self, tool: dict[str, Any]) -> dict[str, Any]:
+        """Map an ADK tool config dict to a CX tool resource dict.
+
+        Handles FunctionTool, McpToolset, and OpenAPITool.  AgentTool has no
+        CX equivalent and is flagged with ``"cx_supported": False``.
+
+        Args:
+            tool: ADK tool config dict with at least a ``tool_type`` key.
+
+        Returns:
+            CX tool resource dict ready for ``CxClient.create_tool`` or direct
+            use in a ``CxTool`` / ``CxToolResource`` model.
+        """
+        t_type = str(tool.get("tool_type", "function_tool")).lower()
+        name = tool.get("name", tool.get("display_name", "unnamed_tool"))
+
+        if "function" in t_type:
+            return {
+                "display_name": name,
+                "tool_type": CxToolType.PYTHON_CODE.value,
+                "cx_supported": True,
+                "spec": {
+                    "type": "PYTHON_CODE",
+                    "pythonCode": {
+                        "code": tool.get("function_code", tool.get("code", "")),
+                        "inputSchema": tool.get("input_schema", {}),
+                        "outputSchema": tool.get("output_schema", {}),
+                    },
+                },
+                "_adk_tool_type": t_type,
+                "_adk_name": name,
+            }
+
+        if "mcp" in t_type:
+            transport = str(tool.get("transport", "streamable_http")).lower()
+            if "stdio" in transport:
+                return {
+                    "display_name": name,
+                    "tool_type": "MCP",
+                    "cx_supported": False,
+                    "cx_warning": "stdio transport is not supported in CX Agent Studio.",
+                    "_adk_tool_type": t_type,
+                    "_adk_name": name,
+                }
+            return {
+                "display_name": name,
+                "tool_type": CxToolType.MCP.value,
+                "cx_supported": True,
+                "spec": {
+                    "type": "MCP",
+                    "mcpSpec": {
+                        "transport": tool.get("transport", "streamable_http"),
+                        "url": tool.get("url", ""),
+                        "headers": tool.get("headers", {}),
+                    },
+                },
+                "_adk_tool_type": t_type,
+                "_adk_name": name,
+            }
+
+        if "openapi" in t_type:
+            return {
+                "display_name": name,
+                "tool_type": CxToolType.OPENAPI.value,
+                "cx_supported": True,
+                "spec": {
+                    "type": "OPEN_API",
+                    "schema": tool.get("spec", tool.get("openapi_spec", {})),
+                    "authentication": tool.get("auth_config", {}),
+                },
+                "_adk_tool_type": t_type,
+                "_adk_name": name,
+            }
+
+        if "agent_tool" in t_type or "agenttool" in t_type:
+            return {
+                "display_name": name,
+                "tool_type": "AGENT_TOOL",
+                "cx_supported": False,
+                "cx_warning": "AgentTool has no CX equivalent. Use sub_agents/childAgents instead.",
+                "_adk_tool_type": t_type,
+                "_adk_name": name,
+            }
+
+        # Unknown type — pass through as generic
+        return {
+            "display_name": name,
+            "tool_type": t_type.upper(),
+            "cx_supported": False,
+            "cx_warning": f"Unknown tool type '{t_type}'. Manual CX configuration required.",
+            "_adk_tool_type": t_type,
+            "_adk_name": name,
+        }
+
+    def map_cx_tool_to_adk(self, cx_tool: dict[str, Any]) -> dict[str, Any]:
+        """Map a CX tool resource dict back to an ADK tool config dict.
+
+        Args:
+            cx_tool: CX tool resource dict (as returned by ``CxClient.list_tools``
+                or stored in a snapshot).
+
+        Returns:
+            ADK-compatible tool config dict.
+        """
+        cx_type = str(cx_tool.get("tool_type", cx_tool.get("toolType", ""))).upper()
+        name = cx_tool.get("display_name", cx_tool.get("displayName", ""))
+        spec = cx_tool.get("spec", {})
+
+        if cx_type in ("OPEN_API", "OPENAPI"):
+            return {
+                "name": name,
+                "tool_type": "openapi_tool",
+                "openapi_spec": spec.get("schema", spec.get("openApiSpec", {})),
+                "auth_config": spec.get("authentication", {}),
+                "_cx_tool_name": cx_tool.get("name", ""),
+                "_cx_tool_type": cx_type,
+            }
+
+        if cx_type == "MCP":
+            mcp_spec = spec.get("mcpSpec", {})
+            return {
+                "name": name,
+                "tool_type": "mcp_toolset",
+                "transport": mcp_spec.get("transport", "streamable_http"),
+                "url": mcp_spec.get("url", ""),
+                "headers": mcp_spec.get("headers", {}),
+                "_cx_tool_name": cx_tool.get("name", ""),
+                "_cx_tool_type": cx_type,
+            }
+
+        if cx_type == "PYTHON_CODE":
+            python_spec = spec.get("pythonCode", {})
+            return {
+                "name": name,
+                "tool_type": "function_tool",
+                "function_code": python_spec.get("code", ""),
+                "input_schema": python_spec.get("inputSchema", {}),
+                "output_schema": python_spec.get("outputSchema", {}),
+                "_cx_tool_name": cx_tool.get("name", ""),
+                "_cx_tool_type": cx_type,
+            }
+
+        if cx_type == "DATA_STORE":
+            return {
+                "name": name,
+                "tool_type": "data_store_tool",
+                "data_store_spec": spec,
+                "_cx_tool_name": cx_tool.get("name", ""),
+                "_cx_tool_type": cx_type,
+                "_cx_only": True,
+            }
+
+        # CX-only types — preserve as metadata
+        return {
+            "name": name,
+            "tool_type": cx_type.lower(),
+            "spec": spec,
+            "_cx_tool_name": cx_tool.get("name", ""),
+            "_cx_tool_type": cx_type,
+            "_cx_only": True,
+        }
+
+    def map_transfer_rules(
+        self,
+        sub_agents: list[dict[str, Any]],
+        routing_strategy: str = "llm",
+    ) -> list[dict[str, Any]]:
+        """Generate CX transfer rules from an ADK sub-agents list.
+
+        In ADK, routing between sub-agents is governed implicitly by the LLM
+        based on the parent agent's instruction.  CX Agent Studio requires
+        explicit ``transferRules`` that define the condition under which a
+        parent agent hands off to each child agent.
+
+        Args:
+            sub_agents: List of sub-agent config dicts, each with at least
+                a ``name`` key.
+            routing_strategy: Routing strategy hint (``"llm"`` or
+                ``"keyword"``).  Affects the generated condition expression.
+
+        Returns:
+            List of CX transfer rule dicts suitable for inclusion in a CX
+            agent resource.
+        """
+        rules: list[dict[str, Any]] = []
+        for sub in sub_agents:
+            agent_name = sub.get("name", sub.get("display_name", ""))
+            description = sub.get("description", "")
+            keywords = sub.get("keywords", [])
+
+            if routing_strategy == "keyword" and keywords:
+                condition = " OR ".join(
+                    f'$sys.func.CONTAIN_TEXT(session.params.last_user_text, "{kw}")'
+                    for kw in keywords[:5]
+                )
+            else:
+                # LLM routing — use a placeholder that CX can override
+                condition = f'$intent.display-name = "{agent_name}"'
+
+            rules.append({
+                "sourceAgent": "",  # parent agent — filled by caller
+                "targetAgent": agent_name,
+                "condition": condition,
+                "description": description or f"Route to {agent_name}",
+                "_adk_sub_agent": agent_name,
+                "_routing_strategy": routing_strategy,
+            })
+        return rules
+
+    def map_cx_transfer_to_adk(
+        self,
+        transfer_rules: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Map CX transfer rules back to ADK sub-agent references.
+
+        Args:
+            transfer_rules: List of CX transfer rule dicts (from a CX agent
+                resource or snapshot).
+
+        Returns:
+            List of minimal sub-agent reference dicts for inclusion in an ADK
+            agent config.
+        """
+        sub_agents: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for rule in transfer_rules:
+            target = rule.get("targetAgent", rule.get("target_agent", ""))
+            if not target or target in seen:
+                continue
+            seen.add(target)
+
+            sub_agents.append({
+                "name": target,
+                "description": rule.get("description", ""),
+                "_cx_transfer_rule": {
+                    "condition": rule.get("condition", ""),
+                    "source_agent": rule.get("sourceAgent", rule.get("source_agent", "")),
+                },
+            })
+
+        return sub_agents
 
     @staticmethod
     def _extract_user_message(conversation_turns: list[dict[str, Any]]) -> str:

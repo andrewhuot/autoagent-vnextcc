@@ -38,7 +38,7 @@ class TestMCPServer:
         resp = handle_request({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}})
         assert resp["id"] == 2
         tools = resp["result"]["tools"]
-        assert len(tools) == 12
+        assert len(tools) >= 12  # 12 original + P0-10 build surface tools
         names = {t["name"] for t in tools}
         assert "autoagent_status" in names
         assert "autoagent_edit" in names
@@ -86,8 +86,8 @@ class TestMCPServer:
 
 
 class TestMCPToolRegistry:
-    def test_registry_has_12_tools(self):
-        assert len(TOOL_REGISTRY) == 12
+    def test_registry_has_tools(self):
+        assert len(TOOL_REGISTRY) >= 12  # 12 original + P0-10 build surface tools
 
     def test_all_tools_have_functions(self):
         for name, (fn, defn) in TOOL_REGISTRY.items():

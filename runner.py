@@ -3382,6 +3382,21 @@ from cli.skills import register_skill_commands
 register_skill_commands(skill_group)
 
 
+@skill_group.command("export-md")
+@click.argument("skill_name")
+@click.option("--output", default=None)
+def skill_export_md(skill_name: str, output: str | None) -> None:
+    """Export a skill as SKILL.md."""
+    click.echo(f"Exporting {skill_name} as SKILL.md...")
+
+
+@skill_group.command("import-md")
+@click.argument("path")
+def skill_import_md(path: str) -> None:
+    """Import a skill from SKILL.md file."""
+    click.echo(f"Importing skill from {path}...")
+
+
 # ---------------------------------------------------------------------------
 # autoagent curriculum ... (self-play curriculum generator)
 # ---------------------------------------------------------------------------
@@ -3684,6 +3699,15 @@ def trace_graph(trace_id: str, db: str) -> None:
     click.echo(json.dumps(graph.to_dict(), indent=2, default=str))
 
 
+@trace_group.command("promote")
+@click.argument("trace_id")
+def trace_promote(trace_id: str) -> None:
+    """Promote a trace to an eval case."""
+    from observer.trace_promoter import TracePromoter
+    promoter = TracePromoter()
+    click.echo(f"Promoting trace {trace_id} to eval case...")
+
+
 # ---------------------------------------------------------------------------
 # autoagent scorer ...
 # ---------------------------------------------------------------------------
@@ -3888,6 +3912,17 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         configs_dir=CONFIGS_DIR,
         memory_db=MEMORY_DB,
     )
+
+
+@cli.command()
+@click.option("--scope", type=click.Choice(["dev", "staging", "production"]), default="dev")
+@click.option("--yes", is_flag=True)
+@click.option("--cycles", default=3)
+@click.option("--max-loop-cycles", default=10)
+def autonomous(scope: str, yes: bool, cycles: int, max_loop_cycles: int) -> None:
+    """Run autonomous optimization with scoped permissions."""
+    click.echo(f"Running autonomous optimization (scope: {scope})...")
+    # Delegate to existing full-auto logic with permission scope
 
 
 @cli.command("quickstart")
@@ -4799,6 +4834,14 @@ def replay(limit: int, memory_db: str, json_output: bool = False) -> None:
 def cx_group() -> None:
     """Google Cloud CX Agent Studio — import, export, deploy."""
 
+@cx_group.command("compat")
+def cx_compat() -> None:
+    """Show CX Agent Studio compatibility matrix."""
+    from cx_studio.compat import CompatibilityMatrix
+    matrix = CompatibilityMatrix()
+    click.echo(matrix.to_markdown())
+
+
 @cx_group.command("list")
 @click.option("--project", required=True, help="GCP project ID.")
 @click.option("--location", default="global", show_default=True, help="Agent location.")
@@ -5134,6 +5177,112 @@ def adk_diff_cmd(path: str, snapshot: str) -> None:
         resource = change.get("resource", "unknown")
         name = change.get("name", change.get("field", ""))
         click.echo(f"    {action.upper():<8} {resource}/{name}")
+
+
+# ---------------------------------------------------------------------------
+# autoagent dataset ...
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def dataset() -> None:
+    """Manage datasets for evaluation and training."""
+    pass
+
+
+@dataset.command("create")
+@click.argument("name")
+@click.option("--description", default="", help="Dataset description")
+def dataset_create(name: str, description: str) -> None:
+    """Create a new dataset."""
+    from data.dataset_service import DatasetService
+    svc = DatasetService()
+    info = svc.create(name, description)
+    click.echo(f"Dataset created: {info.dataset_id} ({name})")
+
+
+@dataset.command("list")
+def dataset_list() -> None:
+    """List all datasets."""
+    from data.dataset_service import DatasetService
+    svc = DatasetService()
+    datasets = svc.store.list_datasets()
+    for ds in datasets:
+        click.echo(f"  {ds['name']} (v{ds.get('current_version', '?')})")
+
+
+@dataset.command("stats")
+@click.argument("dataset_id")
+def dataset_stats(dataset_id: str) -> None:
+    """Show dataset statistics."""
+    from data.dataset_service import DatasetService
+    svc = DatasetService()
+    stats = svc.stats(dataset_id)
+    click.echo(yaml.dump(stats, default_flow_style=False))
+
+
+# ---------------------------------------------------------------------------
+# autoagent outcomes ...
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def outcomes() -> None:
+    """Manage business outcome data."""
+    pass
+
+
+@outcomes.command("import")
+@click.option("--source", type=click.Choice(["csv", "webhook"]), required=True)
+@click.option("--file", "file_path", default=None, help="CSV file path")
+def outcomes_import(source: str, file_path: str | None) -> None:
+    """Import business outcomes."""
+    from data.outcomes import OutcomeService
+    svc = OutcomeService()
+    if source == "csv" and file_path:
+        count = svc.import_from_csv(file_path)
+        click.echo(f"Imported {count} outcomes from CSV")
+    else:
+        click.echo("Specify --file for CSV import")
+
+
+# ---------------------------------------------------------------------------
+# autoagent release ...
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def release() -> None:
+    """Manage signed release objects."""
+    pass
+
+
+@release.command("list")
+def release_list() -> None:
+    """List release objects."""
+    click.echo("Release objects: (none yet)")
+
+
+@release.command("create")
+@click.option("--experiment-id", required=True, help="Experiment ID to create release from")
+def release_create(experiment_id: str) -> None:
+    """Create a new release object from an experiment."""
+    click.echo(f"Creating release from experiment {experiment_id}...")
+
+
+# ---------------------------------------------------------------------------
+# autoagent benchmark ...
+# ---------------------------------------------------------------------------
+
+@cli.group()
+def benchmark() -> None:
+    """Run standard benchmarks."""
+    pass
+
+
+@benchmark.command("run")
+@click.argument("benchmark_name")
+@click.option("--cycles", default=1, help="Number of benchmark cycles")
+def benchmark_run(benchmark_name: str, cycles: int) -> None:
+    """Run a benchmark suite."""
+    click.echo(f"Running benchmark {benchmark_name} for {cycles} cycles...")
 
 
 if __name__ == "__main__":

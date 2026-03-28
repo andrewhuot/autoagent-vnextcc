@@ -6,9 +6,53 @@ so that the mapper layer can evolve each side independently.
 """
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 
 from pydantic import BaseModel, Field
+
+
+class AdkAgentType(str, Enum):
+    """Supported ADK agent orchestration types."""
+
+    LLM_AGENT = "llm_agent"
+    SEQUENTIAL_AGENT = "sequential_agent"
+    PARALLEL_AGENT = "parallel_agent"
+    LOOP_AGENT = "loop_agent"
+
+
+class AdkToolType(str, Enum):
+    """Supported ADK tool integration types."""
+
+    FUNCTION_TOOL = "function_tool"
+    AGENT_TOOL = "agent_tool"
+    MCP_TOOLSET = "mcp_toolset"
+    OPENAPI_TOOL = "openapi_tool"
+
+
+class AdkCallbackSpec(BaseModel):
+    """Specification for a named ADK callback function."""
+
+    name: str
+    callback_type: str
+    function_name: str
+    description: str = ""
+
+
+class AdkSessionConfig(BaseModel):
+    """Session-level configuration for ADK runtime execution."""
+
+    state_prefixes: list[str] = Field(default_factory=lambda: ["user:", "app:", "temp:"])
+    persistence: str = "memory"
+    ttl_seconds: int = 3600
+
+
+class AdkTemplateVar(BaseModel):
+    """A single template variable binding for ADK instruction strings."""
+
+    key: str
+    source: str = "state"
+    default: str = ""
 
 
 class AdkAgentRef(BaseModel):
@@ -29,6 +73,8 @@ class AdkTool(BaseModel):
     description: str = ""  # Extracted from docstring
     function_body: str = ""  # Raw function source code for reference
     signature: str = ""  # Function signature (name + params)
+    tool_type: AdkToolType = AdkToolType.FUNCTION_TOOL
+    cx_portable: bool = True
 
 
 class AdkAgent(BaseModel):
@@ -42,6 +88,12 @@ class AdkAgent(BaseModel):
     generate_config: dict = Field(default_factory=dict)  # temperature, max_output_tokens, etc.
     before_model_callback: str = ""  # Callback function name (reference only)
     after_model_callback: str = ""  # Callback function name (reference only)
+    agent_type: AdkAgentType = AdkAgentType.LLM_AGENT
+    before_agent_callback: str = ""  # Callback function name (reference only)
+    after_agent_callback: str = ""  # Callback function name (reference only)
+    before_tool_callback: str = ""  # Callback function name (reference only)
+    after_tool_callback: str = ""  # Callback function name (reference only)
+    cx_portable: bool = True
 
 
 class AdkAgentTree(BaseModel):

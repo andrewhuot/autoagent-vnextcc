@@ -18,6 +18,9 @@ from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.routes import (
+    datasets as datasets_routes,
+    outcomes as outcomes_routes,
+    a2a as a2a_routes,
     adk as adk_routes,
     agent_skills as agent_skills_routes,
     assistant as assistant_routes,
@@ -391,6 +394,12 @@ app.include_router(knowledge_routes.router)
 app.include_router(what_if_routes.router)
 app.include_router(impact_routes.router)
 app.include_router(collaboration_routes.router)
+app.include_router(datasets_routes.router)
+app.include_router(outcomes_routes.router)
+app.include_router(a2a_routes.router)
+# Check if a2a_routes has a well-known endpoint and wire it up
+# The a2a router registers /.well-known/agent-card.json directly (no prefix)
+# so we include the router without an additional prefix to keep the path correct.
 
 
 # ---------------------------------------------------------------------------

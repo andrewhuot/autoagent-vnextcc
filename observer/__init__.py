@@ -1,10 +1,34 @@
-"""Observer package — health monitoring, anomaly detection, and failure classification."""
+"""Observer package — health monitoring, anomaly detection, failure classification,
+and OpenTelemetry-native observability."""
 
 from logger.store import ConversationStore
 
 from .anomaly import AnomalyDetector, Baseline
+from .trace_promoter import TraceCandidate, TracePromoter
+from .auto_instrumentor import AutoInstrumentor
 from .classifier import FailureClassifier
+from .exporters import (
+    ExporterFactory,
+    OtelCloudTraceExporter,
+    OtelConsoleExporter,
+    OtelExporter,
+    OtelJsonFileExporter,
+    OtelOtlpHttpExporter,
+)
 from .metrics import HealthMetrics, HealthReport, compute_metrics
+from .otel import GENAI_ATTRIBUTES, OtelSpanAdapter
+from .otel_config import OtelConfig, load_otel_config
+from .otel_types import (
+    OtelEvent,
+    OtelLink,
+    OtelResource,
+    OtelSpan,
+    OtelSpanContext,
+    OtelSpanKind,
+    OtelStatus,
+    OtelStatusCode,
+    OtelTrace,
+)
 
 
 class Observer:
@@ -46,6 +70,7 @@ class Observer:
 
 
 __all__ = [
+    # Core observer
     "Observer",
     "HealthReport",
     "HealthMetrics",
@@ -53,4 +78,32 @@ __all__ = [
     "Baseline",
     "FailureClassifier",
     "compute_metrics",
+    # OTel types
+    "OtelResource",
+    "OtelSpanContext",
+    "OtelSpanKind",
+    "OtelStatusCode",
+    "OtelStatus",
+    "OtelEvent",
+    "OtelLink",
+    "OtelSpan",
+    "OtelTrace",
+    # OTel adapter
+    "GENAI_ATTRIBUTES",
+    "OtelSpanAdapter",
+    # OTel exporters
+    "OtelExporter",
+    "OtelConsoleExporter",
+    "OtelJsonFileExporter",
+    "OtelOtlpHttpExporter",
+    "OtelCloudTraceExporter",
+    "ExporterFactory",
+    # OTel config
+    "OtelConfig",
+    "load_otel_config",
+    # Auto-instrumentation
+    "AutoInstrumentor",
+    # Trace-to-eval pipeline (P0-6)
+    "TraceCandidate",
+    "TracePromoter",
 ]

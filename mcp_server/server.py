@@ -10,6 +10,12 @@ import sys
 from typing import Any
 
 from mcp_server.tools import TOOL_REGISTRY
+from mcp_server.resources import ResourceProvider
+from mcp_server.prompts import PromptProvider
+from mcp_server.transport import StreamableHttpTransport
+
+_resource_provider = ResourceProvider()
+_prompt_provider = PromptProvider()
 
 
 def handle_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -21,7 +27,11 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
     if method == "initialize":
         return _success(request_id, {
             "protocolVersion": "2024-11-05",
-            "capabilities": {"tools": {"listChanged": False}},
+            "capabilities": {
+                "tools": {"listChanged": False},
+                "resources": {"listChanged": False, "subscribe": False},
+                "prompts": {"listChanged": False},
+            },
             "serverInfo": {"name": "autoagent", "version": "1.0.0"},
         })
 
@@ -46,6 +56,73 @@ def handle_request(request: dict[str, Any]) -> dict[str, Any]:
                 "content": [{"type": "text", "text": f"Error: {exc}"}],
                 "isError": True,
             })
+
+    # ------------------------------------------------------------------
+    # Resources
+    # ------------------------------------------------------------------
+    if method == "resources/list":
+        all_resources = (
+            _resource_provider.get_agent_configs()
+            + _resource_provider.get_trace_summaries()
+            + _resource_provider.get_eval_results()
+            + _resource_provider.get_skill_catalog()
+            + _resource_provider.get_dataset_stats()
+        )
+        return _success(request_id, {"resources": [r.to_dict() for r in all_resources]})
+
+    if method == "resources/read":
+        uri = params.get("uri", "")
+        if not uri:
+            return _error(request_id, -32602, "Missing required parameter: uri")
+        try:
+            content = _resource_provider.read_resource(uri)
+            return _success(request_id, {
+                "contents": [
+                    {
+                        "uri": uri,
+                        "mimeType": "application/json",
+                        "text": json.dumps(content, default=str),
+                    }
+                ]
+            })
+        except Exception as exc:
+            return _error(request_id, -32603, f"Resource read error: {exc}")
+
+    # ------------------------------------------------------------------
+    # Prompts
+    # ------------------------------------------------------------------
+    if method == "prompts/list":
+        prompts = _prompt_provider.list_prompts()
+        return _success(request_id, {
+            "prompts": [
+                {
+                    "name": p.name,
+                    "description": p.description,
+                    "arguments": p.arguments,
+                }
+                for p in prompts
+            ]
+        })
+
+    if method == "prompts/get":
+        prompt_name = params.get("name", "")
+        arguments = params.get("arguments", {})
+        if not prompt_name:
+            return _error(request_id, -32602, "Missing required parameter: name")
+        try:
+            rendered = _prompt_provider.get_prompt(prompt_name, arguments)
+            return _success(request_id, {
+                "description": prompt_name,
+                "messages": [
+                    {"role": "user", "content": {"type": "text", "text": rendered}}
+                ],
+            })
+        except ValueError as exc:
+            return _error(request_id, -32602, str(exc))
+        except Exception as exc:
+            return _error(request_id, -32603, f"Prompt render error: {exc}")
+
+    # ------------------------------------------------------------------
 
     if method == "notifications/initialized":
         return None  # Notification, no response
