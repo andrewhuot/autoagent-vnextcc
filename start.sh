@@ -174,7 +174,7 @@ wait_for_http() {
     fi
 
     local char="${chars[$((attempt % ${#chars[@]}))]}"
-    echo -ne "\r  ${DIM}$char  Waiting for $label… ($attempt/${max_attempts})${RESET}"
+    echo -ne "\r  ${DIM}$char  Waiting for ${label}... ($attempt/${max_attempts})${RESET}"
     sleep 1
     attempt=$(( attempt + 1 ))
   done
