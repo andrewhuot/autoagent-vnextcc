@@ -37,6 +37,7 @@ TRANSFER_REASON_LABELS: dict[str, str] = {
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
 TEXT_EXTENSIONS = {".txt", ".md"}
+RAW_UPLOAD_EXTENSIONS = {".json", ".csv", ".txt", ".md", ".jsonl"}
 KNOWN_INTENTS = tuple(INTENT_KEYWORDS.keys()) + ("general_support",)
 
 
@@ -181,7 +182,7 @@ class TranscriptIntelligenceService:
         except Exception as exc:
             raise ValueError(f"Invalid base64 encoding: {exc}") from exc
 
-        conversations = self._parse_archive(archive_bytes)
+        conversations = self._parse_uploaded_payload(archive_name, archive_bytes)
         if not conversations:
             raise ValueError("Archive contains no parseable conversations")
         languages = sorted({conversation.language for conversation in conversations})
@@ -647,7 +648,7 @@ class TranscriptIntelligenceService:
         if transcript_report_id is not None:
             report = self.get_report(transcript_report_id)
             if report is not None:
-                created_from = f"transcript:{transcript_report_id}"
+                created_from = "transcript"
                 # Enrich system prompt with gap context
                 if report.missing_intents:
                     gap_list = ", ".join(item["intent"] for item in report.missing_intents[:5])
@@ -674,19 +675,20 @@ class TranscriptIntelligenceService:
                         "parameters": {"customer_message": "string", "context": "object"},
                     })
 
-        return {
-            "system_prompt": system_prompt,
-            "tools": tools,
-            "routing_rules": routing_rules,
-            "policies": policies,
-            "eval_criteria": eval_criteria,
-            "metadata": {
-                "agent_name": agent_name,
-                "version": "1.0.0",
-                "domain": domain,
-                "created_from": created_from,
-            },
-        }
+        return self._normalize_generated_config_output(
+            {
+                "system_prompt": system_prompt,
+                "tools": tools,
+                "routing_rules": routing_rules,
+                "policies": policies,
+                "eval_criteria": eval_criteria,
+                "metadata": {
+                    "agent_name": agent_name,
+                    "version": "1.0.0",
+                    "created_from": created_from,
+                },
+            }
+        )
 
     def chat_refine(self, message: str, current_config: dict[str, Any]) -> dict[str, Any]:
         """Refine an agent config based on a natural language instruction.
@@ -858,7 +860,7 @@ class TranscriptIntelligenceService:
         else:
             response = "Applied the following changes:\n" + "\n".join(f"- {c}" for c in changes)
 
-        return {"response": response, "config": config}
+        return {"response": response, "config": self._normalize_generated_config_output(config)}
 
     def build_agent_artifact(self, prompt: str, connectors: list[str]) -> dict[str, Any]:
         """Build agent configuration artifact from natural language prompt.
@@ -1011,6 +1013,51 @@ class TranscriptIntelligenceService:
             raise KeyError(f"Unknown report: {report_id}")
         return report
 
+    def _parse_uploaded_payload(self, archive_name: str, raw_bytes: bytes) -> list[TranscriptConversation]:
+        """Parse transcript uploads from either zip archives or raw supported files.
+
+        WHY: The Intelligence Studio UI accepts direct JSON/CSV/TXT uploads in
+        mock mode, so the backend contract must match that promise instead of
+        requiring users to zip everything first.
+        """
+        if self._is_zip_payload(raw_bytes):
+            return self._parse_archive(raw_bytes)
+
+        suffix = Path(archive_name).suffix.lower()
+        source_file = Path(archive_name).name or "upload"
+
+        if suffix == ".json":
+            return self._parse_json_file(raw_bytes, source_file)
+        if suffix == ".jsonl":
+            return self._parse_jsonl_file(raw_bytes, source_file)
+        if suffix == ".csv":
+            return self._parse_csv_file(raw_bytes, source_file)
+        if suffix in TEXT_EXTENSIONS:
+            return self._parse_text_file(raw_bytes.decode("utf-8", errors="ignore"), source_file)
+
+        if suffix in RAW_UPLOAD_EXTENSIONS:
+            return []
+
+        text = raw_bytes.decode("utf-8", errors="ignore").strip()
+        if not text:
+            return []
+        if text.startswith(("{", "[")):
+            parsed_json = self._parse_json_file(raw_bytes, source_file)
+            if parsed_json:
+                return parsed_json
+            parsed_jsonl = self._parse_jsonl_file(raw_bytes, source_file)
+            if parsed_jsonl:
+                return parsed_jsonl
+        if "," in text and "\n" in text:
+            parsed_csv = self._parse_csv_file(raw_bytes, source_file)
+            if parsed_csv:
+                return parsed_csv
+        return self._parse_text_file(text, source_file)
+
+    def _is_zip_payload(self, raw_bytes: bytes) -> bool:
+        """Return whether the uploaded payload appears to be a zip archive."""
+        return raw_bytes[:4] == b"PK\x03\x04"
+
     def _parse_archive(self, archive_bytes: bytes) -> list[TranscriptConversation]:
         """Parse zip archive containing conversations in various formats.
 
@@ -1094,6 +1141,26 @@ class TranscriptIntelligenceService:
             return [self._normalize_record(dict(row), source_file) for row in reader]
         except (UnicodeDecodeError, csv.Error):
             return []
+
+    def _parse_jsonl_file(self, raw: bytes, source_file: str) -> list[TranscriptConversation]:
+        """Parse JSONL transcript uploads one object per line."""
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return []
+
+        items: list[dict[str, Any]] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except json.JSONDecodeError:
+                return []
+            if isinstance(payload, dict):
+                items.append(payload)
+        return [self._normalize_record(item, source_file) for item in items]
 
     def _parse_text_file(self, text: str, source_file: str) -> list[TranscriptConversation]:
         chunks = [chunk.strip() for chunk in re.split(r"\n\s*\n", text) if chunk.strip()]
@@ -1283,6 +1350,98 @@ class TranscriptIntelligenceService:
         if parsed is None:
             return None
         return self._normalize_reference_intent(parsed.get("intent"))
+
+    def _normalize_generated_config_output(self, config: dict[str, Any]) -> dict[str, Any]:
+        """Normalize generated configs to the frontend Intelligence Studio contract.
+
+        WHY: The studio preview, YAML export, and tests assume a stable
+        JSON/YAML-friendly shape with simple string arrays and two policy
+        enforcement levels. This keeps mock mode realistic and predictable.
+        """
+        metadata = config.get("metadata") if isinstance(config.get("metadata"), dict) else {}
+        created_from = str(metadata.get("created_from") or "prompt")
+        if created_from != "transcript":
+            created_from = "prompt"
+
+        tools: list[dict[str, Any]] = []
+        for raw_tool in config.get("tools", []):
+            if not isinstance(raw_tool, dict):
+                continue
+            tools.append(
+                {
+                    "name": str(raw_tool.get("name") or "unnamed_tool"),
+                    "description": str(raw_tool.get("description") or ""),
+                    "parameters": self._normalize_tool_parameters(raw_tool.get("parameters")),
+                }
+            )
+
+        routing_rules: list[dict[str, Any]] = []
+        for raw_rule in config.get("routing_rules", []):
+            if not isinstance(raw_rule, dict):
+                continue
+            routing_rules.append(
+                {
+                    "condition": str(raw_rule.get("condition") or "default"),
+                    "action": str(raw_rule.get("action") or "noop"),
+                    "priority": int(raw_rule.get("priority") or 99),
+                }
+            )
+
+        policies: list[dict[str, Any]] = []
+        for raw_policy in config.get("policies", []):
+            if not isinstance(raw_policy, dict):
+                continue
+            policies.append(
+                {
+                    "name": str(raw_policy.get("name") or "unnamed_policy"),
+                    "description": str(raw_policy.get("description") or ""),
+                    "enforcement": self._normalize_policy_enforcement(raw_policy.get("enforcement")),
+                }
+            )
+
+        eval_criteria: list[dict[str, Any]] = []
+        for raw_criterion in config.get("eval_criteria", []):
+            if not isinstance(raw_criterion, dict):
+                continue
+            weight_raw = raw_criterion.get("weight")
+            weight = float(weight_raw) if isinstance(weight_raw, (int, float)) else 0.25
+            eval_criteria.append(
+                {
+                    "name": str(raw_criterion.get("name") or "unnamed_eval"),
+                    "weight": max(0.0, min(weight, 1.0)),
+                    "description": str(raw_criterion.get("description") or ""),
+                }
+            )
+
+        return {
+            "system_prompt": str(config.get("system_prompt") or ""),
+            "tools": tools,
+            "routing_rules": sorted(routing_rules, key=lambda rule: rule["priority"]),
+            "policies": policies,
+            "eval_criteria": eval_criteria,
+            "metadata": {
+                "agent_name": str(metadata.get("agent_name") or "AutoAgent"),
+                "version": str(metadata.get("version") or "1.0.0"),
+                "created_from": created_from,
+            },
+        }
+
+    def _normalize_tool_parameters(self, parameters: Any) -> list[str]:
+        """Collapse tool parameter definitions into a readable parameter-name list."""
+        if isinstance(parameters, list):
+            return [str(item) for item in parameters if str(item).strip()]
+        if isinstance(parameters, dict):
+            return [str(key) for key in parameters.keys() if str(key).strip()]
+        if isinstance(parameters, str) and parameters.strip():
+            return [parameters.strip()]
+        return []
+
+    def _normalize_policy_enforcement(self, enforcement: Any) -> str:
+        """Map internal policy levels to the studio's strict/advisory display model."""
+        normalized = str(enforcement or "").lower()
+        if normalized in {"hard_block", "required", "strict"}:
+            return "strict"
+        return "advisory"
 
     def _normalize_reference_intent(self, raw_intent: Any) -> str | None:
         """Normalize labeled or LLM-returned intents into the supported taxonomy."""

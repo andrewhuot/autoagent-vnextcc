@@ -1,0 +1,23 @@
+[
+  {
+    "conversation_id": "hist-001",
+    "session_id": "archive-1",
+    "user_message": "Where is my order? I do not have my order number.",
+    "agent_response": "I can help after I verify your email and ZIP code.",
+    "outcome": "transfer"
+  },
+  {
+    "conversation_id": "hist-002",
+    "session_id": "archive-2",
+    "user_message": "Can you cancel this order before it ships?",
+    "agent_response": "I can cancel it after I verify your identity.",
+    "outcome": "success"
+  },
+  {
+    "conversation_id": "hist-003",
+    "session_id": "archive-3",
+    "user_message": "How do I get a refund for a damaged item?",
+    "agent_response": "I can process that refund once I confirm the order details.",
+    "outcome": "success"
+  }
+]

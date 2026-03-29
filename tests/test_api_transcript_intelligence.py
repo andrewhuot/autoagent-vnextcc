@@ -111,6 +111,19 @@ def _build_archive_base64() -> str:
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+def _assert_generated_config_contract(payload: dict, *, created_from: str) -> None:
+    assert payload["metadata"]["created_from"] == created_from
+    assert payload["metadata"]["agent_name"]
+    assert payload["metadata"]["version"]
+    assert isinstance(payload["system_prompt"], str) and payload["system_prompt"]
+    assert isinstance(payload["tools"], list) and payload["tools"]
+    assert all(isinstance(tool["parameters"], list) for tool in payload["tools"])
+    assert isinstance(payload["routing_rules"], list) and payload["routing_rules"]
+    assert isinstance(payload["policies"], list) and payload["policies"]
+    assert all(policy["enforcement"] in {"strict", "advisory"} for policy in payload["policies"])
+    assert isinstance(payload["eval_criteria"], list) and payload["eval_criteria"]
+
+
 @pytest.fixture()
 def app(tmp_path: Path) -> FastAPI:
     test_app = FastAPI()
@@ -148,6 +161,59 @@ def client(app: FastAPI) -> TestClient:
 
 
 class TestTranscriptArchiveImport:
+    @pytest.mark.parametrize(
+        ("archive_name", "raw_bytes"),
+        [
+            (
+                "support-history.json",
+                json.dumps(
+                    [
+                        {
+                            "conversation_id": "hist-json-001",
+                            "session_id": "json-1",
+                            "user_message": "Where is my order?",
+                            "agent_response": "I can look that up once I verify your email.",
+                            "outcome": "success",
+                        }
+                    ]
+                ).encode("utf-8"),
+            ),
+            (
+                "support-history.csv",
+                (
+                    "conversation_id,session_id,user_message,agent_response,outcome\n"
+                    "hist-csv-001,csv-1,Can you cancel this order?,I can do that after verification.,success\n"
+                ).encode("utf-8"),
+            ),
+            (
+                "support-history.txt",
+                (
+                    "User: I want a refund for a damaged item.\n"
+                    "Agent: I can help after I confirm the order details.\n"
+                ).encode("utf-8"),
+            ),
+        ],
+    )
+    def test_archive_import_accepts_supported_non_zip_file_types(
+        self,
+        client: TestClient,
+        archive_name: str,
+        raw_bytes: bytes,
+    ) -> None:
+        resp = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": archive_name,
+                "archive_base64": base64.b64encode(raw_bytes).decode("ascii"),
+            },
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["archive_name"] == archive_name
+        assert data["conversation_count"] >= 1
+        assert len(data["faq_entries"]) >= 1
+
     def test_archive_import_extracts_multilingual_insights_and_assets(self, client: TestClient) -> None:
         resp = client.post(
             "/api/intelligence/archive",
@@ -253,6 +319,43 @@ class TestTranscriptArchiveImport:
 
 
 class TestPromptToAgentBuilder:
+    def test_generate_agent_returns_frontend_studio_contract(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/intelligence/generate-agent",
+            json={
+                "prompt": (
+                    "Build an e-commerce support agent for order tracking, cancellations, "
+                    "address changes, and refunds."
+                ),
+            },
+        )
+
+        assert resp.status_code == 200
+        _assert_generated_config_contract(resp.json(), created_from="prompt")
+
+    def test_chat_refine_returns_updated_frontend_studio_contract(self, client: TestClient) -> None:
+        generated = client.post(
+            "/api/intelligence/generate-agent",
+            json={
+                "prompt": "Build an e-commerce support agent for order tracking and refunds.",
+            },
+        )
+        assert generated.status_code == 200
+
+        resp = client.post(
+            "/api/intelligence/chat",
+            json={
+                "message": "Add escalation logic for VIP customers and tighten refund safety policies.",
+                "config": generated.json(),
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["response"]
+        _assert_generated_config_contract(data["config"], created_from="prompt")
+        assert any("escalat" in rule["action"] or "escalat" in rule["condition"] for rule in data["config"]["routing_rules"])
+
     def test_prompt_to_agent_build_generates_artifact_not_just_text(self, client: TestClient) -> None:
         resp = client.post(
             "/api/intelligence/build",

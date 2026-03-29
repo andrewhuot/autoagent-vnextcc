@@ -1,8 +1,13 @@
-import { useState, useRef, useEffect, type ChangeEvent } from 'react';
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type ReactNode,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Brain,
-  ChevronDown,
   Copy,
   Download,
   FileText,
@@ -11,7 +16,7 @@ import {
   Send,
   Sparkles,
   UploadCloud,
-  Zap,
+  WandSparkles,
 } from 'lucide-react';
 import {
   useChatRefine,
@@ -21,10 +26,815 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
 import type { GeneratedAgentConfig, TranscriptReport } from '../lib/types';
+import { classNames } from '../lib/utils';
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type StudioMode = 'prompt' | 'transcript';
+type StudioPhase = 'setup' | 'refine';
+
+interface ChatMessage {
+  id: string;
+  role: 'assistant' | 'user';
+  content: string;
+}
+
+interface IntentSummary {
+  label: string;
+  count: number;
+}
+
+const PROMPT_EXAMPLES = [
+  'Build a customer service agent for order tracking, cancellations, and refunds.',
+  'Create an IT helpdesk agent that handles password resets, VPN issues, and hardware requests.',
+  'Design a healthcare intake agent that collects symptoms, schedules appointments, and triages urgency.',
+  'Build a sales qualification agent that scores leads and books demos.',
+];
+
+const REFINEMENT_EXAMPLES = [
+  'Add escalation logic for VIP customers.',
+  'Add a refund workflow with damage verification.',
+  'Tighten safety policies around PII handling.',
+];
+
+/**
+ * Intelligence Studio is the fastest path from a prompt or transcript archive
+ * to a live, inspectable agent configuration in this app.
+ */
+export function IntelligenceStudio() {
+  const navigate = useNavigate();
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+
+  const [mode, setMode] = useState<StudioMode>('prompt');
+  const [phase, setPhase] = useState<StudioPhase>('setup');
+  const [prompt, setPrompt] = useState('');
+  const [transcriptReport, setTranscriptReport] = useState<TranscriptReport | null>(null);
+  const [agentConfig, setAgentConfig] = useState<GeneratedAgentConfig | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [composer, setComposer] = useState('');
+
+  const importMutation = useImportTranscriptArchive();
+  const generateMutation = useGenerateAgent();
+  const refineMutation = useChatRefine();
+
+  useEffect(() => {
+    if (typeof chatEndRef.current?.scrollIntoView === 'function') {
+      chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  const yamlPreview = agentConfig ? configToYaml(agentConfig) : '';
+  const transcriptIntents = transcriptReport ? buildIntentSummaries(transcriptReport) : [];
+  const patternSignals = transcriptReport ? buildPatternSignals(transcriptReport) : [];
+
+  function resetStudio() {
+    setPhase('setup');
+    setPrompt('');
+    setTranscriptReport(null);
+    setAgentConfig(null);
+    setMessages([]);
+    setComposer('');
+    setMode('prompt');
+  }
+
+  function handlePromptGenerate() {
+    const nextPrompt = prompt.trim();
+    if (!nextPrompt) {
+      toastError('Prompt required', 'Describe the agent you want to build.');
+      return;
+    }
+
+    generateMutation.mutate(
+      { prompt: nextPrompt },
+      {
+        onSuccess: (config) => {
+          setAgentConfig(config);
+          setPhase('refine');
+          setMessages([
+            buildAssistantMessage(
+              `I drafted **${config.metadata.agent_name}** with ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies. Tell me what to refine next.`
+            ),
+          ]);
+          toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
+        },
+        onError: (error) => {
+          toastError('Generation failed', error.message);
+        },
+      }
+    );
+  }
+
+  function handleTranscriptGenerate() {
+    if (!transcriptReport) {
+      toastError('Transcript analysis required', 'Upload transcripts before generating the agent.');
+      return;
+    }
+
+    generateMutation.mutate(
+      {
+        prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}`,
+        transcript_report_id: transcriptReport.report_id,
+      },
+      {
+        onSuccess: (config) => {
+          setAgentConfig(config);
+          setPhase('refine');
+          setMessages([
+            buildAssistantMessage(
+              `I turned the transcript analysis into **${config.metadata.agent_name}**. The config already reflects the top intent gaps, workflow signals, and FAQ patterns from the upload.`
+            ),
+          ]);
+          toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
+        },
+        onError: (error) => {
+          toastError('Generation failed', error.message);
+        },
+      }
+    );
+  }
+
+  async function handleTranscriptUpload(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const archiveBase64 = await fileToBase64(file);
+      importMutation.mutate(
+        {
+          archive_name: file.name,
+          archive_base64: archiveBase64,
+        },
+        {
+          onSuccess: (report) => {
+            setTranscriptReport(report);
+            toastSuccess(
+              'Transcripts analyzed',
+              `${report.conversation_count} conversations processed from ${report.archive_name}.`
+            );
+          },
+          onError: (error) => {
+            toastError('Import failed', error.message);
+          },
+        }
+      );
+    } catch (error) {
+      toastError('Import failed', error instanceof Error ? error.message : String(error));
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  function handleRefineSend() {
+    const message = composer.trim();
+    if (!message || !agentConfig) {
+      return;
+    }
+
+    setMessages((current) => [...current, buildUserMessage(message)]);
+    setComposer('');
+
+    refineMutation.mutate(
+      {
+        message,
+        config: agentConfig,
+      },
+      {
+        onSuccess: (result) => {
+          setAgentConfig(result.config);
+          setMessages((current) => [...current, buildAssistantMessage(result.response)]);
+        },
+        onError: (error) => {
+          toastError('Refinement failed', error.message);
+          setMessages((current) => [
+            ...current,
+            buildAssistantMessage(`I hit an error while applying that change: ${error.message}`),
+          ]);
+        },
+      }
+    );
+  }
+
+  async function handleCopyYaml() {
+    if (!agentConfig || !navigator.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(configToYaml(agentConfig));
+      toastSuccess('Copied', 'The YAML config is in your clipboard.');
+    } catch (error) {
+      toastError('Copy failed', error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function handleExport() {
+    if (!agentConfig) {
+      return;
+    }
+
+    const blob = new Blob([configToYaml(agentConfig)], { type: 'text/yaml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${slugify(agentConfig.metadata.agent_name)}.yaml`;
+    link.click();
+    URL.revokeObjectURL(url);
+    toastSuccess('Config exported', 'Downloaded the YAML config.');
+  }
+
+  if (phase === 'setup') {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Intelligence Studio"
+          description="Start from a prompt or a transcript archive, then refine the generated agent in a live YAML workspace."
+        />
+
+        <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          Mock mode friendly: the studio generates realistic configs and transcript insights without requiring API keys.
+        </div>
+
+        <StudioModeToggle mode={mode} onChange={setMode} />
+
+        {mode === 'prompt' ? (
+          <section className="rounded-3xl border border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-6 py-5">
+              <div className="flex items-start gap-4">
+                <div className="rounded-2xl bg-gray-900 p-3 text-white">
+                  <Brain className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900">Start from Prompt</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-gray-600">
+                    Describe the agent you want to build and the studio will generate a structured config you can refine conversationally.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-5 px-6 py-6">
+              <textarea
+                aria-label="Agent description"
+                value={prompt}
+                onChange={(event) => setPrompt(event.target.value)}
+                rows={7}
+                placeholder="Describe the agent you want to build..."
+                className="min-h-[220px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+              />
+
+              <div className="space-y-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                  Example prompts
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {PROMPT_EXAMPLES.map((example) => (
+                    <button
+                      key={example}
+                      type="button"
+                      onClick={() => setPrompt(example)}
+                      className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="text-sm text-gray-500">
+                  Start with the job, channels, policies, and any must-have tools or routing rules.
+                </div>
+                <button
+                  type="button"
+                  onClick={handlePromptGenerate}
+                  disabled={generateMutation.isPending || !prompt.trim()}
+                  className="inline-flex items-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <WandSparkles className="h-4 w-4" />
+                  {generateMutation.isPending ? 'Generating...' : 'Generate Agent'}
+                </button>
+              </div>
+            </div>
+          </section>
+        ) : (
+          <section className="rounded-3xl border border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-6 py-5">
+              <div className="flex items-start gap-4">
+                <div className="rounded-2xl bg-gray-900 p-3 text-white">
+                  <FileText className="h-5 w-5" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold text-gray-900">Start from Transcripts</h3>
+                  <p className="mt-1 text-sm leading-relaxed text-gray-600">
+                    Upload ZIP, JSON, CSV, TXT, or JSONL transcript files. The studio extracts intents, patterns, and FAQ signals before generating the agent.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-5 px-6 py-6">
+              <label className="flex cursor-pointer flex-col items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-gray-200 bg-gray-50 px-6 py-12 text-center transition hover:border-gray-300 hover:bg-gray-100">
+                <UploadCloud className="h-10 w-10 text-gray-400" />
+                <div>
+                  <p className="text-sm font-semibold text-gray-700">Upload transcript files</p>
+                  <p className="mt-1 text-xs text-gray-500">Supports ZIP, JSON, CSV, TXT, and JSONL</p>
+                </div>
+                <input
+                  aria-label="Upload transcript files"
+                  type="file"
+                  accept=".zip,.json,.jsonl,.csv,.txt,.md"
+                  className="hidden"
+                  onChange={handleTranscriptUpload}
+                />
+              </label>
+
+              {importMutation.isPending && (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+                  Analyzing transcripts...
+                </div>
+              )}
+
+              {transcriptReport && (
+                <div className="space-y-5">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <MetricCard label="Conversations" value={String(transcriptReport.conversation_count)} />
+                    <MetricCard label="Languages" value={transcriptReport.languages.join(', ') || 'n/a'} />
+                    <MetricCard label="Insights" value={String(transcriptReport.insights.length)} />
+                    <MetricCard label="FAQs" value={String(transcriptReport.faq_entries.length)} />
+                  </div>
+
+                  <div className="grid gap-4 xl:grid-cols-[0.9fr_1.1fr]">
+                    <AnalysisSection title="Top Intents" eyebrow="Coverage">
+                      <div className="space-y-2">
+                        {transcriptIntents.map((intent) => (
+                          <div
+                            key={intent.label}
+                            className="flex items-center justify-between rounded-2xl border border-gray-200 bg-gray-50 px-3 py-2"
+                          >
+                            <span className="text-sm font-medium text-gray-800">{humanizeLabel(intent.label)}</span>
+                            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-gray-600">
+                              {intent.count}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </AnalysisSection>
+
+                    <AnalysisSection title="Pattern Signals" eyebrow="What stood out">
+                      <div className="space-y-3">
+                        {patternSignals.map((signal, index) => (
+                          <div
+                            key={`${signal.title}-${index}`}
+                            className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3"
+                          >
+                            <p className="text-sm font-semibold text-gray-900">{signal.title}</p>
+                            <p className="mt-1 text-sm leading-relaxed text-gray-600">{signal.summary}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </AnalysisSection>
+                  </div>
+
+                  <AnalysisSection title="Extracted FAQs" eyebrow="Reusable responses">
+                    <div className="space-y-3">
+                      {transcriptReport.faq_entries.slice(0, 4).map((faq) => (
+                        <div
+                          key={`${faq.intent}-${faq.question}`}
+                          className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3"
+                        >
+                          <p className="text-sm font-semibold text-gray-900">{faq.question}</p>
+                          <p className="mt-1 text-sm leading-relaxed text-gray-600">{faq.answer}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </AnalysisSection>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm text-gray-500">
+                      The generated agent will incorporate the transcript gaps, workflow suggestions, and FAQ patterns.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleTranscriptGenerate}
+                      disabled={generateMutation.isPending}
+                      className="inline-flex items-center gap-2 rounded-2xl bg-gray-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <WandSparkles className="h-4 w-4" />
+                      {generateMutation.isPending ? 'Generating...' : 'Generate Agent'}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Intelligence Studio"
+        description={
+          agentConfig
+            ? `Refining ${agentConfig.metadata.agent_name} through conversation and live YAML inspection.`
+            : 'Refine the generated agent.'
+        }
+        actions={
+          <button
+            type="button"
+            onClick={resetStudio}
+            className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
+          >
+            Start Over
+          </button>
+        }
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,1fr)]">
+        <section className="flex min-h-[720px] flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-gray-500" />
+              <h3 className="text-base font-semibold text-gray-900">Conversational Refinement</h3>
+            </div>
+            <p className="mt-1 text-sm text-gray-500">
+              Ask for policy changes, new tools, routing updates, or safer behavior. Each reply updates the live YAML preview.
+            </p>
+          </div>
+
+          <div className="border-b border-gray-100 px-5 py-3">
+            <div className="flex flex-wrap gap-2">
+              {REFINEMENT_EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  onClick={() => setComposer(example)}
+                  className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-100 hover:text-gray-900"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+            {messages.map((message) => (
+              <ChatBubble key={message.id} message={message} />
+            ))}
+            {refineMutation.isPending && (
+              <div className="max-w-[85%] rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                Updating the config...
+              </div>
+            )}
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="border-t border-gray-100 px-5 py-4">
+            <div className="flex gap-3">
+              <textarea
+                aria-label="Refinement message"
+                value={composer}
+                onChange={(event) => setComposer(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    handleRefineSend();
+                  }
+                }}
+                rows={3}
+                placeholder="Tell the studio what to change next..."
+                className="min-h-[84px] flex-1 resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                disabled={refineMutation.isPending}
+              />
+              <button
+                type="button"
+                aria-label="Send refinement message"
+                onClick={handleRefineSend}
+                disabled={refineMutation.isPending || !composer.trim()}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section className="flex min-h-[720px] flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <Brain className="h-4 w-4 text-gray-500" />
+                  <h3 className="text-base font-semibold text-gray-900">Live YAML Config</h3>
+                </div>
+                <p className="mt-1 text-sm text-gray-500">
+                  Inspect the generated config as YAML while you refine the agent.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCopyYaml}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
+              >
+                <Copy className="h-4 w-4" />
+                Copy
+              </button>
+            </div>
+          </div>
+
+          {agentConfig && (
+            <>
+              <div className="grid grid-cols-3 gap-px border-b border-gray-100 bg-gray-100">
+                <MetricCard label="Tools" value={String(agentConfig.tools.length)} compact />
+                <MetricCard label="Policies" value={String(agentConfig.policies.length)} compact />
+                <MetricCard label="Routes" value={String(agentConfig.routing_rules.length)} compact />
+              </div>
+
+              <div className="border-b border-gray-100 px-5 py-4">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Agent
+                  </p>
+                  <p className="mt-2 text-sm font-semibold text-gray-900">
+                    {agentConfig.metadata.agent_name}
+                  </p>
+                  <p className="mt-1 text-sm text-gray-500">
+                    {agentConfig.metadata.created_from === 'transcript'
+                      ? 'Generated from transcript intelligence.'
+                      : 'Generated from a natural-language prompt.'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto bg-[#0B1020] px-0 py-0">
+                <YamlPreview yaml={yamlPreview} />
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 border-t border-gray-100 p-4 sm:grid-cols-3">
+                <button
+                  type="button"
+                  onClick={() => navigate('/evals?new=1')}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Generate Evals
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                >
+                  <Download className="h-4 w-4" />
+                  Export
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/evals?run=1')}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  <Play className="h-4 w-4" />
+                  Run Eval
+                </button>
+              </div>
+            </>
+          )}
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function StudioModeToggle({
+  mode,
+  onChange,
+}: {
+  mode: StudioMode;
+  onChange: (mode: StudioMode) => void;
+}) {
+  return (
+    <div className="inline-flex rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+      <button
+        type="button"
+        onClick={() => onChange('prompt')}
+        className={classNames(
+          'inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition',
+          mode === 'prompt'
+            ? 'bg-gray-900 text-white'
+            : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+        )}
+      >
+        <Sparkles className="h-4 w-4" />
+        Start from Prompt
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange('transcript')}
+        className={classNames(
+          'inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition',
+          mode === 'transcript'
+            ? 'bg-gray-900 text-white'
+            : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+        )}
+      >
+        <FileText className="h-4 w-4" />
+        Start from Transcripts
+      </button>
+    </div>
+  );
+}
+
+function AnalysisSection({
+  title,
+  eyebrow,
+  children,
+}: {
+  title: string;
+  eyebrow: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">{eyebrow}</p>
+      <h4 className="mt-2 text-base font-semibold text-gray-900">{title}</h4>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function MetricCard({
+  label,
+  value,
+  compact = false,
+}: {
+  label: string;
+  value: string;
+  compact?: boolean;
+}) {
+  return (
+    <div className={classNames(compact ? 'bg-white px-3 py-3 text-center' : 'rounded-2xl border border-gray-200 bg-white p-4')}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">{label}</p>
+      <p className={classNames('mt-2 font-semibold text-gray-900', compact ? 'text-lg' : 'text-2xl')}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  const assistant = message.role === 'assistant';
+  return (
+    <div className={classNames('flex', assistant ? 'justify-start' : 'justify-end')}>
+      <div
+        className={classNames(
+          'max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed',
+          assistant
+            ? 'border border-gray-200 bg-gray-50 text-gray-700'
+            : 'bg-gray-900 text-white'
+        )}
+      >
+        {message.content.split('\n').map((line, index) => (
+          <p key={`${message.id}-${index}`} className={index === 0 ? '' : 'mt-2'}>
+            {renderRichLine(line)}
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function YamlPreview({ yaml }: { yaml: string }) {
+  const lines = yaml.split('\n');
+
+  return (
+    <div data-testid="yaml-preview" className="font-mono text-[12px] leading-6 text-slate-200">
+      {lines.map((line, index) => (
+        <div
+          key={`${index}-${line}`}
+          className="grid grid-cols-[48px_minmax(0,1fr)] items-start border-b border-white/5 px-4"
+        >
+          <span className="select-none pr-3 text-right text-slate-500">{index + 1}</span>
+          <code className="overflow-x-auto py-1.5">{highlightYamlLine(line)}</code>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function highlightYamlLine(line: string): ReactNode {
+  if (!line) {
+    return <span>&nbsp;</span>;
+  }
+
+  const keyMatch = line.match(/^(\s*-\s+)?([A-Za-z_]+):(.*)$/);
+  if (!keyMatch) {
+    return <span className="text-slate-200">{line}</span>;
+  }
+
+  const [, listPrefix = '', key, rest] = keyMatch;
+  return (
+    <>
+      {listPrefix && <span className="text-slate-500">{listPrefix}</span>}
+      <span className="text-sky-300">{key}</span>
+      <span className="text-slate-500">:</span>
+      {rest ? <span className="text-emerald-200">{rest}</span> : null}
+    </>
+  );
+}
+
+function renderRichLine(line: string): ReactNode {
+  if (line.startsWith('- ')) {
+    return (
+      <span className="flex gap-2">
+        <span className="text-gray-400">•</span>
+        <span>{line.slice(2)}</span>
+      </span>
+    );
+  }
+
+  const parts = line.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return (
+        <strong key={`${part}-${index}`} className="font-semibold">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <span key={`${part}-${index}`}>{part}</span>;
+  });
+}
+
+function buildIntentSummaries(report: TranscriptReport): IntentSummary[] {
+  const counts = new Map<string, number>();
+
+  for (const conversation of report.conversations ?? []) {
+    if (conversation.intent) {
+      counts.set(conversation.intent, (counts.get(conversation.intent) ?? 0) + 1);
+    }
+  }
+
+  if (counts.size === 0) {
+    for (const faq of report.faq_entries ?? []) {
+      if (faq.intent) {
+        counts.set(faq.intent, (counts.get(faq.intent) ?? 0) + 1);
+      }
+    }
+  }
+
+  if (counts.size === 0) {
+    for (const item of report.missing_intents ?? []) {
+      if (item.intent) {
+        counts.set(item.intent, Number(item.count ?? 1));
+      }
+    }
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([label, count]) => ({ label, count }));
+}
+
+function buildPatternSignals(report: TranscriptReport) {
+  const insights = (report.insights ?? []).slice(0, 2).map((insight) => ({
+    title: insight.title,
+    summary: insight.summary,
+  }));
+  const workflowSignals = (report.workflow_suggestions ?? []).slice(0, 2).map((workflow) => ({
+    title: workflow.title,
+    summary: workflow.description,
+  }));
+
+  const combined = [...insights, ...workflowSignals];
+  if (combined.length > 0) {
+    return combined;
+  }
+
+  return [
+    {
+      title: 'No dominant pattern detected',
+      summary: 'Upload more transcripts to extract stronger workflow and escalation signals.',
+    },
+  ];
+}
+
+function buildAssistantMessage(content: string): ChatMessage {
+  return {
+    id: `assistant-${crypto.randomUUID()}`,
+    role: 'assistant',
+    content,
+  };
+}
+
+function buildUserMessage(content: string): ChatMessage {
+  return {
+    id: `user-${crypto.randomUUID()}`,
+    role: 'user',
+    content,
+  };
+}
 
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -39,764 +849,60 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
+function slugify(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function humanizeLabel(value: string): string {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function configToYaml(config: GeneratedAgentConfig): string {
-  const lines: string[] = [];
-  const meta = config.metadata;
-  lines.push(`# Agent: ${meta.agent_name}`);
-  lines.push(`# Version: ${meta.version}`);
-  lines.push(`# Created from: ${meta.created_from}`);
-  lines.push('');
-  lines.push('system_prompt: |');
-  for (const line of config.system_prompt.split('\n')) {
-    lines.push(`  ${line}`);
-  }
-  lines.push('');
-  lines.push('tools:');
+  const lines: string[] = [
+    'metadata:',
+    `  agent_name: ${config.metadata.agent_name}`,
+    `  version: ${config.metadata.version}`,
+    `  created_from: ${config.metadata.created_from}`,
+    '',
+    'system_prompt: |',
+    ...config.system_prompt.split('\n').map((line) => `  ${line}`),
+    '',
+    'tools:',
+  ];
+
   for (const tool of config.tools) {
     lines.push(`  - name: ${tool.name}`);
     lines.push(`    description: ${tool.description}`);
-    if (tool.parameters.length > 0) {
-      lines.push(`    parameters: [${tool.parameters.join(', ')}]`);
+    lines.push('    parameters:');
+    if (tool.parameters.length === 0) {
+      lines.push('      - none');
+    } else {
+      for (const parameter of tool.parameters) {
+        lines.push(`      - ${parameter}`);
+      }
     }
   }
-  lines.push('');
-  lines.push('routing_rules:');
+
+  lines.push('', 'routing_rules:');
   for (const rule of config.routing_rules) {
-    lines.push(`  - condition: "${rule.condition}"`);
+    lines.push(`  - condition: ${JSON.stringify(rule.condition)}`);
     lines.push(`    action: ${rule.action}`);
     lines.push(`    priority: ${rule.priority}`);
   }
-  lines.push('');
-  lines.push('policies:');
+
+  lines.push('', 'policies:');
   for (const policy of config.policies) {
     lines.push(`  - name: ${policy.name}`);
-    lines.push(`    description: "${policy.description}"`);
     lines.push(`    enforcement: ${policy.enforcement}`);
+    lines.push(`    description: ${JSON.stringify(policy.description)}`);
   }
-  lines.push('');
-  lines.push('eval_criteria:');
+
+  lines.push('', 'eval_criteria:');
   for (const criterion of config.eval_criteria) {
     lines.push(`  - name: ${criterion.name}`);
     lines.push(`    weight: ${criterion.weight}`);
-    lines.push(`    description: "${criterion.description}"`);
+    lines.push(`    description: ${JSON.stringify(criterion.description)}`);
   }
+
   return lines.join('\n');
-}
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-type Mode = 'prompt' | 'transcript';
-type Phase = 'input' | 'refine';
-
-interface ChatMessage {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-const EXAMPLE_PROMPTS = [
-  'Build a customer service agent for order tracking, cancellations, and refunds',
-  'Create an IT helpdesk agent that handles password resets, VPN issues, and hardware requests',
-  'Design a healthcare intake agent that collects symptoms, schedules appointments, and triages urgency',
-  'Build a sales qualification agent that scores leads and books demos',
-];
-
-// ---------------------------------------------------------------------------
-// Component
-// ---------------------------------------------------------------------------
-
-export function IntelligenceStudio() {
-  const navigate = useNavigate();
-
-  // Mode & phase
-  const [mode, setMode] = useState<Mode>('prompt');
-  const [phase, setPhase] = useState<Phase>('input');
-
-  // Prompt mode
-  const [prompt, setPrompt] = useState('');
-
-  // Transcript mode
-  const [transcriptReport, setTranscriptReport] = useState<TranscriptReport | null>(null);
-
-  // Agent config (shared across both modes after generation)
-  const [agentConfig, setAgentConfig] = useState<GeneratedAgentConfig | null>(null);
-
-  // Chat refinement
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [composer, setComposer] = useState('');
-  const chatEndRef = useRef<HTMLDivElement>(null);
-
-  // Preview panel
-  const [expandedSection, setExpandedSection] = useState<string | null>('system_prompt');
-
-  // Mutations
-  const generateMutation = useGenerateAgent();
-  const chatMutation = useChatRefine();
-  const importMutation = useImportTranscriptArchive();
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  // ── Handlers ────────────────────────────────────────────────────────────
-
-  function handleGenerate() {
-    if (!prompt.trim()) {
-      toastError('Prompt required', 'Describe the agent you want to build.');
-      return;
-    }
-    generateMutation.mutate(
-      { prompt: prompt.trim() },
-      {
-        onSuccess: (config) => {
-          setAgentConfig(config);
-          setPhase('refine');
-          setMessages([
-            {
-              id: 'assistant-0',
-              role: 'assistant',
-              content: `I've built an initial agent config: **${config.metadata.agent_name}** with ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies.\n\nTell me what to add, change, or remove. For example:\n- "Add escalation logic for VIP customers"\n- "Add a refund handling flow"\n- "Add safety policies for PII protection"`,
-            },
-          ]);
-          toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
-        },
-        onError: (error) => toastError('Generation failed', error.message),
-      }
-    );
-  }
-
-  function handleGenerateFromTranscript() {
-    if (!transcriptReport) return;
-    generateMutation.mutate(
-      {
-        prompt: `Build an agent based on transcript analysis: ${transcriptReport.archive_name}`,
-        transcript_report_id: transcriptReport.report_id,
-      },
-      {
-        onSuccess: (config) => {
-          setAgentConfig(config);
-          setPhase('refine');
-          setMessages([
-            {
-              id: 'assistant-0',
-              role: 'assistant',
-              content: `I've analyzed **${transcriptReport.conversation_count} conversations** from "${transcriptReport.archive_name}" and generated an initial agent config: **${config.metadata.agent_name}**.\n\nThe config includes ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies based on the transcript patterns.\n\nRefine it by telling me what to add or change.`,
-            },
-          ]);
-          toastSuccess('Agent generated from transcripts', config.metadata.agent_name);
-        },
-        onError: (error) => toastError('Generation failed', error.message),
-      }
-    );
-  }
-
-  function handleChatSend() {
-    if (!composer.trim() || !agentConfig) return;
-    const userMsg: ChatMessage = {
-      id: `user-${messages.length}`,
-      role: 'user',
-      content: composer.trim(),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    const currentComposer = composer.trim();
-    setComposer('');
-
-    chatMutation.mutate(
-      { message: currentComposer, config: agentConfig },
-      {
-        onSuccess: (result) => {
-          setAgentConfig(result.config);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `assistant-${prev.length}`,
-              role: 'assistant',
-              content: result.response,
-            },
-          ]);
-        },
-        onError: (error) => {
-          toastError('Refinement failed', error.message);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `assistant-err-${prev.length}`,
-              role: 'assistant',
-              content: `Error: ${error.message}. Try again.`,
-            },
-          ]);
-        },
-      }
-    );
-  }
-
-  async function handleArchiveUpload(event: ChangeEvent<HTMLInputElement>) {
-    const file = event.target.files?.[0];
-    if (!file) return;
-    try {
-      const archiveBase64 = await fileToBase64(file);
-      importMutation.mutate(
-        { archive_name: file.name, archive_base64: archiveBase64 },
-        {
-          onSuccess: (report) => {
-            setTranscriptReport(report as unknown as TranscriptReport);
-            toastSuccess(
-              'Transcript archive imported',
-              `${(report as unknown as TranscriptReport).conversation_count} conversations analyzed.`
-            );
-          },
-          onError: (error) => toastError('Import failed', error.message),
-        }
-      );
-    } catch (error) {
-      toastError('Import failed', error instanceof Error ? error.message : String(error));
-    } finally {
-      event.target.value = '';
-    }
-  }
-
-  function handleExportConfig() {
-    if (!agentConfig) return;
-    const yaml = configToYaml(agentConfig);
-    const blob = new Blob([yaml], { type: 'text/yaml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${agentConfig.metadata.agent_name.replace(/\s+/g, '-').toLowerCase()}-config.yaml`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toastSuccess('Config exported', 'YAML file downloaded.');
-  }
-
-  function handleCopyConfig() {
-    if (!agentConfig) return;
-    navigator.clipboard.writeText(configToYaml(agentConfig));
-    toastSuccess('Copied', 'Config YAML copied to clipboard.');
-  }
-
-  function toggleSection(section: string) {
-    setExpandedSection((prev) => (prev === section ? null : section));
-  }
-
-  // ── Render: Input Phase ─────────────────────────────────────────────────
-
-  if (phase === 'input') {
-    return (
-      <div className="space-y-6">
-        <PageHeader
-          title="Intelligence Studio"
-          description="Go from zero to a working agent. Start from a prompt or upload transcripts."
-        />
-
-        {/* Mode Selector */}
-        <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
-          <button
-            onClick={() => setMode('prompt')}
-            className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
-              mode === 'prompt'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            <Sparkles className="mr-2 inline-block h-4 w-4" />
-            Start from Prompt
-          </button>
-          <button
-            onClick={() => setMode('transcript')}
-            className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
-              mode === 'transcript'
-                ? 'bg-white text-gray-900 shadow-sm'
-                : 'text-gray-600 hover:text-gray-900'
-            }`}
-          >
-            <FileText className="mr-2 inline-block h-4 w-4" />
-            Start from Transcripts
-          </button>
-        </div>
-
-        {/* Prompt Mode */}
-        {mode === 'prompt' && (
-          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="rounded-xl bg-gray-900 p-2.5 text-white">
-                <Brain className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Describe Your Agent</h3>
-                <p className="text-sm text-gray-500">Tell us what you want your agent to do. We'll generate the config.</p>
-              </div>
-            </div>
-
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              rows={5}
-              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-              placeholder="Build a customer service agent that handles order tracking, cancellations, and refunds. It should verify identity before making changes and escalate when the customer doesn't have their order number..."
-            />
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              {EXAMPLE_PROMPTS.map((example) => (
-                <button
-                  key={example}
-                  onClick={() => setPrompt(example)}
-                  className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-100"
-                >
-                  {example}
-                </button>
-              ))}
-            </div>
-
-            <button
-              onClick={handleGenerate}
-              disabled={generateMutation.isPending || !prompt.trim()}
-              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
-            >
-              <Zap className="h-4 w-4" />
-              {generateMutation.isPending ? 'Generating...' : 'Generate Agent'}
-            </button>
-          </section>
-        )}
-
-        {/* Transcript Mode */}
-        {mode === 'transcript' && (
-          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
-            <div className="flex items-center gap-3 mb-5">
-              <div className="rounded-xl bg-gray-900 p-2.5 text-white">
-                <FileText className="h-5 w-5" />
-              </div>
-              <div>
-                <h3 className="text-lg font-semibold text-gray-900">Upload Transcripts</h3>
-                <p className="text-sm text-gray-500">
-                  Upload a ZIP, JSON, CSV, or TXT file with conversation transcripts.
-                </p>
-              </div>
-            </div>
-
-            {!transcriptReport && (
-              <label className="flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 p-10 transition hover:border-gray-400 hover:bg-gray-100">
-                <UploadCloud className="h-10 w-10 text-gray-400" />
-                <span className="text-sm font-medium text-gray-600">
-                  Drop transcript files here or click to browse
-                </span>
-                <span className="text-xs text-gray-400">Supports ZIP, JSON, CSV, TXT</span>
-                <input
-                  type="file"
-                  accept=".zip,.json,.csv,.txt,.jsonl"
-                  className="hidden"
-                  onChange={handleArchiveUpload}
-                />
-                {importMutation.isPending && (
-                  <span className="text-sm font-medium text-sky-600">Analyzing transcripts...</span>
-                )}
-              </label>
-            )}
-
-            {transcriptReport && (
-              <div className="space-y-4">
-                {/* Insights Summary */}
-                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                  <InsightCard label="Conversations" value={transcriptReport.conversation_count} />
-                  <InsightCard label="Languages" value={transcriptReport.languages.join(', ')} />
-                  <InsightCard label="Insights" value={transcriptReport.insights.length} />
-                  <InsightCard label="Missing Intents" value={transcriptReport.missing_intents.length} />
-                </div>
-
-                {/* Intent Distribution */}
-                {transcriptReport.insights.length > 0 && (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
-                      Top Insights
-                    </p>
-                    <div className="space-y-2">
-                      {transcriptReport.insights.slice(0, 4).map((insight) => (
-                        <div
-                          key={insight.insight_id}
-                          className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2"
-                        >
-                          <span className="text-sm text-gray-700">{insight.title}</span>
-                          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
-                            {(insight.share * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {/* FAQs */}
-                {transcriptReport.faq_entries.length > 0 && (
-                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
-                      Extracted FAQs
-                    </p>
-                    <div className="space-y-2">
-                      {transcriptReport.faq_entries.slice(0, 3).map((faq) => (
-                        <div
-                          key={`${faq.intent}-${faq.question}`}
-                          className="rounded-lg border border-gray-200 bg-white px-3 py-2"
-                        >
-                          <p className="text-sm font-medium text-gray-900">{faq.question}</p>
-                          <p className="mt-1 text-sm text-gray-500">{faq.answer}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                <button
-                  onClick={handleGenerateFromTranscript}
-                  disabled={generateMutation.isPending}
-                  className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
-                >
-                  <Zap className="h-4 w-4" />
-                  {generateMutation.isPending
-                    ? 'Generating...'
-                    : 'Generate Agent from These Transcripts'}
-                </button>
-              </div>
-            )}
-          </section>
-        )}
-      </div>
-    );
-  }
-
-  // ── Render: Refine Phase ────────────────────────────────────────────────
-
-  return (
-    <div className="space-y-4">
-      <PageHeader
-        title="Intelligence Studio"
-        description={agentConfig ? `Refining: ${agentConfig.metadata.agent_name}` : 'Refine your agent'}
-        actions={
-          <button
-            onClick={() => {
-              setPhase('input');
-              setAgentConfig(null);
-              setMessages([]);
-              setTranscriptReport(null);
-            }}
-            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50"
-          >
-            Start Over
-          </button>
-        }
-      />
-
-      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]" style={{ minHeight: 'calc(100vh - 200px)' }}>
-        {/* Left Panel: Chat */}
-        <section className="flex flex-col rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center gap-2 border-b border-gray-100 px-5 py-3">
-            <MessageSquare className="h-4 w-4 text-gray-500" />
-            <h3 className="text-sm font-semibold text-gray-900">Conversational Refinement</h3>
-          </div>
-
-          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" style={{ maxHeight: 'calc(100vh - 360px)' }}>
-            {messages.map((msg) => (
-              <div
-                key={msg.id}
-                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                    msg.role === 'user'
-                      ? 'bg-gray-900 text-white'
-                      : 'border border-gray-200 bg-gray-50 text-gray-700'
-                  }`}
-                >
-                  {msg.content.split('\n').map((line, i) => (
-                    <p key={`${msg.id}-${i}`} className={i > 0 ? 'mt-2' : ''}>
-                      {line.startsWith('- ') ? (
-                        <span className="flex gap-2">
-                          <span className="text-gray-400">•</span>
-                          <span>{line.slice(2)}</span>
-                        </span>
-                      ) : line.startsWith('**') && line.endsWith('**') ? (
-                        <strong className="font-semibold">{line.slice(2, -2)}</strong>
-                      ) : (
-                        renderInlineBold(line)
-                      )}
-                    </p>
-                  ))}
-                </div>
-              </div>
-            ))}
-            {chatMutation.isPending && (
-              <div className="flex justify-start">
-                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
-                  Updating config...
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
-          </div>
-
-          {/* Composer */}
-          <div className="border-t border-gray-100 px-5 py-3">
-            <div className="flex gap-2">
-              <input
-                value={composer}
-                onChange={(e) => setComposer(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
-                    e.preventDefault();
-                    handleChatSend();
-                  }
-                }}
-                className="flex-1 rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-                placeholder="Add escalation logic, refund handling, safety policies..."
-                disabled={chatMutation.isPending}
-              />
-              <button
-                onClick={handleChatSend}
-                disabled={chatMutation.isPending || !composer.trim()}
-                className="rounded-xl bg-gray-900 px-4 py-2.5 text-white transition hover:bg-gray-800 disabled:opacity-60"
-              >
-                <Send className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {/* Right Panel: Live Agent Preview */}
-        <section className="flex flex-col rounded-2xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
-            <div className="flex items-center gap-2">
-              <Brain className="h-4 w-4 text-gray-500" />
-              <h3 className="text-sm font-semibold text-gray-900">Agent Config</h3>
-            </div>
-            <div className="flex gap-1">
-              <button
-                onClick={handleCopyConfig}
-                className="rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
-                title="Copy YAML"
-              >
-                <Copy className="h-4 w-4" />
-              </button>
-              <button
-                onClick={handleExportConfig}
-                className="rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
-                title="Download YAML"
-              >
-                <Download className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {agentConfig && (
-            <div className="flex-1 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 360px)' }}>
-              {/* Stats Bar */}
-              <div className="grid grid-cols-3 gap-px border-b border-gray-100 bg-gray-100">
-                <StatCell label="Tools" value={agentConfig.tools.length} />
-                <StatCell label="Policies" value={agentConfig.policies.length} />
-                <StatCell label="Routing Rules" value={agentConfig.routing_rules.length} />
-              </div>
-
-              {/* Collapsible Sections */}
-              <div className="divide-y divide-gray-100">
-                <ConfigSection
-                  title="System Prompt"
-                  sectionKey="system_prompt"
-                  expanded={expandedSection === 'system_prompt'}
-                  onToggle={toggleSection}
-                >
-                  <pre className="whitespace-pre-wrap text-xs leading-relaxed text-gray-700 font-mono bg-gray-50 rounded-lg p-3">
-                    {agentConfig.system_prompt}
-                  </pre>
-                </ConfigSection>
-
-                <ConfigSection
-                  title={`Tools (${agentConfig.tools.length})`}
-                  sectionKey="tools"
-                  expanded={expandedSection === 'tools'}
-                  onToggle={toggleSection}
-                >
-                  <div className="space-y-2">
-                    {agentConfig.tools.map((tool) => (
-                      <div key={tool.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                        <p className="text-xs font-semibold text-gray-900">{tool.name}</p>
-                        <p className="mt-0.5 text-xs text-gray-500">{tool.description}</p>
-                        {tool.parameters.length > 0 && (
-                          <p className="mt-1 text-xs text-gray-400">
-                            Params: {tool.parameters.join(', ')}
-                          </p>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </ConfigSection>
-
-                <ConfigSection
-                  title={`Routing Rules (${agentConfig.routing_rules.length})`}
-                  sectionKey="routing_rules"
-                  expanded={expandedSection === 'routing_rules'}
-                  onToggle={toggleSection}
-                >
-                  <div className="space-y-2">
-                    {agentConfig.routing_rules.map((rule, i) => (
-                      <div key={`rule-${i}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-semibold text-gray-900">{rule.action}</p>
-                          <span className="rounded-full bg-white px-2 py-0.5 text-xs text-gray-500">
-                            P{rule.priority}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-gray-500">When: {rule.condition}</p>
-                      </div>
-                    ))}
-                  </div>
-                </ConfigSection>
-
-                <ConfigSection
-                  title={`Policies (${agentConfig.policies.length})`}
-                  sectionKey="policies"
-                  expanded={expandedSection === 'policies'}
-                  onToggle={toggleSection}
-                >
-                  <div className="space-y-2">
-                    {agentConfig.policies.map((policy) => (
-                      <div key={policy.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-semibold text-gray-900">{policy.name}</p>
-                          <span
-                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                              policy.enforcement === 'strict'
-                                ? 'bg-red-50 text-red-600'
-                                : 'bg-amber-50 text-amber-600'
-                            }`}
-                          >
-                            {policy.enforcement}
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-gray-500">{policy.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </ConfigSection>
-
-                <ConfigSection
-                  title={`Eval Criteria (${agentConfig.eval_criteria.length})`}
-                  sectionKey="eval_criteria"
-                  expanded={expandedSection === 'eval_criteria'}
-                  onToggle={toggleSection}
-                >
-                  <div className="space-y-2">
-                    {agentConfig.eval_criteria.map((criterion) => (
-                      <div key={criterion.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-                        <div className="flex items-center justify-between">
-                          <p className="text-xs font-semibold text-gray-900">{criterion.name}</p>
-                          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
-                            {(criterion.weight * 100).toFixed(0)}%
-                          </span>
-                        </div>
-                        <p className="mt-0.5 text-xs text-gray-500">{criterion.description}</p>
-                      </div>
-                    ))}
-                  </div>
-                </ConfigSection>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="border-t border-gray-100 p-4 space-y-2">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => navigate('/evals?new=1')}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-                  >
-                    <Play className="h-3.5 w-3.5" />
-                    Generate Evals
-                  </button>
-                  <button
-                    onClick={handleExportConfig}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
-                  >
-                    <Download className="h-3.5 w-3.5" />
-                    Export Config
-                  </button>
-                  <button
-                    onClick={() => navigate('/evals?run=1')}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
-                  >
-                    <Sparkles className="h-3.5 w-3.5" />
-                    Run First Eval
-                  </button>
-                  <button
-                    onClick={() => navigate('/optimize?new=1')}
-                    className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
-                  >
-                    <Zap className="h-3.5 w-3.5" />
-                    Start Optimization
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </section>
-      </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Sub-components
-// ---------------------------------------------------------------------------
-
-function InsightCard({ label, value }: { label: string; value: string | number }) {
-  return (
-    <div className="rounded-xl border border-gray-200 bg-white p-3">
-      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
-      <p className="mt-1 text-xl font-semibold text-gray-900">{value}</p>
-    </div>
-  );
-}
-
-function StatCell({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="bg-white px-4 py-2.5 text-center">
-      <p className="text-lg font-semibold text-gray-900">{value}</p>
-      <p className="text-[11px] font-medium text-gray-400">{label}</p>
-    </div>
-  );
-}
-
-function ConfigSection({
-  title,
-  sectionKey,
-  expanded,
-  onToggle,
-  children,
-}: {
-  title: string;
-  sectionKey: string;
-  expanded: boolean;
-  onToggle: (key: string) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <button
-        onClick={() => onToggle(sectionKey)}
-        className="flex w-full items-center justify-between px-5 py-3 text-left transition hover:bg-gray-50"
-      >
-        <span className="text-sm font-semibold text-gray-900">{title}</span>
-        <ChevronDown
-          className={`h-4 w-4 text-gray-400 transition ${expanded ? 'rotate-180' : ''}`}
-        />
-      </button>
-      {expanded && <div className="px-5 pb-4">{children}</div>}
-    </div>
-  );
-}
-
-function renderInlineBold(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g);
-  return parts.map((part, i) => {
-    if (part.startsWith('**') && part.endsWith('**')) {
-      return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
-    }
-    return part;
-  });
 }
