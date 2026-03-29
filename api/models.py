@@ -197,6 +197,8 @@ class HealthResponse(BaseModel):
     failure_buckets: dict[str, int] = Field(default_factory=dict, description="Failure classification counts")
     needs_optimization: bool = Field(False, description="Whether the observer recommends optimization")
     reason: str = Field("", description="Reason if optimization is recommended")
+    mock_mode: bool = Field(False, description="Whether the active server path is currently using simulated components")
+    mock_reasons: list[str] = Field(default_factory=list, description="Human-readable reasons mock mode is active")
 
 
 # ---------------------------------------------------------------------------

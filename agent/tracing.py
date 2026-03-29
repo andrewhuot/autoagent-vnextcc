@@ -303,3 +303,30 @@ class TracingMiddleware:
             invocation_id=invocation_id,
             branch=branch,
         )
+
+
+def instrument_eval_runner(
+    eval_runner: Any,
+    trace_store: TraceStore,
+    *,
+    agent_path: str = "eval",
+    branch: str = "eval",
+) -> Any:
+    """Attach tracing to an EvalRunner-style object exactly once.
+
+    WHY: The CLI and API server both build eval runners, and they should emit
+    the same trace events without duplicating wrapping logic in two places.
+    """
+    if getattr(eval_runner, "_trace_instrumented", False):
+        return eval_runner
+
+    middleware = TracingMiddleware(trace_store=trace_store)
+    eval_runner.agent_fn = middleware.wrap_agent_fn(
+        getattr(eval_runner, "agent_fn"),
+        agent_path=agent_path,
+        branch=branch,
+    )
+    setattr(eval_runner, "trace_store", trace_store)
+    setattr(eval_runner, "tracing_middleware", middleware)
+    setattr(eval_runner, "_trace_instrumented", True)
+    return eval_runner

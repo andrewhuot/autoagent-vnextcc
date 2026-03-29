@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import threading
 import time
@@ -333,6 +334,10 @@ class LLMRouter:
         models: list[ModelConfig],
         providers: dict[tuple[str, str], LLMProvider] | None = None,
         retry_policy: RetryPolicy | None = None,
+        mock_mode: bool = False,
+        mock_reason: str = "",
+        requested_mock: bool = False,
+        skipped_models: list[str] | None = None,
     ) -> None:
         if not models:
             raise ValueError("LLMRouter requires at least one model")
@@ -340,6 +345,10 @@ class LLMRouter:
         self.strategy = strategy
         self.models = models
         self.retry_policy = retry_policy or RetryPolicy()
+        self.mock_mode = mock_mode
+        self.mock_reason = mock_reason
+        self.requested_mock = requested_mock
+        self.skipped_models = skipped_models or []
         self.providers = providers or {
             (model.provider, model.model): self._build_provider(model)
             for model in models
@@ -434,10 +443,56 @@ class LLMRouter:
         raise ValueError(f"Unsupported provider: {model.provider}")
 
 
+def _default_api_key_env(provider: str) -> str | None:
+    provider_name = provider.strip().lower()
+    if provider_name == "openai":
+        return "OPENAI_API_KEY"
+    if provider_name == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider_name == "google":
+        return "GOOGLE_API_KEY"
+    return None
+
+
+def _model_requires_credentials(model: ModelConfig) -> bool:
+    provider_name = model.provider.strip().lower()
+    if provider_name in {"mock", "local"}:
+        return False
+    if provider_name == "openai_compatible":
+        return bool(model.api_key_env)
+    if provider_name in {"openai", "anthropic", "google"}:
+        return True
+    return bool(model.api_key_env)
+
+
+def _credentials_available(model: ModelConfig) -> tuple[bool, str | None]:
+    env_name = model.api_key_env or _default_api_key_env(model.provider)
+    if not _model_requires_credentials(model):
+        return True, env_name
+    if env_name and os.environ.get(env_name):
+        return True, env_name
+    return False, env_name
+
+
+def _mock_provider_for(model: ModelConfig) -> MockProvider:
+    return MockProvider(
+        ModelConfig(
+            provider="mock",
+            model=model.model,
+            role=model.role,
+            api_key_env=model.api_key_env,
+            base_url=model.base_url,
+            timeout_seconds=model.timeout_seconds,
+            requests_per_minute=model.requests_per_minute,
+            input_cost_per_1k_tokens=model.input_cost_per_1k_tokens,
+            output_cost_per_1k_tokens=model.output_cost_per_1k_tokens,
+        )
+    )
+
+
 def build_router_from_runtime_config(optimizer_config: Any) -> LLMRouter:
     """Create an LLMRouter from runtime optimizer config models/settings."""
-    model_configs: list[ModelConfig] = []
-    provider_clients: dict[tuple[str, str], LLMProvider] = {}
+    configured_models: list[ModelConfig] = []
 
     for model in getattr(optimizer_config, "models", []):
         model_config = ModelConfig(
@@ -451,17 +506,48 @@ def build_router_from_runtime_config(optimizer_config: Any) -> LLMRouter:
             input_cost_per_1k_tokens=float(getattr(model, "input_cost_per_1k_tokens", 0.0)),
             output_cost_per_1k_tokens=float(getattr(model, "output_cost_per_1k_tokens", 0.0)),
         )
-        model_configs.append(model_config)
+        configured_models.append(model_config)
 
-        if bool(getattr(optimizer_config, "use_mock", True)):
-            provider_clients[(model_config.provider, model_config.model)] = MockProvider(model_config)
-        else:
-            provider_clients[(model_config.provider, model_config.model)] = LLMRouter._build_provider(model_config)
+    provider_clients: dict[tuple[str, str], LLMProvider] = {}
+    active_models: list[ModelConfig] = []
+    skipped_models: list[str] = []
+    requested_mock = bool(getattr(optimizer_config, "use_mock", False))
+    mock_mode = False
+    mock_reason = ""
 
-    if not model_configs:
-        fallback = ModelConfig(provider="mock", model="mock-proposer")
-        model_configs.append(fallback)
-        provider_clients[(fallback.provider, fallback.model)] = MockProvider(fallback)
+    if requested_mock:
+        mock_mode = True
+        mock_reason = "Mock mode explicitly enabled by optimizer.use_mock."
+        active_models = configured_models or [ModelConfig(provider="mock", model="mock-proposer")]
+        for model_config in active_models:
+            provider_clients[(model_config.provider, model_config.model)] = _mock_provider_for(model_config)
+    else:
+        for model_config in configured_models:
+            available, env_name = _credentials_available(model_config)
+            if available:
+                active_models.append(model_config)
+                provider_clients[(model_config.provider, model_config.model)] = LLMRouter._build_provider(model_config)
+            else:
+                descriptor = f"{model_config.provider}:{model_config.model}"
+                if env_name:
+                    descriptor += f" (missing {env_name})"
+                skipped_models.append(descriptor)
+
+        if not active_models:
+            fallback = ModelConfig(provider="mock", model="mock-proposer")
+            active_models = [fallback]
+            provider_clients[(fallback.provider, fallback.model)] = MockProvider(fallback)
+            mock_mode = True
+            if skipped_models:
+                mock_reason = (
+                    "No configured provider credentials were found; falling back to mock mode. "
+                    + "Unavailable models: "
+                    + ", ".join(skipped_models)
+                )
+            elif configured_models:
+                mock_reason = "No usable real-model configuration was available; falling back to mock mode."
+            else:
+                mock_reason = "No optimizer models were configured; falling back to mock mode."
 
     retry = getattr(optimizer_config, "retry", None)
     retry_policy = RetryPolicy(
@@ -473,7 +559,11 @@ def build_router_from_runtime_config(optimizer_config: Any) -> LLMRouter:
 
     return LLMRouter(
         strategy=str(getattr(optimizer_config, "strategy", "single")),
-        models=model_configs,
+        models=active_models,
         providers=provider_clients,
         retry_policy=retry_policy,
+        mock_mode=mock_mode,
+        mock_reason=mock_reason,
+        requested_mock=requested_mock,
+        skipped_models=skipped_models,
     )

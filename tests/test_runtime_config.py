@@ -32,6 +32,7 @@ class TestRuntimeConfigIntegration:
         rc = RuntimeConfig()
         assert rc.optimization is not None
         assert rc.optimization.mode == "standard"
+        assert rc.optimizer.use_mock is False
 
     def test_load_runtime_config_with_optimization(self, tmp_path: Path):
         data = {

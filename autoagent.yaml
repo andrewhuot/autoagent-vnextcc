@@ -1,5 +1,5 @@
 optimizer:
-  use_mock: true
+  use_mock: false
   strategy: round_robin
   search_strategy: simple
   bandit_policy: thompson

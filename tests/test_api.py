@@ -141,9 +141,14 @@ class TestResponseModels:
                 total_conversations=100,
             ),
             needs_optimization=False,
+            mock_mode=True,
+            mock_reasons=["Eval harness is using mock_agent_response."],
         )
         assert resp.metrics.success_rate == 0.85
         assert resp.needs_optimization is False
+        assert resp.mock_mode is True
+        assert resp.mock_reasons == ["Eval harness is using mock_agent_response."]
+
 
     def test_eval_case_result(self):
         case = EvalCaseResult(

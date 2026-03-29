@@ -87,7 +87,7 @@ DB_PATH = os.environ.get("AUTOAGENT_DB", "conversations.db")
 CONFIGS_DIR = os.environ.get("AUTOAGENT_CONFIGS", "configs")
 MEMORY_DB = os.environ.get("AUTOAGENT_MEMORY_DB", "optimizer_memory.db")
 REGISTRY_DB = os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db")
-TRACE_DB = os.environ.get("AUTOAGENT_TRACE_DB", "traces.db")
+TRACE_DB = os.environ.get("AUTOAGENT_TRACE_DB", ".autoagent/traces.db")
 
 
 def _load_config_dict(config_path: str) -> dict:
@@ -409,9 +409,17 @@ def _build_skill_components() -> tuple[SkillStore, SkillEngine]:
     return skill_store, skill_engine
 
 
-def _build_eval_runner(runtime, *, cases_dir: str | None = None) -> EvalRunner:
+def _build_eval_runner(
+    runtime,
+    *,
+    cases_dir: str | None = None,
+    trace_db_path: str | None = None,
+) -> EvalRunner:
     """Build an EvalRunner from runtime config with harness defaults wired in."""
-    return EvalRunner(
+    from agent.tracing import instrument_eval_runner
+    from observer.traces import TraceStore
+
+    eval_runner = EvalRunner(
         cases_dir=cases_dir,
         history_db_path=runtime.eval.history_db_path,
         cache_enabled=runtime.eval.cache_enabled,
@@ -420,6 +428,40 @@ def _build_eval_runner(runtime, *, cases_dir: str | None = None) -> EvalRunner:
         random_seed=runtime.eval.random_seed,
         token_cost_per_1k=runtime.eval.token_cost_per_1k,
     )
+    trace_store = TraceStore(db_path=trace_db_path or os.environ.get("AUTOAGENT_TRACE_DB", TRACE_DB))
+    instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="cli")
+    eval_runner.mock_mode_messages = [
+        "Eval harness is using mock_agent_response, so eval scores remain simulated until a real agent_fn is wired in."
+    ]
+    return eval_runner
+
+
+def _warn_mock_modes(
+    *,
+    eval_runner: EvalRunner | None = None,
+    proposer: Proposer | None = None,
+    json_output: bool = False,
+) -> None:
+    """Print human-readable warnings for any active simulated execution paths."""
+    if json_output:
+        return
+
+    messages: list[str] = []
+    if proposer is not None and proposer.use_mock:
+        messages.append(
+            proposer.mock_reason
+            or "Optimization proposer is running in mock mode; generated changes are simulated."
+        )
+
+    if eval_runner is not None:
+        messages.extend(list(getattr(eval_runner, "mock_mode_messages", []) or []))
+
+    seen: set[str] = set()
+    for message in messages:
+        if not message or message in seen:
+            continue
+        seen.add(message)
+        click.echo(click.style(f"⚠ {message}", fg="yellow"))
 
 
 def _build_runtime_components() -> tuple[
@@ -434,7 +476,11 @@ def _build_runtime_components() -> tuple[
     runtime = load_runtime_config()
     eval_runner = _build_eval_runner(runtime)
     router = build_router_from_runtime_config(runtime.optimizer)
-    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    proposer = Proposer(
+        use_mock=router.mock_mode,
+        llm_router=router,
+        mock_reason=router.mock_reason,
+    )
     _, skill_engine = _build_skill_components()
 
     adversarial_simulator = None
@@ -891,12 +937,6 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
                 "Summarize scores and suggested follow-up",
             ],
         )
-    if runtime.optimizer.use_mock and not json_output:
-        click.echo(click.style(
-            "\u26a0 Running with mock provider. Results are simulated. "
-            "Set use_mock: false in autoagent.yaml for real evaluation.",
-            fg="yellow",
-        ))
 
     config = None
     if config_path:
@@ -908,6 +948,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             click.echo("Evaluating with default config")
 
     runner = _build_eval_runner(runtime, cases_dir=suite)
+    _warn_mock_modes(eval_runner=runner, json_output=json_output)
 
     if category:
         score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
@@ -1082,6 +1123,7 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
         adversarial_simulator,
         skill_autolearner,
     ) = _build_runtime_components()
+    _warn_mock_modes(proposer=proposer, json_output=json_output)
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -3963,12 +4005,8 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     # Step 2: Run eval baseline
     click.echo(click.style("\n━━━ Step 2/4: Run eval baseline", fg="cyan", bold=True))
     runtime = load_runtime_config()
-    if runtime.optimizer.use_mock:
-        click.echo(click.style(
-            "  ⚠ Running with mock provider. Results are simulated.",
-            fg="yellow",
-        ))
     eval_runner = _build_eval_runner(runtime)
+    _warn_mock_modes(eval_runner=eval_runner)
     baseline_score = eval_runner.run()
     click.echo(click.style("  ✓ ", fg="green") + f"Baseline composite: {baseline_score.composite:.4f}")
     click.echo(f"    Cases: {baseline_score.passed_cases}/{baseline_score.total_cases} passed")
@@ -3982,7 +4020,8 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
     memory = OptimizationMemory(db_path=MEMORY_DB)
     router = build_router_from_runtime_config(runtime.optimizer)
-    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    proposer = Proposer(use_mock=router.mock_mode, llm_router=router, mock_reason=router.mock_reason)
+    _warn_mock_modes(proposer=proposer)
     _, skill_engine = _build_skill_components()
     optimizer = Optimizer(
         eval_runner=eval_runner,
@@ -4119,6 +4158,7 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     click.echo(click.style("\n▸ Running evaluation...", fg="white", bold=True))
     runtime = load_runtime_config()
     eval_runner = _build_eval_runner(runtime)
+    _warn_mock_modes(eval_runner=eval_runner)
     score = eval_runner.run()
     click.echo(f"  Score: {score.composite:.4f}  |  "
                f"Passed: {score.passed_cases}/{score.total_cases}  |  "
@@ -4131,7 +4171,8 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
     memory = OptimizationMemory(db_path=MEMORY_DB)
     router = build_router_from_runtime_config(runtime.optimizer)
-    proposer = Proposer(use_mock=runtime.optimizer.use_mock, llm_router=router)
+    proposer = Proposer(use_mock=router.mock_mode, llm_router=router, mock_reason=router.mock_reason)
+    _warn_mock_modes(proposer=proposer)
     _, skill_engine = _build_skill_components()
     optimizer = Optimizer(
         eval_runner=eval_runner,

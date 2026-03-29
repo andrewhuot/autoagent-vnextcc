@@ -107,12 +107,14 @@ def _seed_demo_data_if_empty(conversation_store) -> None:
 async def lifespan(app: FastAPI):
     """Initialize shared resources on startup, clean up on shutdown."""
     from agent.config.runtime import load_runtime_config
+    from agent.tracing import instrument_eval_runner
     from deployer.canary import Deployer
     from deployer.versioning import ConfigVersionManager
     from evals.runner import EvalRunner
     from logger.structured import configure_structured_logging
     from logger.store import ConversationStore
     from observer import Observer
+    from observer.traces import TraceStore
     from optimizer import Optimizer
     from optimizer.adversarial import AdversarialSimulationConfig, AdversarialSimulator
     from optimizer.memory import OptimizationMemory
@@ -130,6 +132,7 @@ async def lifespan(app: FastAPI):
 
     runtime = load_runtime_config()
     startup_epoch = time.time()
+    trace_store = TraceStore(db_path=os.environ.get("AUTOAGENT_TRACE_DB", ".autoagent/traces.db"))
 
     structured_logger = configure_structured_logging(
         log_path=runtime.loop.structured_log_path,
@@ -155,9 +158,15 @@ async def lifespan(app: FastAPI):
         random_seed=runtime.eval.random_seed,
         token_cost_per_1k=runtime.eval.token_cost_per_1k,
     )
+    instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="api")
+    eval_runner.mock_mode_messages = [
+        "Eval harness is using mock_agent_response, so eval scores remain simulated until a real agent_fn is wired in."
+    ]
+    router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(
-        use_mock=runtime.optimizer.use_mock,
-        llm_router=build_router_from_runtime_config(runtime.optimizer),
+        use_mock=router.mock_mode,
+        llm_router=router,
+        mock_reason=router.mock_reason,
     )
 
     # Initialize skills system
@@ -234,6 +243,7 @@ async def lifespan(app: FastAPI):
     app.state.version_manager = version_manager
     app.state.observer = observer
     app.state.eval_runner = eval_runner
+    app.state.proposer = proposer
     app.state.optimizer = optimizer
     app.state.deployer = deployer
     app.state.task_manager = task_manager
@@ -257,15 +267,13 @@ async def lifespan(app: FastAPI):
     app.state.started_at = startup_epoch
 
     # Trace, opportunity, and experiment stores
-    from observer.traces import TraceStore
     from observer.opportunities import OpportunityQueue
     from optimizer.experiments import ExperimentStore
-    from agent.tracing import TracingMiddleware
 
-    app.state.trace_store = TraceStore(db_path=".autoagent/traces.db")
+    app.state.trace_store = trace_store
     app.state.opportunity_queue = OpportunityQueue(db_path=".autoagent/opportunities.db")
     app.state.experiment_store = ExperimentStore(db_path=".autoagent/experiments.db")
-    app.state.tracing_middleware = TracingMiddleware(trace_store=app.state.trace_store)
+    app.state.tracing_middleware = getattr(eval_runner, "tracing_middleware")
 
     # Production controls (from R2 simplicity thesis)
     from data.event_log import EventLog

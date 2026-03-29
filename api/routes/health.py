@@ -12,6 +12,29 @@ from api.models import HealthMetricsData, HealthResponse, SystemHealthResponse
 router = APIRouter(prefix="/api/health", tags=["health"])
 
 
+def _collect_mock_reasons(request: Request) -> list[str]:
+    """Return distinct mock/simulation reasons from current app state."""
+    reasons: list[str] = []
+
+    proposer = getattr(request.app.state, "proposer", None)
+    if proposer is not None and bool(getattr(proposer, "use_mock", False)):
+        reason = str(getattr(proposer, "mock_reason", "")).strip()
+        reasons.append(reason or "Optimization proposer is running in mock mode.")
+
+    eval_runner = getattr(request.app.state, "eval_runner", None)
+    if eval_runner is not None:
+        reasons.extend(list(getattr(eval_runner, "mock_mode_messages", []) or []))
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for reason in reasons:
+        if not reason or reason in seen:
+            continue
+        seen.add(reason)
+        deduped.append(reason)
+    return deduped
+
+
 @router.get("/ready")
 async def readiness_check() -> dict:
     """Lightweight readiness probe — no database queries."""
@@ -35,6 +58,7 @@ async def get_health(
         avg_cost=report.metrics.avg_cost,
         total_conversations=report.metrics.total_conversations,
     )
+    mock_reasons = _collect_mock_reasons(request)
 
     return HealthResponse(
         metrics=metrics,
@@ -42,6 +66,8 @@ async def get_health(
         failure_buckets=report.failure_buckets,
         needs_optimization=report.needs_optimization,
         reason=report.reason,
+        mock_mode=bool(mock_reasons),
+        mock_reasons=mock_reasons,
     )
 
 

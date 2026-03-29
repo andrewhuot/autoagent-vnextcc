@@ -58,7 +58,7 @@ class RuntimeModelConfig(BaseModel):
 class OptimizerRuntimeConfig(BaseModel):
     """Runtime settings for optimization proposer model orchestration."""
 
-    use_mock: bool = True
+    use_mock: bool = False
     strategy: Literal["single", "round_robin", "ensemble", "mixture"] = "single"
     search_strategy: Literal["simple", "adaptive", "full"] = "simple"
     bandit_policy: Literal["ucb", "thompson"] = "thompson"
@@ -76,7 +76,32 @@ class OptimizerRuntimeConfig(BaseModel):
     skill_autolearn_enabled: bool = True
     skill_autolearn_min_improvement: float = Field(0.01, ge=0.0, le=1.0)
     models: list[RuntimeModelConfig] = Field(
-        default_factory=lambda: [RuntimeModelConfig(provider="mock", model="mock-proposer")]
+        default_factory=lambda: [
+            RuntimeModelConfig(
+                provider="openai",
+                model="gpt-4o",
+                api_key_env="OPENAI_API_KEY",
+                requests_per_minute=120,
+                input_cost_per_1k_tokens=0.005,
+                output_cost_per_1k_tokens=0.015,
+            ),
+            RuntimeModelConfig(
+                provider="anthropic",
+                model="claude-sonnet-4-5",
+                api_key_env="ANTHROPIC_API_KEY",
+                requests_per_minute=120,
+                input_cost_per_1k_tokens=0.003,
+                output_cost_per_1k_tokens=0.015,
+            ),
+            RuntimeModelConfig(
+                provider="google",
+                model="gemini-2.5-pro",
+                api_key_env="GOOGLE_API_KEY",
+                requests_per_minute=120,
+                input_cost_per_1k_tokens=0.00125,
+                output_cost_per_1k_tokens=0.005,
+            ),
+        ]
     )
     retry: RetryConfig = Field(default_factory=RetryConfig)
 

@@ -21,9 +21,15 @@ class Proposal:
 class Proposer:
     """Proposes config changes using LLM (or mock)."""
 
-    def __init__(self, use_mock: bool = True, llm_router: LLMRouter | None = None) -> None:
+    def __init__(
+        self,
+        use_mock: bool = True,
+        llm_router: LLMRouter | None = None,
+        mock_reason: str = "",
+    ) -> None:
         self.use_mock = use_mock
         self.llm_router = llm_router
+        self.mock_reason = mock_reason
 
     def propose(
         self,

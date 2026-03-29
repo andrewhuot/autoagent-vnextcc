@@ -18,6 +18,7 @@ def _get_memory(request: Request) -> ProjectMemory:
     return memory
 
 
+@router.get("")
 @router.get("/")
 async def get_project_memory(request: Request) -> dict[str, Any]:
     """Get the current project memory."""
@@ -25,6 +26,7 @@ async def get_project_memory(request: Request) -> dict[str, Any]:
     return {"memory": memory.to_dict(), "raw": memory.raw_content}
 
 
+@router.put("")
 @router.put("/")
 async def update_project_memory(request: Request) -> dict[str, Any]:
     """Update the full project memory from structured data."""
