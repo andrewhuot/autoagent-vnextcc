@@ -202,7 +202,20 @@ main() {
   cd "$SCRIPT_DIR"
 
   if [[ -d "$VENV_DIR" ]]; then
-    ok "Virtual environment already exists - skipping creation"
+    # Check if existing venv uses a compatible Python version
+    local venv_python_version
+    venv_python_version="$("$VENV_BIN_DIR/python3" --version 2>/dev/null | cut -d' ' -f2 || echo "0.0.0")"
+    local venv_major venv_minor
+    venv_major="$(echo "$venv_python_version" | cut -d. -f1)"
+    venv_minor="$(echo "$venv_python_version" | cut -d. -f2)"
+    if [[ "$venv_major" -lt 3 ]] || { [[ "$venv_major" -eq 3 ]] && [[ "$venv_minor" -lt 11 ]]; }; then
+      warn "Existing .venv uses Python $venv_python_version (need >=3.11) — recreating..."
+      rm -rf "$VENV_DIR"
+      "$python_command" -m venv "$VENV_DIR"
+      ok "Recreated .venv with $python_command"
+    else
+      ok "Virtual environment already exists (Python $venv_python_version)"
+    fi
   else
     "$python_command" -m venv "$VENV_DIR"
     ok "Created .venv"
