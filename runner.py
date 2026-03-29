@@ -988,6 +988,44 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
 
 
 # ---------------------------------------------------------------------------
+# autoagent build show (FR-13: inspect without knowing .autoagent paths)
+# ---------------------------------------------------------------------------
+
+@cli.command("build-show")
+@click.argument("selector", default="latest")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def build_show(selector: str, json_output: bool = False) -> None:
+    """Show build output. Currently supports 'latest'.
+
+    Examples:
+      autoagent build-show latest
+      autoagent build-show latest --json
+    """
+    from cli.stream2_helpers import get_latest_build_artifact, json_response
+
+    artifact = get_latest_build_artifact()
+    if artifact is None:
+        if json_output:
+            click.echo(json_response("error", {"message": "No build artifact found"}))
+        else:
+            click.echo("No build artifact found.")
+            click.echo("Run: autoagent build \"Describe your agent\"")
+        return
+
+    if json_output:
+        click.echo(json_response("ok", artifact, next_cmd="autoagent eval run"))
+        return
+
+    click.echo(click.style("\n✦ Latest Build Artifact", fg="cyan", bold=True))
+    click.echo(f"  Prompt:      {artifact.get('source_prompt', '—')}")
+    click.echo(f"  Connectors:  {', '.join(artifact.get('connectors', [])) or 'None'}")
+    click.echo(f"  Intents:     {len(artifact.get('intents', []))}")
+    click.echo(f"  Tools:       {len(artifact.get('tools', []))}")
+    click.echo(f"  Guardrails:  {len(artifact.get('guardrails', []))}")
+    click.echo(f"  Skills:      {len(artifact.get('skills', []))}")
+
+
+# ---------------------------------------------------------------------------
 # autoagent eval (subgroup)
 # ---------------------------------------------------------------------------
 
@@ -1148,6 +1186,55 @@ def eval_results(run_id: str | None, results_file: str | None) -> None:
         click.echo(f"Run ID lookup requires the API server. Use: autoagent server")
     else:
         click.echo("Provide --file or --run-id. Use 'autoagent eval run --output results.json' first.")
+
+
+@eval_group.command("show")
+@click.argument("selector", default="latest")
+@click.option("--file", "results_file", default=None, help="Path to results JSON file.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def eval_show(selector: str, results_file: str | None, json_output: bool = False) -> None:
+    """Show eval results. Supports selectors: latest.
+
+    Examples:
+      autoagent eval show latest
+      autoagent eval show latest --json
+      autoagent eval show --file results.json
+    """
+    from cli.stream2_helpers import get_latest_eval_result, json_response
+
+    if results_file:
+        data = json.loads(Path(results_file).read_text(encoding="utf-8"))
+    else:
+        data = get_latest_eval_result()
+
+    if data is None:
+        if json_output:
+            click.echo(json_response("error", {"message": "No eval results found"}))
+        else:
+            click.echo("No eval results found.")
+            click.echo("Run: autoagent eval run --output results.json")
+        return
+
+    if json_output:
+        click.echo(json_response("ok", data, next_cmd="autoagent optimize"))
+        return
+
+    click.echo(f"\nEval Results — {data.get('timestamp', 'unknown')}")
+    click.echo(f"  Config:  {data.get('config_path', 'default')}")
+    scores = data.get("scores", {})
+    click.echo(f"  Cases:   {data.get('passed', '?')}/{data.get('total', '?')} passed")
+    click.echo(f"  Quality:   {scores.get('quality', 0):.4f}")
+    click.echo(f"  Safety:    {scores.get('safety', 0):.4f}")
+    click.echo(f"  Latency:   {scores.get('latency', 0):.4f}")
+    click.echo(f"  Cost:      {scores.get('cost', 0):.4f}")
+    click.echo(f"  Composite: {scores.get('composite', 0):.4f}")
+
+    results = data.get("results", [])
+    failed = [r for r in results if not r.get("passed")]
+    if failed:
+        click.echo(f"\nFailed cases ({len(failed)}):")
+        for r in failed:
+            click.echo(f"  {r['case_id']} [{r.get('category', '?')}] quality={r.get('quality_score', 0):.2f}")
 
 
 @eval_group.command("list")
@@ -1485,23 +1572,40 @@ def config_group() -> None:
 
 @config_group.command("list")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
-def config_list(configs_dir: str) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def config_list(configs_dir: str, json_output: bool = False) -> None:
     """List all config versions.
 
     Examples:
       autoagent config list
+      autoagent config list --json
     """
+    from cli.stream2_helpers import json_response
+
     store = ConversationStore(db_path=DB_PATH)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     history = deployer.version_manager.get_version_history()
 
     if not history:
-        click.echo("No config versions found.")
-        click.echo("Run: autoagent init")
+        if json_output:
+            click.echo(json_response("ok", []))
+        else:
+            click.echo("No config versions found.")
+            click.echo("Run: autoagent init")
         return
 
     active = deployer.version_manager.manifest.get("active_version")
     canary = deployer.version_manager.manifest.get("canary_version")
+
+    if json_output:
+        data = []
+        for v in history:
+            entry = dict(v)
+            entry["is_active"] = v["version"] == active
+            entry["is_canary"] = v["version"] == canary
+            data.append(entry)
+        click.echo(json_response("ok", data, next_cmd="autoagent config show <version>"))
+        return
 
     click.echo(f"\nConfig versions ({len(history)} total):")
     click.echo(f"{'Ver':>5}  {'Status':<12}  {'Hash':<14}  {'Composite':>10}  {'Timestamp'}")
@@ -1524,43 +1628,92 @@ def config_list(configs_dir: str) -> None:
 
 
 @config_group.command("show")
-@click.argument("version", type=int, required=False)
+@click.argument("version", type=str, required=False)
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
-def config_show(version: int | None, configs_dir: str) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def config_show(version: str | None, configs_dir: str, json_output: bool = False) -> None:
     """Show config YAML for a version (defaults to active).
+
+    Supports standard selectors: latest, active, current.
 
     Examples:
       autoagent config show
       autoagent config show 3
+      autoagent config show active
+      autoagent config show latest --json
     """
+    from cli.stream2_helpers import is_selector, json_response
+
     store = ConversationStore(db_path=DB_PATH)
     deployer = Deployer(configs_dir=configs_dir, store=store)
 
-    if version is None:
+    # FR-08: resolve selectors
+    resolved_version: int | None = None
+    if version is not None:
+        if is_selector(version):
+            history = deployer.version_manager.get_version_history()
+            if version.lower() in ("latest",):
+                resolved_version = history[-1]["version"] if history else None
+            elif version.lower() in ("active", "current"):
+                resolved_version = deployer.version_manager.manifest.get("active_version")
+            elif version.lower() == "pending":
+                for v in reversed(history):
+                    if v["status"] in ("canary", "candidate", "imported"):
+                        resolved_version = v["version"]
+                        break
+        else:
+            try:
+                resolved_version = int(version)
+            except ValueError:
+                click.echo(f"Invalid version: {version}")
+                return
+
+    if resolved_version is None and version is None:
         config = deployer.get_active_config()
         if config is None:
-            click.echo("No active config. Run: autoagent init")
+            if json_output:
+                click.echo(json_response("error", {"message": "No active config"}))
+            else:
+                click.echo("No active config. Run: autoagent init")
             return
         active_ver = deployer.version_manager.manifest.get("active_version", "?")
-        click.echo(f"# Active config: v{active_ver:03d}\n")
+        if json_output:
+            click.echo(json_response("ok", {"version": active_ver, "config": config}))
+        else:
+            click.echo(f"# Active config: v{active_ver:03d}\n")
+            click.echo(yaml.safe_dump(config, default_flow_style=False, sort_keys=False))
+        return
+
+    if resolved_version is None:
+        if json_output:
+            click.echo(json_response("error", {"message": f"No config matching selector: {version}"}))
+        else:
+            click.echo(f"No config matching selector: {version}")
+        return
+
+    # Find the version file
+    history = deployer.version_manager.get_version_history()
+    found = None
+    for v in history:
+        if v["version"] == resolved_version:
+            found = v
+            break
+    if found is None:
+        if json_output:
+            click.echo(json_response("error", {"message": f"Version {resolved_version} not found"}))
+        else:
+            click.echo(f"Version {resolved_version} not found.")
+        return
+
+    filepath = Path(configs_dir) / found["filename"]
+    with filepath.open("r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+
+    if json_output:
+        click.echo(json_response("ok", {"version": resolved_version, "status": found["status"], "config": config}))
     else:
-        # Find the version file
-        history = deployer.version_manager.get_version_history()
-        found = None
-        for v in history:
-            if v["version"] == version:
-                found = v
-                break
-        if found is None:
-            click.echo(f"Version {version} not found.")
-            return
-
-        filepath = Path(configs_dir) / found["filename"]
-        with filepath.open("r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        click.echo(f"# Config: v{version:03d} [{found['status']}]\n")
-
-    click.echo(yaml.safe_dump(config, default_flow_style=False, sort_keys=False))
+        click.echo(f"# Config: v{resolved_version:03d} [{found['status']}]\n")
+        click.echo(yaml.safe_dump(config, default_flow_style=False, sort_keys=False))
 
 
 @config_group.command("diff")
@@ -1598,6 +1751,50 @@ def config_diff(v1: int, v2: int, configs_dir: str) -> None:
     click.echo(f"\nDiff: v{v1:03d} → v{v2:03d}")
     click.echo(f"{'─' * 50}")
     click.echo(diff_text)
+
+
+@config_group.command("import")
+@click.argument("file_path", type=click.Path(exists=True))
+@click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def config_import(file_path: str, configs_dir: str, json_output: bool = False) -> None:
+    """Import a plain YAML or JSON config file into the versioned config store.
+
+    Converts the file to a versioned config in the configs directory with
+    manifest tracking.  The imported config appears in ``config list``,
+    ``config show``, and ``config diff``.
+
+    Examples:
+      autoagent config import my_config.yaml
+      autoagent config import agent.json --json
+    """
+    from cli.stream2_helpers import ConfigImporter, json_response
+
+    importer = ConfigImporter(configs_dir=configs_dir)
+    try:
+        result = importer.import_config(file_path)
+    except (FileNotFoundError, ValueError) as exc:
+        if json_output:
+            click.echo(json_response("error", {"message": str(exc)}))
+        else:
+            click.echo(click.style(f"Error: {exc}", fg="red"))
+        raise SystemExit(1)
+
+    if json_output:
+        click.echo(json_response("ok", result, next_cmd=f"autoagent config show {result['version']}"))
+        return
+
+    click.echo(click.style("\n✦ Config Imported", fg="cyan", bold=True))
+    click.echo(f"  Source:  {result['source_file']}")
+    click.echo(f"  Version: v{result['version']:03d}")
+    click.echo(f"  Hash:    {result['config_hash']}")
+    click.echo(f"  Path:    {result['dest_path']}")
+    click.echo("")
+    _print_next_actions([
+        f"autoagent config show {result['version']}",
+        f"autoagent eval run --config {result['dest_path']}",
+        "autoagent config list",
+    ])
 
 
 @config_group.command("migrate")
@@ -1653,6 +1850,7 @@ def config_migrate(input_file: str, output: str | None) -> None:
 @click.option("--credentials", default=None, help="Path to service account JSON for CX calls.")
 @click.option("--output", default=None, help="Output path for CX export package JSON.")
 @click.option("--push/--no-push", default=False, show_default=True, help="Push to CX now (otherwise package only).")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def deploy(
     config_version: int | None,
     strategy: str,
@@ -1666,6 +1864,7 @@ def deploy(
     credentials: str | None,
     output: str | None,
     push: bool,
+    json_output: bool = False,
 ) -> None:
     """Deploy a config version.
 
@@ -1740,27 +1939,34 @@ def deploy(
         click.echo(f"CX export pushed: {result.resources_updated} resource(s) updated")
         return
 
+    from cli.stream2_helpers import json_response
+
     store = ConversationStore(db_path=db)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     history = deployer.version_manager.get_version_history()
 
     if not history:
-        click.echo("No config versions available. Run: autoagent optimize")
+        if json_output:
+            click.echo(json_response("error", {"message": "No config versions available"}))
+        else:
+            click.echo("No config versions available. Run: autoagent optimize")
         return
 
     if config_version is None:
-        # Use latest version
         config_version = history[-1]["version"]
-        click.echo(f"Deploying latest version: v{config_version:03d}")
+        if not json_output:
+            click.echo(f"Deploying latest version: v{config_version:03d}")
 
-    # Find config
     found = None
     for v in history:
         if v["version"] == config_version:
             found = v
             break
     if found is None:
-        click.echo(f"Version {config_version} not found.")
+        if json_output:
+            click.echo(json_response("error", {"message": f"Version {config_version} not found"}))
+        else:
+            click.echo(f"Version {config_version} not found.")
         return
 
     filepath = Path(configs_dir) / found["filename"]
@@ -1771,11 +1977,17 @@ def deploy(
 
     if strategy == "immediate":
         deployer.version_manager.promote(config_version)
-        click.echo(f"Deployed v{config_version:03d} immediately (promoted to active).")
+        if json_output:
+            click.echo(json_response("ok", {"version": config_version, "strategy": "immediate", "status": "active"}, next_cmd="autoagent status"))
+        else:
+            click.echo(f"Deployed v{config_version:03d} immediately (promoted to active).")
     else:
         result = deployer.deploy(config, scores)
-        click.echo(f"Deployed v{config_version:03d} as canary.")
-        click.echo(f"  {result}")
+        if json_output:
+            click.echo(json_response("ok", {"version": config_version, "strategy": "canary", "result": str(result)}, next_cmd="autoagent status"))
+        else:
+            click.echo(f"Deployed v{config_version:03d} as canary.")
+            click.echo(f"  {result}")
 
 
 # ---------------------------------------------------------------------------
@@ -2512,12 +2724,15 @@ def autofix_group() -> None:
 
 
 @autofix_group.command("suggest")
-def autofix_suggest() -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def autofix_suggest(json_output: bool = False) -> None:
     """Generate AutoFix proposals without applying them.
 
     Examples:
       autoagent autofix suggest
+      autoagent autofix suggest --json
     """
+    from cli.stream2_helpers import json_response
     from optimizer.autofix import AutoFixEngine, AutoFixStore
     from optimizer.autofix_proposers import (
         CostOptimizationProposer,
@@ -2537,7 +2752,27 @@ def autofix_suggest() -> None:
 
     proposals = engine.suggest(failures, current_config)
     if not proposals:
-        click.echo("No proposals generated.")
+        if json_output:
+            click.echo(json_response("ok", []))
+        else:
+            click.echo("No proposals generated.")
+        return
+
+    if json_output:
+        data = [
+            {
+                "proposal_id": p.proposal_id,
+                "mutation_name": p.mutation_name,
+                "surface": p.surface,
+                "risk_class": p.risk_class,
+                "expected_lift": p.expected_lift,
+                "cost_impact_estimate": p.cost_impact_estimate,
+                "diff_preview": p.diff_preview,
+                "status": getattr(p, "status", "pending"),
+            }
+            for p in proposals
+        ]
+        click.echo(json_response("ok", data, next_cmd="autoagent autofix apply <proposal_id>"))
         return
 
     click.echo(f"\n{len(proposals)} proposal(s) generated:\n")
@@ -2553,14 +2788,33 @@ def autofix_suggest() -> None:
 
 @autofix_group.command("apply")
 @click.argument("proposal_id", type=str)
-def autofix_apply(proposal_id: str) -> None:
-    """Apply a specific AutoFix proposal.
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def autofix_apply(proposal_id: str, json_output: bool = False) -> None:
+    """Apply a specific AutoFix proposal and write a new config version.
 
     Examples:
       autoagent autofix apply abc123
+      autoagent autofix apply pending
     """
+    from cli.stream2_helpers import apply_autofix_to_config, is_selector, json_response
     from optimizer.autofix import AutoFixEngine, AutoFixStore
     from optimizer.mutations import create_default_registry
+
+    # FR-08: resolve "pending" selector
+    if is_selector(proposal_id):
+        store = AutoFixStore()
+        proposals = store.list_pending(limit=1) if hasattr(store, "list_pending") else []
+        if not proposals:
+            history = store.history(limit=50) if hasattr(store, "history") else []
+            proposals = [p for p in history if getattr(p, "status", "") == "pending"]
+        if not proposals:
+            msg = "No pending autofix proposals found."
+            if json_output:
+                click.echo(json_response("error", {"message": msg}))
+            else:
+                click.echo(msg)
+            return
+        proposal_id = proposals[0].proposal_id
 
     store = AutoFixStore()
     registry = create_default_registry()
@@ -2571,21 +2825,44 @@ def autofix_apply(proposal_id: str) -> None:
 
     try:
         new_config, status_msg = engine.apply(proposal_id, current_config)
-        click.echo(f"Applied: {status_msg}")
         if new_config:
-            click.echo("New config generated. Run 'autoagent eval run' to validate.")
+            version_info = apply_autofix_to_config(proposal_id, new_config, configs_dir=CONFIGS_DIR)
+            if json_output:
+                click.echo(json_response("ok", {
+                    "proposal_id": proposal_id,
+                    "status": status_msg,
+                    "config_version": version_info["version"],
+                    "config_path": version_info["path"],
+                }, next_cmd=f"autoagent eval run --config {version_info['path']}"))
+            else:
+                click.echo(f"Applied: {status_msg}")
+                click.echo(f"  New config version: v{version_info['version']:03d}")
+                click.echo(f"  Path: {version_info['path']}")
+                _print_next_actions([f"autoagent eval run --config {version_info['path']}"])
+        else:
+            if json_output:
+                click.echo(json_response("ok", {"proposal_id": proposal_id, "status": status_msg, "config_version": None}))
+            else:
+                click.echo(f"Applied: {status_msg}")
+                click.echo("No config changes produced.")
     except ValueError as exc:
-        click.echo(click.style(f"Error: {exc}", fg="red"))
+        if json_output:
+            click.echo(json_response("error", {"message": str(exc)}))
+        else:
+            click.echo(click.style(f"Error: {exc}", fg="red"))
 
 
 @autofix_group.command("history")
 @click.option("--limit", default=20, show_default=True, type=int, help="Number of proposals to show.")
-def autofix_history(limit: int) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def autofix_history(limit: int, json_output: bool = False) -> None:
     """Show past AutoFix proposals and outcomes.
 
     Examples:
       autoagent autofix history
+      autoagent autofix history --json
     """
+    from cli.stream2_helpers import json_response
     from optimizer.autofix import AutoFixEngine, AutoFixStore
 
     store = AutoFixStore()
@@ -2593,7 +2870,24 @@ def autofix_history(limit: int) -> None:
     proposals = engine.history(limit=limit)
 
     if not proposals:
-        click.echo("No AutoFix history found.")
+        if json_output:
+            click.echo(json_response("ok", []))
+        else:
+            click.echo("No AutoFix history found.")
+        return
+
+    if json_output:
+        data = [
+            {
+                "proposal_id": p.proposal_id,
+                "mutation_name": p.mutation_name,
+                "status": p.status,
+                "expected_lift": p.expected_lift,
+                "risk_class": p.risk_class,
+            }
+            for p in proposals
+        ]
+        click.echo(json_response("ok", data))
         return
 
     click.echo(f"\nAutoFix history ({len(proposals)} proposals):\n")
@@ -2811,20 +3105,39 @@ def review_group(ctx: click.Context) -> None:
 
 @review_group.command("list")
 @click.option("--limit", default=20, show_default=True, type=int, help="Number of cards to show.")
-def review_list(limit: int = 20) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def review_list(limit: int = 20, json_output: bool = False) -> None:
     """List pending change cards.
 
     Examples:
       autoagent review
       autoagent review list
+      autoagent review list --json
     """
+    from cli.stream2_helpers import json_response
     from optimizer.change_card import ChangeCardStore
 
     store = ChangeCardStore()
     cards = store.list_pending(limit=limit)
 
     if not cards:
-        click.echo("No pending change cards.")
+        if json_output:
+            click.echo(json_response("ok", []))
+        else:
+            click.echo("No pending change cards.")
+        return
+
+    if json_output:
+        data = [
+            {
+                "card_id": card.card_id,
+                "title": card.title,
+                "risk_class": card.risk_class,
+                "status": card.status,
+            }
+            for card in cards
+        ]
+        click.echo(json_response("ok", data, next_cmd="autoagent review show <card_id>"))
         return
 
     click.echo(f"\nPending change cards ({len(cards)}):\n")
@@ -2837,20 +3150,50 @@ def review_list(limit: int = 20) -> None:
 
 @review_group.command("show")
 @click.argument("card_id")
-def review_show(card_id: str) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def review_show(card_id: str, json_output: bool = False) -> None:
     """Show a specific change card with full terminal rendering.
+
+    Supports selectors: pending, latest.
 
     Examples:
       autoagent review show abc12345
+      autoagent review show pending
+      autoagent review show pending --json
     """
+    from cli.stream2_helpers import is_selector, json_response
     from optimizer.change_card import ChangeCardStore
 
     store = ChangeCardStore()
+
+    # FR-08: resolve selectors
+    if is_selector(card_id):
+        cards = store.list_pending(limit=1)
+        if not cards:
+            if json_output:
+                click.echo(json_response("error", {"message": f"No {card_id} change cards found"}))
+            else:
+                click.echo(f"No {card_id} change cards found.")
+            return
+        card_id = cards[0].card_id
+
     card = store.get(card_id)
     if card is None:
-        click.echo(f"Change card not found: {card_id}")
+        if json_output:
+            click.echo(json_response("error", {"message": f"Change card not found: {card_id}"}))
+        else:
+            click.echo(f"Change card not found: {card_id}")
         raise SystemExit(1)
-    click.echo(card.to_terminal())
+
+    if json_output:
+        click.echo(json_response("ok", {
+            "card_id": card.card_id,
+            "title": card.title,
+            "risk_class": card.risk_class,
+            "status": card.status,
+        }, next_cmd=f"autoagent review apply {card.card_id}"))
+    else:
+        click.echo(card.to_terminal())
 
 
 @review_group.command("apply")
@@ -4048,6 +4391,66 @@ def trace_group() -> None:
     """Trace analysis — grading, blame maps, and graphs."""
 
 
+@trace_group.command("show")
+@click.argument("trace_id")
+@click.option("--db", default=TRACE_DB, show_default=True)
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def trace_show(trace_id: str, db: str, json_output: bool = False) -> None:
+    """Show trace details. Supports selectors: latest.
+
+    Examples:
+      autoagent trace show abc-123
+      autoagent trace show latest
+      autoagent trace show latest --json
+    """
+    from cli.stream2_helpers import json_response
+    from observer.traces import TraceStore
+
+    store = TraceStore(db_path=db)
+
+    # FR-08: resolve "latest" selector
+    if trace_id.lower() == "latest":
+        recent = store.get_recent_trace_ids(limit=1) if hasattr(store, "get_recent_trace_ids") else []
+        if not recent:
+            if json_output:
+                click.echo(json_response("error", {"message": "No traces found"}))
+            else:
+                click.echo("No traces found.")
+            return
+        trace_id = recent[0]
+
+    events = store.get_trace(trace_id=trace_id)
+    if not events:
+        if json_output:
+            click.echo(json_response("error", {"message": f"No events found for trace: {trace_id}"}))
+        else:
+            click.echo(f"No events found for trace: {trace_id}")
+        return
+
+    total_tokens = sum(e.tokens_in + e.tokens_out for e in events)
+    total_latency = sum(e.latency_ms for e in events)
+    errors = [e for e in events if e.error_message]
+
+    if json_output:
+        data = {
+            "trace_id": trace_id,
+            "events": len(events),
+            "total_tokens": total_tokens,
+            "total_latency_ms": total_latency,
+            "errors": len(errors),
+        }
+        click.echo(json_response("ok", data, next_cmd=f"autoagent trace grade {trace_id}"))
+    else:
+        click.echo(f"\nTrace: {trace_id}")
+        click.echo(f"  Events:      {len(events)}")
+        click.echo(f"  Total tokens: {total_tokens}")
+        click.echo(f"  Total latency: {total_latency:.1f}ms")
+        click.echo(f"  Errors:      {len(errors)}")
+        if errors:
+            for e in errors[:5]:
+                click.echo(f"    - {e.error_message}")
+
+
 @trace_group.command("grade")
 @click.argument("trace_id")
 @click.option("--db", default=TRACE_DB, show_default=True)
@@ -4155,11 +4558,53 @@ def trace_graph(trace_id: str, db: str) -> None:
 
 @trace_group.command("promote")
 @click.argument("trace_id")
-def trace_promote(trace_id: str) -> None:
-    """Promote a trace to an eval case."""
-    from observer.trace_promoter import TracePromoter
+@click.option("--eval-cases-dir", default="evals/cases", show_default=True, help="Eval cases directory.")
+@click.option("--db", default=TRACE_DB, show_default=True)
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def trace_promote(trace_id: str, eval_cases_dir: str, db: str, json_output: bool = False) -> None:
+    """Promote a trace to an eval case file in the active eval set.
+
+    Examples:
+      autoagent trace promote abc-123
+      autoagent trace promote latest
+    """
+    from cli.stream2_helpers import json_response, write_trace_eval_case
+    from observer.trace_promoter import TraceCandidate, TracePromoter
+    from observer.traces import TraceStore
+
+    # FR-08: resolve "latest" selector
+    if trace_id.lower() == "latest":
+        store = TraceStore(db_path=db)
+        recent = store.get_recent_trace_ids(limit=1) if hasattr(store, "get_recent_trace_ids") else []
+        if not recent:
+            msg = "No traces found."
+            if json_output:
+                click.echo(json_response("error", {"message": msg}))
+            else:
+                click.echo(msg)
+            return
+        trace_id = recent[0]
+
     promoter = TracePromoter()
-    click.echo(f"Promoting trace {trace_id} to eval case...")
+    candidate = TraceCandidate(
+        trace_id=trace_id,
+        reason="manual promotion",
+        confidence=1.0,
+        suggested_category="promoted",
+    )
+    eval_case = promoter.promote_to_eval_case(candidate)
+    file_path = write_trace_eval_case(trace_id, eval_case, eval_cases_dir=eval_cases_dir)
+
+    if json_output:
+        click.echo(json_response("ok", {
+            "trace_id": trace_id,
+            "eval_case": eval_case,
+            "file_path": file_path,
+        }, next_cmd="autoagent eval run"))
+    else:
+        click.echo(click.style("  ✓ ", fg="green") + f"Promoted trace {trace_id} to eval case")
+        click.echo(f"  File: {file_path}")
+        _print_next_actions(["autoagent eval run"])
 
 
 # ---------------------------------------------------------------------------
@@ -4201,16 +4646,27 @@ def scorer_create(description: str | None, from_file: str | None, name: str | No
 
 
 @scorer_group.command("list")
-def scorer_list() -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def scorer_list(json_output: bool = False) -> None:
     """List all scorer specs in memory.
 
     Examples:
       autoagent scorer list
+      autoagent scorer list --json
     """
+    from cli.stream2_helpers import json_response
+
     scorer = _make_nl_scorer()
     specs = scorer.list()
     if not specs:
-        click.echo("No scorers found. Create one with: autoagent scorer create")
+        if json_output:
+            click.echo(json_response("ok", []))
+        else:
+            click.echo("No scorers found. Create one with: autoagent scorer create")
+        return
+    if json_output:
+        data = [{"name": s.name, "version": s.version, "dimensions": len(s.dimensions)} for s in specs]
+        click.echo(json_response("ok", data))
         return
     click.echo(f"\n{len(specs)} scorer(s):\n")
     for s in specs:
@@ -4970,6 +5426,172 @@ def demo_vp(
 # autoagent edit — Natural Language Config Editing
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# autoagent build show (FR-13: inspect commands)
+# ---------------------------------------------------------------------------
+
+@cli.group("build-inspect", hidden=True)
+def build_inspect_group() -> None:
+    """Inspect build artifacts."""
+
+
+# We add "show" as a subcommand of "build" by converting build to a group isn't
+# feasible without breaking the existing positional-arg command.
+# Instead, add a top-level `autoagent build-show` command.
+
+
+# ---------------------------------------------------------------------------
+# autoagent policy (FR-13: inspect commands)
+# ---------------------------------------------------------------------------
+
+@cli.group("policy")
+def policy_group() -> None:
+    """Policy management — inspect trained policy artifacts."""
+
+
+@policy_group.command("list")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def policy_list(json_output: bool = False) -> None:
+    """List all policy artifacts.
+
+    Examples:
+      autoagent policy list
+      autoagent policy list --json
+    """
+    from cli.stream2_helpers import json_response, list_policies
+
+    policies = list_policies()
+    if json_output:
+        click.echo(json_response("ok", policies))
+        return
+    if not policies:
+        click.echo("No policy artifacts found.")
+        click.echo("Create one with: autoagent rl train")
+        return
+    click.echo(f"\nPolicy artifacts ({len(policies)}):\n")
+    click.echo(f"{'Policy ID':<16}  {'Name':<20}  {'Version':>8}  {'Status':<10}  {'Mode'}")
+    click.echo(f"{'─' * 16}  {'─' * 20}  {'─' * 8}  {'─' * 10}  {'─' * 12}")
+    for p in policies:
+        click.echo(f"{p['policy_id']:<16}  {p['name']:<20}  v{p['version']:>6}  {p['status']:<10}  {p['mode']}")
+
+
+@policy_group.command("show")
+@click.argument("policy_id_or_name")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def policy_show(policy_id_or_name: str, json_output: bool = False) -> None:
+    """Show details for a policy artifact.
+
+    Supports selectors: latest, active.
+
+    Examples:
+      autoagent policy show my_policy
+      autoagent policy show latest --json
+    """
+    from cli.stream2_helpers import get_policy, is_selector, json_response, list_policies
+
+    if is_selector(policy_id_or_name):
+        policies = list_policies()
+        if not policies:
+            if json_output:
+                click.echo(json_response("error", {"message": "No policies found"}))
+            else:
+                click.echo("No policies found.")
+            return
+        if policy_id_or_name.lower() in ("active", "current"):
+            active = [p for p in policies if p["status"] in ("active", "promoted")]
+            policy = active[0] if active else policies[-1]
+        else:
+            policy = policies[-1]
+    else:
+        policy = get_policy(policy_id_or_name)
+
+    if policy is None:
+        if json_output:
+            click.echo(json_response("error", {"message": f"Policy not found: {policy_id_or_name}"}))
+        else:
+            click.echo(f"Policy not found: {policy_id_or_name}")
+        return
+
+    if json_output:
+        click.echo(json_response("ok", policy))
+    else:
+        click.echo(json.dumps(policy, indent=2, default=str))
+
+
+# ---------------------------------------------------------------------------
+# autoagent autofix show (FR-13: inspect commands)
+# ---------------------------------------------------------------------------
+
+@autofix_group.command("show")
+@click.argument("proposal_id")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def autofix_show(proposal_id: str, json_output: bool = False) -> None:
+    """Show details for an autofix proposal.
+
+    Examples:
+      autoagent autofix show abc123
+      autoagent autofix show latest --json
+    """
+    from cli.stream2_helpers import is_selector, json_response
+    from optimizer.autofix import AutoFixStore
+
+    store = AutoFixStore()
+
+    if is_selector(proposal_id):
+        history = store.history(limit=50) if hasattr(store, "history") else []
+        if proposal_id.lower() == "pending":
+            proposals = [p for p in history if getattr(p, "status", "") == "pending"]
+        else:
+            proposals = list(history)
+        if not proposals:
+            if json_output:
+                click.echo(json_response("error", {"message": f"No {proposal_id} proposals found"}))
+            else:
+                click.echo(f"No {proposal_id} proposals found.")
+            return
+        proposal_id = proposals[0].proposal_id
+
+    proposal = store.get(proposal_id) if hasattr(store, "get") else None
+    if proposal is None:
+        # Try searching history
+        history = store.history(limit=100) if hasattr(store, "history") else []
+        for p in history:
+            if p.proposal_id == proposal_id:
+                proposal = p
+                break
+
+    if proposal is None:
+        if json_output:
+            click.echo(json_response("error", {"message": f"Proposal not found: {proposal_id}"}))
+        else:
+            click.echo(f"Proposal not found: {proposal_id}")
+        return
+
+    data = {
+        "proposal_id": proposal.proposal_id,
+        "mutation_name": proposal.mutation_name,
+        "surface": proposal.surface,
+        "risk_class": proposal.risk_class,
+        "expected_lift": proposal.expected_lift,
+        "cost_impact_estimate": proposal.cost_impact_estimate,
+        "status": getattr(proposal, "status", "unknown"),
+        "diff_preview": proposal.diff_preview,
+    }
+
+    if json_output:
+        click.echo(json_response("ok", data))
+    else:
+        click.echo(f"\nAutoFix Proposal: {proposal.proposal_id}")
+        click.echo(f"  Mutation:  {proposal.mutation_name}")
+        click.echo(f"  Surface:   {proposal.surface}")
+        click.echo(f"  Risk:      {proposal.risk_class}")
+        click.echo(f"  Lift:      {proposal.expected_lift:.1%}")
+        click.echo(f"  Cost:      ${proposal.cost_impact_estimate:.4f}")
+        click.echo(f"  Status:    {getattr(proposal, 'status', 'unknown')}")
+        if proposal.diff_preview:
+            click.echo(f"  Preview:   {proposal.diff_preview}")
+
+
 @cli.command("edit")
 @click.argument("description", required=False)
 @click.option("--interactive", "-i", is_flag=True, help="Multi-turn editing session.")
@@ -5726,12 +6348,17 @@ def dataset_list() -> None:
 
 @dataset.command("stats")
 @click.argument("dataset_id")
-def dataset_stats(dataset_id: str) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def dataset_stats(dataset_id: str, json_output: bool = False) -> None:
     """Show dataset statistics."""
+    from cli.stream2_helpers import json_response
     from data.dataset_service import DatasetService
     svc = DatasetService()
     stats = svc.stats(dataset_id)
-    click.echo(yaml.dump(stats, default_flow_style=False))
+    if json_output:
+        click.echo(json_response("ok", stats))
+    else:
+        click.echo(yaml.dump(stats, default_flow_style=False))
 
 
 # ---------------------------------------------------------------------------
@@ -5769,16 +6396,56 @@ def release() -> None:
 
 
 @release.command("list")
-def release_list() -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def release_list(json_output: bool = False) -> None:
     """List release objects."""
-    click.echo("Release objects: (none yet)")
+    from cli.stream2_helpers import ReleaseStore, json_response
+
+    store = ReleaseStore()
+    releases = store.list_releases()
+
+    if json_output:
+        click.echo(json_response("ok", releases))
+        return
+
+    if not releases:
+        click.echo("No release objects found.")
+        click.echo("Create one with: autoagent release create --experiment-id <id>")
+        return
+
+    click.echo(f"\nRelease objects ({len(releases)}):\n")
+    click.echo(f"{'Release ID':<20}  {'Experiment':<16}  {'Status':<10}  {'Created'}")
+    click.echo(f"{'─' * 20}  {'─' * 16}  {'─' * 10}  {'─' * 24}")
+    for r in releases:
+        click.echo(f"{r['release_id']:<20}  {r.get('experiment_id', '—'):<16}  {r['status']:<10}  {r.get('created_at', '—')}")
 
 
 @release.command("create")
 @click.option("--experiment-id", required=True, help="Experiment ID to create release from")
-def release_create(experiment_id: str) -> None:
-    """Create a new release object from an experiment."""
-    click.echo(f"Creating release from experiment {experiment_id}...")
+@click.option("--config-version", type=int, default=None, help="Config version to include.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def release_create(experiment_id: str, config_version: int | None = None, json_output: bool = False) -> None:
+    """Create a new release object from an experiment.
+
+    Persists the release to .autoagent/releases/ as a JSON file.
+
+    Examples:
+      autoagent release create --experiment-id exp-abc123
+    """
+    from cli.stream2_helpers import ReleaseStore, json_response
+
+    store = ReleaseStore()
+    release = store.create(experiment_id, config_version=config_version)
+
+    if json_output:
+        click.echo(json_response("ok", release, next_cmd=f"autoagent release list"))
+        return
+
+    click.echo(click.style("  ✓ ", fg="green") + f"Release created: {release['release_id']}")
+    click.echo(f"  Experiment: {experiment_id}")
+    click.echo(f"  Status:     {release['status']}")
+    click.echo(f"  Created:    {release['created_at']}")
+    click.echo(f"  Path:       .autoagent/releases/{release['release_id']}.json")
 
 
 # ---------------------------------------------------------------------------
@@ -5927,17 +6594,43 @@ def rl_jobs(status):
 
 @rl.command("eval")
 @click.argument("policy_id")
-def rl_eval(policy_id):
-    """Evaluate a policy artifact offline."""
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def rl_eval(policy_id, json_output: bool = False):
+    """Evaluate a policy artifact offline.
+
+    Supports selectors: ``autoagent rl eval latest``
+    """
+    from cli.stream2_helpers import is_selector, json_response
     from policy_opt.registry import PolicyArtifactRegistry
     from policy_opt.orchestrator import PolicyOptOrchestrator
+
+    # FR-08: resolve "latest" selector
+    if is_selector(policy_id):
+        registry = PolicyArtifactRegistry()
+        all_policies = registry.list_all()
+        if not all_policies:
+            if json_output:
+                click.echo(json_response("error", {"message": "No policies found"}))
+            else:
+                click.echo("No policies found.")
+            registry.close()
+            return
+        policy_id = all_policies[-1].policy_id
+        registry.close()
+
     registry = PolicyArtifactRegistry()
     orch = PolicyOptOrchestrator(policy_registry=registry)
     try:
         report = orch.evaluate_policy(policy_id)
-        click.echo(json.dumps(report, indent=2))
+        if json_output:
+            click.echo(json_response("ok", report))
+        else:
+            click.echo(json.dumps(report, indent=2))
     except KeyError as e:
-        click.echo(f"Error: {e}", err=True)
+        if json_output:
+            click.echo(json_response("error", {"message": str(e)}))
+        else:
+            click.echo(f"Error: {e}", err=True)
         raise SystemExit(1)
     finally:
         registry.close()
