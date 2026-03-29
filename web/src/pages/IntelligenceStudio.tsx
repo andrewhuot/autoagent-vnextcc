@@ -1,28 +1,30 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import { useState, useRef, useEffect, type ChangeEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Brain, FileArchive, MessageSquareText, Sparkles, UploadCloud, WandSparkles } from 'lucide-react';
 import {
-  useApplyTranscriptInsight,
-  useAskTranscriptReport,
-  useBuildAgentArtifact,
-  useDeepResearchReport,
+  Brain,
+  ChevronDown,
+  Copy,
+  Download,
+  FileText,
+  MessageSquare,
+  Play,
+  Send,
+  Sparkles,
+  UploadCloud,
+  Zap,
+} from 'lucide-react';
+import {
+  useChatRefine,
+  useGenerateAgent,
   useImportTranscriptArchive,
-  useKnowledgeAsset,
-  useRunAutonomousLoop,
-  useTranscriptReport,
-  useTranscriptReports,
 } from '../lib/api';
-import { BuilderResult, ListPanel, ReportHighlights, SummaryCard } from '../components/IntelligenceComponents';
-import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
 import { toastError, toastSuccess } from '../lib/toast';
-import type {
-  ApplyInsightResult,
-  AutonomousLoopResult,
-  DeepResearchReport,
-  IntelligenceAnswer,
-} from '../lib/types';
-import { formatTimestamp, formatPercent } from '../lib/utils';
+import type { GeneratedAgentConfig, TranscriptReport } from '../lib/types';
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -37,51 +39,200 @@ async function fileToBase64(file: File): Promise<string> {
   });
 }
 
-const starterQuestions = [
-  'Why are people transferring to live support?',
-  'What should I change to improve this metric?',
+function configToYaml(config: GeneratedAgentConfig): string {
+  const lines: string[] = [];
+  const meta = config.metadata;
+  lines.push(`# Agent: ${meta.agent_name}`);
+  lines.push(`# Version: ${meta.version}`);
+  lines.push(`# Created from: ${meta.created_from}`);
+  lines.push('');
+  lines.push('system_prompt: |');
+  for (const line of config.system_prompt.split('\n')) {
+    lines.push(`  ${line}`);
+  }
+  lines.push('');
+  lines.push('tools:');
+  for (const tool of config.tools) {
+    lines.push(`  - name: ${tool.name}`);
+    lines.push(`    description: ${tool.description}`);
+    if (tool.parameters.length > 0) {
+      lines.push(`    parameters: [${tool.parameters.join(', ')}]`);
+    }
+  }
+  lines.push('');
+  lines.push('routing_rules:');
+  for (const rule of config.routing_rules) {
+    lines.push(`  - condition: "${rule.condition}"`);
+    lines.push(`    action: ${rule.action}`);
+    lines.push(`    priority: ${rule.priority}`);
+  }
+  lines.push('');
+  lines.push('policies:');
+  for (const policy of config.policies) {
+    lines.push(`  - name: ${policy.name}`);
+    lines.push(`    description: "${policy.description}"`);
+    lines.push(`    enforcement: ${policy.enforcement}`);
+  }
+  lines.push('');
+  lines.push('eval_criteria:');
+  for (const criterion of config.eval_criteria) {
+    lines.push(`  - name: ${criterion.name}`);
+    lines.push(`    weight: ${criterion.weight}`);
+    lines.push(`    description: "${criterion.description}"`);
+  }
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+type Mode = 'prompt' | 'transcript';
+type Phase = 'input' | 'refine';
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const EXAMPLE_PROMPTS = [
+  'Build a customer service agent for order tracking, cancellations, and refunds',
+  'Create an IT helpdesk agent that handles password resets, VPN issues, and hardware requests',
+  'Design a healthcare intake agent that collects symptoms, schedules appointments, and triages urgency',
+  'Build a sales qualification agent that scores leads and books demos',
 ];
 
-const connectorOptions = ['Shopify', 'Amazon Connect', 'Salesforce', 'Zendesk'];
+// ---------------------------------------------------------------------------
+// Component
+// ---------------------------------------------------------------------------
 
 export function IntelligenceStudio() {
   const navigate = useNavigate();
-  const [selectedReportId, setSelectedReportId] = useState<string | undefined>(undefined);
-  const [question, setQuestion] = useState(starterQuestions[0]);
-  const [answer, setAnswer] = useState<IntelligenceAnswer | null>(null);
-  const [deepResearch, setDeepResearch] = useState<DeepResearchReport | null>(null);
-  const [autonomousResult, setAutonomousResult] = useState<AutonomousLoopResult | null>(null);
-  const [lastApplyResult, setLastApplyResult] = useState<ApplyInsightResult | null>(null);
-  const [builderPrompt, setBuilderPrompt] = useState(
-    'Build a customer service agent for order tracking, cancellation, and shipping-address changes. Escalate when the customer lacks the order number.'
-  );
-  const [selectedConnectors, setSelectedConnectors] = useState<string[]>(['Shopify', 'Amazon Connect']);
 
-  const reportsQuery = useTranscriptReports();
-  const reportQuery = useTranscriptReport(selectedReportId);
+  // Mode & phase
+  const [mode, setMode] = useState<Mode>('prompt');
+  const [phase, setPhase] = useState<Phase>('input');
+
+  // Prompt mode
+  const [prompt, setPrompt] = useState('');
+
+  // Transcript mode
+  const [transcriptReport, setTranscriptReport] = useState<TranscriptReport | null>(null);
+
+  // Agent config (shared across both modes after generation)
+  const [agentConfig, setAgentConfig] = useState<GeneratedAgentConfig | null>(null);
+
+  // Chat refinement
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [composer, setComposer] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  // Preview panel
+  const [expandedSection, setExpandedSection] = useState<string | null>('system_prompt');
+
+  // Mutations
+  const generateMutation = useGenerateAgent();
+  const chatMutation = useChatRefine();
   const importMutation = useImportTranscriptArchive();
-  const askMutation = useAskTranscriptReport();
-  const applyMutation = useApplyTranscriptInsight();
-  const deepResearchMutation = useDeepResearchReport();
-  const autonomousMutation = useRunAutonomousLoop();
-  const buildMutation = useBuildAgentArtifact();
-  const knowledgeAssetId = (reportQuery.data ?? importMutation.data)?.knowledge_asset?.asset_id;
-  const knowledgeAssetQuery = useKnowledgeAsset(knowledgeAssetId);
 
   useEffect(() => {
-    if (!selectedReportId && reportsQuery.data && reportsQuery.data.length > 0) {
-      setSelectedReportId(reportsQuery.data[0].report_id);
+    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // ── Handlers ────────────────────────────────────────────────────────────
+
+  function handleGenerate() {
+    if (!prompt.trim()) {
+      toastError('Prompt required', 'Describe the agent you want to build.');
+      return;
     }
-  }, [reportsQuery.data, selectedReportId]);
+    generateMutation.mutate(
+      { prompt: prompt.trim() },
+      {
+        onSuccess: (config) => {
+          setAgentConfig(config);
+          setPhase('refine');
+          setMessages([
+            {
+              id: 'assistant-0',
+              role: 'assistant',
+              content: `I've built an initial agent config: **${config.metadata.agent_name}** with ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies.\n\nTell me what to add, change, or remove. For example:\n- "Add escalation logic for VIP customers"\n- "Add a refund handling flow"\n- "Add safety policies for PII protection"`,
+            },
+          ]);
+          toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
+        },
+        onError: (error) => toastError('Generation failed', error.message),
+      }
+    );
+  }
 
-  useEffect(() => {
-    setAnswer(null);
-    setDeepResearch(null);
-    setAutonomousResult(null);
-    setLastApplyResult(null);
-  }, [selectedReportId]);
+  function handleGenerateFromTranscript() {
+    if (!transcriptReport) return;
+    generateMutation.mutate(
+      {
+        prompt: `Build an agent based on transcript analysis: ${transcriptReport.archive_name}`,
+        transcript_report_id: transcriptReport.report_id,
+      },
+      {
+        onSuccess: (config) => {
+          setAgentConfig(config);
+          setPhase('refine');
+          setMessages([
+            {
+              id: 'assistant-0',
+              role: 'assistant',
+              content: `I've analyzed **${transcriptReport.conversation_count} conversations** from "${transcriptReport.archive_name}" and generated an initial agent config: **${config.metadata.agent_name}**.\n\nThe config includes ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies based on the transcript patterns.\n\nRefine it by telling me what to add or change.`,
+            },
+          ]);
+          toastSuccess('Agent generated from transcripts', config.metadata.agent_name);
+        },
+        onError: (error) => toastError('Generation failed', error.message),
+      }
+    );
+  }
 
-  async function onArchiveSelected(event: ChangeEvent<HTMLInputElement>) {
+  function handleChatSend() {
+    if (!composer.trim() || !agentConfig) return;
+    const userMsg: ChatMessage = {
+      id: `user-${messages.length}`,
+      role: 'user',
+      content: composer.trim(),
+    };
+    setMessages((prev) => [...prev, userMsg]);
+    const currentComposer = composer.trim();
+    setComposer('');
+
+    chatMutation.mutate(
+      { message: currentComposer, config: agentConfig },
+      {
+        onSuccess: (result) => {
+          setAgentConfig(result.config);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-${prev.length}`,
+              role: 'assistant',
+              content: result.response,
+            },
+          ]);
+        },
+        onError: (error) => {
+          toastError('Refinement failed', error.message);
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `assistant-err-${prev.length}`,
+              role: 'assistant',
+              content: `Error: ${error.message}. Try again.`,
+            },
+          ]);
+        },
+      }
+    );
+  }
+
+  async function handleArchiveUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
     try {
@@ -90,476 +241,562 @@ export function IntelligenceStudio() {
         { archive_name: file.name, archive_base64: archiveBase64 },
         {
           onSuccess: (report) => {
-            toastSuccess('Transcript archive imported', `${report.conversation_count} conversations operationalized.`);
-            setSelectedReportId(report.report_id);
+            setTranscriptReport(report as unknown as TranscriptReport);
+            toastSuccess(
+              'Transcript archive imported',
+              `${(report as unknown as TranscriptReport).conversation_count} conversations analyzed.`
+            );
           },
-          onError: (error) => toastError('Archive import failed', error.message),
+          onError: (error) => toastError('Import failed', error.message),
         }
       );
     } catch (error) {
-      toastError('Archive import failed', error instanceof Error ? error.message : String(error));
+      toastError('Import failed', error instanceof Error ? error.message : String(error));
     } finally {
       event.target.value = '';
     }
   }
 
-  function onAsk() {
-    if (!selectedReportId || !question.trim()) {
-      toastError('Question required', 'Import an archive and enter a research question.');
-      return;
-    }
-    askMutation.mutate(
-      { reportId: selectedReportId, question },
-      {
-        onSuccess: (result) => {
-          setAnswer(result);
-          setDeepResearch(result.deep_research ?? null);
-        },
-        onError: (error) => toastError('Question failed', error.message),
-      }
-    );
+  function handleExportConfig() {
+    if (!agentConfig) return;
+    const yaml = configToYaml(agentConfig);
+    const blob = new Blob([yaml], { type: 'text/yaml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${agentConfig.metadata.agent_name.replace(/\s+/g, '-').toLowerCase()}-config.yaml`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toastSuccess('Config exported', 'YAML file downloaded.');
   }
 
-  function onDeepResearch() {
-    if (!selectedReportId || !question.trim()) {
-      toastError('Question required', 'Import an archive and enter a research question.');
-      return;
-    }
-    deepResearchMutation.mutate(
-      { reportId: selectedReportId, question },
-      {
-        onSuccess: (result) => {
-          setDeepResearch(result);
-          toastSuccess('Deep research complete', `${result.root_causes.length} quantified root causes identified.`);
-        },
-        onError: (error) => toastError('Deep research failed', error.message),
-      }
-    );
+  function handleCopyConfig() {
+    if (!agentConfig) return;
+    navigator.clipboard.writeText(configToYaml(agentConfig));
+    toastSuccess('Copied', 'Config YAML copied to clipboard.');
   }
 
-  function onRunAutonomousLoop() {
-    if (!selectedReportId) {
-      toastError('Report required', 'Import an archive before running the autonomous loop.');
-      return;
-    }
-    autonomousMutation.mutate(
-      { reportId: selectedReportId, auto_ship: false },
-      {
-        onSuccess: (result) => {
-          setAutonomousResult(result);
-          toastSuccess(
-            'Autonomous loop complete',
-            `Change card ${result.change_card_id} created with ${formatPercent(result.pipeline.test.pass_rate)} sandbox pass rate.`
-          );
-        },
-        onError: (error) => toastError('Autonomous loop failed', error.message),
-      }
-    );
+  function toggleSection(section: string) {
+    setExpandedSection((prev) => (prev === section ? null : section));
   }
 
-  function onApplyInsight(insightId: string) {
-    if (!selectedReportId) return;
-    applyMutation.mutate(
-      { reportId: selectedReportId, insight_id: insightId },
-      {
-        onSuccess: (result) => {
-          setLastApplyResult(result);
-          toastSuccess('Change card drafted', `Insight converted into review card ${result.change_card.card_id}.`);
-        },
-        onError: (error) => toastError('Apply insight failed', error.message),
-      }
-    );
-  }
+  // ── Render: Input Phase ─────────────────────────────────────────────────
 
-  function toggleConnector(connector: string) {
-    setSelectedConnectors((current) =>
-      current.includes(connector) ? current.filter((item) => item !== connector) : [...current, connector]
-    );
-  }
+  if (phase === 'input') {
+    return (
+      <div className="space-y-6">
+        <PageHeader
+          title="Intelligence Studio"
+          description="Go from zero to a working agent. Start from a prompt or upload transcripts."
+        />
 
-  function onBuildArtifact() {
-    if (!builderPrompt.trim()) {
-      toastError('Prompt required', 'Describe the agent you want to build.');
-      return;
-    }
-    buildMutation.mutate(
-      { prompt: builderPrompt, connectors: selectedConnectors },
-      {
-        onError: (error) => toastError('Build failed', error.message),
-      }
-    );
-  }
+        {/* Mode Selector */}
+        <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+          <button
+            onClick={() => setMode('prompt')}
+            className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
+              mode === 'prompt'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <Sparkles className="mr-2 inline-block h-4 w-4" />
+            Start from Prompt
+          </button>
+          <button
+            onClick={() => setMode('transcript')}
+            className={`flex-1 rounded-lg px-4 py-2.5 text-sm font-semibold transition ${
+              mode === 'transcript'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            <FileText className="mr-2 inline-block h-4 w-4" />
+            Start from Transcripts
+          </button>
+        </div>
 
-  const activeReport = reportQuery.data ?? importMutation.data ?? null;
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Intelligence Studio"
-        description="Operationalize transcript archives, ask natural-language questions about conversation failure, and turn insights into reviewable agent changes."
-      />
-      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
-        Canonical build path: create your agent artifact here, then run evaluation, optimization, review, and CX deployment.
-      </div>
-
-      <section className="relative overflow-hidden rounded-[32px] border border-slate-200 bg-[radial-gradient(circle_at_top_left,_rgba(56,189,248,0.18),_transparent_35%),linear-gradient(135deg,#f8fbff_0%,#ffffff_52%,#f8fafc_100%)] p-6 shadow-sm shadow-slate-200/70">
-        <div className="absolute inset-y-0 right-0 hidden w-1/3 bg-[radial-gradient(circle_at_center,_rgba(15,23,42,0.06),_transparent_60%)] xl:block" />
-        <div className="relative grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-          <div className="space-y-5">
-            <div className="flex items-center gap-3">
-              <div className="rounded-2xl bg-slate-900 p-3 text-white">
+        {/* Prompt Mode */}
+        {mode === 'prompt' && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="rounded-xl bg-gray-900 p-2.5 text-white">
                 <Brain className="h-5 w-5" />
               </div>
               <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">Natural-Language First</p>
-                <h2 className="text-2xl font-semibold tracking-tight text-slate-900">Ask, ingest, and operationalize in one place</h2>
+                <h3 className="text-lg font-semibold text-gray-900">Describe Your Agent</h3>
+                <p className="text-sm text-gray-500">Tell us what you want your agent to do. We'll generate the config.</p>
               </div>
             </div>
 
-            <p className="max-w-2xl text-sm leading-6 text-slate-600">
-              Use transcript history as raw material for agent improvement. The studio turns messy archives into intents, procedures,
-              FAQ seeds, workflow gaps, regression tests, and drafted change cards without disturbing the current optimization loop.
-            </p>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={5}
+              className="w-full rounded-xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+              placeholder="Build a customer service agent that handles order tracking, cancellations, and refunds. It should verify identity before making changes and escalate when the customer doesn't have their order number..."
+            />
 
-            <div className="flex flex-wrap gap-3">
-              <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800">
-                <UploadCloud className="h-4 w-4" />
-                Import Transcript ZIP
-                <input type="file" accept=".zip" className="hidden" onChange={onArchiveSelected} />
-              </label>
-              <button
-                onClick={onAsk}
-                disabled={!selectedReportId || askMutation.isPending}
-                className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50 disabled:opacity-60"
-              >
-                {askMutation.isPending ? 'Researching...' : 'Ask The Corpus'}
-              </button>
-              <button
-                onClick={onBuildArtifact}
-                disabled={buildMutation.isPending}
-                className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100 disabled:opacity-60"
-              >
-                {buildMutation.isPending ? 'Drafting...' : 'Start From Prompt'}
-              </button>
-              <button
-                onClick={onDeepResearch}
-                disabled={!selectedReportId || deepResearchMutation.isPending}
-                className="rounded-full border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
-              >
-                {deepResearchMutation.isPending ? 'Analyzing...' : 'Deep Research'}
-              </button>
-              <button
-                onClick={onRunAutonomousLoop}
-                disabled={!selectedReportId || autonomousMutation.isPending}
-                className="rounded-full border border-amber-200 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-800 transition hover:bg-amber-100 disabled:opacity-60"
-              >
-                {autonomousMutation.isPending ? 'Running Loop...' : 'Run Autonomous Loop'}
-              </button>
-            </div>
-          </div>
-
-          <div className="rounded-3xl border border-slate-200 bg-white/90 p-5 backdrop-blur">
-            <div className="flex items-center gap-2">
-              <FileArchive className="h-4 w-4 text-slate-500" />
-              <h3 className="text-sm font-semibold text-slate-900">Archive Research</h3>
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {reportsQuery.isLoading && <LoadingSkeleton rows={3} />}
-              {!reportsQuery.isLoading && (reportsQuery.data?.length ?? 0) === 0 && !importMutation.data && (
-                <div className="rounded-2xl border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                  No archives imported yet. Upload a support-history ZIP to start mining intents and workflow gaps.
-                </div>
-              )}
-              {(reportsQuery.data ?? []).map((report) => (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {EXAMPLE_PROMPTS.map((example) => (
                 <button
-                  key={report.report_id}
-                  onClick={() => setSelectedReportId(report.report_id)}
-                  className={`w-full rounded-2xl border px-4 py-3 text-left transition ${
-                    selectedReportId === report.report_id
-                      ? 'border-sky-200 bg-sky-50'
-                      : 'border-slate-200 bg-slate-50 hover:border-slate-300 hover:bg-white'
-                  }`}
+                  key={example}
+                  onClick={() => setPrompt(example)}
+                  className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-100"
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{report.archive_name}</p>
-                      <p className="mt-1 text-xs text-slate-500">
-                        {report.conversation_count} conversations · {report.languages.join(', ')} · {formatTimestamp(report.created_at)}
-                      </p>
-                    </div>
-                    <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-slate-600">{report.report_id}</span>
-                  </div>
+                  {example}
                 </button>
               ))}
             </div>
-          </div>
-        </div>
-      </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.15fr_0.85fr]">
-        <section className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm shadow-gray-100/60">
-          <div className="flex items-center gap-2">
-            <MessageSquareText className="h-4 w-4 text-gray-500" />
-            <h3 className="text-lg font-semibold tracking-tight text-gray-900">Ask The Conversation Warehouse</h3>
-          </div>
-          <p className="mt-2 text-sm text-gray-600">
-            Ask plain-language questions about the imported corpus instead of digging through dashboards.
-          </p>
+            <button
+              onClick={handleGenerate}
+              disabled={generateMutation.isPending || !prompt.trim()}
+              className="mt-5 inline-flex items-center gap-2 rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
+            >
+              <Zap className="h-4 w-4" />
+              {generateMutation.isPending ? 'Generating...' : 'Generate Agent'}
+            </button>
+          </section>
+        )}
 
-          <div className="mt-4 flex flex-wrap gap-2">
-            {starterQuestions.map((item) => (
-              <button
-                key={item}
-                onClick={() => setQuestion(item)}
-                className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-100"
-              >
-                {item}
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-            <textarea
-              value={question}
-              onChange={(event) => setQuestion(event.target.value)}
-              rows={3}
-              className="min-h-[96px] flex-1 rounded-2xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-              placeholder="Why are people transferring to live support?"
-            />
-              <button
-                onClick={onAsk}
-                disabled={!selectedReportId || askMutation.isPending}
-                className="rounded-2xl bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-              >
-                {askMutation.isPending ? 'Researching...' : 'Run Analysis'}
-              </button>
-              <button
-                onClick={onDeepResearch}
-                disabled={!selectedReportId || deepResearchMutation.isPending}
-                className="rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-3 text-sm font-semibold text-emerald-800 transition hover:bg-emerald-100 disabled:opacity-60"
-              >
-                {deepResearchMutation.isPending ? 'Analyzing...' : 'Run Deep Research'}
-              </button>
+        {/* Transcript Mode */}
+        {mode === 'transcript' && (
+          <section className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="rounded-xl bg-gray-900 p-2.5 text-white">
+                <FileText className="h-5 w-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-gray-900">Upload Transcripts</h3>
+                <p className="text-sm text-gray-500">
+                  Upload a ZIP, JSON, CSV, or TXT file with conversation transcripts.
+                </p>
+              </div>
             </div>
 
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
-            {!answer && (
-              <p className="text-sm text-gray-500">
-                Import an archive and ask a question to get quantified root-cause reporting plus prescriptive recommendations.
-              </p>
+            {!transcriptReport && (
+              <label className="flex cursor-pointer flex-col items-center gap-3 rounded-xl border-2 border-dashed border-gray-300 bg-gray-50 p-10 transition hover:border-gray-400 hover:bg-gray-100">
+                <UploadCloud className="h-10 w-10 text-gray-400" />
+                <span className="text-sm font-medium text-gray-600">
+                  Drop transcript files here or click to browse
+                </span>
+                <span className="text-xs text-gray-400">Supports ZIP, JSON, CSV, TXT</span>
+                <input
+                  type="file"
+                  accept=".zip,.json,.csv,.txt,.jsonl"
+                  className="hidden"
+                  onChange={handleArchiveUpload}
+                />
+                {importMutation.isPending && (
+                  <span className="text-sm font-medium text-sky-600">Analyzing transcripts...</span>
+                )}
+              </label>
             )}
-            {answer && (
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-700">
-                    Share {formatPercent(answer.metrics.share)}
-                  </span>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-600">
-                    {answer.metrics.count}/{answer.metrics.total} conversations
-                  </span>
-                  {answer.recommended_insight_id && (
-                    <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-gray-600">
-                      Insight {answer.recommended_insight_id}
-                    </span>
-                  )}
+
+            {transcriptReport && (
+              <div className="space-y-4">
+                {/* Insights Summary */}
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                  <InsightCard label="Conversations" value={transcriptReport.conversation_count} />
+                  <InsightCard label="Languages" value={transcriptReport.languages.join(', ')} />
+                  <InsightCard label="Insights" value={transcriptReport.insights.length} />
+                  <InsightCard label="Missing Intents" value={transcriptReport.missing_intents.length} />
                 </div>
-                <p className="text-sm leading-6 text-gray-700">{answer.answer}</p>
-                {answer.evidence.length > 0 && (
-                  <div className="rounded-2xl bg-white p-3">
-                    <p className="text-xs uppercase tracking-[0.16em] text-gray-400">Evidence</p>
-                    <ul className="mt-2 space-y-1.5 text-sm text-gray-600">
-                      {answer.evidence.map((item) => (
-                        <li key={item}>“{item}”</li>
+
+                {/* Intent Distribution */}
+                {transcriptReport.insights.length > 0 && (
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                      Top Insights
+                    </p>
+                    <div className="space-y-2">
+                      {transcriptReport.insights.slice(0, 4).map((insight) => (
+                        <div
+                          key={insight.insight_id}
+                          className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2"
+                        >
+                          <span className="text-sm text-gray-700">{insight.title}</span>
+                          <span className="rounded-full bg-sky-100 px-2 py-0.5 text-xs font-semibold text-sky-700">
+                            {(insight.share * 100).toFixed(0)}%
+                          </span>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   </div>
                 )}
+
+                {/* FAQs */}
+                {transcriptReport.faq_entries.length > 0 && (
+                  <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-3">
+                      Extracted FAQs
+                    </p>
+                    <div className="space-y-2">
+                      {transcriptReport.faq_entries.slice(0, 3).map((faq) => (
+                        <div
+                          key={`${faq.intent}-${faq.question}`}
+                          className="rounded-lg border border-gray-200 bg-white px-3 py-2"
+                        >
+                          <p className="text-sm font-medium text-gray-900">{faq.question}</p>
+                          <p className="mt-1 text-sm text-gray-500">{faq.answer}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <button
+                  onClick={handleGenerateFromTranscript}
+                  disabled={generateMutation.isPending}
+                  className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
+                >
+                  <Zap className="h-4 w-4" />
+                  {generateMutation.isPending
+                    ? 'Generating...'
+                    : 'Generate Agent from These Transcripts'}
+                </button>
               </div>
             )}
+          </section>
+        )}
+      </div>
+    );
+  }
+
+  // ── Render: Refine Phase ────────────────────────────────────────────────
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="Intelligence Studio"
+        description={agentConfig ? `Refining: ${agentConfig.metadata.agent_name}` : 'Refine your agent'}
+        actions={
+          <button
+            onClick={() => {
+              setPhase('input');
+              setAgentConfig(null);
+              setMessages([]);
+              setTranscriptReport(null);
+            }}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-sm font-medium text-gray-600 transition hover:bg-gray-50"
+          >
+            Start Over
+          </button>
+        }
+      />
+
+      <div className="grid gap-4 xl:grid-cols-[1.15fr_0.85fr]" style={{ minHeight: 'calc(100vh - 200px)' }}>
+        {/* Left Panel: Chat */}
+        <section className="flex flex-col rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex items-center gap-2 border-b border-gray-100 px-5 py-3">
+            <MessageSquare className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Conversational Refinement</h3>
           </div>
-        </section>
 
-        <section className="rounded-3xl border border-gray-200 bg-white p-5 shadow-sm shadow-gray-100/60">
-          <div className="flex items-center gap-2">
-            <WandSparkles className="h-4 w-4 text-gray-500" />
-            <h3 className="text-lg font-semibold tracking-tight text-gray-900">Prompt-To-Agent Builder</h3>
-          </div>
-          <p className="mt-2 text-sm text-gray-600">
-            Start from a blank slate prompt and generate structured agent artifacts instead of manually wiring every flow.
-          </p>
-
-          <textarea
-            value={builderPrompt}
-            onChange={(event) => setBuilderPrompt(event.target.value)}
-            rows={6}
-            className="mt-4 w-full rounded-2xl border border-gray-300 px-4 py-3 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
-            placeholder="Describe the agent you want to create..."
-          />
-
-          <div className="mt-4 flex flex-wrap gap-2">
-            {connectorOptions.map((connector) => {
-              const active = selectedConnectors.includes(connector);
-              return (
-                <button
-                  key={connector}
-                  onClick={() => toggleConnector(connector)}
-                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${
-                    active
-                      ? 'border-sky-200 bg-sky-50 text-sky-800'
-                      : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+          <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4" style={{ maxHeight: 'calc(100vh - 360px)' }}>
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                    msg.role === 'user'
+                      ? 'bg-gray-900 text-white'
+                      : 'border border-gray-200 bg-gray-50 text-gray-700'
                   }`}
                 >
-                  {connector}
-                </button>
-              );
-            })}
+                  {msg.content.split('\n').map((line, i) => (
+                    <p key={`${msg.id}-${i}`} className={i > 0 ? 'mt-2' : ''}>
+                      {line.startsWith('- ') ? (
+                        <span className="flex gap-2">
+                          <span className="text-gray-400">•</span>
+                          <span>{line.slice(2)}</span>
+                        </span>
+                      ) : line.startsWith('**') && line.endsWith('**') ? (
+                        <strong className="font-semibold">{line.slice(2, -2)}</strong>
+                      ) : (
+                        renderInlineBold(line)
+                      )}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {chatMutation.isPending && (
+              <div className="flex justify-start">
+                <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                  Updating config...
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef} />
           </div>
 
-          <button
-            onClick={onBuildArtifact}
-            disabled={buildMutation.isPending}
-            className="mt-4 inline-flex items-center gap-2 rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-60"
-          >
-            <Sparkles className="h-4 w-4" />
-            {buildMutation.isPending ? 'Drafting agent...' : 'Generate Agent Artifact'}
-          </button>
-        </section>
-      </div>
-
-      {reportQuery.isLoading && <LoadingSkeleton rows={8} />}
-      {activeReport && <ReportHighlights report={activeReport} onApplyInsight={onApplyInsight} applyPending={applyMutation.isPending} />}
-      {lastApplyResult && (
-        <ListPanel title="Auto-Generated Simulation Bundle" eyebrow="Change Validation">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="space-y-3">
-              {lastApplyResult.auto_simulation.generated_tests.map((test) => (
-                <div key={test.name} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-gray-900">{test.name}</p>
-                    <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">{test.difficulty}</span>
-                  </div>
-                  <p className="mt-2 text-sm text-gray-600">Prompt: {test.user_message}</p>
-                  <p className="mt-1 text-sm text-gray-600">Expected: {test.expected_behavior}</p>
-                </div>
-              ))}
+          {/* Composer */}
+          <div className="border-t border-gray-100 px-5 py-3">
+            <div className="flex gap-2">
+              <input
+                value={composer}
+                onChange={(e) => setComposer(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleChatSend();
+                  }
+                }}
+                className="flex-1 rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-800 outline-none transition focus:border-sky-400 focus:ring-2 focus:ring-sky-100"
+                placeholder="Add escalation logic, refund handling, safety policies..."
+                disabled={chatMutation.isPending}
+              />
+              <button
+                onClick={handleChatSend}
+                disabled={chatMutation.isPending || !composer.trim()}
+                className="rounded-xl bg-gray-900 px-4 py-2.5 text-white transition hover:bg-gray-800 disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" />
+              </button>
             </div>
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-sm font-semibold text-gray-900">Sandbox Validation</p>
-              <div className="mt-3 space-y-2 text-sm text-gray-600">
-                <p>Pass Rate: {formatPercent(lastApplyResult.auto_simulation.sandbox_validation.pass_rate)}</p>
-                <p>Total: {lastApplyResult.auto_simulation.sandbox_validation.total_conversations}</p>
-                <p>Passed: {lastApplyResult.auto_simulation.sandbox_validation.passed}</p>
-                <p>Failed: {lastApplyResult.auto_simulation.sandbox_validation.failed}</p>
-                <p>Avg Latency: {lastApplyResult.auto_simulation.sandbox_validation.avg_latency_ms.toFixed(1)}ms</p>
+          </div>
+        </section>
+
+        {/* Right Panel: Live Agent Preview */}
+        <section className="flex flex-col rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
+            <div className="flex items-center gap-2">
+              <Brain className="h-4 w-4 text-gray-500" />
+              <h3 className="text-sm font-semibold text-gray-900">Agent Config</h3>
+            </div>
+            <div className="flex gap-1">
+              <button
+                onClick={handleCopyConfig}
+                className="rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                title="Copy YAML"
+              >
+                <Copy className="h-4 w-4" />
+              </button>
+              <button
+                onClick={handleExportConfig}
+                className="rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
+                title="Download YAML"
+              >
+                <Download className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          {agentConfig && (
+            <div className="flex-1 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 360px)' }}>
+              {/* Stats Bar */}
+              <div className="grid grid-cols-3 gap-px border-b border-gray-100 bg-gray-100">
+                <StatCell label="Tools" value={agentConfig.tools.length} />
+                <StatCell label="Policies" value={agentConfig.policies.length} />
+                <StatCell label="Routing Rules" value={agentConfig.routing_rules.length} />
+              </div>
+
+              {/* Collapsible Sections */}
+              <div className="divide-y divide-gray-100">
+                <ConfigSection
+                  title="System Prompt"
+                  sectionKey="system_prompt"
+                  expanded={expandedSection === 'system_prompt'}
+                  onToggle={toggleSection}
+                >
+                  <pre className="whitespace-pre-wrap text-xs leading-relaxed text-gray-700 font-mono bg-gray-50 rounded-lg p-3">
+                    {agentConfig.system_prompt}
+                  </pre>
+                </ConfigSection>
+
+                <ConfigSection
+                  title={`Tools (${agentConfig.tools.length})`}
+                  sectionKey="tools"
+                  expanded={expandedSection === 'tools'}
+                  onToggle={toggleSection}
+                >
+                  <div className="space-y-2">
+                    {agentConfig.tools.map((tool) => (
+                      <div key={tool.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <p className="text-xs font-semibold text-gray-900">{tool.name}</p>
+                        <p className="mt-0.5 text-xs text-gray-500">{tool.description}</p>
+                        {tool.parameters.length > 0 && (
+                          <p className="mt-1 text-xs text-gray-400">
+                            Params: {tool.parameters.join(', ')}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </ConfigSection>
+
+                <ConfigSection
+                  title={`Routing Rules (${agentConfig.routing_rules.length})`}
+                  sectionKey="routing_rules"
+                  expanded={expandedSection === 'routing_rules'}
+                  onToggle={toggleSection}
+                >
+                  <div className="space-y-2">
+                    {agentConfig.routing_rules.map((rule, i) => (
+                      <div key={`rule-${i}`} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-gray-900">{rule.action}</p>
+                          <span className="rounded-full bg-white px-2 py-0.5 text-xs text-gray-500">
+                            P{rule.priority}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-gray-500">When: {rule.condition}</p>
+                      </div>
+                    ))}
+                  </div>
+                </ConfigSection>
+
+                <ConfigSection
+                  title={`Policies (${agentConfig.policies.length})`}
+                  sectionKey="policies"
+                  expanded={expandedSection === 'policies'}
+                  onToggle={toggleSection}
+                >
+                  <div className="space-y-2">
+                    {agentConfig.policies.map((policy) => (
+                      <div key={policy.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-gray-900">{policy.name}</p>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                              policy.enforcement === 'strict'
+                                ? 'bg-red-50 text-red-600'
+                                : 'bg-amber-50 text-amber-600'
+                            }`}
+                          >
+                            {policy.enforcement}
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-gray-500">{policy.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </ConfigSection>
+
+                <ConfigSection
+                  title={`Eval Criteria (${agentConfig.eval_criteria.length})`}
+                  sectionKey="eval_criteria"
+                  expanded={expandedSection === 'eval_criteria'}
+                  onToggle={toggleSection}
+                >
+                  <div className="space-y-2">
+                    {agentConfig.eval_criteria.map((criterion) => (
+                      <div key={criterion.name} className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs font-semibold text-gray-900">{criterion.name}</p>
+                          <span className="rounded-full bg-sky-50 px-2 py-0.5 text-xs font-medium text-sky-700">
+                            {(criterion.weight * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                        <p className="mt-0.5 text-xs text-gray-500">{criterion.description}</p>
+                      </div>
+                    ))}
+                  </div>
+                </ConfigSection>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="border-t border-gray-100 p-4 space-y-2">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => navigate('/evals?new=1')}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    Generate Evals
+                  </button>
+                  <button
+                    onClick={handleExportConfig}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                  >
+                    <Download className="h-3.5 w-3.5" />
+                    Export Config
+                  </button>
+                  <button
+                    onClick={() => navigate('/evals?run=1')}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-xs font-semibold text-sky-700 transition hover:bg-sky-100"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    Run First Eval
+                  </button>
+                  <button
+                    onClick={() => navigate('/optimize?new=1')}
+                    className="flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700 transition hover:bg-emerald-100"
+                  >
+                    <Zap className="h-3.5 w-3.5" />
+                    Start Optimization
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        </ListPanel>
-      )}
-
-      {knowledgeAssetQuery.data && (
-        <ListPanel title="Durable Knowledge Asset" eyebrow="Knowledge Base">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
-              <p className="text-xs uppercase tracking-[0.16em] text-gray-400">Asset</p>
-              <p className="mt-2 text-sm font-semibold text-gray-900">{knowledgeAssetQuery.data.asset_id}</p>
-              <p className="mt-1 text-sm text-gray-600">{knowledgeAssetQuery.data.archive_name}</p>
-              <p className="mt-1 text-sm text-gray-600">{knowledgeAssetQuery.data.entry_count} entries</p>
-            </div>
-            <div className="space-y-3">
-              {knowledgeAssetQuery.data.entries.slice(0, 5).map((entry, index) => (
-                <div key={`${entry.type}-${index}`} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                  <p className="text-xs uppercase tracking-[0.16em] text-gray-400">{entry.type}</p>
-                  <p className="mt-2 text-sm text-gray-700">
-                    {entry.question || entry.title || entry.example || entry.intent || 'Knowledge entry'}
-                  </p>
-                  {(entry.answer || entry.description || entry.response) && (
-                    <p className="mt-1 text-sm text-gray-600">{entry.answer || entry.description || entry.response}</p>
-                  )}
-                </div>
-              ))}
-            </div>
-          </div>
-        </ListPanel>
-      )}
-
-      {deepResearch && (
-        <ListPanel title="Deep Research Findings" eyebrow="Explorer">
-          <div className="grid gap-4 xl:grid-cols-2">
-            <div className="space-y-3">
-              {deepResearch.root_causes.slice(0, 5).map((cause) => (
-                <div key={cause.reason} className="rounded-2xl border border-gray-200 bg-gray-50 p-3">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-sm font-semibold text-gray-900">{cause.reason}</p>
-                    <span className="rounded-full bg-white px-2 py-1 text-xs font-medium text-gray-600">
-                      {cause.attribution_pct.toFixed(1)}%
-                    </span>
-                  </div>
-                  <p className="mt-1 text-sm text-gray-600">{cause.count} conversations</p>
-                  {cause.evidence.length > 0 && <p className="mt-2 text-sm text-gray-600">“{cause.evidence[0]}”</p>}
-                </div>
-              ))}
-            </div>
-            <div className="space-y-3">
-              {deepResearch.recommendations.map((recommendation) => (
-                <div key={recommendation} className="rounded-2xl border border-sky-100 bg-sky-50/70 p-3 text-sm text-slate-700">
-                  {recommendation}
-                </div>
-              ))}
-            </div>
-          </div>
-        </ListPanel>
-      )}
-
-      {autonomousResult && (
-        <ListPanel title="Autonomous Improvement Pipeline" eyebrow="Analyze -> Improve -> Test -> Ship">
-          <div className="grid gap-4 xl:grid-cols-4">
-            <SummaryCard label="Analyze" value={autonomousResult.pipeline.analyze.status} />
-            <SummaryCard label="Improve" value={autonomousResult.pipeline.improve.status} />
-            <SummaryCard label="Test" value={formatPercent(autonomousResult.pipeline.test.pass_rate)} />
-            <SummaryCard label="Ship" value={autonomousResult.pipeline.ship.status} />
-          </div>
-          <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
-            <p>Change Card: {autonomousResult.change_card_id}</p>
-            <p className="mt-1">Drafted Prompt: {autonomousResult.drafted_change_prompt}</p>
-          </div>
-        </ListPanel>
-      )}
-
-      {buildMutation.data && (
-        <>
-          <ListPanel title="Golden Path Next Steps" eyebrow="Build -> Eval -> Optimize -> Deploy">
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <button
-                onClick={() => navigate('/evals?new=1')}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
-              >
-                1. Run Evaluation
-              </button>
-              <button
-                onClick={() => navigate('/optimize?new=1')}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
-              >
-                2. Start Optimization
-              </button>
-              <button
-                onClick={() => navigate('/changes')}
-                className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
-              >
-                3. Review Changes
-              </button>
-              <button
-                onClick={() => navigate('/cx/deploy')}
-                className="rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-sm font-semibold text-sky-800 transition hover:bg-sky-100"
-              >
-                4. Deploy to CX
-              </button>
-            </div>
-          </ListPanel>
-          <BuilderResult artifact={buildMutation.data} />
-        </>
-      )}
+          )}
+        </section>
+      </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+function InsightCard({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="mt-1 text-xl font-semibold text-gray-900">{value}</p>
+    </div>
+  );
+}
+
+function StatCell({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="bg-white px-4 py-2.5 text-center">
+      <p className="text-lg font-semibold text-gray-900">{value}</p>
+      <p className="text-[11px] font-medium text-gray-400">{label}</p>
+    </div>
+  );
+}
+
+function ConfigSection({
+  title,
+  sectionKey,
+  expanded,
+  onToggle,
+  children,
+}: {
+  title: string;
+  sectionKey: string;
+  expanded: boolean;
+  onToggle: (key: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <button
+        onClick={() => onToggle(sectionKey)}
+        className="flex w-full items-center justify-between px-5 py-3 text-left transition hover:bg-gray-50"
+      >
+        <span className="text-sm font-semibold text-gray-900">{title}</span>
+        <ChevronDown
+          className={`h-4 w-4 text-gray-400 transition ${expanded ? 'rotate-180' : ''}`}
+        />
+      </button>
+      {expanded && <div className="px-5 pb-4">{children}</div>}
+    </div>
+  );
+}
+
+function renderInlineBold(text: string): React.ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if (part.startsWith('**') && part.endsWith('**')) {
+      return <strong key={i} className="font-semibold">{part.slice(2, -2)}</strong>;
+    }
+    return part;
+  });
 }

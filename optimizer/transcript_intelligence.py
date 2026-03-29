@@ -278,6 +278,588 @@ class TranscriptIntelligenceService:
             "recommended_insight_id": report.insights[0].insight_id if report.insights else None,
         }
 
+    def generate_agent_config(self, prompt: str, transcript_report_id: str | None = None) -> dict[str, Any]:
+        """Generate a structured agent config dict from a natural language prompt.
+
+        Args:
+            prompt: Natural language description of the desired agent.
+            transcript_report_id: Optional report ID whose insights should be incorporated.
+
+        Returns:
+            YAML-friendly dict with system_prompt, tools, routing_rules, policies,
+            eval_criteria, and metadata keys.
+        """
+        lower = prompt.lower()
+
+        # --- domain detection ---
+        domain = "general"
+        if any(kw in lower for kw in ("customer service", "support", "help desk", "helpdesk")):
+            domain = "customer_service"
+        if any(kw in lower for kw in ("sales", "lead", "prospect", "crm", "deal")):
+            domain = "sales"
+        if any(kw in lower for kw in ("health", "medical", "patient", "clinic", "doctor")):
+            domain = "healthcare"
+        if any(kw in lower for kw in ("finance", "banking", "payment", "invoice", "billing")):
+            domain = "finance"
+        if any(kw in lower for kw in ("ecommerce", "e-commerce", "shop", "order", "shipping", "cart")):
+            domain = "ecommerce"
+        if any(kw in lower for kw in ("hr", "human resource", "employee", "onboard", "payroll")):
+            domain = "hr"
+
+        # --- derive a short agent name from the prompt ---
+        agent_name_words = [w.capitalize() for w in re.findall(r"[a-z]+", lower) if len(w) > 3][:3]
+        agent_name = "".join(agent_name_words) + "Agent" if agent_name_words else "AutoAgent"
+
+        # ---- domain-specific system prompts ----
+        _system_prompts: dict[str, str] = {
+            "customer_service": (
+                "You are a friendly and efficient customer service agent. "
+                "Your primary goal is to resolve customer issues quickly and accurately on the first interaction. "
+                "Always greet the customer warmly, identify their issue, and provide a clear resolution path.\n\n"
+                "Verify customer identity before accessing or modifying account details. "
+                "Prefer self-service resolution over escalation. When escalation is necessary, "
+                "transfer full context so the customer does not have to repeat themselves.\n\n"
+                "Maintain a professional and empathetic tone at all times. "
+                "If you cannot resolve an issue, acknowledge it clearly and set realistic expectations."
+            ),
+            "sales": (
+                "You are a consultative sales assistant. Your role is to understand prospect needs, "
+                "qualify leads, and guide potential customers toward the right solution.\n\n"
+                "Ask open-ended discovery questions before pitching. Focus on value and outcomes, "
+                "not features. Never apply high-pressure tactics. "
+                "Qualify prospects using BANT (Budget, Authority, Need, Timeline) criteria.\n\n"
+                "When a prospect is ready to proceed, guide them through the next steps clearly "
+                "and hand off to a human account executive when the deal value warrants it."
+            ),
+            "healthcare": (
+                "You are a healthcare information assistant. You provide general health information "
+                "and help patients navigate scheduling, billing, and administrative tasks.\n\n"
+                "You do NOT provide medical diagnoses or prescribe treatments. "
+                "Always recommend consulting a qualified healthcare professional for medical decisions. "
+                "Handle patient data with strict confidentiality in compliance with HIPAA regulations.\n\n"
+                "For urgent or emergency situations, immediately direct the patient to call emergency services "
+                "or visit the nearest emergency room."
+            ),
+            "finance": (
+                "You are a financial services assistant. You help customers understand their accounts, "
+                "transactions, and available financial products.\n\n"
+                "Never share sensitive financial information without proper identity verification. "
+                "All advice is informational only and does not constitute financial advice. "
+                "Direct customers to a certified financial advisor for investment decisions.\n\n"
+                "Flag and escalate any suspected fraudulent activity immediately."
+            ),
+            "ecommerce": (
+                "You are an e-commerce support agent. You assist customers with order tracking, "
+                "returns, exchanges, shipping, and product questions.\n\n"
+                "Verify customer identity using order number or email before accessing order details. "
+                "Follow the return and refund policy strictly. "
+                "Proactively provide order updates and shipping estimates.\n\n"
+                "Escalate to a human agent for complex disputes, high-value orders, or when policy "
+                "does not cover the customer's situation."
+            ),
+            "hr": (
+                "You are an HR assistant helping employees with questions about benefits, policies, "
+                "payroll, and onboarding.\n\n"
+                "Maintain strict confidentiality with all employee data. "
+                "Provide accurate information about company policies and direct employees to the "
+                "appropriate HR specialist for complex matters.\n\n"
+                "For sensitive issues such as workplace disputes or performance matters, "
+                "immediately escalate to an HR Business Partner."
+            ),
+            "general": (
+                "You are a helpful, accurate, and professional AI assistant. "
+                "Your goal is to provide clear and actionable responses to user requests.\n\n"
+                "When you are uncertain, say so clearly and offer to help find the right information. "
+                "Maintain a consistent, friendly tone. Respect user privacy and handle sensitive "
+                "information with care.\n\n"
+                "Escalate to a human operator when you cannot confidently resolve the user's request."
+            ),
+        }
+
+        # ---- domain-specific tools ----
+        _tools_by_domain: dict[str, list[dict[str, Any]]] = {
+            "customer_service": [
+                {
+                    "name": "lookup_customer",
+                    "description": "Look up a customer record by email or account ID.",
+                    "parameters": {"identifier": "string — email or account_id"},
+                },
+                {
+                    "name": "get_ticket_history",
+                    "description": "Retrieve previous support tickets for a customer.",
+                    "parameters": {"customer_id": "string"},
+                },
+                {
+                    "name": "create_ticket",
+                    "description": "Open a new support ticket and assign to the correct queue.",
+                    "parameters": {"customer_id": "string", "subject": "string", "body": "string", "priority": "low|medium|high"},
+                },
+                {
+                    "name": "escalate_to_human",
+                    "description": "Transfer the conversation to a live agent with full context.",
+                    "parameters": {"reason": "string", "context_summary": "string"},
+                },
+            ],
+            "sales": [
+                {
+                    "name": "lookup_crm_record",
+                    "description": "Retrieve CRM data for a prospect or contact.",
+                    "parameters": {"email": "string"},
+                },
+                {
+                    "name": "create_lead",
+                    "description": "Create or update a lead record in the CRM.",
+                    "parameters": {"name": "string", "email": "string", "company": "string", "notes": "string"},
+                },
+                {
+                    "name": "schedule_demo",
+                    "description": "Book a product demo with an account executive.",
+                    "parameters": {"prospect_email": "string", "preferred_times": "list[string]"},
+                },
+                {
+                    "name": "send_proposal",
+                    "description": "Generate and send a product proposal to the prospect.",
+                    "parameters": {"prospect_email": "string", "package": "string"},
+                },
+            ],
+            "healthcare": [
+                {
+                    "name": "get_appointment_slots",
+                    "description": "Retrieve available appointment slots for a provider.",
+                    "parameters": {"provider_id": "string", "date_range": "string"},
+                },
+                {
+                    "name": "book_appointment",
+                    "description": "Schedule an appointment for a patient.",
+                    "parameters": {"patient_id": "string", "provider_id": "string", "slot": "string"},
+                },
+                {
+                    "name": "get_patient_info",
+                    "description": "Retrieve non-clinical patient administrative data.",
+                    "parameters": {"patient_id": "string"},
+                },
+            ],
+            "finance": [
+                {
+                    "name": "get_account_summary",
+                    "description": "Retrieve account balance and recent transaction summary.",
+                    "parameters": {"account_id": "string"},
+                },
+                {
+                    "name": "initiate_transfer",
+                    "description": "Initiate a funds transfer between verified accounts.",
+                    "parameters": {"from_account": "string", "to_account": "string", "amount": "number"},
+                },
+                {
+                    "name": "flag_fraud",
+                    "description": "Flag a transaction or account for fraud review.",
+                    "parameters": {"account_id": "string", "reason": "string"},
+                },
+            ],
+            "ecommerce": [
+                {
+                    "name": "lookup_order",
+                    "description": "Retrieve order details by order ID or customer email.",
+                    "parameters": {"order_id": "string | null", "email": "string | null"},
+                },
+                {
+                    "name": "initiate_return",
+                    "description": "Start a return or exchange for an eligible order.",
+                    "parameters": {"order_id": "string", "reason": "string", "items": "list[string]"},
+                },
+                {
+                    "name": "process_refund",
+                    "description": "Issue a refund to the original payment method.",
+                    "parameters": {"order_id": "string", "amount": "number | null"},
+                },
+                {
+                    "name": "update_shipping_address",
+                    "description": "Update the shipping address for an unshipped order.",
+                    "parameters": {"order_id": "string", "new_address": "object"},
+                },
+            ],
+            "hr": [
+                {
+                    "name": "get_employee_profile",
+                    "description": "Look up an employee's HR profile and benefits enrollment.",
+                    "parameters": {"employee_id": "string"},
+                },
+                {
+                    "name": "submit_time_off_request",
+                    "description": "Submit a PTO or leave request on behalf of an employee.",
+                    "parameters": {"employee_id": "string", "start_date": "string", "end_date": "string", "type": "string"},
+                },
+                {
+                    "name": "get_policy_document",
+                    "description": "Retrieve a specific HR policy document by name.",
+                    "parameters": {"policy_name": "string"},
+                },
+            ],
+            "general": [
+                {
+                    "name": "search_knowledge_base",
+                    "description": "Search the internal knowledge base for relevant articles.",
+                    "parameters": {"query": "string"},
+                },
+                {
+                    "name": "escalate_to_human",
+                    "description": "Transfer the session to a human operator.",
+                    "parameters": {"reason": "string", "context_summary": "string"},
+                },
+            ],
+        }
+
+        # ---- domain-specific routing rules ----
+        _routing_by_domain: dict[str, list[dict[str, Any]]] = {
+            "customer_service": [
+                {"condition": "intent == 'complaint' and sentiment == 'negative'", "action": "escalate_to_human", "priority": 1},
+                {"condition": "identity_verified == false and action_required == true", "action": "request_verification", "priority": 2},
+                {"condition": "ticket_age_hours > 48", "action": "flag_for_manager_review", "priority": 3},
+                {"condition": "default", "action": "self_service_resolution", "priority": 99},
+            ],
+            "sales": [
+                {"condition": "deal_value > 50000", "action": "route_to_enterprise_ae", "priority": 1},
+                {"condition": "lead_score < 20", "action": "nurture_sequence", "priority": 2},
+                {"condition": "prospect_stage == 'demo_requested'", "action": "schedule_demo", "priority": 3},
+                {"condition": "default", "action": "qualify_lead", "priority": 99},
+            ],
+            "healthcare": [
+                {"condition": "urgency == 'emergency'", "action": "direct_to_emergency_services", "priority": 1},
+                {"condition": "topic == 'clinical_advice'", "action": "decline_and_refer_to_provider", "priority": 2},
+                {"condition": "patient_verified == false", "action": "verify_patient_identity", "priority": 3},
+                {"condition": "default", "action": "handle_administrative_request", "priority": 99},
+            ],
+            "finance": [
+                {"condition": "fraud_signals_detected == true", "action": "flag_fraud_and_escalate", "priority": 1},
+                {"condition": "identity_verified == false", "action": "require_mfa_verification", "priority": 2},
+                {"condition": "transaction_amount > 10000", "action": "require_additional_approval", "priority": 3},
+                {"condition": "default", "action": "self_service_banking", "priority": 99},
+            ],
+            "ecommerce": [
+                {"condition": "order_value > 500 and issue_type == 'dispute'", "action": "escalate_to_human", "priority": 1},
+                {"condition": "order_status == 'delivered' and return_window_expired == true", "action": "apply_goodwill_policy", "priority": 2},
+                {"condition": "identity_verified == false", "action": "verify_via_order_number_or_email", "priority": 3},
+                {"condition": "default", "action": "standard_order_support", "priority": 99},
+            ],
+            "hr": [
+                {"condition": "topic == 'workplace_dispute'", "action": "escalate_to_hrbp", "priority": 1},
+                {"condition": "employee_verified == false", "action": "verify_employee_identity", "priority": 2},
+                {"condition": "topic == 'payroll_discrepancy'", "action": "route_to_payroll_team", "priority": 3},
+                {"condition": "default", "action": "answer_policy_question", "priority": 99},
+            ],
+            "general": [
+                {"condition": "confidence_score < 0.4", "action": "escalate_to_human", "priority": 1},
+                {"condition": "topic == 'sensitive'", "action": "apply_safety_guardrails", "priority": 2},
+                {"condition": "default", "action": "answer_from_knowledge_base", "priority": 99},
+            ],
+        }
+
+        # ---- domain-specific policies ----
+        _policies_by_domain: dict[str, list[dict[str, Any]]] = {
+            "customer_service": [
+                {"name": "identity_verification", "description": "Verify customer identity before accessing or modifying account data.", "enforcement": "hard_block"},
+                {"name": "no_pii_in_logs", "description": "Strip PII from all logs and analytics pipelines.", "enforcement": "hard_block"},
+                {"name": "escalation_with_context", "description": "Always pass a context summary when escalating to a human agent.", "enforcement": "required"},
+                {"name": "response_time_sla", "description": "Initial response must be within 30 seconds.", "enforcement": "monitored"},
+            ],
+            "sales": [
+                {"name": "no_high_pressure_tactics", "description": "Prohibit urgency manipulation or false scarcity claims.", "enforcement": "hard_block"},
+                {"name": "accurate_pricing", "description": "Only quote prices from the current approved price book.", "enforcement": "hard_block"},
+                {"name": "gdpr_consent", "description": "Capture explicit consent before storing prospect data.", "enforcement": "required"},
+            ],
+            "healthcare": [
+                {"name": "hipaa_compliance", "description": "All patient data handling must comply with HIPAA privacy and security rules.", "enforcement": "hard_block"},
+                {"name": "no_clinical_advice", "description": "Do not provide diagnoses, treatment plans, or prescription guidance.", "enforcement": "hard_block"},
+                {"name": "emergency_referral", "description": "Always direct emergency situations to emergency services immediately.", "enforcement": "hard_block"},
+            ],
+            "finance": [
+                {"name": "strong_authentication", "description": "Require MFA for any account modification or fund transfer.", "enforcement": "hard_block"},
+                {"name": "fraud_monitoring", "description": "Apply real-time fraud detection on all transactions.", "enforcement": "hard_block"},
+                {"name": "no_investment_advice", "description": "Do not provide investment recommendations without required licensing disclosures.", "enforcement": "hard_block"},
+                {"name": "transaction_limits", "description": "Enforce per-session transaction limits as defined by compliance policy.", "enforcement": "required"},
+            ],
+            "ecommerce": [
+                {"name": "return_policy_adherence", "description": "Follow the published return policy; escalate exceptions for manager approval.", "enforcement": "required"},
+                {"name": "no_unauthorized_refunds", "description": "Refunds must meet policy criteria and be logged for audit.", "enforcement": "hard_block"},
+                {"name": "order_verification", "description": "Verify order ownership before disclosing or modifying order details.", "enforcement": "hard_block"},
+            ],
+            "hr": [
+                {"name": "employee_confidentiality", "description": "Never disclose one employee's information to another without authorization.", "enforcement": "hard_block"},
+                {"name": "equal_treatment", "description": "Provide consistent policy information to all employees regardless of level.", "enforcement": "required"},
+                {"name": "escalate_sensitive_topics", "description": "Workplace disputes, harassment claims, and performance issues must be escalated to HR.", "enforcement": "hard_block"},
+            ],
+            "general": [
+                {"name": "safety_guardrails", "description": "Refuse requests for harmful, illegal, or unethical content.", "enforcement": "hard_block"},
+                {"name": "hallucination_prevention", "description": "Do not fabricate facts; acknowledge uncertainty when knowledge is incomplete.", "enforcement": "required"},
+                {"name": "user_privacy", "description": "Do not store or repeat sensitive personal information unnecessarily.", "enforcement": "required"},
+            ],
+        }
+
+        # ---- domain-specific eval criteria ----
+        _evals_by_domain: dict[str, list[dict[str, Any]]] = {
+            "customer_service": [
+                {"name": "first_contact_resolution", "weight": 0.35, "description": "Percentage of issues resolved without requiring a follow-up or escalation."},
+                {"name": "customer_satisfaction_score", "weight": 0.30, "description": "Post-interaction CSAT score from 1-5."},
+                {"name": "escalation_rate", "weight": 0.20, "description": "Rate of conversations that required human escalation; lower is better."},
+                {"name": "policy_adherence", "weight": 0.15, "description": "Fraction of interactions that correctly applied business rules and policies."},
+            ],
+            "sales": [
+                {"name": "lead_qualification_accuracy", "weight": 0.40, "description": "Accuracy of BANT qualification against CRM ground truth."},
+                {"name": "demo_conversion_rate", "weight": 0.30, "description": "Percentage of qualified leads that book a demo."},
+                {"name": "message_on_brand", "weight": 0.30, "description": "Adherence to approved messaging and pricing guidelines."},
+            ],
+            "healthcare": [
+                {"name": "safety_compliance", "weight": 0.50, "description": "Zero tolerance for clinical advice or HIPAA violations."},
+                {"name": "appointment_booking_success", "weight": 0.30, "description": "Successful appointment bookings as a fraction of booking intents."},
+                {"name": "patient_satisfaction", "weight": 0.20, "description": "Patient-reported satisfaction with the administrative interaction."},
+            ],
+            "finance": [
+                {"name": "fraud_detection_rate", "weight": 0.40, "description": "Percentage of flagged fraudulent transactions correctly identified."},
+                {"name": "authentication_pass_rate", "weight": 0.30, "description": "Rate at which legitimate users successfully complete MFA without friction."},
+                {"name": "regulatory_compliance", "weight": 0.30, "description": "Adherence to applicable financial regulations and disclosure requirements."},
+            ],
+            "ecommerce": [
+                {"name": "order_resolution_rate", "weight": 0.35, "description": "Percentage of order-related issues resolved in a single interaction."},
+                {"name": "return_policy_accuracy", "weight": 0.30, "description": "Correct application of return and refund policy."},
+                {"name": "customer_effort_score", "weight": 0.20, "description": "How easy customers find it to get their issue resolved."},
+                {"name": "escalation_rate", "weight": 0.15, "description": "Rate of human escalation; lower indicates better self-service coverage."},
+            ],
+            "hr": [
+                {"name": "policy_accuracy", "weight": 0.40, "description": "Accuracy of HR policy information provided to employees."},
+                {"name": "confidentiality_compliance", "weight": 0.40, "description": "Zero tolerance for unauthorized disclosure of employee data."},
+                {"name": "employee_satisfaction", "weight": 0.20, "description": "Employee-reported satisfaction with HR assistant interactions."},
+            ],
+            "general": [
+                {"name": "response_accuracy", "weight": 0.40, "description": "Factual correctness of responses against knowledge base ground truth."},
+                {"name": "task_completion_rate", "weight": 0.35, "description": "Percentage of user requests successfully completed without escalation."},
+                {"name": "safety_compliance", "weight": 0.25, "description": "Adherence to safety policies; zero tolerance for hard_block violations."},
+            ],
+        }
+
+        tools = list(_tools_by_domain.get(domain, _tools_by_domain["general"]))
+        routing_rules = list(_routing_by_domain.get(domain, _routing_by_domain["general"]))
+        policies = list(_policies_by_domain.get(domain, _policies_by_domain["general"]))
+        eval_criteria = list(_evals_by_domain.get(domain, _evals_by_domain["general"]))
+        system_prompt = _system_prompts.get(domain, _system_prompts["general"])
+
+        # --- incorporate transcript report insights if provided ---
+        created_from = "prompt"
+        if transcript_report_id is not None:
+            report = self.get_report(transcript_report_id)
+            if report is not None:
+                created_from = f"transcript:{transcript_report_id}"
+                # Enrich system prompt with gap context
+                if report.missing_intents:
+                    gap_list = ", ".join(item["intent"] for item in report.missing_intents[:5])
+                    system_prompt += (
+                        f"\n\nTranscript analysis identified these coverage gaps you should handle: {gap_list}. "
+                        "Ensure you have clear handling paths for each of these intents."
+                    )
+                # Add FAQ entries as knowledge anchors in routing
+                for faq in report.faq_entries[:5]:
+                    question = faq.get("question", "")
+                    answer = faq.get("answer", "")
+                    if question:
+                        routing_rules.append({
+                            "condition": f"intent_matches_faq('{question[:60]}')",
+                            "action": f"respond_with_faq_answer: {answer[:120]}",
+                            "priority": 50,
+                        })
+                # Add missing intents as additional tools stubs
+                for item in report.missing_intents[:3]:
+                    intent = item.get("intent", "unknown")
+                    tools.append({
+                        "name": f"handle_{intent}",
+                        "description": f"Handle the '{intent}' intent identified as a gap in transcript analysis.",
+                        "parameters": {"customer_message": "string", "context": "object"},
+                    })
+
+        return {
+            "system_prompt": system_prompt,
+            "tools": tools,
+            "routing_rules": routing_rules,
+            "policies": policies,
+            "eval_criteria": eval_criteria,
+            "metadata": {
+                "agent_name": agent_name,
+                "version": "1.0.0",
+                "domain": domain,
+                "created_from": created_from,
+            },
+        }
+
+    def chat_refine(self, message: str, current_config: dict[str, Any]) -> dict[str, Any]:
+        """Refine an agent config based on a natural language instruction.
+
+        Args:
+            message: User instruction describing the desired change.
+            current_config: The current agent config dict to modify.
+
+        Returns:
+            Dict with 'response' (explanation of changes) and 'config' (updated dict).
+        """
+        import copy
+
+        config = copy.deepcopy(current_config)
+        lower = message.lower()
+        changes: list[str] = []
+
+        # Ensure all required top-level keys exist
+        config.setdefault("tools", [])
+        config.setdefault("routing_rules", [])
+        config.setdefault("policies", [])
+        config.setdefault("eval_criteria", [])
+        config.setdefault("metadata", {})
+
+        # ---- escalation intent ----
+        if "escalat" in lower:
+            # Add escalation routing rule
+            escalation_rule = {
+                "condition": "customer_requests_human or confidence_score < 0.35",
+                "action": "escalate_to_human_agent",
+                "priority": 1,
+            }
+            existing_conditions = {r.get("condition", "") for r in config["routing_rules"]}
+            if escalation_rule["condition"] not in existing_conditions:
+                config["routing_rules"].insert(0, escalation_rule)
+                changes.append("Added high-priority escalation routing rule (triggers on human request or low confidence).")
+
+            # Add escalation policy
+            esc_policy = {
+                "name": "escalation_with_context",
+                "description": "Always pass a full context summary when escalating to a live agent so the customer does not repeat themselves.",
+                "enforcement": "required",
+            }
+            existing_policy_names = {p.get("name", "") for p in config["policies"]}
+            if esc_policy["name"] not in existing_policy_names:
+                config["policies"].append(esc_policy)
+                changes.append("Added 'escalation_with_context' policy to ensure context handoff during transfers.")
+
+            # Add escalation tool if missing
+            tool_names = {t.get("name", "") for t in config["tools"]}
+            if "escalate_to_human" not in tool_names:
+                config["tools"].append({
+                    "name": "escalate_to_human",
+                    "description": "Transfer the conversation to a live human agent with full context.",
+                    "parameters": {"reason": "string", "context_summary": "string", "priority": "low|medium|high"},
+                })
+                changes.append("Added 'escalate_to_human' tool to the toolset.")
+
+        # ---- refund intent ----
+        if "refund" in lower:
+            tool_names = {t.get("name", "") for t in config["tools"]}
+            if "process_refund" not in tool_names:
+                config["tools"].append({
+                    "name": "process_refund",
+                    "description": "Issue a full or partial refund to the customer's original payment method after eligibility verification.",
+                    "parameters": {"order_id": "string", "amount": "number | null", "reason": "string"},
+                })
+                changes.append("Added 'process_refund' tool.")
+
+            existing_conditions = {r.get("condition", "") for r in config["routing_rules"]}
+            refund_rule = {
+                "condition": "intent == 'refund_request' and order_eligible == true",
+                "action": "process_refund_self_service",
+                "priority": 5,
+            }
+            if refund_rule["condition"] not in existing_conditions:
+                config["routing_rules"].append(refund_rule)
+                changes.append("Added refund routing rule for eligible orders.")
+
+            existing_policy_names = {p.get("name", "") for p in config["policies"]}
+            if "refund_policy_adherence" not in existing_policy_names:
+                config["policies"].append({
+                    "name": "refund_policy_adherence",
+                    "description": "Refunds must meet return window and condition criteria; escalate out-of-policy requests.",
+                    "enforcement": "required",
+                })
+                changes.append("Added 'refund_policy_adherence' policy.")
+
+        # ---- safety / policy intent ----
+        if "safety" in lower or ("policy" in lower and "refund" not in lower and "return" not in lower):
+            existing_policy_names = {p.get("name", "") for p in config["policies"]}
+            new_policies = [
+                {
+                    "name": "safety_guardrails",
+                    "description": "Refuse requests for harmful, illegal, or unethical content without explanation of the refusal mechanism.",
+                    "enforcement": "hard_block",
+                },
+                {
+                    "name": "hallucination_prevention",
+                    "description": "Do not fabricate facts; explicitly acknowledge uncertainty when knowledge is incomplete.",
+                    "enforcement": "required",
+                },
+                {
+                    "name": "pii_protection",
+                    "description": "Never log, repeat, or expose personally identifiable information beyond what is necessary for task completion.",
+                    "enforcement": "hard_block",
+                },
+            ]
+            added = [p for p in new_policies if p["name"] not in existing_policy_names]
+            config["policies"].extend(added)
+            if added:
+                changes.append(f"Added safety policies: {', '.join(p['name'] for p in added)}.")
+
+        # ---- tool / integration intent ----
+        if ("tool" in lower or "integration" in lower) and "refund" not in lower and "escalat" not in lower:
+            # Extract a tool name hint from the message
+            tool_hint = re.sub(r"(add|integrate|include|tool|integration|the|a|an)\s*", "", lower).strip()
+            tool_name = re.sub(r"\s+", "_", tool_hint)[:40] or "custom_integration"
+            tool_names = {t.get("name", "") for t in config["tools"]}
+            if tool_name not in tool_names and tool_name:
+                config["tools"].append({
+                    "name": tool_name,
+                    "description": f"Integration tool added from user request: {message.strip()[:100]}",
+                    "parameters": {"input": "string", "context": "object"},
+                })
+                changes.append(f"Added integration tool '{tool_name}'.")
+
+        # ---- remove / delete intent ----
+        if "remove" in lower or "delete" in lower:
+            # Try to find what to remove
+            remove_match = re.search(r"(?:remove|delete)\s+(?:the\s+)?['\"]?([a-z0-9_\s]+)['\"]?", lower)
+            if remove_match:
+                target = remove_match.group(1).strip().replace(" ", "_")
+                before_tools = len(config["tools"])
+                before_rules = len(config["routing_rules"])
+                before_policies = len(config["policies"])
+                config["tools"] = [t for t in config["tools"] if target not in t.get("name", "").lower()]
+                config["routing_rules"] = [r for r in config["routing_rules"] if target not in r.get("action", "").lower() and target not in r.get("condition", "").lower()]
+                config["policies"] = [p for p in config["policies"] if target not in p.get("name", "").lower()]
+                removed_count = (before_tools - len(config["tools"])) + (before_rules - len(config["routing_rules"])) + (before_policies - len(config["policies"]))
+                if removed_count:
+                    changes.append(f"Removed {removed_count} item(s) matching '{target}'.")
+                else:
+                    changes.append(f"No items found matching '{target}' to remove.")
+
+        # ---- fallback: add as general policy or routing rule ----
+        if not changes:
+            # Try to parse as a routing instruction
+            if any(kw in lower for kw in ("when", "if ", "route", "direct", "send")):
+                new_rule = {
+                    "condition": f"user_instruction: {message.strip()[:120]}",
+                    "action": "follow_instruction",
+                    "priority": 50,
+                }
+                config["routing_rules"].append(new_rule)
+                changes.append(f"Added routing rule derived from instruction: '{message.strip()[:80]}'.")
+            else:
+                new_policy = {
+                    "name": re.sub(r"\s+", "_", re.sub(r"[^a-z0-9\s]", "", lower).strip())[:40] or "custom_policy",
+                    "description": message.strip()[:200],
+                    "enforcement": "required",
+                }
+                config["policies"].append(new_policy)
+                changes.append(f"Added general policy: '{new_policy['name']}'.")
+
+        # Build a human-readable response
+        if len(changes) == 1:
+            response = changes[0]
+        else:
+            response = "Applied the following changes:\n" + "\n".join(f"- {c}" for c in changes)
+
+        return {"response": response, "config": config}
+
     def build_agent_artifact(self, prompt: str, connectors: list[str]) -> dict[str, Any]:
         """Build agent configuration artifact from natural language prompt.
 

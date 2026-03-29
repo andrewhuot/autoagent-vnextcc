@@ -31,6 +31,16 @@ class BuildAgentRequest(BaseModel):
     connectors: list[str] = Field(default_factory=list)
 
 
+class GenerateAgentRequest(BaseModel):
+    prompt: str = Field(..., min_length=1)
+    transcript_report_id: str | None = Field(None)
+
+
+class ChatRefineRequest(BaseModel):
+    message: str = Field(..., min_length=1)
+    config: dict = Field(...)
+
+
 class DeepResearchRequest(BaseModel):
     question: str = Field(..., min_length=1)
 
@@ -121,6 +131,18 @@ async def apply_insight(report_id: str, body: ApplyInsightRequest, request: Requ
 async def build_agent_from_prompt(body: BuildAgentRequest, request: Request) -> dict[str, Any]:
     service = _get_service(request)
     return service.build_agent_artifact(body.prompt, body.connectors)
+
+
+@router.post("/generate-agent")
+async def generate_agent(body: GenerateAgentRequest, request: Request) -> dict[str, Any]:
+    service = _get_service(request)
+    return service.generate_agent_config(body.prompt, body.transcript_report_id)
+
+
+@router.post("/chat")
+async def chat_refine(body: ChatRefineRequest, request: Request) -> dict[str, Any]:
+    service = _get_service(request)
+    return service.chat_refine(body.message, body.config)
 
 
 @router.get("/knowledge/{asset_id}")
