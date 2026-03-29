@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoAgent — Start backend + frontend
+# AutoAgent - Start backend + frontend
 # Usage: ./start.sh
 
 set -euo pipefail
@@ -42,7 +42,7 @@ FRONTEND_URL="http://localhost:$FRONTEND_PORT"
 # ─── Cleanup / Ctrl+C handler ─────────────────────────────────────────────────
 cleanup() {
   echo ""
-  echo -e "\n  ${YELLOW}Shutting down AutoAgent…${RESET}"
+  echo -e "\n  ${YELLOW}Shutting down AutoAgent...${RESET}"
 
   if [[ -f "$BACKEND_PID_FILE" ]]; then
     local pid
@@ -75,8 +75,8 @@ banner() {
   echo ""
   echo -e "${BOLD_WHITE}  ┌─────────────────────────────────────────────────────────┐${RESET}"
   echo -e "${BOLD_WHITE}  │                                                         │${RESET}"
-  echo -e "${BOLD_WHITE}  │   ${BOLD_CYAN}AutoAgent${RESET}${BOLD_WHITE}  ·  Agent Optimization Platform             │${RESET}"
-  echo -e "${BOLD_WHITE}  │   ${DIM}Starting up…${RESET}${BOLD_WHITE}                                            │${RESET}"
+  echo -e "${BOLD_WHITE}  │   ${BOLD_CYAN}AutoAgent${RESET}${BOLD_WHITE}  -  Agent Optimization Platform             │${RESET}"
+  echo -e "${BOLD_WHITE}  │   ${DIM}Starting up...${RESET}${BOLD_WHITE}                                            │${RESET}"
   echo -e "${BOLD_WHITE}  │                                                         │${RESET}"
   echo -e "${BOLD_WHITE}  └─────────────────────────────────────────────────────────┘${RESET}"
   echo ""
@@ -111,7 +111,7 @@ freeport() {
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
-    warn "Port $port in use (pid $pid) — killing stale process"
+    warn "Port ${port} in use (pid ${pid}) - killing stale process"
     kill "$pid" 2>/dev/null || true
     sleep 0.5
   fi
@@ -169,7 +169,7 @@ wait_for_http() {
 
   while [[ $attempt -lt $max_attempts ]]; do
     if curl -sf "$url" >/dev/null 2>&1; then
-      echo -e "\r  ${BOLD_GREEN}✓${RESET}  $label ready                    "
+      echo -e "\r  ${BOLD_GREEN}✓${RESET}  ${label} ready                    "
       return 0
     fi
 
@@ -179,7 +179,7 @@ wait_for_http() {
     attempt=$(( attempt + 1 ))
   done
 
-  echo -e "\r  ${RED}✗  $label did not start within ${max_attempts}s${RESET}"
+  echo -e "\r  ${RED}✗  ${label} did not start within ${max_attempts}s${RESET}"
   local label_lower
   label_lower=$(echo "$label" | tr '[:upper:]' '[:lower:]')
   echo -e "  ${DIM}Check logs: cat .autoagent/${label_lower}.log${RESET}"
@@ -215,11 +215,11 @@ echo ""
 echo -e "  ${BOLD_GREEN}AutoAgent is running!${RESET}"
 echo ""
 echo -e "  ${BOLD_WHITE}Open in browser:${RESET}"
-echo -e "  ${BOLD_CYAN}  Frontend   →  $FRONTEND_URL${RESET}"
-echo -e "  ${DIM}  API        →  $BACKEND_URL${RESET}"
-echo -e "  ${DIM}  API docs   →  $BACKEND_URL/docs${RESET}"
+echo -e "  ${BOLD_CYAN}  Frontend   →  ${FRONTEND_URL}${RESET}"
+echo -e "  ${DIM}  API        →  ${BACKEND_URL}${RESET}"
+echo -e "  ${DIM}  API docs   →  ${BACKEND_URL}/docs${RESET}"
 echo ""
-echo -e "  ${DIM}Logs:  .autoagent/backend.log  ·  .autoagent/frontend.log${RESET}"
+echo -e "  ${DIM}Logs:  .autoagent/backend.log  |  .autoagent/frontend.log${RESET}"
 echo -e "  ${DIM}Stop:  Ctrl+C  or  ./stop.sh${RESET}"
 echo ""
 hr

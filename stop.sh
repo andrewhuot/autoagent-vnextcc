@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoAgent — Stop backend + frontend
+# AutoAgent - Stop backend + frontend
 # Usage: ./stop.sh
 
 set -euo pipefail
@@ -18,7 +18,7 @@ BACKEND_PORT=8000
 FRONTEND_PORT=5173
 
 echo ""
-echo -e "${BOLD_CYAN}  Stopping AutoAgent…${RESET}"
+echo -e "${BOLD_CYAN}  Stopping AutoAgent...${RESET}"
 echo ""
 
 stopped=0
@@ -31,14 +31,16 @@ stop_pid_file() {
     local pid
     pid=$(cat "$file")
     if kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null && echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped $label (pid $pid)"
-      stopped=$(( stopped + 1 ))
+      if kill "$pid" 2>/dev/null; then
+        echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped ${label} (pid ${pid})"
+        stopped=$(( stopped + 1 ))
+      fi
     else
-      echo -e "  ${DIM}ℹ  $label was not running (stale pid $pid)${RESET}"
+      echo -e "  ${DIM}ℹ  ${label} was not running (stale pid ${pid})${RESET}"
     fi
     rm -f "$file"
   else
-    echo -e "  ${DIM}ℹ  No $label pid file found — trying port…${RESET}"
+    echo -e "  ${DIM}ℹ  No ${label} pid file found - trying port...${RESET}"
   fi
 }
 
@@ -52,8 +54,10 @@ kill_port() {
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
-    kill "$pid" 2>/dev/null && echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped $label on port $port (pid $pid)"
-    stopped=$(( stopped + 1 ))
+    if kill "$pid" 2>/dev/null; then
+      echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped ${label} on port ${port} (pid ${pid})"
+      stopped=$(( stopped + 1 ))
+    fi
   fi
 }
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# AutoAgent — First-time setup
+# AutoAgent - First-time setup
 # Usage: ./setup.sh
 
 set -euo pipefail
@@ -33,7 +33,7 @@ banner() {
   echo ""
   echo -e "${BOLD_WHITE}  ┌─────────────────────────────────────────────────────────┐${RESET}"
   echo -e "${BOLD_WHITE}  │                                                         │${RESET}"
-  echo -e "${BOLD_WHITE}  │   ${BOLD_CYAN}AutoAgent${RESET}${BOLD_WHITE}  ·  Agent Optimization Platform             │${RESET}"
+  echo -e "${BOLD_WHITE}  │   ${BOLD_CYAN}AutoAgent${RESET}${BOLD_WHITE}  -  Agent Optimization Platform             │${RESET}"
   echo -e "${BOLD_WHITE}  │   ${DIM}First-time setup${RESET}${BOLD_WHITE}                                        │${RESET}"
   echo -e "${BOLD_WHITE}  │                                                         │${RESET}"
   echo -e "${BOLD_WHITE}  └─────────────────────────────────────────────────────────┘${RESET}"
@@ -96,7 +96,7 @@ fi
 ok "Node.js v$NODE_VERSION"
 
 if ! command -v npm &>/dev/null; then
-  die "npm is not installed. It should come with Node.js — try reinstalling Node."
+  die "npm is not installed. It should come with Node.js - try reinstalling Node."
 fi
 ok "npm $(npm --version)"
 
@@ -107,7 +107,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 if [[ -d ".venv" ]]; then
-  ok "Virtual environment already exists — skipping creation"
+  ok "Virtual environment already exists - skipping creation"
 else
   python3 -m venv .venv
   ok "Created .venv"
@@ -120,7 +120,7 @@ ok "Activated .venv (Python $(python3 --version | cut -d' ' -f2))"
 
 # ─── Step 4: Python dependencies ──────────────────────────────────────────────
 step "Installing Python dependencies"
-info "This may take 30–60 seconds on first run…"
+info "This may take 30-60 seconds on first run..."
 
 if pip install -e '.[dev]' --quiet 2>&1 | tail -3; then
   ok "Python dependencies installed"
@@ -132,7 +132,7 @@ fi
 
 # ─── Step 5: Frontend dependencies ───────────────────────────────────────────
 step "Installing frontend dependencies"
-info "This may take 30–60 seconds on first run…"
+info "This may take 30-60 seconds on first run..."
 
 if [[ ! -d "web" ]]; then
   die "web/ directory not found. Are you in the project root?"
@@ -151,7 +151,7 @@ cd ..
 step "Configuring environment"
 
 if [[ -f ".env" ]]; then
-  ok ".env already exists — skipping"
+  ok ".env already exists - skipping"
 else
   cp .env.example .env
   ok "Created .env from .env.example"
@@ -160,7 +160,7 @@ fi
 
 # ─── Step 7: Seed demo data ───────────────────────────────────────────────────
 step "Seeding demo data"
-info "Loading synthetic conversations, traces, and optimization history…"
+info "Loading synthetic conversations, traces, and optimization history..."
 
 # Make sure venv is active
 source .venv/bin/activate
@@ -188,7 +188,7 @@ except Exception as e:
 " 2>&1; then
   ok "Demo data seeded"
 else
-  warn "Demo data seeding had warnings (non-fatal — app will still run)"
+  warn "Demo data seeding had warnings (non-fatal; app will still run)"
 fi
 
 # ─── Done ──────────────────────────────────────────────────────────────────────
