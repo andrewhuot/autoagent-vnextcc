@@ -1,0 +1,1 @@
+{"skills": [{"name": "greet", "instructions": "say hi"}, {"name": "order", "instructions": "handle orders"}], "policies": [{"name": "safety", "rules": ["no harm"]}]}

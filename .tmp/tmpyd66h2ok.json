@@ -1,0 +1,16 @@
+{
+  "members": [
+    {
+      "user_id": "u1",
+      "name": "Alice",
+      "role": "admin",
+      "email": null
+    },
+    {
+      "user_id": "u2",
+      "name": "Bob",
+      "role": "reviewer",
+      "email": null
+    }
+  ]
+}

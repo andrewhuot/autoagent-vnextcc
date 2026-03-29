@@ -1,0 +1,14 @@
+{
+  "immutable_surfaces": [
+    "safety_config",
+    "system_prompt",
+    "tools"
+  ],
+  "last_injected_mutation": null,
+  "paused": true,
+  "rejected_experiments": [
+    "exp_1",
+    "exp_2"
+  ],
+  "updated_at": 1774794568.6308658
+}

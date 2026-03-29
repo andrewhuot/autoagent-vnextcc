@@ -1,0 +1,14 @@
+{
+  "immutable_surfaces": [
+    "alpha",
+    "charlie",
+    "zulu"
+  ],
+  "last_injected_mutation": null,
+  "paused": false,
+  "rejected_experiments": [
+    "exp-001",
+    "exp-999"
+  ],
+  "updated_at": 1774794601.7483048
+}

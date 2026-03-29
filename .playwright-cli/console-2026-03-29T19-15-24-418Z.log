@@ -1,0 +1,16 @@
+[     150ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/eval/runs:0
+[     150ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/conversations?limit=15:0
+[     150ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/config/list:0
+[     158ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:5173/ws' failed: Connection closed before receiving a handshake response @ http://127.0.0.1:5173/src/lib/websocket.ts:20
+[    1185ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/eval/runs:0
+[    1186ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/conversations?limit=15:0
+[    1186ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/config/list:0
+[    1187ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:5173/ws' failed: Connection closed before receiving a handshake response @ http://127.0.0.1:5173/src/lib/websocket.ts:20
+[    3335ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/eval/runs:0
+[    3335ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/conversations?limit=15:0
+[    3336ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/config/list:0
+[    3336ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:5173/ws' failed: Connection closed before receiving a handshake response @ http://127.0.0.1:5173/src/lib/websocket.ts:20
+[    7431ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/eval/runs:0
+[    7432ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/conversations?limit=15:0
+[    7432ms] [ERROR] Failed to load resource: the server responded with a status of 502 (Bad Gateway) @ http://127.0.0.1:5173/api/config/list:0
+[    7432ms] [ERROR] WebSocket connection to 'ws://127.0.0.1:5173/ws' failed: Connection closed before receiving a handshake response @ http://127.0.0.1:5173/src/lib/websocket.ts:20

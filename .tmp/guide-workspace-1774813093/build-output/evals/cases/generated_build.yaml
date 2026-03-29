@@ -1,0 +1,18 @@
+cases:
+- id: build_001
+  category: generated_build
+  user_message: Where is my order? I do not have the order number.
+  expected_specialist: orders
+  expected_behavior: answer
+  expected_keywords:
+  - order
+  expected_notes: The agent verifies identity, attempts fallback lookup, and escalates
+    only if verification fails.
+- id: build_002
+  category: generated_build
+  user_message: Please cancel my order before it ships.
+  expected_specialist: orders
+  expected_behavior: answer
+  expected_keywords:
+  - order
+  expected_notes: The agent checks policy, cancels the order, and confirms the action.

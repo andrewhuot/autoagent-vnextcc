@@ -1,0 +1,11 @@
+{
+  "immutable_surfaces": [
+    "auth/login:v1.0@prod"
+  ],
+  "last_injected_mutation": "prompt\\with\\backslashes",
+  "paused": false,
+  "rejected_experiments": [
+    "exp-with-dashes_and_underscores.and.dots"
+  ],
+  "updated_at": 1774794755.910617
+}

@@ -1,0 +1,1921 @@
+## root
+EXIT=0
+      /\        ___         __        ___                     __
+     /==\       /   | __  __/ /_____  /   | ____ ____  ____  / /_
+    /====\      / /| |/ / / / __/ __ \/ /| |/ __ `/ _ \/ __ \/ __/
+    |::::|      / ___ / /_/ / /_/ /_/ / ___ / /_/ /  __/ / / / /_
+    /|__|\     /_/  |_|\__,_/\__/\____/_/  |_|\__, /\___/_/ /_/\__/
+      ||                                 /____/
+      ||        Continuous Agent Optimization Platform   v1.0.0
+      ||        Created by Andrew Huot
+  ------------------------------------------------------------------------
+Usage: autoagent [OPTIONS] COMMAND [ARGS]...
+
+  AutoAgent VNextCC — agent optimization platform.
+
+  A product-grade platform for iterating ADK agent quality. CLI-first, API-
+  ready, with a web console for visual insight.
+
+Options:
+  --version    Show the version and exit.
+  --quiet      Suppress the branded startup banner.
+  --no-banner  Suppress the branded startup banner.
+  --help       Show this message and exit.
+
+Commands:
+  adk         Google Agent Development Kit (ADK) integration — import,...
+  autofix     AutoFix Copilot — reviewable improvement proposals.
+  autonomous  Run autonomous optimization with scoped permissions.
+  benchmark   Run standard benchmarks.
+  build       Build an agent artifact from natural language and scaffold...
+  changes     Changes — aliases for reviewable optimizer change cards.
+  config      Manage agent config versions.
+  context     Context Engineering Workbench — diagnose and tune agent...
+  curriculum  Self-play curriculum generator for adversarial eval prompts.
+  cx          Google Cloud CX Agent Studio — import, export, deploy.
+  dataset     Manage datasets for evaluation and training.
+  demo        Demo commands for presentations and quick trials.
+  deploy      Deploy a config version.
+  diagnose    Run failure diagnosis and optionally fix issues interactively.
+  doctor      Check system health and configuration.
+  edit        Apply natural language edits to agent config.
+  eval        Evaluate agent configs against test suites.
+  explain     Generate a plain-English summary of the agent's current state.
+  full-auto   Run optimization + loop in dangerous full-auto mode.
+  init        Scaffold a new AutoAgent project with config, eval suite,...
+  judges      Judge Ops — monitoring, calibration, and human feedback.
+  logs        Browse conversation logs.
+  loop        Run the continuous autoresearch loop.
+  mcp-server  Start MCP server for AI coding tool integration.
+  memory      Project memory — manage AUTOAGENT.md persistent context.
+  optimize    Run optimization cycles to improve agent config.
+  outcomes    Manage business outcome data.
+  pause       Pause the optimization loop (human escape hatch).
+  pin         Mark a config surface as immutable (e.g.
+  pref        Preference collection and export.
+  quickstart  Run the ENTIRE golden path: init → seed → eval → optimize →...
+  registry    Modular registry — skills, policies, tool contracts,...
+  reject      Reject a promoted experiment and rollback any active canary.
+  release     Manage signed release objects.
+  replay      Show optimization history like git log --oneline.
+  resume      Resume the optimization loop after a pause.
+  review      Review proposed change cards from the optimizer.
+  reward      Manage reward definitions.
+  rl          Policy optimization commands.
+  runbook     Runbooks — curated bundles of skills, policies, and tool...
+  scorer      NL Scorer — create eval scorers from natural language...
+  server      Start the API server + web console.
+  skill       Unified skill management — build-time and run-time skills.
+  status      Show system health, config versions, and recent activity.
+  trace       Trace analysis — grading, blame maps, and graphs.
+  unpin       Remove immutable marking from a config surface.
+
+
+## init
+EXIT=0
+Usage: autoagent init [OPTIONS]
+
+  Scaffold a new AutoAgent project with config, eval suite, and structure.
+
+Options:
+  --template [customer-support|minimal]
+                                  Project template to scaffold.  [default:
+                                  customer-support]
+  --dir TEXT                      Directory to initialize in.  [default: .]
+  --agent-name TEXT               Agent name for AUTOAGENT.md.  [default: My
+                                  Agent]
+  --platform TEXT                 Platform for AUTOAGENT.md.  [default: Google
+                                  ADK]
+  --with-synthetic-data / --no-synthetic-data
+                                  Seed synthetic conversations and evals.
+                                  [default: with-synthetic-data]
+  --help                          Show this message and exit.
+
+
+## build
+EXIT=0
+Usage: autoagent build [OPTIONS] PROMPT
+
+  Build an agent artifact from natural language and scaffold eval/deploy
+  handoff files.
+
+Options:
+  --connector TEXT   Connector to include (repeatable). Example: --connector
+                     Shopify
+  --output-dir TEXT  Directory for generated build artifacts.  [default: .]
+  -j, --json         Output artifact as JSON only.
+  --help             Show this message and exit.
+
+
+## eval
+EXIT=0
+Usage: autoagent eval [OPTIONS] COMMAND [ARGS]...
+
+  Evaluate agent configs against test suites.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  generate  AI-generate a comprehensive eval suite from agent config.
+  list      List recent eval runs.
+  results   View eval results from a previous run.
+  run       Run eval suite against a config.
+
+
+## eval run
+EXIT=0
+Usage: autoagent eval run [OPTIONS]
+
+  Run eval suite against a config.
+
+  Examples:   autoagent eval run   autoagent eval run --config
+  configs/v003.yaml   autoagent eval run --config configs/v003.yaml --category
+  safety   autoagent eval run --output results.json
+
+Options:
+  --config TEXT             Path to config YAML.
+  --suite TEXT              Path to eval cases directory.
+  --dataset TEXT            Path to eval dataset (.jsonl or .csv).
+  --split [train|test|all]  Dataset split to evaluate when using --dataset.
+                            [default: all]
+  --category TEXT           Run only a specific category.
+  --output TEXT             Write results JSON to file.
+  --real-agent              Force the real-agent eval path even if
+                            optimizer.use_mock is enabled.
+  -j, --json                Output as JSON.
+  --help                    Show this message and exit.
+
+
+## eval results
+EXIT=0
+Usage: autoagent eval results [OPTIONS]
+
+  View eval results from a previous run.
+
+  Examples:   autoagent eval results --file results.json
+
+Options:
+  --run-id TEXT  Run ID to show results for.
+  --file TEXT    Path to results JSON file.
+  --help         Show this message and exit.
+
+
+## eval list
+EXIT=0
+Usage: autoagent eval list [OPTIONS]
+
+  List recent eval runs.
+
+  Note: Full run history requires the API server. Checks for local result
+  files in the current directory.
+
+Options:
+  --help  Show this message and exit.
+
+
+## eval generate
+EXIT=0
+Usage: autoagent eval generate [OPTIONS]
+
+  AI-generate a comprehensive eval suite from agent config.
+
+  Examples:   autoagent eval generate   autoagent eval generate --config
+  agent_config.yaml   autoagent eval generate --config agent_config.yaml
+  --output evals.json   autoagent eval generate --provider mock --agent-name
+  "My Agent"
+
+Options:
+  --config TEXT                   Path to agent config YAML/JSON to analyze.
+  --agent-name TEXT               Agent name for labeling the eval suite.
+  --from-transcripts              Generate from conversation transcripts
+                                  (future).
+  --output TEXT                   Write generated eval suite to JSON file.
+  -j, --json                      Output as JSON.
+  --provider [openai|anthropic|mock]
+                                  Force LLM provider.
+  --help                          Show this message and exit.
+
+
+## optimize
+EXIT=0
+Usage: autoagent optimize [OPTIONS]
+
+  Run optimization cycles to improve agent config.
+
+  Examples:   autoagent optimize   autoagent optimize --cycles 5   autoagent
+  optimize --mode advanced --cycles 3
+
+Options:
+  --cycles INTEGER                Number of optimization cycles.  [default: 1]
+  --mode [standard|advanced|research]
+                                  Optimization mode (replaces --strategy).
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --memory-db TEXT                Optimizer memory DB.  [default:
+                                  optimizer_memory.db]
+  --full-auto                     Danger mode: auto-promote accepted configs
+                                  without manual review.
+  -j, --json                      Output as JSON.
+  --help                          Show this message and exit.
+
+
+## config
+EXIT=0
+Usage: autoagent config [OPTIONS] COMMAND [ARGS]...
+
+  Manage agent config versions.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  diff     Diff two config versions.
+  list     List all config versions.
+  migrate  Migrate old optimizer config format to new optimization section.
+  show     Show config YAML for a version (defaults to active).
+
+
+## config list
+EXIT=0
+Usage: autoagent config list [OPTIONS]
+
+  List all config versions.
+
+  Examples:   autoagent config list
+
+Options:
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --help              Show this message and exit.
+
+
+## config show
+EXIT=0
+Usage: autoagent config show [OPTIONS] [VERSION]
+
+  Show config YAML for a version (defaults to active).
+
+  Examples:   autoagent config show   autoagent config show 3
+
+Options:
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --help              Show this message and exit.
+
+
+## config diff
+EXIT=0
+Usage: autoagent config diff [OPTIONS] V1 V2
+
+  Diff two config versions.
+
+  Examples:   autoagent config diff 1 3
+
+Options:
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --help              Show this message and exit.
+
+
+## config migrate
+EXIT=0
+Usage: autoagent config migrate [OPTIONS] INPUT_FILE
+
+  Migrate old optimizer config format to new optimization section.
+
+  Converts legacy optimizer.search_strategy / bandit_policy settings into the
+  new optimization.mode / budget / autonomy format.
+
+  Examples:   autoagent config migrate autoagent.yaml   autoagent config
+  migrate autoagent.yaml --output autoagent_v2.yaml
+
+Options:
+  --output TEXT  Output file path (prints to stdout if omitted).
+  --help         Show this message and exit.
+
+
+## deploy
+EXIT=0
+Usage: autoagent deploy [OPTIONS]
+
+  Deploy a config version.
+
+  Examples:   autoagent deploy --config-version 5 --strategy canary
+  autoagent deploy --strategy immediate   autoagent deploy --target cx-studio
+
+Options:
+  --config-version INTEGER        Config version to deploy. Defaults to latest
+                                  accepted.
+  --strategy [canary|immediate]   Deployment strategy.  [default: canary]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --target [autoagent|cx-studio]  Deployment target.  [default: autoagent]
+  --project TEXT                  GCP project ID (required for CX push).
+  --location TEXT                 CX agent location.  [default: global]
+  --agent-id TEXT                 CX agent ID (required for CX push).
+  --snapshot TEXT                 CX snapshot JSON path from `autoagent cx
+                                  import`.
+  --credentials TEXT              Path to service account JSON for CX calls.
+  --output TEXT                   Output path for CX export package JSON.
+  --push / --no-push              Push to CX now (otherwise package only).
+                                  [default: no-push]
+  --help                          Show this message and exit.
+
+
+## loop
+EXIT=0
+Usage: autoagent loop [OPTIONS]
+
+  Run the continuous autoresearch loop.
+
+  Observes agent health, proposes improvements, evaluates them, and deploys
+  accepted changes — automatically, cycle after cycle.
+
+  Examples:   autoagent loop   autoagent loop --max-cycles 100 --stop-on-
+  plateau
+
+Options:
+  --max-cycles INTEGER            Maximum optimization cycles.  [default: 50]
+  --stop-on-plateau               Stop if no improvement for 5 consecutive
+                                  cycles.
+  --delay FLOAT                   Seconds between cycles.  [default: 1.0]
+  --schedule [continuous|interval|cron]
+                                  Scheduling mode. Defaults to autoagent.yaml
+                                  loop.schedule_mode.
+  --interval-minutes FLOAT        Interval minutes for --schedule interval.
+  --cron TEXT                     Cron expression for --schedule cron (5-field
+                                  UTC).
+  --checkpoint-file TEXT          Checkpoint file path. Defaults to
+                                  autoagent.yaml loop.checkpoint_path.
+  --resume / --no-resume          Resume from checkpoint when available.
+                                  [default: resume]
+  --full-auto                     Danger mode: auto-promote accepted configs
+                                  and skip manual gates.
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --memory-db TEXT                Optimizer memory DB.  [default:
+                                  optimizer_memory.db]
+  --help                          Show this message and exit.
+
+
+## status
+EXIT=0
+Usage: autoagent status [OPTIONS]
+
+  Show system health, config versions, and recent activity.
+
+  Examples:   autoagent status
+
+Options:
+  --db TEXT           Conversation store DB.  [default: conversations.db]
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --memory-db TEXT    Optimizer memory DB.  [default: optimizer_memory.db]
+  -j, --json          Output as JSON.
+  --help              Show this message and exit.
+
+
+## logs
+EXIT=0
+Usage: autoagent logs [OPTIONS]
+
+  Browse conversation logs.
+
+  Examples:   autoagent logs   autoagent logs --limit 50 --outcome fail
+
+Options:
+  --limit INTEGER                 Number of logs to show.  [default: 20]
+  --outcome [success|fail|error|abandon]
+                                  Filter by outcome.
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --help                          Show this message and exit.
+
+
+## doctor
+EXIT=0
+Usage: autoagent doctor [OPTIONS]
+
+  Check system health and configuration.
+
+  Reports on API keys, mock mode, data stores, eval cases, and config
+  versions.
+
+  Examples:   autoagent doctor
+
+Options:
+  --config TEXT  Path to runtime config YAML.  [default: autoagent.yaml]
+  --help         Show this message and exit.
+
+
+## pause
+EXIT=0
+Usage: autoagent pause [OPTIONS]
+
+  Pause the optimization loop (human escape hatch).
+
+  Examples:   autoagent pause
+
+Options:
+  --help  Show this message and exit.
+
+
+## resume
+EXIT=0
+Usage: autoagent resume [OPTIONS]
+
+  Resume the optimization loop after a pause.
+
+  Examples:   autoagent resume
+
+Options:
+  --help  Show this message and exit.
+
+
+## reject
+EXIT=0
+Usage: autoagent reject [OPTIONS] EXPERIMENT_ID
+
+  Reject a promoted experiment and rollback any active canary.
+
+  Examples:   autoagent reject abc12345
+
+Options:
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --db TEXT           Conversation store DB.  [default: conversations.db]
+  --help              Show this message and exit.
+
+
+## pin
+EXIT=0
+Usage: autoagent pin [OPTIONS] SURFACE
+
+  Mark a config surface as immutable (e.g. prompts.root, safety_instructions).
+
+  Examples:   autoagent pin safety_instructions   autoagent pin prompts.root
+
+Options:
+  --help  Show this message and exit.
+
+
+## unpin
+EXIT=0
+Usage: autoagent unpin [OPTIONS] SURFACE
+
+  Remove immutable marking from a config surface.
+
+  Examples:   autoagent unpin safety_instructions
+
+Options:
+  --help  Show this message and exit.
+
+
+## autofix
+EXIT=0
+Usage: autoagent autofix [OPTIONS] COMMAND [ARGS]...
+
+  AutoFix Copilot — reviewable improvement proposals.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  apply    Apply a specific AutoFix proposal.
+  history  Show past AutoFix proposals and outcomes.
+  suggest  Generate AutoFix proposals without applying them.
+
+
+## autofix suggest
+EXIT=0
+Usage: autoagent autofix suggest [OPTIONS]
+
+  Generate AutoFix proposals without applying them.
+
+  Examples:   autoagent autofix suggest
+
+Options:
+  --help  Show this message and exit.
+
+
+## autofix apply
+EXIT=0
+Usage: autoagent autofix apply [OPTIONS] PROPOSAL_ID
+
+  Apply a specific AutoFix proposal.
+
+  Examples:   autoagent autofix apply abc123
+
+Options:
+  --help  Show this message and exit.
+
+
+## autofix history
+EXIT=0
+Usage: autoagent autofix history [OPTIONS]
+
+  Show past AutoFix proposals and outcomes.
+
+  Examples:   autoagent autofix history
+
+Options:
+  --limit INTEGER  Number of proposals to show.  [default: 20]
+  --help           Show this message and exit.
+
+
+## judges
+EXIT=0
+Usage: autoagent judges [OPTIONS] COMMAND [ARGS]...
+
+  Judge Ops — monitoring, calibration, and human feedback.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  calibrate  Sample cases for human calibration review.
+  drift      Show drift report for all judges.
+  list       Show active judges with version and agreement stats.
+
+
+## judges list
+EXIT=0
+Usage: autoagent judges list [OPTIONS]
+
+  Show active judges with version and agreement stats.
+
+  Examples:   autoagent judges list
+
+Options:
+  --help  Show this message and exit.
+
+
+## judges calibrate
+EXIT=0
+Usage: autoagent judges calibrate [OPTIONS]
+
+  Sample cases for human calibration review.
+
+  Examples:   autoagent judges calibrate --sample 50   autoagent judges
+  calibrate --judge-id llm_judge
+
+Options:
+  --sample INTEGER  Number of cases to sample.  [default: 50]
+  --judge-id TEXT   Filter to a specific judge.
+  --help            Show this message and exit.
+
+
+## judges drift
+EXIT=0
+Usage: autoagent judges drift [OPTIONS]
+
+  Show drift report for all judges.
+
+  Examples:   autoagent judges drift
+
+Options:
+  --help  Show this message and exit.
+
+
+## context
+EXIT=0
+Usage: autoagent context [OPTIONS] COMMAND [ARGS]...
+
+  Context Engineering Workbench — diagnose and tune agent context.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  analyze   Analyze context utilization for a trace.
+  report    Show aggregate context health report.
+  simulate  Simulate a compaction strategy.
+
+
+## context analyze
+EXIT=0
+Usage: autoagent context analyze [OPTIONS]
+
+  Analyze context utilization for a trace.
+
+  Examples:   autoagent context analyze --trace abc123
+
+Options:
+  --trace TEXT  Trace ID to analyze.  [required]
+  --help        Show this message and exit.
+
+
+## context simulate
+EXIT=0
+Usage: autoagent context simulate [OPTIONS]
+
+  Simulate a compaction strategy.
+
+  Examples:   autoagent context simulate --strategy aggressive
+
+Options:
+  --strategy [aggressive|balanced|conservative]
+                                  Compaction strategy to simulate.  [default:
+                                  balanced]
+  --help                          Show this message and exit.
+
+
+## context report
+EXIT=0
+Usage: autoagent context report [OPTIONS]
+
+  Show aggregate context health report.
+
+  Examples:   autoagent context report
+
+Options:
+  --help  Show this message and exit.
+
+
+## review
+EXIT=0
+Usage: autoagent review [OPTIONS] COMMAND [ARGS]...
+
+  Review proposed change cards from the optimizer.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  apply   Apply (accept) a change card.
+  export  Export a change card as markdown.
+  list    List pending change cards.
+  reject  Reject a change card with an optional reason.
+  show    Show a specific change card with full terminal rendering.
+
+
+## review list
+EXIT=0
+Usage: autoagent review list [OPTIONS]
+
+  List pending change cards.
+
+  Examples:   autoagent review   autoagent review list
+
+Options:
+  --limit INTEGER  Number of cards to show.  [default: 20]
+  --help           Show this message and exit.
+
+
+## review show
+EXIT=0
+Usage: autoagent review show [OPTIONS] CARD_ID
+
+  Show a specific change card with full terminal rendering.
+
+  Examples:   autoagent review show abc12345
+
+Options:
+  --help  Show this message and exit.
+
+
+## review apply
+EXIT=0
+Usage: autoagent review apply [OPTIONS] CARD_ID
+
+  Apply (accept) a change card.
+
+  Examples:   autoagent review apply abc12345
+
+Options:
+  --help  Show this message and exit.
+
+
+## review reject
+EXIT=0
+Usage: autoagent review reject [OPTIONS] CARD_ID
+
+  Reject a change card with an optional reason.
+
+  Examples:   autoagent review reject abc12345 --reason "Too risky"
+
+Options:
+  --reason TEXT  Reason for rejection.
+  --help         Show this message and exit.
+
+
+## review export
+EXIT=0
+Usage: autoagent review export [OPTIONS] CARD_ID
+
+  Export a change card as markdown.
+
+  Examples:   autoagent review export abc12345
+
+Options:
+  --help  Show this message and exit.
+
+
+## changes
+EXIT=0
+Usage: autoagent changes [OPTIONS] COMMAND [ARGS]...
+
+  Changes — aliases for reviewable optimizer change cards.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  approve  Approve/apply a change card (alias for `autoagent review apply`).
+  export   Export a change card markdown (alias for `autoagent review...
+  list     List pending change cards (alias for `autoagent review list`).
+  reject   Reject a change card (alias for `autoagent review reject`).
+  show     Show a specific change card (alias for `autoagent review show`).
+
+
+## changes list
+EXIT=0
+Usage: autoagent changes list [OPTIONS]
+
+  List pending change cards (alias for `autoagent review list`).
+
+Options:
+  --limit INTEGER  Number of cards to show.  [default: 20]
+  --help           Show this message and exit.
+
+
+## changes show
+EXIT=0
+Usage: autoagent changes show [OPTIONS] CARD_ID
+
+  Show a specific change card (alias for `autoagent review show`).
+
+Options:
+  --help  Show this message and exit.
+
+
+## changes approve
+EXIT=0
+Usage: autoagent changes approve [OPTIONS] CARD_ID
+
+  Approve/apply a change card (alias for `autoagent review apply`).
+
+Options:
+  --help  Show this message and exit.
+
+
+## changes reject
+EXIT=0
+Usage: autoagent changes reject [OPTIONS] CARD_ID
+
+  Reject a change card (alias for `autoagent review reject`).
+
+Options:
+  --reason TEXT  Reason for rejection.
+  --help         Show this message and exit.
+
+
+## changes export
+EXIT=0
+Usage: autoagent changes export [OPTIONS] CARD_ID
+
+  Export a change card markdown (alias for `autoagent review export`).
+
+Options:
+  --help  Show this message and exit.
+
+
+## runbook
+EXIT=0
+Usage: autoagent runbook [OPTIONS] COMMAND [ARGS]...
+
+  Runbooks — curated bundles of skills, policies, and tool contracts.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  apply   Apply a runbook — registers its skills, policies, and tool...
+  create  Create a runbook from a YAML file.
+  list    List all runbooks.
+  show    Show runbook details.
+
+
+## runbook list
+EXIT=0
+Usage: autoagent runbook list [OPTIONS]
+
+  List all runbooks.
+
+  Examples:   autoagent runbook list
+
+Options:
+  --db TEXT  [default: registry.db]
+  --help     Show this message and exit.
+
+
+## runbook show
+EXIT=0
+Usage: autoagent runbook show [OPTIONS] NAME
+
+  Show runbook details.
+
+  Examples:   autoagent runbook show fix-retrieval-grounding
+
+Options:
+  --db TEXT  [default: registry.db]
+  --help     Show this message and exit.
+
+
+## runbook apply
+EXIT=0
+Usage: autoagent runbook apply [OPTIONS] NAME
+
+  Apply a runbook — registers its skills, policies, and tool contracts.
+
+  Examples:   autoagent runbook apply fix-retrieval-grounding
+
+Options:
+  --db TEXT  [default: registry.db]
+  --help     Show this message and exit.
+
+
+## runbook create
+EXIT=0
+Usage: autoagent runbook create [OPTIONS]
+
+  Create a runbook from a YAML file.
+
+  Examples:   autoagent runbook create --name my-runbook --file runbook.yaml
+
+Options:
+  --name TEXT  Runbook name.  [required]
+  --file PATH  YAML file with runbook definition.  [required]
+  --db TEXT    [default: registry.db]
+  --help       Show this message and exit.
+
+
+## memory
+EXIT=0
+Usage: autoagent memory [OPTIONS] COMMAND [ARGS]...
+
+  Project memory — manage AUTOAGENT.md persistent context.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  add   Add a note to a section of AUTOAGENT.md.
+  show  Show AUTOAGENT.md contents.
+
+
+## memory show
+EXIT=0
+Usage: autoagent memory show [OPTIONS]
+
+  Show AUTOAGENT.md contents.
+
+  Examples:   autoagent memory show
+
+Options:
+  --help  Show this message and exit.
+
+
+## memory add
+EXIT=0
+Usage: autoagent memory add [OPTIONS] NOTE
+
+  Add a note to a section of AUTOAGENT.md.
+
+  Examples:   autoagent memory add "Prefer instruction edits over model swaps"
+  --section preference   autoagent memory add "Never use gpt-3.5 for safety
+  checks" --section bad
+
+Options:
+  --section [good|bad|preference|constraint]
+                                  Section to add the note to.  [required]
+  --help                          Show this message and exit.
+
+
+## server
+EXIT=0
+Usage: autoagent server [OPTIONS]
+
+  Start the API server + web console.
+
+  Starts the FastAPI backend serving both the REST API and the web console.
+  API docs available at http://localhost:8000/docs
+
+  Examples:   autoagent server   autoagent server --port 3000 --reload
+
+Options:
+  --quiet         Suppress the branded startup banner.
+  --no-banner     Suppress the branded startup banner.
+  --host TEXT     Host to bind to.  [default: 0.0.0.0]
+  --port INTEGER  Port to bind to.  [default: 8000]
+  --reload        Enable auto-reload for development.
+  --help          Show this message and exit.
+
+
+## mcp-server
+EXIT=0
+Usage: autoagent mcp-server [OPTIONS]
+
+  Start MCP server for AI coding tool integration.
+
+  Runs in stdio mode by default for Claude Code, Cursor, Codex, and other MCP-
+  compatible tools. Supply --port to serve streamable HTTP locally.
+
+  Setup for Claude Code (project-scoped .mcp.json example):   {
+  "mcpServers": {       "autoagent": {         "command": "python3",
+  "args": ["-m", "mcp_server"]       }     }   }
+
+  Examples:   autoagent mcp-server                         # Stdio mode
+  (default)   autoagent mcp-server --host 127.0.0.1 --port 8081
+
+Options:
+  --host TEXT     HTTP bind host when using --port.  [default: 127.0.0.1]
+  --port INTEGER  Start streamable HTTP mode on this port. Defaults to stdio
+                  mode.
+  --help          Show this message and exit.
+
+
+## registry
+EXIT=0
+Usage: autoagent registry [OPTIONS] COMMAND [ARGS]...
+
+  Modular registry — skills, policies, tool contracts, handoff schemas.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  add     Add a new item (or new version) to the registry.
+  diff    Diff two versions of a registry item.
+  import  Bulk-import registry items from a YAML/JSON file.
+  list    List registered items.
+  show    Show details for a registry item.
+
+
+## registry list
+EXIT=0
+Usage: autoagent registry list [OPTIONS]
+
+  List registered items.
+
+  Examples:   autoagent registry list   autoagent registry list --type skills
+
+Options:
+  --type [skills|policies|tools|handoffs]
+                                  Filter by registry type.
+  --db TEXT                       [default: registry.db]
+  --help                          Show this message and exit.
+
+
+## registry show
+EXIT=0
+Usage: autoagent registry show [OPTIONS] {skills|policies|tools|handoffs} NAME
+
+  Show details for a registry item.
+
+  Examples:   autoagent registry show skills returns_handling   autoagent
+  registry show tools order_lookup --version 2
+
+Options:
+  --version INTEGER  Specific version.
+  --db TEXT          [default: registry.db]
+  --help             Show this message and exit.
+
+
+## registry add
+EXIT=0
+Usage: autoagent registry add [OPTIONS] {skills|policies|tools|handoffs} NAME
+
+  Add a new item (or new version) to the registry.
+
+  Examples:   autoagent registry add skills returns_handling --file skill.yaml
+
+Options:
+  --file PATH  YAML/JSON file with item data.  [required]
+  --db TEXT    [default: registry.db]
+  --help       Show this message and exit.
+
+
+## registry diff
+EXIT=0
+Usage: autoagent registry diff [OPTIONS] {skills|policies|tools|handoffs} NAME
+                               V1 V2
+
+  Diff two versions of a registry item.
+
+  Examples:   autoagent registry diff skills returns_handling 1 2
+
+Options:
+  --db TEXT  [default: registry.db]
+  --help     Show this message and exit.
+
+
+## registry import
+EXIT=0
+Usage: autoagent registry import [OPTIONS] PATH
+
+  Bulk-import registry items from a YAML/JSON file.
+
+  Examples:   autoagent registry import registry_export.yaml
+
+Options:
+  --db TEXT  [default: registry.db]
+  --help     Show this message and exit.
+
+
+## skill
+EXIT=0
+Usage: autoagent skill [OPTIONS] COMMAND [ARGS]...
+
+  Unified skill management — build-time and run-time skills.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  archive        Archive (reject) a draft skill.
+  compose        Compose multiple skills into a skillset.
+  create         Create a new skill.
+  effectiveness  Show effectiveness metrics for a skill.
+  export-md      Export a skill as SKILL.md.
+  import-md      Import a skill from SKILL.md file.
+  install        Install a skill from marketplace, URL, or file.
+  list           List all skills with optional filters.
+  promote        Promote a draft skill to active status.
+  publish        Publish a skill to the marketplace.
+  recommend      Recommend skills based on failure patterns or metrics.
+  review         Interactive review of draft skills for promotion.
+  search         Search for skills by query string.
+  show           Show detailed information about a skill.
+  test           Validate and test a skill.
+
+
+## skill export-md
+EXIT=0
+Usage: autoagent skill export-md [OPTIONS] SKILL_NAME
+
+  Export a skill as SKILL.md.
+
+Options:
+  --output TEXT
+  --help         Show this message and exit.
+
+
+## skill import-md
+EXIT=0
+Usage: autoagent skill import-md [OPTIONS] PATH
+
+  Import a skill from SKILL.md file.
+
+Options:
+  --help  Show this message and exit.
+
+
+## curriculum
+EXIT=0
+Usage: autoagent curriculum [OPTIONS] COMMAND [ARGS]...
+
+  Self-play curriculum generator for adversarial eval prompts.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  apply     Apply a curriculum batch to the active eval set.
+  generate  Generate a new curriculum batch from recent failures.
+  list      List generated curriculum batches.
+
+
+## curriculum generate
+EXIT=0
+Usage: autoagent curriculum generate [OPTIONS]
+
+  Generate a new curriculum batch from recent failures.
+
+  Examples:   autoagent curriculum generate   autoagent curriculum generate
+  --limit 20 --prompts-per-cluster 5
+
+Options:
+  --limit INTEGER                Max failure clusters to process  [default:
+                                 10]
+  --prompts-per-cluster INTEGER  Prompts to generate per cluster  [default: 3]
+  --adversarial-ratio FLOAT      Ratio of adversarial variants  [default: 0.2]
+  --db TEXT                      Conversation database path  [default:
+                                 conversations.db]
+  --output-dir TEXT              Output directory  [default:
+                                 .autoagent/curriculum]
+  --help                         Show this message and exit.
+
+
+## curriculum list
+EXIT=0
+Usage: autoagent curriculum list [OPTIONS]
+
+  List generated curriculum batches.
+
+  Examples:   autoagent curriculum list   autoagent curriculum list --json
+
+Options:
+  --limit INTEGER    Max batches to list  [default: 20]
+  --output-dir TEXT  Curriculum directory  [default: .autoagent/curriculum]
+  --json             Output as JSON
+  --help             Show this message and exit.
+
+
+## curriculum apply
+EXIT=0
+Usage: autoagent curriculum apply [OPTIONS] BATCH_ID
+
+  Apply a curriculum batch to the active eval set.
+
+  Examples:   autoagent curriculum apply curriculum_abc123
+
+Options:
+  --output-dir TEXT      Curriculum directory  [default:
+                         .autoagent/curriculum]
+  --eval-cases-dir TEXT  Eval cases directory  [default: evals/cases]
+  --help                 Show this message and exit.
+
+
+## trace
+EXIT=0
+Usage: autoagent trace [OPTIONS] COMMAND [ARGS]...
+
+  Trace analysis — grading, blame maps, and graphs.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  blame    Build a blame map of failure clusters.
+  grade    Grade all spans in a trace.
+  graph    Render a trace as a dependency graph with critical-path analysis.
+  promote  Promote a trace to an eval case.
+
+
+## trace grade
+EXIT=0
+Usage: autoagent trace grade [OPTIONS] TRACE_ID
+
+  Grade all spans in a trace.
+
+  Examples:   autoagent trace grade abc-123
+
+Options:
+  --db TEXT  [default: .autoagent/traces.db]
+  --help     Show this message and exit.
+
+
+## trace blame
+EXIT=0
+Usage: autoagent trace blame [OPTIONS]
+
+  Build a blame map of failure clusters.
+
+  Examples:   autoagent trace blame --window 24h   autoagent trace blame
+  --window 7d --top 5
+
+Options:
+  --window TEXT  Time window (e.g. 24h, 7d, 30m).  [default: 24h]
+  --top INTEGER  Number of clusters to show.  [default: 10]
+  --db TEXT      [default: .autoagent/traces.db]
+  --help         Show this message and exit.
+
+
+## trace graph
+EXIT=0
+Usage: autoagent trace graph [OPTIONS] TRACE_ID
+
+  Render a trace as a dependency graph with critical-path analysis.
+
+  Examples:   autoagent trace graph abc-123
+
+Options:
+  --db TEXT  [default: .autoagent/traces.db]
+  --help     Show this message and exit.
+
+
+## trace promote
+EXIT=0
+Usage: autoagent trace promote [OPTIONS] TRACE_ID
+
+  Promote a trace to an eval case.
+
+Options:
+  --help  Show this message and exit.
+
+
+## scorer
+EXIT=0
+Usage: autoagent scorer [OPTIONS] COMMAND [ARGS]...
+
+  NL Scorer — create eval scorers from natural language descriptions.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  create  Create a scorer from a natural language description.
+  list    List all scorer specs in memory.
+  refine  Refine an existing scorer with additional criteria.
+  show    Show a scorer spec in detail.
+  test    Test a scorer against a trace.
+
+
+## scorer create
+EXIT=0
+Usage: autoagent scorer create [OPTIONS] [DESCRIPTION]
+
+  Create a scorer from a natural language description.
+
+  Examples:   autoagent scorer create "The agent should respond within 5
+  seconds"   autoagent scorer create --from-file criteria.txt --name
+  latency_check
+
+Options:
+  --from-file PATH  Read NL description from a file.
+  --name TEXT       Name for the scorer (auto-generated if omitted).
+  --help            Show this message and exit.
+
+
+## scorer list
+EXIT=0
+Usage: autoagent scorer list [OPTIONS]
+
+  List all scorer specs in memory.
+
+  Examples:   autoagent scorer list
+
+Options:
+  --help  Show this message and exit.
+
+
+## scorer show
+EXIT=0
+Usage: autoagent scorer show [OPTIONS] NAME
+
+  Show a scorer spec in detail.
+
+  Examples:   autoagent scorer show latency_check
+
+Options:
+  --help  Show this message and exit.
+
+
+## scorer refine
+EXIT=0
+Usage: autoagent scorer refine [OPTIONS] NAME ADDITIONAL_NL
+
+  Refine an existing scorer with additional criteria.
+
+  Examples:   autoagent scorer refine latency_check "Also check for empathy"
+
+Options:
+  --help  Show this message and exit.
+
+
+## scorer test
+EXIT=0
+Usage: autoagent scorer test [OPTIONS] NAME
+
+  Test a scorer against a trace.
+
+  Examples:   autoagent scorer test latency_check --trace abc-123
+
+Options:
+  --trace TEXT  Trace ID to test against.  [required]
+  --db TEXT     [default: .autoagent/traces.db]
+  --help        Show this message and exit.
+
+
+## full-auto
+EXIT=0
+Usage: autoagent full-auto [OPTIONS]
+
+  Run optimization + loop in dangerous full-auto mode.
+
+  Similar intent to 'dangerously skip permissions': auto-promotes accepted
+  configs and skips manual promotion/review gates.
+
+Options:
+  --cycles INTEGER           Optimization cycles to run.  [default: 5]
+  --max-loop-cycles INTEGER  Continuous loop cycles after optimize.  [default:
+                             20]
+  --yes                      Acknowledge dangerous mode and skip permission-
+                             style gates.
+  --help                     Show this message and exit.
+
+
+## autonomous
+EXIT=0
+Usage: autoagent autonomous [OPTIONS]
+
+  Run autonomous optimization with scoped permissions.
+
+Options:
+  --scope [dev|staging|production]
+  --yes
+  --cycles INTEGER
+  --max-loop-cycles INTEGER
+  --help                          Show this message and exit.
+
+
+## quickstart
+EXIT=0
+Usage: autoagent quickstart [OPTIONS]
+
+  Run the ENTIRE golden path: init → seed → eval → optimize → summary.
+
+  A single command that takes you from zero to optimized agent in minutes.
+
+  Examples:   autoagent quickstart   autoagent quickstart --agent-name
+  "Support Bot" --verbose
+
+Options:
+  --quiet             Suppress the branded startup banner.
+  --no-banner         Suppress the branded startup banner.
+  --agent-name TEXT   Agent name for AUTOAGENT.md.  [default: My Agent]
+  --verbose           Show detailed output.
+  --dir TEXT          Directory to initialize in.  [default: .]
+  --open / --no-open  Auto-open web console after completion.
+  --help              Show this message and exit.
+
+
+## edit
+EXIT=0
+Usage: autoagent edit [OPTIONS] [DESCRIPTION]
+
+  Apply natural language edits to agent config.
+
+  Examples:   autoagent edit "Make the billing agent more empathetic"
+  autoagent edit "Reduce response verbosity" --dry-run   autoagent edit
+  --interactive
+
+Options:
+  -i, --interactive   Multi-turn editing session.
+  --dry-run           Show proposed changes without applying.
+  -j, --json          Output as JSON.
+  --db TEXT           Conversation store DB.  [default: conversations.db]
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --help              Show this message and exit.
+
+
+## explain
+EXIT=0
+Usage: autoagent explain [OPTIONS]
+
+  Generate a plain-English summary of the agent's current state.
+
+Options:
+  --verbose           Show detailed breakdown.
+  --db TEXT           Conversation store DB.  [default: conversations.db]
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --memory-db TEXT    Optimizer memory DB.  [default: optimizer_memory.db]
+  -j, --json          Output as JSON.
+  --help              Show this message and exit.
+
+
+## diagnose
+EXIT=0
+Usage: autoagent diagnose [OPTIONS]
+
+  Run failure diagnosis and optionally fix issues interactively.
+
+Options:
+  -i, --interactive   Interactive diagnosis session.
+  -j, --json          Output as JSON.
+  --db TEXT           [default: conversations.db]
+  --configs-dir TEXT  [default: configs]
+  --memory-db TEXT    [default: optimizer_memory.db]
+  --help              Show this message and exit.
+
+
+## replay
+EXIT=0
+Usage: autoagent replay [OPTIONS]
+
+  Show optimization history like git log --oneline.
+
+Options:
+  --limit INTEGER   Number of entries to show.  [default: 20]
+  --memory-db TEXT  Optimizer memory DB.  [default: optimizer_memory.db]
+  -j, --json        Output as JSON.
+  --help            Show this message and exit.
+
+
+## cx
+EXIT=0
+Usage: autoagent cx [OPTIONS] COMMAND [ARGS]...
+
+  Google Cloud CX Agent Studio — import, export, deploy.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  compat  Show CX Agent Studio compatibility matrix.
+  deploy  Deploy agent to a CX environment.
+  export  Export optimized config back to CX Agent Studio.
+  import  Import a CX agent into AutoAgent format.
+  list    List CX agents in a project.
+  status  Show CX agent deployment status.
+  widget  Generate a chat-messenger web widget HTML file.
+
+
+## cx compat
+EXIT=0
+Usage: autoagent cx compat [OPTIONS]
+
+  Show CX Agent Studio compatibility matrix.
+
+Options:
+  --help  Show this message and exit.
+
+
+## cx list
+EXIT=0
+Usage: autoagent cx list [OPTIONS]
+
+  List CX agents in a project.
+
+Options:
+  --project TEXT      GCP project ID.  [required]
+  --location TEXT     Agent location.  [default: global]
+  --credentials TEXT  Path to service account JSON.
+  --help              Show this message and exit.
+
+
+## cx import
+EXIT=0
+Usage: autoagent cx import [OPTIONS]
+
+  Import a CX agent into AutoAgent format.
+
+Options:
+  --project TEXT                  GCP project ID.  [required]
+  --location TEXT                 [default: global]
+  --agent TEXT                    CX agent ID.  [required]
+  --output-dir TEXT               Output directory.  [default: .]
+  --credentials TEXT              Path to service account JSON.
+  --include-test-cases / --no-test-cases
+                                  [default: include-test-cases]
+  --help                          Show this message and exit.
+
+
+## cx export
+EXIT=0
+Usage: autoagent cx export [OPTIONS]
+
+  Export optimized config back to CX Agent Studio.
+
+Options:
+  --project TEXT      GCP project ID.  [required]
+  --location TEXT     [default: global]
+  --agent TEXT        CX agent ID.  [required]
+  --config TEXT       AutoAgent config YAML path.  [required]
+  --snapshot TEXT     CX snapshot JSON from import.  [required]
+  --credentials TEXT  Path to service account JSON.
+  --dry-run           Preview changes without pushing.
+  --help              Show this message and exit.
+
+
+## cx deploy
+EXIT=0
+Usage: autoagent cx deploy [OPTIONS]
+
+  Deploy agent to a CX environment.
+
+Options:
+  --project TEXT      GCP project ID.  [required]
+  --location TEXT     [default: global]
+  --agent TEXT        CX agent ID.  [required]
+  --environment TEXT  [default: production]
+  --credentials TEXT  Path to service account JSON.
+  --help              Show this message and exit.
+
+
+## cx widget
+EXIT=0
+Usage: autoagent cx widget [OPTIONS]
+
+  Generate a chat-messenger web widget HTML file.
+
+Options:
+  --project TEXT   GCP project ID.  [required]
+  --location TEXT  [default: global]
+  --agent TEXT     CX agent ID.  [required]
+  --title TEXT     Chat widget title.  [default: Agent]
+  --color TEXT     Primary color hex.  [default: #1a73e8]
+  --output TEXT    Output HTML file path.
+  --help           Show this message and exit.
+
+
+## cx status
+EXIT=0
+Usage: autoagent cx status [OPTIONS]
+
+  Show CX agent deployment status.
+
+Options:
+  --project TEXT      GCP project ID.  [required]
+  --location TEXT     [default: global]
+  --agent TEXT        CX agent ID.  [required]
+  --credentials TEXT  Path to service account JSON.
+  --help              Show this message and exit.
+
+
+## adk
+EXIT=0
+Usage: autoagent adk [OPTIONS] COMMAND [ARGS]...
+
+  Google Agent Development Kit (ADK) integration — import, export, deploy.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  deploy  Deploy ADK agent to Cloud Run or Vertex AI.
+  diff    Preview what would change on export.
+  export  Export optimized config back to ADK source files.
+  import  Import an ADK agent from a local directory.
+  status  Show ADK agent structure and config summary.
+
+
+## adk import
+EXIT=0
+Usage: autoagent adk import [OPTIONS] PATH
+
+  Import an ADK agent from a local directory.
+
+Options:
+  -o, --output TEXT  Output directory for config and snapshot.  [default: .]
+  --help             Show this message and exit.
+
+
+## adk export
+EXIT=0
+Usage: autoagent adk export [OPTIONS] PATH
+
+  Export optimized config back to ADK source files.
+
+Options:
+  -o, --output TEXT    Output directory for modified source files.
+  -s, --snapshot TEXT  Snapshot directory path from import.  [required]
+  --dry-run            Preview changes without writing files.
+  --help               Show this message and exit.
+
+
+## adk deploy
+EXIT=0
+Usage: autoagent adk deploy [OPTIONS] PATH
+
+  Deploy ADK agent to Cloud Run or Vertex AI.
+
+Options:
+  --target [cloud-run|vertex-ai]  [default: cloud-run]
+  --project TEXT                  GCP project ID.  [required]
+  --region TEXT                   GCP region.  [default: us-central1]
+  --help                          Show this message and exit.
+
+
+## adk status
+EXIT=0
+Usage: autoagent adk status [OPTIONS] PATH
+
+  Show ADK agent structure and config summary.
+
+Options:
+  -j, --json  Output as JSON.
+  --help      Show this message and exit.
+
+
+## adk diff
+EXIT=0
+Usage: autoagent adk diff [OPTIONS] PATH
+
+  Preview what would change on export.
+
+Options:
+  -s, --snapshot TEXT  Snapshot directory path from import.  [required]
+  --help               Show this message and exit.
+
+
+## dataset
+EXIT=0
+Usage: autoagent dataset [OPTIONS] COMMAND [ARGS]...
+
+  Manage datasets for evaluation and training.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  create  Create a new dataset.
+  list    List all datasets.
+  stats   Show dataset statistics.
+
+
+## dataset create
+EXIT=0
+Usage: autoagent dataset create [OPTIONS] NAME
+
+  Create a new dataset.
+
+Options:
+  --description TEXT  Dataset description
+  --help              Show this message and exit.
+
+
+## dataset list
+EXIT=0
+Usage: autoagent dataset list [OPTIONS]
+
+  List all datasets.
+
+Options:
+  --help  Show this message and exit.
+
+
+## dataset stats
+EXIT=0
+Usage: autoagent dataset stats [OPTIONS] DATASET_ID
+
+  Show dataset statistics.
+
+Options:
+  --help  Show this message and exit.
+
+
+## outcomes
+EXIT=0
+Usage: autoagent outcomes [OPTIONS] COMMAND [ARGS]...
+
+  Manage business outcome data.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  import  Import business outcomes.
+
+
+## outcomes import
+EXIT=0
+Usage: autoagent outcomes import [OPTIONS]
+
+  Import business outcomes.
+
+Options:
+  --source [csv|webhook]  [required]
+  --file TEXT             CSV file path
+  --help                  Show this message and exit.
+
+
+## release
+EXIT=0
+Usage: autoagent release [OPTIONS] COMMAND [ARGS]...
+
+  Manage signed release objects.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  create  Create a new release object from an experiment.
+  list    List release objects.
+
+
+## release list
+EXIT=0
+Usage: autoagent release list [OPTIONS]
+
+  List release objects.
+
+Options:
+  --help  Show this message and exit.
+
+
+## release create
+EXIT=0
+Usage: autoagent release create [OPTIONS]
+
+  Create a new release object from an experiment.
+
+Options:
+  --experiment-id TEXT  Experiment ID to create release from  [required]
+  --help                Show this message and exit.
+
+
+## benchmark
+EXIT=0
+Usage: autoagent benchmark [OPTIONS] COMMAND [ARGS]...
+
+  Run standard benchmarks.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  run  Run a benchmark suite.
+
+
+## benchmark run
+EXIT=0
+Usage: autoagent benchmark run [OPTIONS] BENCHMARK_NAME
+
+  Run a benchmark suite.
+
+Options:
+  --cycles INTEGER  Number of benchmark cycles
+  --help            Show this message and exit.
+
+
+## reward
+EXIT=0
+Usage: autoagent reward [OPTIONS] COMMAND [ARGS]...
+
+  Manage reward definitions.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  create  Create a new reward definition.
+  list    List all reward definitions.
+  test    Test a reward definition.
+
+
+## reward create
+EXIT=0
+Usage: autoagent reward create [OPTIONS] NAME
+
+  Create a new reward definition.
+
+Options:
+  --kind [verifiable|preference|business_outcome|constitutional]
+  --scope [runtime|buildtime|multi_agent]
+  --source [deterministic_checker|environment_checker|human_label|llm_judge|ai_preference]
+  --hard-gate                     Mark as hard gate (pass/fail, not
+                                  optimizable)
+  --weight FLOAT
+  --description TEXT
+  --help                          Show this message and exit.
+
+
+## reward list
+EXIT=0
+Usage: autoagent reward list [OPTIONS]
+
+  List all reward definitions.
+
+Options:
+  --kind TEXT  Filter by kind
+  --help       Show this message and exit.
+
+
+## reward test
+EXIT=0
+Usage: autoagent reward test [OPTIONS] NAME
+
+  Test a reward definition.
+
+Options:
+  --trace TEXT  Trace ID to test against
+  --help        Show this message and exit.
+
+
+## rl
+EXIT=0
+Usage: autoagent rl [OPTIONS] COMMAND [ARGS]...
+
+  Policy optimization commands.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  canary    Start canary evaluation for a policy.
+  dataset   Build a training dataset from episodes.
+  eval      Evaluate a policy artifact offline.
+  jobs      List training jobs.
+  promote   Promote a policy to active status.
+  rollback  Rollback a promoted policy.
+  train     Start a policy training job.
+
+
+## rl train
+EXIT=0
+Usage: autoagent rl train [OPTIONS]
+
+  Start a policy training job.
+
+Options:
+  --mode [control|verifier|preference]
+                                  [required]
+  --backend [openai_rft|openai_dpo|vertex_sft|vertex_preference|vertex_continuous]
+                                  [required]
+  --dataset TEXT                  Path to training dataset  [required]
+  --config TEXT                   JSON config string
+  --help                          Show this message and exit.
+
+
+## rl jobs
+EXIT=0
+Usage: autoagent rl jobs [OPTIONS]
+
+  List training jobs.
+
+Options:
+  --status TEXT
+  --help         Show this message and exit.
+
+
+## rl eval
+EXIT=0
+Usage: autoagent rl eval [OPTIONS] POLICY_ID
+
+  Evaluate a policy artifact offline.
+
+Options:
+  --help  Show this message and exit.
+
+
+## rl promote
+EXIT=0
+Usage: autoagent rl promote [OPTIONS] POLICY_ID
+
+  Promote a policy to active status.
+
+Options:
+  --help  Show this message and exit.
+
+
+## rl rollback
+EXIT=0
+Usage: autoagent rl rollback [OPTIONS] POLICY_ID
+
+  Rollback a promoted policy.
+
+Options:
+  --help  Show this message and exit.
+
+
+## rl dataset
+EXIT=0
+Usage: autoagent rl dataset [OPTIONS]
+
+  Build a training dataset from episodes.
+
+Options:
+  --mode [verifiable|preference|episode|audit]
+  --limit INTEGER
+  --help                          Show this message and exit.
+
+
+## rl canary
+EXIT=0
+Usage: autoagent rl canary [OPTIONS] POLICY_ID
+
+  Start canary evaluation for a policy.
+
+Options:
+  --help  Show this message and exit.
+
+
+## pref
+EXIT=0
+Usage: autoagent pref [OPTIONS] COMMAND [ARGS]...
+
+  Preference collection and export.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  collect  Add a preference pair.
+  export   Export preference pairs as DPO dataset.
+
+
+## pref collect
+EXIT=0
+Usage: autoagent pref collect [OPTIONS]
+
+  Add a preference pair.
+
+Options:
+  --input-text TEXT  [required]
+  --chosen TEXT      [required]
+  --rejected TEXT    [required]
+  --source TEXT
+  --help             Show this message and exit.
+
+
+## pref export
+EXIT=0
+Usage: autoagent pref export [OPTIONS]
+
+  Export preference pairs as DPO dataset.
+
+Options:
+  --format [vertex|openai|generic]
+  --help                          Show this message and exit.
+

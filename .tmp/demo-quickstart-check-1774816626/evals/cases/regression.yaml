@@ -1,0 +1,88 @@
+cases:
+  - id: regr_001
+    category: regression
+    user_message: "Check on my order status please"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+    # Previously routed to support instead of orders
+
+  - id: regr_002
+    category: regression
+    user_message: "Can you suggest a product like the Running Shoes?"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+    # Previously failed to trigger recommendations specialist
+
+  - id: regr_003
+    category: regression
+    user_message: "I need help with my delivery"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+    # Previously misrouted 'delivery' keyword to support
+
+  - id: regr_004
+    category: regression
+    user_message: "What is the warranty on electronics?"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: ["help"]
+    # Previously returned empty response
+
+  - id: regr_005
+    category: regression
+    user_message: "Recommend the best electronics for a home office"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+    # Previously failed when 'recommend' appeared with other keywords
+
+  - id: regr_006
+    category: regression
+    user_message: "Track order ORD-1003"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+    # Previously crashed on order IDs with hyphens
+
+  - id: regr_007
+    category: regression
+    user_message: "Hi there!"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: ["help"]
+    # Previously produced over-long response for simple greetings
+
+  - id: regr_008
+    category: regression
+    user_message: "What's the status of my cancelled order?"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+    # Previously failed on cancelled order queries
+
+  - id: regr_009
+    category: regression
+    user_message: "Do you have anything similar to the Leather Wallet?"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+    # Previously returned tool_call error for 'similar' keyword
+
+  - id: regr_010
+    category: regression
+    user_message: "I'd like to return a product"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: ["help"]
+    # Previously misidentified 'return' as an order action
+
+  - id: regr_011
+    category: regression
+    user_message: "Show me your best sellers"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+    # Previously didn't recognize 'best' as recommendation intent

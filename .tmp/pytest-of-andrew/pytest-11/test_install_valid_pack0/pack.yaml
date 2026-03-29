@@ -1,0 +1,33 @@
+skills:
+- author: test
+  capabilities:
+  - optimization
+  dependencies: []
+  description: Installed from pack
+  domain: general
+  effectiveness: {}
+  eval_criteria:
+  - metric: composite_score
+    target: 0.8
+  examples: []
+  guardrails: []
+  id: ''
+  instructions: ''
+  kind: build
+  metadata: {}
+  mutations:
+  - description: Pack mutation
+    name: installed_mut
+    operator_type: replace
+    risk_level: low
+    target_surface: prompt
+    template: ''
+  name: installed_skill
+  policies: []
+  status: active
+  tags: []
+  test_cases: []
+  tools: []
+  triggers:
+  - failure_family: test_error
+  version: 1.0.0

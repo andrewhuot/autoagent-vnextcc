@@ -1,0 +1,9 @@
+{
+  "immutable_surfaces": [
+    "billing"
+  ],
+  "last_injected_mutation": null,
+  "paused": false,
+  "rejected_experiments": [],
+  "updated_at": 1774794756.53481
+}

@@ -1,0 +1,13 @@
+displayName: {{ intent_name }}
+description: {{ description }}
+trainingPhrases:
+  {% for phrase in training_phrases %}
+  - parts:
+      - text: "{{ phrase }}"
+  {% endfor %}
+parameters:
+  {% for param in parameters %}
+  - id: {{ param.id }}
+    entityType: "{{ param.entity_type }}"
+    isList: {{ param.is_list | default(false) }}
+  {% endfor %}

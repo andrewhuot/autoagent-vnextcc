@@ -1,0 +1,75 @@
+skills:
+- name: cx_playbook_instruction_tuning
+  version: 1
+  description: Tune CX Agent Studio playbook instructions to reduce off-script responses
+    and improve task completion
+  category: quality
+  platform: cx-agent-studio
+  target_surfaces:
+  - cx.playbooks.*.goal
+  - cx.playbooks.*.instructions
+  mutations:
+  - name: refine_playbook_goal_and_steps
+    mutation_type: instruction_rewrite
+    target_surface: cx.playbooks.{playbook_id}.instructions
+    description: Rewrite playbook goal and step instructions based on conversation
+      traces where the agent deviated from the intended flow
+    template: Review CX conversation traces for playbook {playbook_id} where the agent
+      deviated or failed to complete the goal. Identify ambiguous step instructions
+      and rewrite them with explicit conditions and expected outputs.
+    parameters:
+      max_steps_to_rewrite: 5
+      preserve_existing_transitions: true
+      add_explicit_end_conditions: true
+  examples:
+  - name: refund_playbook_clarification
+    surface: cx.playbooks.refund_processing.instructions
+    before: Help the customer with their refund.
+    after: 'Guide the customer through the refund process. Step 1: Confirm order ID
+      and purchase date. Step 2: Verify refund eligibility using the eligibility tool.
+      Step 3: If eligible, initiate refund and provide confirmation number. Step 4:
+      If ineligible, explain the reason and offer store credit as an alternative.
+      End the playbook only after confirming the customer understands the outcome.'
+    improvement: 0.21
+    context: Refund playbook had 21% incomplete rate; agents were ending conversations
+      before confirming eligibility outcomes
+  guardrails:
+  - Do not modify playbook transitions that are enforced by CX Studio flow logic
+  - All rewritten steps must be testable in the CX Simulator before deployment
+  - Preserve any compliance-mandated disclosure steps verbatim
+  - Changes must be reviewed by a CX admin before activating in production
+  eval_criteria:
+  - metric: playbook_completion_rate
+    target: 0.9
+    operator: gt
+    weight: 1.0
+  triggers:
+  - failure_family: playbook_incomplete
+    metric_name: playbook_completion_rate
+    threshold: 0.8
+    operator: lt
+    blame_pattern: null
+  author: autoagent-builtin
+  tags:
+  - quality
+  - cx-agent-studio
+  - playbook
+  - instructions
+  created_at: 1774794654.2463732
+  proven_improvement: null
+  times_applied: 0
+  success_rate: 0.0
+  status: active
+  kind: runtime
+  dependencies: []
+  allowed_tools: []
+  supported_frameworks: []
+  required_approvals: []
+  eval_contract: {}
+  rollout_policy: gradual
+  provenance: ''
+  trust_level: unverified
+  instructions: ''
+  references: ''
+  runtime_effectiveness: 0.0
+  buildtime_effectiveness: 0.0

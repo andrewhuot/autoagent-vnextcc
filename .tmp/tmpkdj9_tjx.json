@@ -1,0 +1,10 @@
+{
+  "members": [
+    {
+      "user_id": "u1",
+      "name": "Alice",
+      "role": "admin",
+      "email": null
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+prompts:
+  root: 'You are a helpful customer support agent.
+
+    You can help with billing questions, technical support, and order tracking.
+
+    Route complex billing issues to the billing specialist.
+
+    Always be polite and professional.'
+  billing_agent: 'You are a billing specialist.
+
+    You have access to billing records and can process refunds.
+
+    Always verify customer identity before discussing account details.'
+tools:
+  lookup_order:
+    enabled: true
+    description: "Look up order details by order ID.\n\nArgs:\n    order_id: The unique\
+      \ order identifier\n\nReturns:\n    Order details including status, items, and\
+      \ shipping info"
+    signature: 'lookup_order(order_id: str)'
+    _adk_function_body: "@tool\ndef lookup_order(order_id: str) -> dict:\n    \"\"\
+      \"Look up order details by order ID.\n\n    Args:\n        order_id: The unique\
+      \ order identifier\n\n    Returns:\n        Order details including status,\
+      \ items, and shipping info\n    \"\"\"\n    return {'order_id': order_id, 'status':\
+      \ 'shipped'}"
+  search_knowledge_base:
+    enabled: true
+    description: "Search the knowledge base for relevant articles.\n\nArgs:\n    query:\
+      \ The search query\n\nReturns:\n    List of matching knowledge base articles"
+    signature: 'search_knowledge_base(query: str)'
+    _adk_function_body: "@tool\ndef search_knowledge_base(query: str) -> list:\n \
+      \   \"\"\"Search the knowledge base for relevant articles.\n\n    Args:\n  \
+      \      query: The search query\n\n    Returns:\n        List of matching knowledge\
+      \ base articles\n    \"\"\"\n    return [{'title': 'FAQ', 'content': 'Common\
+      \ questions'}]"
+  create_ticket:
+    enabled: true
+    description: "Create a support ticket.\n\nArgs:\n    subject: Brief description\
+      \ of the issue\n    description: Detailed description of the problem\n\nReturns:\n\
+      \    Created ticket details with ticket ID"
+    signature: 'create_ticket(subject: str, description: str)'
+    _adk_function_body: "@tool\ndef create_ticket(subject: str, description: str)\
+      \ -> dict:\n    \"\"\"Create a support ticket.\n\n    Args:\n        subject:\
+      \ Brief description of the issue\n        description: Detailed description\
+      \ of the problem\n\n    Returns:\n        Created ticket details with ticket\
+      \ ID\n    \"\"\"\n    return {'ticket_id': 'TKT-001', 'status': 'open'}"
+routing:
+  rules:
+  - specialist: billing_agent
+    keywords:
+    - billing
+    - bill
+    - payment
+    - invoice
+    patterns: []
+    _adk_agent_name: billing_agent
+model: gemini-2.0-flash
+generation:
+  temperature: 0.3
+  max_tokens: 1024

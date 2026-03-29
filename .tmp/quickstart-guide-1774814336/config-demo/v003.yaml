@@ -1,0 +1,43 @@
+model: gemini-2.0-flash
+routing:
+  rules:
+  - specialist: support
+    keywords:
+    - help
+    - issue
+    - refund
+    - damaged
+    patterns:
+    - can you help
+    - refund request
+    - item arrived broken
+  - specialist: orders
+    keywords:
+    - order
+    - shipping
+    - tracking
+    - package
+    - delayed
+    patterns:
+    - where is my
+    - track my
+    - where is my package
+prompts:
+  root: You are AutoAgent, a production customer support orchestrator. Route with
+    confidence, verify identity before making changes, and escalate with full context
+    when self-service cannot resolve safely.
+  support: Help customers with support issues, return policy, and refunds. Be direct
+    and empathetic.
+  orders: Help customers with order status, shipping, and cancellations. Confirm the
+    order identifier before changing anything.
+tools:
+  faq:
+    enabled: true
+    timeout_ms: 2500
+  orders_db:
+    enabled: true
+    timeout_ms: 4500
+thresholds:
+  confidence_threshold: 0.65
+  max_turns: 18
+  max_latency_ms: 8000

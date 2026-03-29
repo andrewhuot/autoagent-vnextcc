@@ -1,0 +1,84 @@
+{
+  "batch_id": "curriculum_0b1a008225fc",
+  "generated_at": 1774794599.636707,
+  "prompts": [
+    {
+      "id": "curr_a3c9b8be49c7",
+      "tier": "medium",
+      "user_message": "Handle test properly",
+      "category": "test",
+      "expected_specialist": "support",
+      "expected_behavior": "answer",
+      "safety_probe": false,
+      "expected_keywords": [],
+      "source_cluster": "test",
+      "difficulty_score": 0.5,
+      "metadata": {
+        "generated_from": "failure_cluster",
+        "cluster_size": 1
+      }
+    },
+    {
+      "id": "curr_a3c9b8be49c7_edge",
+      "tier": "adversarial",
+      "user_message": "HANDLE TEST PROPERLY",
+      "category": "test",
+      "expected_specialist": "support",
+      "expected_behavior": "answer",
+      "safety_probe": false,
+      "expected_keywords": [],
+      "source_cluster": "test",
+      "difficulty_score": 0.9,
+      "metadata": {
+        "variant_type": "edge_case",
+        "base_prompt_id": "curr_a3c9b8be49c7"
+      }
+    },
+    {
+      "id": "curr_a3c9b8be49c7_ambig",
+      "tier": "adversarial",
+      "user_message": "Maybe handle test properly or something?",
+      "category": "test",
+      "expected_specialist": "support",
+      "expected_behavior": "answer",
+      "safety_probe": false,
+      "expected_keywords": [],
+      "source_cluster": "test",
+      "difficulty_score": 0.85,
+      "metadata": {
+        "variant_type": "ambiguous",
+        "base_prompt_id": "curr_a3c9b8be49c7"
+      }
+    },
+    {
+      "id": "curr_a3c9b8be49c7_multi",
+      "tier": "adversarial",
+      "user_message": "Handle test properly Also, what's the status? And one more thing...",
+      "category": "test",
+      "expected_specialist": "support",
+      "expected_behavior": "answer",
+      "safety_probe": false,
+      "expected_keywords": [],
+      "source_cluster": "test",
+      "difficulty_score": 0.8,
+      "metadata": {
+        "variant_type": "multi_intent",
+        "base_prompt_id": "curr_a3c9b8be49c7"
+      }
+    }
+  ],
+  "source_clusters": [
+    "test"
+  ],
+  "tier_distribution": {
+    "easy": 0,
+    "medium": 1,
+    "hard": 0,
+    "adversarial": 3
+  },
+  "metadata": {
+    "num_clusters": 1,
+    "prompts_per_cluster": 1,
+    "adversarial_ratio": 0.0
+  }
+}

@@ -1,0 +1,18 @@
+displayName: {{ tool_name }}
+description: {{ description }}
+openApiSpec:
+  paths:
+    /{{ endpoint }}:
+      {{ method }}:
+        summary: {{ summary }}
+        parameters:
+          {% for param in parameters %}
+          - name: {{ param.name }}
+            in: {{ param.location }}
+            schema:
+              type: {{ param.type }}
+            description: {{ param.description }}
+          {% endfor %}
+        responses:
+          '200':
+            description: {{ response_description }}

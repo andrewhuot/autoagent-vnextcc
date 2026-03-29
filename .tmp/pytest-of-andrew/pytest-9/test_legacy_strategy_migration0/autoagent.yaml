@@ -1,0 +1,3 @@
+optimizer:
+  search_strategy: adaptive
+  use_mock: true

@@ -1,0 +1,13 @@
+{
+  "immutable_surfaces": [
+    "auth.login",
+    "billing.charge"
+  ],
+  "last_injected_mutation": "prompt/test/v1.0",
+  "paused": true,
+  "rejected_experiments": [
+    "exp-001",
+    "exp-002"
+  ],
+  "updated_at": 1774794601.655387
+}

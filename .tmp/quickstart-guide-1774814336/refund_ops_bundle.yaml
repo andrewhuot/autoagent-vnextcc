@@ -1,0 +1,40 @@
+skillset:
+  id: skillset_1774815082
+  name: Refund Ops Bundle
+  description: Combine routing and runtime guardrails.
+  skills:
+  - id: routing-keyword-expansion
+    name: routing_keyword_expansion
+    version: 1.0.0
+    kind: build
+  - id: refund-policy-check
+    name: refund_policy_check
+    version: 1.0.0
+    kind: runtime
+  conflicts: []
+  merged_instructions: '# refund_policy_check
+
+    Confirm the order identifier, check refund eligibility, and explain the next step
+    clearly. If the request is out of policy, explain why and offer the best supported
+    alternative.'
+  merged_tools:
+    refund_policy_lookup:
+      name: refund_policy_lookup
+      description: Look up return and refund eligibility for an order.
+      parameters:
+        order_id: string
+      returns:
+        eligible: boolean
+        days_remaining: integer
+      implementation: null
+      sandbox_policy: read_only
+  tags:
+  - policy
+  - optimization
+  - routing
+  - refunds
+  metadata:
+    composition_strategy: fail
+    num_skills: 2
+    num_conflicts: 0
+  created_at: 1774815082.215152

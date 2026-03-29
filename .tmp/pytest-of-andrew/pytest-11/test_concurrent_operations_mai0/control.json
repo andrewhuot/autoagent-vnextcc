@@ -1,0 +1,13 @@
+{
+  "immutable_surfaces": [
+    "surface1",
+    "surface2"
+  ],
+  "last_injected_mutation": "mutation1",
+  "paused": false,
+  "rejected_experiments": [
+    "exp1",
+    "exp2"
+  ],
+  "updated_at": 1774794755.906293
+}

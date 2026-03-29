@@ -1,0 +1,28 @@
+{
+  "d9e2b974-b": {
+    "archive_name": "support.zip",
+    "asset_id": "d9e2b974-b",
+    "created_at": 1774794781.19584,
+    "entries": [
+      {
+        "answer": "Let me check that for you.",
+        "intent": "order_tracking",
+        "question": "Where is my package right now?",
+        "type": "faq"
+      },
+      {
+        "answer": "I can help with that refund.",
+        "intent": "refund",
+        "question": "I want my money back for this order.",
+        "type": "faq"
+      },
+      {
+        "example": "Where is my package right now?",
+        "intent": "order_tracking",
+        "response": "Let me check that for you.",
+        "type": "conversation_evidence"
+      }
+    ],
+    "entry_count": 3
+  }
+}

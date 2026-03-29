@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Quickstart Agent</title>
+  <link rel="stylesheet" href="https://www.gstatic.com/dialogflow-console/fast/cx-messenger/prod/v1/cx-messenger-default.css">
+  <script src="https://www.gstatic.com/dialogflow-console/fast/cx-messenger/prod/v1/cx-messenger.js"></script>
+  <style>
+    chat-messenger {
+      z-index: 999;
+      position: fixed;
+      bottom: 16px;
+      right: 16px;
+      --chat-messenger-font-color: #000;
+      --chat-messenger-font-family: Google Sans;
+      --chat-messenger-chat-background: #f3f6fc;
+      --chat-messenger-message-user-background: #1a73e8;
+      --chat-messenger-message-bot-background: #fff;
+    }
+  </style>
+</head>
+<body>
+  <h1>Quickstart Agent</h1>
+  <p>This page embeds the CX Agent Studio agent as a web widget.</p>
+
+  <chat-messenger
+      agent-id="demo-agent"
+      language-code="en"
+      max-query-length="-1">
+    <chat-messenger-chat-bubble chat-title="Quickstart Agent">
+    </chat-messenger-chat-bubble>
+  </chat-messenger>
+</body>
+</html>

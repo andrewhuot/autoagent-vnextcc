@@ -1,0 +1,26 @@
+{
+  "versions": [
+    {
+      "version": 1,
+      "config_hash": "869a24b2dce3",
+      "filename": "v001.yaml",
+      "timestamp": 1774794755.331455,
+      "scores": {
+        "composite": 0.7
+      },
+      "status": "active"
+    },
+    {
+      "version": 2,
+      "config_hash": "b20117169472",
+      "filename": "v002.yaml",
+      "timestamp": 1774794755.3330822,
+      "scores": {
+        "composite": 0.72
+      },
+      "status": "rolled_back"
+    }
+  ],
+  "active_version": 1,
+  "canary_version": null
+}

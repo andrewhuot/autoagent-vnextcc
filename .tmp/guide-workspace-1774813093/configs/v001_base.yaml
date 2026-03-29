@@ -1,0 +1,47 @@
+model: "gemini-2.0-flash"
+
+routing:
+  rules:
+    - specialist: support
+      keywords: ["help", "issue", "problem", "broken", "error", "bug", "complaint", "refund"]
+      patterns: ["how do I", "can you help", "not working", "doesn't work"]
+    - specialist: orders
+      keywords: ["order", "shipping", "delivery", "tracking", "cancel", "return", "status"]
+      patterns: ["where is my", "order number", "track my", "cancel my"]
+    - specialist: recommendations
+      keywords: ["recommend", "suggest", "looking for", "best", "similar", "alternative"]
+      patterns: ["what should I", "can you suggest", "I need a", "something like"]
+
+prompts:
+  root: >
+    You are AutoAgent, a helpful customer service assistant. Route customer
+    requests to the appropriate specialist. If unclear, ask a clarifying
+    question. Be friendly and concise.
+  support: >
+    You are a customer support specialist. Help customers resolve issues
+    with products, answer questions from the FAQ, and provide troubleshooting
+    guidance. Always be empathetic and solution-oriented.
+  orders: >
+    You are an order management specialist. Help customers check order
+    status, track shipments, process cancellations, and handle returns.
+    Always confirm order details before making changes.
+  recommendations: >
+    You are a product recommendation specialist. Suggest products based on
+    customer needs, preferences, and browsing context. Explain why each
+    recommendation fits. Offer alternatives at different price points.
+
+tools:
+  catalog:
+    enabled: true
+    timeout_ms: 5000
+  orders_db:
+    enabled: true
+    timeout_ms: 5000
+  faq:
+    enabled: true
+    timeout_ms: 3000
+
+thresholds:
+  confidence_threshold: 0.6
+  max_turns: 20
+  max_latency_ms: 10000

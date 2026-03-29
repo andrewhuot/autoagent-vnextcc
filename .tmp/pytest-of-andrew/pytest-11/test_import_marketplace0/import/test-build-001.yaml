@@ -1,0 +1,52 @@
+skills:
+- author: test-author
+  capabilities:
+  - keyword-expansion
+  - routing-improvement
+  created_at: 1774794780.308712
+  dependencies: []
+  description: Test skill for expanding routing keywords
+  domain: general
+  effectiveness:
+    avg_improvement: 0.0
+    last_applied: null
+    success_count: 0
+    success_rate: 0.0
+    times_applied: 0
+    total_improvement: 0.0
+  eval_criteria:
+  - metric: routing_accuracy
+    operator: gt
+    target: 0.9
+    weight: 1.0
+  examples: []
+  guardrails: []
+  id: test-build-001
+  instructions: ''
+  kind: build
+  metadata: {}
+  mutations:
+  - description: Add related keywords to routing config
+    name: expand_keywords
+    operator_type: append
+    parameters: {}
+    risk_level: low
+    target_surface: routing
+    template: null
+  name: test_keyword_expansion
+  policies: []
+  status: active
+  tags:
+  - routing
+  - keywords
+  - test
+  test_cases: []
+  tools: []
+  triggers:
+  - blame_pattern: null
+    failure_family: routing_failure
+    metric_name: routing_accuracy
+    operator: lt
+    threshold: 0.8
+  updated_at: 1774794780.308712
+  version: 1.0.0

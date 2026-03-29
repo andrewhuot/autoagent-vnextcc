@@ -1,0 +1,6 @@
+prompts:
+  root: Minimal agent
+tools: {}
+routing:
+  rules: []
+model: gemini-2.0-flash

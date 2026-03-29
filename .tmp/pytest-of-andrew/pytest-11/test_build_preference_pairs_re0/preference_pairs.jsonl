@@ -1,0 +1,1 @@
+{"input_text": "prompt text", "chosen": "good response", "rejected": "bad response", "source": "annotation_tool", "metadata": {"episode_id": "d1679c00-fdf6-44a4-99ac-bfa001a67226", "agent_version": "v1", "experiment_id": "exp1", "confidence": 0.9}}

@@ -1,0 +1,2 @@
+{"id": "a", "split": "train", "user_message": "Where is my order?", "expected_specialist": "orders", "expected_behavior": "answer", "expected_keywords": ["order"]}
+{"id": "b", "split": "test", "user_message": "Recommend a keyboard", "expected_specialist": "recommendations", "expected_behavior": "answer", "expected_keywords": ["recommend"]}

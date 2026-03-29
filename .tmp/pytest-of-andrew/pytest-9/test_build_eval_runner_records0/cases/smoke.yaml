@@ -1,0 +1,8 @@
+cases:
+- id: trace_smoke_001
+  category: smoke
+  user_message: Track my order please
+  expected_specialist: orders
+  expected_behavior: answer
+  expected_keywords:
+  - order

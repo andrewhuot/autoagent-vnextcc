@@ -1,0 +1,363 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: AutoAgent
+      - generic [ref=e7]: VNextCC
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - heading "Build" [level=3] [ref=e10]
+        - generic [ref=e11]:
+          - link "Builder" [ref=e12] [cursor=pointer]:
+            - /url: /build
+            - img [ref=e13]
+            - generic [ref=e17]: Builder
+          - link "Intelligence Studio" [ref=e18] [cursor=pointer]:
+            - /url: /intelligence
+            - img [ref=e19]
+            - generic [ref=e31]: Intelligence Studio
+      - generic [ref=e32]:
+        - heading "Operate" [level=3] [ref=e33]
+        - generic [ref=e34]:
+          - link "Dashboard" [ref=e35] [cursor=pointer]:
+            - /url: /dashboard
+            - img [ref=e36]
+            - generic [ref=e41]: Dashboard
+          - link "Demo" [ref=e42] [cursor=pointer]:
+            - /url: /demo
+            - img [ref=e43]
+            - generic [ref=e46]: Demo
+          - link "Eval Runs" [ref=e47] [cursor=pointer]:
+            - /url: /evals
+            - img [ref=e48]
+            - generic [ref=e50]: Eval Runs
+          - link "Conversations" [ref=e51] [cursor=pointer]:
+            - /url: /conversations
+            - img [ref=e52]
+            - generic [ref=e54]: Conversations
+          - link "Loop Monitor" [ref=e55] [cursor=pointer]:
+            - /url: /loop
+            - img [ref=e56]
+            - generic [ref=e61]: Loop Monitor
+          - link "Deploy" [ref=e62] [cursor=pointer]:
+            - /url: /deploy
+            - img [ref=e63]
+            - generic [ref=e68]: Deploy
+          - link "Traces" [ref=e69] [cursor=pointer]:
+            - /url: /traces
+            - img [ref=e70]
+            - generic [ref=e72]: Traces
+          - link "Event Log" [ref=e73] [cursor=pointer]:
+            - /url: /events
+            - img [ref=e74]
+            - generic [ref=e77]: Event Log
+      - generic [ref=e78]:
+        - heading "Improve" [level=3] [ref=e79]
+        - generic [ref=e80]:
+          - link "Optimize" [ref=e81] [cursor=pointer]:
+            - /url: /optimize
+            - img [ref=e82]
+            - generic [ref=e84]: Optimize
+          - link "Live Optimize" [ref=e85] [cursor=pointer]:
+            - /url: /live-optimize
+            - img [ref=e86]
+            - generic [ref=e89]: Live Optimize
+          - link "Opportunities" [ref=e90] [cursor=pointer]:
+            - /url: /opportunities
+            - img [ref=e91]
+            - generic [ref=e93]: Opportunities
+          - link "Changes" [ref=e94] [cursor=pointer]:
+            - /url: /changes
+            - img [ref=e95]
+            - generic [ref=e99]: Changes
+          - link "Experiments" [ref=e100] [cursor=pointer]:
+            - /url: /experiments
+            - img [ref=e101]
+            - generic [ref=e104]: Experiments
+          - link "AutoFix" [ref=e105] [cursor=pointer]:
+            - /url: /autofix
+            - img [ref=e106]
+            - generic [ref=e108]: AutoFix
+      - generic [ref=e109]:
+        - heading "Integrations" [level=3] [ref=e110]
+        - generic [ref=e111]:
+          - link "ADK Import" [ref=e112] [cursor=pointer]:
+            - /url: /adk/import
+            - img [ref=e113]
+            - generic [ref=e116]: ADK Import
+          - link "ADK Deploy" [ref=e117] [cursor=pointer]:
+            - /url: /adk/deploy
+            - img [ref=e118]
+            - generic [ref=e121]: ADK Deploy
+          - link "CX Import" [ref=e122] [cursor=pointer]:
+            - /url: /cx/import
+            - img [ref=e123]
+            - generic [ref=e126]: CX Import
+          - link "CX Deploy" [ref=e127] [cursor=pointer]:
+            - /url: /cx/deploy
+            - img [ref=e128]
+            - generic [ref=e131]: CX Deploy
+      - generic [ref=e132]:
+        - heading "Governance" [level=3] [ref=e133]
+        - generic [ref=e134]:
+          - link "Judge Ops" [ref=e135] [cursor=pointer]:
+            - /url: /judge-ops
+            - img [ref=e136]
+            - generic [ref=e140]: Judge Ops
+          - link "Configs" [ref=e141] [cursor=pointer]:
+            - /url: /configs
+            - img [ref=e142]
+            - generic [ref=e145]: Configs
+          - link "Memory" [ref=e146] [cursor=pointer]:
+            - /url: /memory
+            - img [ref=e147]
+            - generic [ref=e155]: Memory
+          - link "Runbooks" [ref=e156] [cursor=pointer]:
+            - /url: /runbooks
+            - img [ref=e157]
+            - generic [ref=e159]: Runbooks
+          - link "Scorer Studio" [ref=e160] [cursor=pointer]:
+            - /url: /scorer-studio
+            - img [ref=e161]
+            - generic [ref=e164]: Scorer Studio
+          - link "Notifications" [ref=e165] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e166]
+            - generic [ref=e169]: Notifications
+      - generic [ref=e170]:
+        - heading "Analysis" [level=3] [ref=e171]
+        - generic [ref=e172]:
+          - link "Context Workbench" [ref=e173] [cursor=pointer]:
+            - /url: /context
+            - img [ref=e174]
+            - generic [ref=e178]: Context Workbench
+          - link "Skills" [ref=e179] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e180]
+            - generic [ref=e182]: Skills
+          - link "Registry" [ref=e183] [cursor=pointer]:
+            - /url: /registry
+            - img [ref=e184]
+            - generic [ref=e186]: Registry
+          - link "Agent Skills" [ref=e187] [cursor=pointer]:
+            - /url: /agent-skills
+            - img [ref=e188]
+            - generic [ref=e191]: Agent Skills
+          - link "Blame Map" [ref=e192] [cursor=pointer]:
+            - /url: /blame
+            - img [ref=e193]
+            - generic [ref=e196]: Blame Map
+      - generic [ref=e197]:
+        - heading "Policy Optimization" [level=3] [ref=e198]
+        - generic [ref=e199]:
+          - link "Reward Studio" [ref=e200] [cursor=pointer]:
+            - /url: /reward-studio
+            - img [ref=e201]
+            - generic [ref=e204]: Reward Studio
+          - link "Preference Inbox" [ref=e205] [cursor=pointer]:
+            - /url: /preference-inbox
+            - img [ref=e206]
+            - generic [ref=e209]: Preference Inbox
+          - link "Policy Candidates" [ref=e210] [cursor=pointer]:
+            - /url: /policy-candidates
+            - img [ref=e211]
+            - generic [ref=e215]: Policy Candidates
+          - link "Reward Audit" [ref=e216] [cursor=pointer]:
+            - /url: /reward-audit
+            - img [ref=e217]
+            - generic [ref=e220]: Reward Audit
+    - link "Settings" [ref=e222] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e223]
+      - generic [ref=e226]: Settings
+    - generic [ref=e227]: ⌘KCommand palette
+  - generic [ref=e228]:
+    - banner [ref=e229]:
+      - generic [ref=e231]:
+        - heading "Builder" [level=1] [ref=e232]
+        - generic [ref=e235]: Build
+      - button "Search... ⌘K" [ref=e236]:
+        - img [ref=e237]
+        - text: Search...
+        - generic [ref=e240]: ⌘K
+    - main [ref=e241]:
+      - generic [ref=e243]:
+        - generic [ref=e245]:
+          - heading "Builder" [level=2] [ref=e246]
+          - paragraph [ref=e247]: Describe the agent you want to build, refine it in conversation, and watch the config update live.
+        - generic [ref=e248]:
+          - generic [ref=e249]:
+            - generic [ref=e251]:
+              - generic [ref=e252]:
+                - paragraph [ref=e253]: Conversational Builder
+                - heading "Describe the agent you want to build" [level=3] [ref=e254]
+              - generic [ref=e255]:
+                - img [ref=e256]
+                - text: Mock mode
+            - generic [ref=e259]:
+              - generic [ref=e300]:
+                - paragraph [ref=e301]: Builder
+                - paragraph [ref=e302]: Describe the agent you want to build. I will draft the config, update it as you refine the requirements, and keep the preview in sync.
+              - generic [ref=e303]:
+                - paragraph [ref=e304]: You
+                - paragraph [ref=e305]: Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status
+              - generic [ref=e306]:
+                - paragraph [ref=e307]: Builder
+                - paragraph [ref=e308]: "I drafted `Airline Customer Support Agent` with routing for booking change, cancellation, flight status. The preview now includes a base system prompt, default guardrails, and eval criteria. You can ask me to add tools, adjust tone, add policies, or generate evals."
+              - generic [ref=e389]:
+                - paragraph [ref=e390]: You
+                - paragraph [ref=e391]: Generate evals for this
+              - generic [ref=e392]:
+                - paragraph [ref=e393]: Builder
+                - paragraph [ref=e394]: Generated 3 draft evals covering routing, policy compliance, and customer-tone regression checks.
+            - generic [ref=e263]:
+              - generic [ref=e264]:
+                - button "Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status" [ref=e265]
+                - button "Add a tool for checking flight status" [ref=e266]
+                - button "Make it more empathetic" [ref=e267]
+                - button "Add a policy that it should never reveal internal codes" [ref=e268]
+              - generic [ref=e269]:
+                - textbox "Describe the agent you want to build..." [ref=e270]
+                - generic [ref=e271]:
+                  - paragraph [ref=e272]: Ask for a base agent, then refine tools, policies, tone, and evals.
+                  - button "Send" [ref=e273]:
+                    - img [ref=e274]
+                    - text: Send
+          - complementary [ref=e277]:
+            - generic [ref=e278]:
+              - heading "Live Config" [level=3] [ref=e279]
+              - paragraph [ref=e280]: Preview
+              - paragraph [ref=e281]: Airline Customer Support Agent
+              - paragraph [ref=e282]: The preview stays in sync with the conversation and is ready to export at any point.
+            - generic [ref=e283]:
+              - generic [ref=e284]: 0 tools
+              - generic [ref=e285]: 2 policies
+              - generic [ref=e286]: 3 routes
+            - generic [ref=e287]:
+              - generic [ref=e288]:
+                - generic [ref=e309]:
+                  - generic [ref=e310]: Live Config
+                  - generic [ref=e311]: JSON preview
+                - generic [ref=e312]:
+                  - generic [ref=e313]: "{"
+                  - generic [ref=e314]:
+                    - generic [ref=e315]: "\"agent_name\""
+                    - text: ": \"Airline Customer Support Agent\","
+                  - generic [ref=e316]:
+                    - generic [ref=e317]: "\"system_prompt\""
+                    - text: ": \"You are a airline support agent. Help customers with Handle itinerary changes, rebooking requests, and seat updates., Handle cancellations, refund expectations, and waiver eligibility., Handle delay checks, departure changes, and live flight-status questions. Keep responses clear, action-oriented, and grounded in policy.\","
+                  - generic [ref=e318]:
+                    - generic [ref=e319]: "\"tools\""
+                    - text: ": [],"
+                  - generic [ref=e320]:
+                    - generic [ref=e321]: "\"routing_rules\""
+                    - text: ": ["
+                  - generic [ref=e322]: "{"
+                  - generic [ref=e323]:
+                    - generic [ref=e324]: "\"name\""
+                    - text: ": \"booking_changes\","
+                  - generic [ref=e325]:
+                    - generic [ref=e326]: "\"intent\""
+                    - text: ": \"booking_change\","
+                  - generic [ref=e327]:
+                    - generic [ref=e328]: "\"description\""
+                    - text: ": \"Handle itinerary changes, rebooking requests, and seat updates.\""
+                  - generic [ref=e329]: "},"
+                  - generic [ref=e330]: "{"
+                  - generic [ref=e331]:
+                    - generic [ref=e332]: "\"name\""
+                    - text: ": \"cancellations\","
+                  - generic [ref=e333]:
+                    - generic [ref=e334]: "\"intent\""
+                    - text: ": \"cancellation\","
+                  - generic [ref=e335]:
+                    - generic [ref=e336]: "\"description\""
+                    - text: ": \"Handle cancellations, refund expectations, and waiver eligibility.\""
+                  - generic [ref=e337]: "},"
+                  - generic [ref=e338]: "{"
+                  - generic [ref=e339]:
+                    - generic [ref=e340]: "\"name\""
+                    - text: ": \"flight_status\","
+                  - generic [ref=e341]:
+                    - generic [ref=e342]: "\"intent\""
+                    - text: ": \"flight_status\","
+                  - generic [ref=e343]:
+                    - generic [ref=e344]: "\"description\""
+                    - text: ": \"Handle delay checks, departure changes, and live flight-status questions.\""
+                  - generic [ref=e345]: "}"
+                  - generic [ref=e346]: "],"
+                  - generic [ref=e347]:
+                    - generic [ref=e348]: "\"policies\""
+                    - text: ": ["
+                  - generic [ref=e349]: "{"
+                  - generic [ref=e350]:
+                    - generic [ref=e351]: "\"name\""
+                    - text: ": \"verify_customer_context\","
+                  - generic [ref=e352]:
+                    - generic [ref=e353]: "\"description\""
+                    - text: ": \"Verify the traveler and reservation context before making booking changes.\""
+                  - generic [ref=e354]: "},"
+                  - generic [ref=e355]: "{"
+                  - generic [ref=e356]:
+                    - generic [ref=e357]: "\"name\""
+                    - text: ": \"escalate_irregular_operations\","
+                  - generic [ref=e358]:
+                    - generic [ref=e359]: "\"description\""
+                    - text: ": \"Escalate urgent disruption, safety, or compensation exceptions to a human agent.\""
+                  - generic [ref=e360]: "}"
+                  - generic [ref=e361]: "],"
+                  - generic [ref=e362]:
+                    - generic [ref=e363]: "\"eval_criteria\""
+                    - text: ": ["
+                  - generic [ref=e364]: "{"
+                  - generic [ref=e365]:
+                    - generic [ref=e366]: "\"name\""
+                    - text: ": \"correct_routing\","
+                  - generic [ref=e367]:
+                    - generic [ref=e368]: "\"description\""
+                    - text: ": \"Requests should route to the correct workflow based on customer intent.\""
+                  - generic [ref=e369]: "},"
+                  - generic [ref=e370]: "{"
+                  - generic [ref=e371]:
+                    - generic [ref=e372]: "\"name\""
+                    - text: ": \"policy_compliance\","
+                  - generic [ref=e373]:
+                    - generic [ref=e374]: "\"description\""
+                    - text: ": \"The agent should verify account or reservation context before making sensitive changes.\""
+                  - generic [ref=e375]: "},"
+                  - generic [ref=e376]: "{"
+                  - generic [ref=e377]:
+                    - generic [ref=e378]: "\"name\""
+                    - text: ": \"customer_tone\","
+                  - generic [ref=e379]:
+                    - generic [ref=e380]: "\"description\""
+                    - text: ": \"Responses should sound calm, concise, and helpful under stress.\""
+                  - generic [ref=e381]: "}"
+                  - generic [ref=e382]: "],"
+                  - generic [ref=e383]:
+                    - generic [ref=e384]: "\"metadata\""
+                    - text: ": {"
+                  - generic [ref=e385]:
+                    - generic [ref=e386]: "\"source_prompt\""
+                    - text: ": \"Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status\""
+                  - generic [ref=e387]: "}"
+                  - generic [ref=e388]: "}"
+              - generic [ref=e289]:
+                - paragraph [ref=e290]: Eval Readiness
+                - paragraph [ref=e291]: 3 draft evals
+                - generic [ref=e395]:
+                  - generic [ref=e396]:
+                    - paragraph [ref=e397]: booking_change_routing
+                    - paragraph [ref=e398]: Verify booking-change requests route to the correct workflow and preserve traveler context.
+                  - generic [ref=e399]:
+                    - paragraph [ref=e400]: flight_status_tool_use
+                    - paragraph [ref=e401]: Verify live flight-status requests trigger the correct lookup tool when available.
+                  - generic [ref=e402]:
+                    - paragraph [ref=e403]: internal_code_guardrail
+                    - paragraph [ref=e404]: Verify the agent refuses to reveal internal codes or hidden operational notes.
+            - generic [ref=e292]:
+              - button "Download Config" [ref=e293]:
+                - img [ref=e294]
+                - text: Download Config
+              - button "Run Eval" [ref=e297]:
+                - img [ref=e298]
+                - text: Run Eval

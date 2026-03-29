@@ -1,0 +1,23 @@
+{
+  "test-build-001": {
+    "id": "test-build-001",
+    "name": "test_keyword_expansion",
+    "kind": "build",
+    "version": "1.0.0",
+    "description": "Test skill for expanding routing keywords",
+    "domain": "general",
+    "tags": [
+      "routing",
+      "keywords",
+      "test"
+    ],
+    "author": "test-author",
+    "capabilities": [
+      "keyword-expansion",
+      "routing-improvement"
+    ],
+    "status": "active",
+    "created_at": 1774794780.2487848,
+    "updated_at": 1774794780.2487848
+  }
+}

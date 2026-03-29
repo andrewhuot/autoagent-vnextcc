@@ -1,0 +1,8 @@
+optimization:
+  autonomy: semi-auto
+  budget_daily: 20.0
+  budget_per_cycle: 2.0
+  guardrails:
+  - No safety regressions
+  mode: advanced
+  objective: Maximize task success

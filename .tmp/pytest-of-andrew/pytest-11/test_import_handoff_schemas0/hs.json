@@ -1,0 +1,1 @@
+{"handoff_schemas": [{"name": "s2b", "from_agent": "support", "to_agent": "billing", "required_fields": ["goal"]}]}

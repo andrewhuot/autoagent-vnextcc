@@ -1,0 +1,344 @@
+- generic [ref=e3]:
+  - complementary [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]: AutoAgent
+      - generic [ref=e7]: VNextCC
+    - navigation [ref=e8]:
+      - generic [ref=e9]:
+        - heading "Build" [level=3] [ref=e10]
+        - generic [ref=e11]:
+          - link "Builder Workspace" [ref=e12] [cursor=pointer]:
+            - /url: /builder
+            - img [ref=e13]
+            - generic [ref=e17]: Builder Workspace
+          - link "Builder Demo" [ref=e18] [cursor=pointer]:
+            - /url: /builder/demo
+            - img [ref=e19]
+            - generic [ref=e22]: Builder Demo
+      - generic [ref=e23]:
+        - heading "Operate" [level=3] [ref=e24]
+        - generic [ref=e25]:
+          - link "Dashboard" [ref=e26] [cursor=pointer]:
+            - /url: /dashboard
+            - img [ref=e27]
+            - generic [ref=e32]: Dashboard
+          - link "Demo" [ref=e33] [cursor=pointer]:
+            - /url: /demo
+            - img [ref=e34]
+            - generic [ref=e37]: Demo
+          - link "Assistant Chat" [ref=e38] [cursor=pointer]:
+            - /url: /assistant
+            - img [ref=e39]
+            - generic [ref=e42]: Assistant Chat
+          - link "Eval Runs" [ref=e43] [cursor=pointer]:
+            - /url: /evals
+            - img [ref=e44]
+            - generic [ref=e46]: Eval Runs
+          - link "Conversations" [ref=e47] [cursor=pointer]:
+            - /url: /conversations
+            - img [ref=e48]
+            - generic [ref=e50]: Conversations
+          - link "Loop Monitor" [ref=e51] [cursor=pointer]:
+            - /url: /loop
+            - img [ref=e52]
+            - generic [ref=e57]: Loop Monitor
+          - link "Deploy" [ref=e58] [cursor=pointer]:
+            - /url: /deploy
+            - img [ref=e59]
+            - generic [ref=e64]: Deploy
+          - link "Traces" [ref=e65] [cursor=pointer]:
+            - /url: /traces
+            - img [ref=e66]
+            - generic [ref=e68]: Traces
+          - link "Event Log" [ref=e69] [cursor=pointer]:
+            - /url: /events
+            - img [ref=e70]
+            - generic [ref=e73]: Event Log
+      - generic [ref=e74]:
+        - heading "Improve" [level=3] [ref=e75]
+        - generic [ref=e76]:
+          - link "Optimize" [ref=e77] [cursor=pointer]:
+            - /url: /optimize
+            - img [ref=e78]
+            - generic [ref=e80]: Optimize
+          - link "Live Optimize" [ref=e81] [cursor=pointer]:
+            - /url: /live-optimize
+            - img [ref=e82]
+            - generic [ref=e85]: Live Optimize
+          - link "Agent Studio Draft" [ref=e86] [cursor=pointer]:
+            - /url: /agent-studio
+            - img [ref=e87]
+            - generic [ref=e90]: Agent Studio Draft
+          - link "Opportunities" [ref=e91] [cursor=pointer]:
+            - /url: /opportunities
+            - img [ref=e92]
+            - generic [ref=e94]: Opportunities
+          - link "Changes" [ref=e95] [cursor=pointer]:
+            - /url: /changes
+            - img [ref=e96]
+            - generic [ref=e100]: Changes
+          - link "Experiments" [ref=e101] [cursor=pointer]:
+            - /url: /experiments
+            - img [ref=e102]
+            - generic [ref=e105]: Experiments
+          - link "AutoFix" [ref=e106] [cursor=pointer]:
+            - /url: /autofix
+            - img [ref=e107]
+            - generic [ref=e109]: AutoFix
+      - generic [ref=e110]:
+        - heading "Integrations" [level=3] [ref=e111]
+        - generic [ref=e112]:
+          - link "ADK Import" [ref=e113] [cursor=pointer]:
+            - /url: /adk/import
+            - img [ref=e114]
+            - generic [ref=e117]: ADK Import
+          - link "ADK Deploy" [ref=e118] [cursor=pointer]:
+            - /url: /adk/deploy
+            - img [ref=e119]
+            - generic [ref=e122]: ADK Deploy
+          - link "CX Import" [ref=e123] [cursor=pointer]:
+            - /url: /cx/import
+            - img [ref=e124]
+            - generic [ref=e127]: CX Import
+          - link "CX Deploy" [ref=e128] [cursor=pointer]:
+            - /url: /cx/deploy
+            - img [ref=e129]
+            - generic [ref=e132]: CX Deploy
+      - generic [ref=e133]:
+        - heading "Governance" [level=3] [ref=e134]
+        - generic [ref=e135]:
+          - link "Judge Ops" [ref=e136] [cursor=pointer]:
+            - /url: /judge-ops
+            - img [ref=e137]
+            - generic [ref=e141]: Judge Ops
+          - link "Configs" [ref=e142] [cursor=pointer]:
+            - /url: /configs
+            - img [ref=e143]
+            - generic [ref=e146]: Configs
+          - link "Memory" [ref=e147] [cursor=pointer]:
+            - /url: /memory
+            - img [ref=e148]
+            - generic [ref=e156]: Memory
+          - link "Runbooks" [ref=e157] [cursor=pointer]:
+            - /url: /runbooks
+            - img [ref=e158]
+            - generic [ref=e160]: Runbooks
+          - link "Scorer Studio" [ref=e161] [cursor=pointer]:
+            - /url: /scorer-studio
+            - img [ref=e162]
+            - generic [ref=e165]: Scorer Studio
+          - link "Notifications" [ref=e166] [cursor=pointer]:
+            - /url: /notifications
+            - img [ref=e167]
+            - generic [ref=e170]: Notifications
+      - generic [ref=e171]:
+        - heading "Analysis" [level=3] [ref=e172]
+        - generic [ref=e173]:
+          - link "Context Workbench" [ref=e174] [cursor=pointer]:
+            - /url: /context
+            - img [ref=e175]
+            - generic [ref=e179]: Context Workbench
+          - link "Build Agent" [ref=e180] [cursor=pointer]:
+            - /url: /intelligence
+            - img [ref=e181]
+            - generic [ref=e193]: Build Agent
+          - link "Skills" [ref=e194] [cursor=pointer]:
+            - /url: /skills
+            - img [ref=e195]
+            - generic [ref=e197]: Skills
+          - link "Registry" [ref=e198] [cursor=pointer]:
+            - /url: /registry
+            - img [ref=e199]
+            - generic [ref=e201]: Registry
+          - link "Agent Skills" [ref=e202] [cursor=pointer]:
+            - /url: /agent-skills
+            - img [ref=e203]
+            - generic [ref=e206]: Agent Skills
+          - link "Blame Map" [ref=e207] [cursor=pointer]:
+            - /url: /blame
+            - img [ref=e208]
+            - generic [ref=e211]: Blame Map
+      - generic [ref=e212]:
+        - heading "Policy Optimization" [level=3] [ref=e213]
+        - generic [ref=e214]:
+          - link "Reward Studio" [ref=e215] [cursor=pointer]:
+            - /url: /reward-studio
+            - img [ref=e216]
+            - generic [ref=e219]: Reward Studio
+          - link "Preference Inbox" [ref=e220] [cursor=pointer]:
+            - /url: /preference-inbox
+            - img [ref=e221]
+            - generic [ref=e224]: Preference Inbox
+          - link "Policy Candidates" [ref=e225] [cursor=pointer]:
+            - /url: /policy-candidates
+            - img [ref=e226]
+            - generic [ref=e230]: Policy Candidates
+          - link "Reward Audit" [ref=e231] [cursor=pointer]:
+            - /url: /reward-audit
+            - img [ref=e232]
+            - generic [ref=e235]: Reward Audit
+    - link "Settings" [ref=e237] [cursor=pointer]:
+      - /url: /settings
+      - img [ref=e238]
+      - generic [ref=e241]: Settings
+    - generic [ref=e242]: ⌘KCommand palette
+  - generic [ref=e243]:
+    - banner [ref=e244]:
+      - generic [ref=e246]:
+        - heading "Agent Studio" [level=1] [ref=e247]
+        - generic [ref=e248]:
+          - generic [ref=e249]:
+            - generic [ref=e250]: Improve
+            - generic [ref=e251]: /
+          - generic [ref=e253]: Agent Studio
+      - button "Search... ⌘K" [ref=e254]:
+        - img [ref=e255]
+        - text: Search...
+        - generic [ref=e258]: ⌘K
+    - main [ref=e259]:
+      - generic [ref=e261]:
+        - generic [ref=e263]:
+          - heading "Agent Studio" [level=2] [ref=e264]
+          - paragraph [ref=e265]: Update an agent in natural language and watch the draft mutate live.
+        - generic [ref=e266]:
+          - text: Agent Studio is a rapid draft sandbox. For the full production journey (build to eval to optimize to deploy), use
+          - button "Intelligence Studio" [ref=e267]
+          - text: .
+        - generic [ref=e268]:
+          - generic [ref=e269]:
+            - paragraph [ref=e270]: Quality score
+            - generic [ref=e271]:
+              - generic [ref=e272]:
+                - paragraph [ref=e273]: 82%
+                - paragraph [ref=e274]: Current 76%
+              - generic [ref=e275]:
+                - paragraph [ref=e276]: Drafted from
+                - paragraph [ref=e277]: natural language
+          - generic [ref=e278]:
+            - paragraph [ref=e279]: Queued changes
+            - generic [ref=e280]:
+              - generic [ref=e281]:
+                - paragraph [ref=e282]: "3"
+                - paragraph [ref=e283]: Current 0
+              - generic [ref=e284]:
+                - paragraph [ref=e285]: Drafted from
+                - paragraph [ref=e286]: natural language
+          - generic [ref=e287]:
+            - paragraph [ref=e288]: Regression watch
+            - generic [ref=e289]:
+              - generic [ref=e290]:
+                - paragraph [ref=e291]: "4"
+                - paragraph [ref=e292]: Current 2
+              - generic [ref=e293]:
+                - paragraph [ref=e294]: Drafted from
+                - paragraph [ref=e295]: natural language
+        - generic [ref=e296]:
+          - generic [ref=e297]:
+            - generic [ref=e298]:
+              - generic [ref=e299]:
+                - paragraph [ref=e300]: Change thread
+                - heading "Queued changes" [level=2] [ref=e301]
+              - generic [ref=e302]: 3 queued
+            - generic [ref=e303]:
+              - generic [ref=e304]:
+                - generic [ref=e305]:
+                  - generic [ref=e306]:
+                    - paragraph [ref=e307]: instruction
+                    - heading "Invoice-first response guardrail" [level=3] [ref=e308]
+                  - generic [ref=e309]: high
+                - paragraph [ref=e310]: Require the agent to ground billing answers in fresh invoice or order context before replying.
+              - generic [ref=e311]:
+                - generic [ref=e312]:
+                  - generic [ref=e313]:
+                    - paragraph [ref=e314]: policy
+                    - heading "VIP escalation fast lane" [level=3] [ref=e315]
+                  - generic [ref=e316]: high
+                - paragraph [ref=e317]: Escalate frustrated or high-value cases earlier and avoid forcing a repeated self-serve loop.
+              - generic [ref=e318]:
+                - generic [ref=e319]:
+                  - generic [ref=e320]:
+                    - paragraph [ref=e321]: tooling
+                    - heading "Tool-backed resolution check" [level=3] [ref=e322]
+                  - generic [ref=e323]: medium
+                - paragraph [ref=e324]: Add a required system lookup before the agent approves a refund or shipping promise.
+            - generic [ref=e325]:
+              - paragraph [ref=e326]: Review checklist
+              - generic [ref=e327]:
+                - generic [ref=e328]:
+                  - img [ref=e329]
+                  - generic [ref=e331]: Verify the diff keeps the original tone and domain constraints intact.
+                - generic [ref=e332]:
+                  - img [ref=e333]
+                  - generic [ref=e335]: Run a simulation that covers the highest-volume customer path.
+                - generic [ref=e336]:
+                  - img [ref=e337]
+                  - generic [ref=e339]: Replay a VIP refund conversation through the new path.
+                - generic [ref=e340]:
+                  - img [ref=e341]
+                  - generic [ref=e343]: Confirm the agent verifies invoice context before issuing an answer.
+          - generic [ref=e344]:
+            - generic [ref=e345]:
+              - generic [ref=e346]:
+                - img [ref=e347]
+                - generic [ref=e349]: Conversation
+              - generic [ref=e350]: Translated a plain-language request into 3 queued updates for Billing Agent.
+            - generic [ref=e351]:
+              - generic [ref=e352]:
+                - generic [ref=e353]:
+                  - paragraph [ref=e354]: AutoAgent
+                  - paragraph [ref=e355]: Describe the change in plain language. I'll translate it into prompt edits, routing updates, and rollout checks.
+                - generic [ref=e356]:
+                  - paragraph [ref=e357]: Change request
+                  - paragraph [ref=e358]: Make BillingAgent verify invoices before answering and escalate VIP refund requests sooner.
+                - generic [ref=e359]:
+                  - paragraph [ref=e360]: AutoAgent
+                  - paragraph [ref=e361]: Queued 3 changes for Billing Agent. I converted the request into prompt, policy, and rollout checks so the draft is ready for simulation.
+              - generic [ref=e362]:
+                - generic [ref=e363]:
+                  - button "Make BillingAgent verify invoices before answering and escalate VIP refund requests sooner." [ref=e364]
+                  - button "Route shipping delays straight to RefundAgent when the order is already lost in transit." [ref=e365]
+                  - button "Tighten orchestrator handoffs so specialists inherit the customer's last two actions." [ref=e366]
+                  - button "Add safety guardrails to prevent unauthorized PII disclosure." [ref=e367]
+                - generic [ref=e368]: Describe the agent update
+                - generic [ref=e369]:
+                  - textbox "Describe the agent update" [ref=e370]: Make BillingAgent verify invoices before answering and escalate VIP refund requests sooner.
+                  - generic [ref=e371]:
+                    - generic [ref=e372]: Natural language in, scoped diff out.
+                    - button "Queue update" [ref=e373]
+          - generic [ref=e374]:
+            - generic [ref=e375]:
+              - generic [ref=e376]:
+                - generic [ref=e377]:
+                  - paragraph [ref=e378]: Live draft
+                  - heading "Draft Billing Agent update" [level=2] [ref=e379]
+                - generic [ref=e380]: ready
+              - paragraph [ref=e381]: Translated a plain-language request into 3 queued updates for Billing Agent.
+            - generic [ref=e383]:
+              - img [ref=e384]
+              - paragraph [ref=e388]: studio/billing-agent-3-change-set
+            - generic [ref=e389]:
+              - generic [ref=e390]:
+                - paragraph [ref=e391]: Current
+                - paragraph [ref=e392]: Handle billing inquiries and respond to customer balance questions.
+              - generic [ref=e393]:
+                - paragraph [ref=e394]: Drafted
+                - paragraph [ref=e395]: Before answering any balance, payment, or shipping question, verify the invoice or order record and cite the finding in the reply. Handle billing inquiries and respond to customer balance questions.
+            - generic [ref=e396]:
+              - button "Simulate" [ref=e397]:
+                - img [ref=e398]
+                - text: Simulate
+              - button "Merge draft" [ref=e400]:
+                - img [ref=e401]
+                - text: Merge draft
+            - generic [ref=e403]:
+              - paragraph [ref=e404]: All changes (3)
+              - generic [ref=e405]:
+                - generic [ref=e407]:
+                  - heading "Invoice-first response guardrail" [level=3] [ref=e408]
+                  - generic [ref=e409]: instruction
+                - generic [ref=e411]:
+                  - heading "VIP escalation fast lane" [level=3] [ref=e412]
+                  - generic [ref=e413]: policy
+                - generic [ref=e415]:
+                  - heading "Tool-backed resolution check" [level=3] [ref=e416]
+                  - generic [ref=e417]: tooling

@@ -1,0 +1,11 @@
+{
+  "immutable_surfaces": [
+    "auth.login_\ud83d\udd10"
+  ],
+  "last_injected_mutation": "prompt/\u00e9moji/v1.0",
+  "paused": false,
+  "rejected_experiments": [
+    "exp-\u6d4b\u8bd5-001"
+  ],
+  "updated_at": 1774794601.754672
+}

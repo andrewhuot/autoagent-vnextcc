@@ -1,0 +1,22 @@
+{
+  "members": [
+    {
+      "user_id": "admin",
+      "name": "Admin",
+      "role": "admin",
+      "email": null
+    },
+    {
+      "user_id": "reviewer",
+      "name": "Reviewer",
+      "role": "reviewer",
+      "email": null
+    },
+    {
+      "user_id": "viewer",
+      "name": "Viewer",
+      "role": "viewer",
+      "email": null
+    }
+  ]
+}

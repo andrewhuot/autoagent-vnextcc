@@ -1,0 +1,37 @@
+- main [ref=e5]:
+  - generic [ref=e7]:
+    - generic [ref=e9]:
+      - heading "AutoAgent Assistant" [level=1] [ref=e10]
+      - paragraph [ref=e11]: Preview conversational workflows for building, optimizing, and debugging AI agents.
+      - generic [ref=e13]:
+        - img [ref=e14]
+        - generic [ref=e16]:
+          - paragraph [ref=e17]: Preview mode
+          - paragraph [ref=e18]: Assistant responses and actions are simulated in this build. Use the Builder Workspace, Intelligence Studio, and Deploy pages for live workflows.
+      - generic [ref=e19]:
+        - text: "Recommended builder:"
+        - button "Intelligence Studio" [ref=e20]
+    - generic [ref=e24]:
+      - generic [ref=e26]: 🤖
+      - heading "Welcome!" [level=2] [ref=e27]
+      - paragraph [ref=e28]: I can help you build, optimize, and debug AI agents. What would you like to do?
+      - generic [ref=e29]:
+        - button "Build me a new agent" [ref=e30]:
+          - img [ref=e31]
+          - text: Build me a new agent
+        - button "Optimize my agent" [ref=e35]:
+          - img [ref=e36]
+          - text: Optimize my agent
+        - button "Explore conversations" [ref=e38]:
+          - img [ref=e39]
+          - text: Explore conversations
+        - button "Why is my agent failing?" [ref=e42]
+        - button "Show me recent changes" [ref=e43]
+    - generic [ref=e44]:
+      - generic [ref=e45]:
+        - button "Upload files" [ref=e46]:
+          - img [ref=e47]
+        - textbox "Type a message... (Shift+Enter for new line)" [ref=e49]
+        - button "Send message" [disabled] [ref=e50]:
+          - img [ref=e51]
+      - generic [ref=e55]: Press Enter to send, Shift+Enter for new line

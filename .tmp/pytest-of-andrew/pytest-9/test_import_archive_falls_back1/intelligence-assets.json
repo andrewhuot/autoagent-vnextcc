@@ -1,0 +1,22 @@
+{
+  "94a0bd91-5": {
+    "archive_name": "support.zip",
+    "asset_id": "94a0bd91-5",
+    "created_at": 1774794655.473228,
+    "entries": [
+      {
+        "answer": "I can help with that.",
+        "intent": "refund",
+        "question": "Can I get a refund for this order?",
+        "type": "faq"
+      },
+      {
+        "example": "Can I get a refund for this order?",
+        "intent": "refund",
+        "response": "I can help with that.",
+        "type": "conversation_evidence"
+      }
+    ],
+    "entry_count": 2
+  }
+}

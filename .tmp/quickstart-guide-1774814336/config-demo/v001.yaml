@@ -1,0 +1,28 @@
+model: gemini-2.0-flash
+routing:
+  rules:
+    - specialist: support
+      keywords: [help, issue, refund]
+      patterns: ["can you help", "refund request"]
+    - specialist: orders
+      keywords: [order, shipping, tracking]
+      patterns: ["where is my", "track my"]
+prompts:
+  root: >-
+    You are AutoAgent, a helpful customer support assistant. Route clearly and
+    ask a clarifying question when intent is ambiguous.
+  support: >-
+    Help customers with support issues, return policy, and refunds.
+  orders: >-
+    Help customers with order status, shipping, and cancellations.
+tools:
+  faq:
+    enabled: true
+    timeout_ms: 3000
+  orders_db:
+    enabled: true
+    timeout_ms: 5000
+thresholds:
+  confidence_threshold: 0.6
+  max_turns: 20
+  max_latency_ms: 10000

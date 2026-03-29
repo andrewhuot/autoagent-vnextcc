@@ -1,0 +1,91 @@
+cases:
+  - id: edge_001
+    category: edge_case
+    user_message: "I need help with my order and can you also recommend something new?"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+
+  - id: edge_002
+    category: edge_case
+    user_message: ""
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []
+
+  - id: edge_003
+    category: edge_case
+    user_message: "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Can you help with my order?"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+
+  - id: edge_004
+    category: edge_case
+    user_message: "prdouct reccommend plz"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+
+  - id: edge_005
+    category: edge_case
+    user_message: "Donde esta mi pedido?"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []
+
+  - id: edge_006
+    category: edge_case
+    user_message: "12345"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []
+
+  - id: edge_007
+    category: edge_case
+    user_message: "!@#$%^&*()"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []
+
+  - id: edge_008
+    category: edge_case
+    user_message: "order order order order order"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+
+  - id: edge_009
+    category: edge_case
+    user_message: "I want to order food and also track my delivery status and get recommendations for best sellers"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+
+  - id: edge_010
+    category: edge_case
+    user_message: "       "
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []
+
+  - id: edge_011
+    category: edge_case
+    user_message: "Can you help? I'm not sure what I need. Maybe something for the kitchen or maybe check my order status?"
+    expected_specialist: orders
+    expected_behavior: answer
+    expected_keywords: ["order"]
+
+  - id: edge_012
+    category: edge_case
+    user_message: "RECOMMEND ME SOMETHING NOW!!!!"
+    expected_specialist: recommendations
+    expected_behavior: answer
+    expected_keywords: ["recommend"]
+
+  - id: edge_013
+    category: edge_case
+    user_message: "a"
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords: []

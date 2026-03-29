@@ -1,0 +1,12 @@
+from google.adk.agents import Agent
+
+{{ agent_name }} = Agent(
+    model="{{ model }}",
+    name="{{ agent_name }}",
+    instruction="""{{ instruction }}""",
+    tools=[{{ tools | join(', ') }}],
+    generate_config={
+        "temperature": {{ temperature }},
+        "max_output_tokens": {{ max_tokens }},
+    },
+)

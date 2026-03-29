@@ -1,0 +1,10 @@
+{
+  "immutable_surfaces": [],
+  "last_injected_mutation": null,
+  "paused": false,
+  "rejected_experiments": [
+    "exp-001",
+    "exp-002"
+  ],
+  "updated_at": 1774794601.652355
+}

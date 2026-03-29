@@ -1,0 +1,10 @@
+{
+  "immutable_surfaces": [
+    "auth.login",
+    "billing.charge"
+  ],
+  "last_injected_mutation": null,
+  "paused": false,
+  "rejected_experiments": [],
+  "updated_at": 1774794601.648535
+}

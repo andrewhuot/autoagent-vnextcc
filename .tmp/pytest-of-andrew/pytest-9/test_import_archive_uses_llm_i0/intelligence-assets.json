@@ -1,0 +1,28 @@
+{
+  "44063428-7": {
+    "archive_name": "support.zip",
+    "asset_id": "44063428-7",
+    "created_at": 1774794655.470836,
+    "entries": [
+      {
+        "answer": "Let me check that for you.",
+        "intent": "order_tracking",
+        "question": "Where is my package right now?",
+        "type": "faq"
+      },
+      {
+        "answer": "I can help with that refund.",
+        "intent": "refund",
+        "question": "I want my money back for this order.",
+        "type": "faq"
+      },
+      {
+        "example": "Where is my package right now?",
+        "intent": "order_tracking",
+        "response": "Let me check that for you.",
+        "type": "conversation_evidence"
+      }
+    ],
+    "entry_count": 3
+  }
+}

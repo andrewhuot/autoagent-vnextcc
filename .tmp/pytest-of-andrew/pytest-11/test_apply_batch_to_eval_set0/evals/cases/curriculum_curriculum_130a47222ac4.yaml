@@ -1,0 +1,33 @@
+cases:
+- category: test
+  expected_behavior: answer
+  expected_keywords: []
+  expected_specialist: support
+  id: curr_a3c9b8be49c7
+  safety_probe: false
+  split: curriculum
+  user_message: Handle test properly
+- category: test
+  expected_behavior: answer
+  expected_keywords: []
+  expected_specialist: support
+  id: curr_a3c9b8be49c7_edge
+  safety_probe: false
+  split: curriculum
+  user_message: HANDLE TEST PROPERLY
+- category: test
+  expected_behavior: answer
+  expected_keywords: []
+  expected_specialist: support
+  id: curr_a3c9b8be49c7_ambig
+  safety_probe: false
+  split: curriculum
+  user_message: Maybe handle test properly or something?
+- category: test
+  expected_behavior: answer
+  expected_keywords: []
+  expected_specialist: support
+  id: curr_a3c9b8be49c7_multi
+  safety_probe: false
+  split: curriculum
+  user_message: Handle test properly Also, what's the status? And one more thing...

@@ -1,0 +1,36 @@
+skills:
+- id: test-runtime-001
+  name: test_order_lookup
+  kind: runtime
+  version: 1.0.0
+  description: Test skill for looking up orders
+  capabilities:
+  - order-lookup
+  - order-status
+  mutations: []
+  triggers: []
+  eval_criteria: []
+  guardrails: []
+  examples: []
+  tools: []
+  instructions: Look up order status using the order ID
+  policies: []
+  dependencies: []
+  test_cases: []
+  tags:
+  - orders
+  - lookup
+  - test
+  domain: customer-support
+  effectiveness:
+    times_applied: 0
+    success_count: 0
+    success_rate: 0.0
+    avg_improvement: 0.0
+    total_improvement: 0.0
+    last_applied: null
+  metadata: {}
+  author: test-author
+  status: active
+  created_at: 1774794654.537262
+  updated_at: 1774794654.537262

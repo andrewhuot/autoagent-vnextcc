@@ -1,0 +1,1 @@
+{"id": "case-1", "split": "test", "user_message": "Where is order 123?", "expected_specialist": "orders", "expected_behavior": "answer", "expected_keywords": ["order"]}

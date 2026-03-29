@@ -1,0 +1,9 @@
+{
+  "immutable_surfaces": [],
+  "last_injected_mutation": "api_payload",
+  "paused": true,
+  "rejected_experiments": [
+    "exp_123"
+  ],
+  "updated_at": 1774794568.6188989
+}

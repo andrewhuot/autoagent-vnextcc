@@ -1,0 +1,76 @@
+skills:
+- name: keyword_expansion
+  version: 1
+  description: Expand routing keywords based on failure analysis
+  category: routing
+  platform: universal
+  target_surfaces:
+  - routing.rules.*.keywords
+  mutations:
+  - name: add_missing_keywords
+    mutation_type: keyword_expansion
+    target_surface: routing.rules.{agent}.keywords
+    description: Add semantically related keywords to reduce routing misses
+    template: Analyze misrouted conversations and identify keywords that should route
+      to {agent}
+    parameters:
+      max_keywords_to_add: 10
+      require_semantic_similarity: true
+  examples:
+  - name: billing_keyword_fix
+    surface: routing.rules[billing_agent].keywords
+    before:
+    - billing
+    - account
+    - subscription
+    after:
+    - billing
+    - account
+    - subscription
+    - invoice
+    - charge
+    - refund
+    - payment
+    - receipt
+    - credit
+    improvement: 0.12
+    context: 40% of billing queries were misrouted because keywords missed common
+      billing terms
+  guardrails:
+  - Never remove existing working keywords
+  - Keep total keywords under 30 per agent to avoid false positives
+  - Verify new keywords don't overlap with other agents' keywords
+  eval_criteria:
+  - metric: routing_accuracy
+    target: 0.85
+    operator: gt
+    weight: 1.0
+  triggers:
+  - failure_family: routing_error
+    metric_name: routing_accuracy
+    threshold: 0.85
+    operator: lt
+    blame_pattern: null
+  author: autoagent-builtin
+  tags:
+  - routing
+  - keywords
+  - core
+  created_at: 1774794780.0264919
+  proven_improvement: null
+  times_applied: 0
+  success_rate: 0.0
+  status: active
+  kind: runtime
+  dependencies: []
+  allowed_tools: []
+  supported_frameworks: []
+  required_approvals: []
+  eval_contract: {}
+  rollout_policy: gradual
+  provenance: ''
+  trust_level: unverified
+  instructions: ''
+  references: ''
+  runtime_effectiveness: 0.0
+  buildtime_effectiveness: 0.0

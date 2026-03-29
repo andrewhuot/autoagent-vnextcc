@@ -1,0 +1,10 @@
+{
+  "members": [
+    {
+      "user_id": "user1",
+      "name": "Alice",
+      "role": "reviewer",
+      "email": "alice@example.com"
+    }
+  ]
+}

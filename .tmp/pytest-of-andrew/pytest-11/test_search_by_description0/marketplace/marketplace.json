@@ -1,0 +1,23 @@
+{
+  "test-runtime-001": {
+    "id": "test-runtime-001",
+    "name": "test_order_lookup",
+    "kind": "runtime",
+    "version": "1.0.0",
+    "description": "Test skill for looking up orders",
+    "domain": "customer-support",
+    "tags": [
+      "orders",
+      "lookup",
+      "test"
+    ],
+    "author": "test-author",
+    "capabilities": [
+      "order-lookup",
+      "order-status"
+    ],
+    "status": "active",
+    "created_at": 1774794780.2506518,
+    "updated_at": 1774794780.2506518
+  }
+}

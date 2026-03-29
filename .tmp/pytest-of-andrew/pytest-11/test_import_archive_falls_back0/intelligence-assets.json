@@ -1,0 +1,22 @@
+{
+  "e2ccf441-b": {
+    "archive_name": "support.zip",
+    "asset_id": "e2ccf441-b",
+    "created_at": 1774794781.19699,
+    "entries": [
+      {
+        "answer": "I can do that after verification.",
+        "intent": "cancellation",
+        "question": "Please cancel my order.",
+        "type": "faq"
+      },
+      {
+        "example": "Please cancel my order.",
+        "intent": "cancellation",
+        "response": "I can do that after verification.",
+        "type": "conversation_evidence"
+      }
+    ],
+    "entry_count": 2
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "652d8230-6": {
+    "archive_name": "support.zip",
+    "asset_id": "652d8230-6",
+    "created_at": 1774794655.47199,
+    "entries": [
+      {
+        "answer": "I can do that after verification.",
+        "intent": "cancellation",
+        "question": "Please cancel my order.",
+        "type": "faq"
+      },
+      {
+        "example": "Please cancel my order.",
+        "intent": "cancellation",
+        "response": "I can do that after verification.",
+        "type": "conversation_evidence"
+      }
+    ],
+    "entry_count": 2
+  }
+}

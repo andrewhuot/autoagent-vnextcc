@@ -1,0 +1,14 @@
+displayName: {{ playbook_name }}
+goal: {{ goal }}
+steps:
+  {% for step in steps %}
+  - text: {{ step.text }}
+    {% if step.tool %}
+    tool: {{ step.tool }}
+    {% endif %}
+  {% endfor %}
+examples:
+  {% for example in examples %}
+  - userInput: {{ example.user_input }}
+    agentOutput: {{ example.agent_output }}
+  {% endfor %}

@@ -1,0 +1,1 @@
+{"skills": [{"name": "s1", "instructions": "do"}], "policies": [{"name": "p1", "rules": ["r"]}], "tool_contracts": [{"tool_name": "t1"}], "handoff_schemas": [{"name": "h1", "from_agent": "a", "to_agent": "b", "required_fields": []}]}
