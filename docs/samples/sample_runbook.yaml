@@ -1,0 +1,16 @@
+description: Improve refund handling and support routing in one repeatable bundle.
+tags:
+  - refunds
+  - routing
+skills:
+  - returns_handling
+policies:
+  - support_safety_rules
+tool_contracts:
+  - order_lookup
+triggers:
+  - failure_family: routing_error
+    root_cause: refund_misroute
+surfaces:
+  - prompts.root
+  - routing.rules

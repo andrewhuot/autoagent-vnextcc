@@ -223,6 +223,53 @@ class TestSkillTest:
         assert "not found" in result.output
 
 
+class TestSkillPortableFormat:
+    """Tests for SKILL.md import/export commands."""
+
+    def test_export_md_writes_portable_skill_file(self, runner, populated_db, tmp_path):
+        """Exporting a build skill should write a SKILL.md-compatible file to disk."""
+        output_path = tmp_path / "portable" / "routing.SKILL.md"
+
+        result = runner.invoke(
+            cli,
+            ["skill", "export-md", "test_skill_1", "--db", populated_db, "--output", str(output_path)],
+        )
+
+        assert result.exit_code == 0
+        assert output_path.exists()
+        content = output_path.read_text(encoding="utf-8")
+        assert "name: Test Skill" in content
+        assert "kind: build" in content
+        assert "## Mutations" in content
+
+    def test_import_md_registers_skill_in_target_database(self, runner, populated_db, tmp_path):
+        """Importing a SKILL.md file should add the build skill to the requested DB."""
+        exported_path = tmp_path / "portable" / "routing.SKILL.md"
+        import_db = tmp_path / "imported.db"
+
+        export_result = runner.invoke(
+            cli,
+            ["skill", "export-md", "test_skill_1", "--db", populated_db, "--output", str(exported_path)],
+        )
+        assert export_result.exit_code == 0
+
+        import_result = runner.invoke(
+            cli,
+            ["skill", "import-md", str(exported_path), "--db", str(import_db)],
+        )
+
+        assert import_result.exit_code == 0
+        assert "Imported skill: Test Skill" in import_result.output
+
+        imported_store = SkillStore(str(import_db))
+        try:
+            imported_skill = imported_store.get_by_name("Test Skill")
+            assert imported_skill is not None
+            assert imported_skill.kind == SkillKind.BUILD
+        finally:
+            imported_store.close()
+
+
 class TestSkillSearch:
     """Tests for 'autoagent skill search' command."""
 

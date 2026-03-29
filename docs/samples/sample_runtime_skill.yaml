@@ -1,0 +1,42 @@
+id: refund-policy-check
+name: refund_policy_check
+kind: runtime
+version: "1.0.0"
+description: Validate refund eligibility before offering a refund workflow.
+capabilities:
+  - validate refund window
+  - explain refund policy clearly
+tools:
+  - name: refund_policy_lookup
+    description: Look up return and refund eligibility for an order.
+    parameters:
+      order_id: string
+    returns:
+      eligible: boolean
+      days_remaining: integer
+    sandbox_policy: read_only
+instructions: >-
+  Confirm the order identifier, check refund eligibility, and explain the next
+  step clearly. If the request is out of policy, explain why and offer the best
+  supported alternative.
+policies:
+  - name: no_policy_override
+    description: Do not promise an exception that the system cannot enforce.
+    rule_type: deny
+    condition: refund_request_out_of_policy
+    action: explain_policy_and_offer_alternative
+    severity: high
+test_cases:
+  - name: eligible_refund
+    description: The order is still inside the refund window.
+    input:
+      order_id: A1001
+      days_since_delivery: 3
+    expected_behavior: explain eligibility and next steps
+    assertions:
+      - confirms eligibility
+      - explains next step
+tags:
+  - refunds
+  - policy
+domain: customer-support

@@ -1,0 +1,44 @@
+skills:
+  - name: returns_handling
+    instructions: Explain return eligibility and route exceptions to a human.
+    examples:
+      - input: The item arrived damaged.
+        output: Explain the return path and next steps.
+    tool_requirements:
+      - order_lookup
+    constraints:
+      - Never promise a refund before checking eligibility.
+policies:
+  - name: support_safety_rules
+    rules:
+      - Never reveal internal notes.
+      - Verify identity before updating any order.
+    enforcement: hard
+    scope: global
+tool_contracts:
+  - tool_name: order_lookup
+    input_schema:
+      type: object
+      required:
+        - order_id
+    output_schema:
+      type: object
+      properties:
+        status:
+          type: string
+    side_effect_class: pure
+    replay_mode: deterministic_stub
+    description: Retrieve order status from the order system.
+handoff_schemas:
+  - name: support_to_billing
+    from_agent: support
+    to_agent: billing
+    required_fields:
+      - customer_id
+      - issue_summary
+    optional_fields:
+      - order_id
+    validation_rules:
+      customer_id:
+        type: string
+        min_length: 3

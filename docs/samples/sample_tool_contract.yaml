@@ -1,0 +1,20 @@
+tool_name: order_lookup
+input_schema:
+  type: object
+  required:
+    - order_id
+  properties:
+    order_id:
+      type: string
+output_schema:
+  type: object
+  properties:
+    status:
+      type: string
+    tracking_number:
+      type: string
+side_effect_class: pure
+replay_mode: deterministic_stub
+description: Look up order status and shipment tracking details.
+metadata:
+  owner: docs

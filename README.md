@@ -15,6 +15,8 @@ TRACE → DIAGNOSE → SEARCH → EVAL → GATE → DEPLOY → LEARN → REPEAT
 > **[Platform overview](docs/platform-overview.md)** — Full walkthrough of every subsystem and feature
 >
 > **[Architecture and process diagrams](docs/architecture-diagram.md)** — Visual guide to system design and data flow
+>
+> **[CLI quick start guide](docs/QUICKSTART_GUIDE.md)** — Beginner-friendly, copy-pasteable walkthrough of the full CLI surface
 
 ---
 
@@ -731,6 +733,7 @@ make fmt
 
 **Guides:**
 - [Getting Started](docs/getting-started.md)
+- [CLI Quick Start Guide](docs/QUICKSTART_GUIDE.md)
 - [Agentic Coding Tools Guide](docs/guides/agentic-coding-tools.md)
 - [Concepts](docs/concepts.md)
 - [CLI Reference](docs/cli-reference.md)

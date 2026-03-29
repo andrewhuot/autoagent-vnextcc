@@ -9,7 +9,8 @@ from click.testing import CliRunner
 
 from agent.config.runtime import RuntimeConfig
 from evals.fixtures.mock_data import mock_agent_response
-from observer.traces import TraceStore
+from logger import ConversationRecord, ConversationStore
+from observer.traces import TraceEvent, TraceStore
 from runner import cli
 from runner import _build_eval_runner
 
@@ -187,3 +188,174 @@ def test_build_eval_runner_surfaces_mock_fallback_when_real_agent_cannot_start(t
     )
 
     assert any("falling back to mock mode" in message.lower() for message in eval_runner.mock_mode_messages)
+
+
+def test_context_analyze_command_reads_trace_events_from_store(tmp_path, monkeypatch) -> None:
+    """`context analyze` should read events from the trace store and summarize them."""
+    trace_dir = tmp_path / ".autoagent"
+    trace_dir.mkdir()
+    store = TraceStore(db_path=str(trace_dir / "traces.db"))
+    store.log_event(
+        TraceEvent(
+            event_id="evt-1",
+            trace_id="trace-ctx-1",
+            event_type="model_call",
+            timestamp=1.0,
+            invocation_id="inv-1",
+            session_id="sess-1",
+            agent_path="root/support",
+            branch="v001",
+            tokens_in=120,
+            tokens_out=80,
+            metadata={"tokens_available": 4000},
+        )
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(cli, ["context", "analyze", "--trace", "trace-ctx-1"])
+
+    assert result.exit_code == 0
+    assert "Context Analysis for trace trace-ctx-1" in result.output
+    assert "Peak utilization" in result.output
+
+
+def test_scorer_test_command_scores_a_trace_from_persisted_spec(tmp_path, monkeypatch) -> None:
+    """`scorer test` should load the persisted scorer spec and evaluate the requested trace."""
+    trace_dir = tmp_path / ".autoagent"
+    trace_dir.mkdir()
+    store = TraceStore(db_path=str(trace_dir / "traces.db"))
+    store.log_event(
+        TraceEvent(
+            event_id="evt-score-1",
+            trace_id="trace-score-1",
+            event_type="model_response",
+            timestamp=1.0,
+            invocation_id="inv-score-1",
+            session_id="sess-score-1",
+            agent_path="root/support",
+            branch="v001",
+            tokens_in=80,
+            tokens_out=120,
+            latency_ms=900.0,
+            metadata={"tokens_available": 4000},
+        )
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    create_result = runner.invoke(
+        cli,
+        [
+            "scorer",
+            "create",
+            "accurate and respond in under 3 seconds",
+            "--name",
+            "trace_scorer",
+        ],
+    )
+    assert create_result.exit_code == 0
+
+    test_result = runner.invoke(
+        cli,
+        ["scorer", "test", "trace_scorer", "--trace", "trace-score-1", "--db", ".autoagent/traces.db"],
+    )
+
+    assert test_result.exit_code == 0
+    assert "aggregate_score" in test_result.output
+
+
+def test_registry_add_tools_maps_cli_name_to_tool_contract_key(tmp_path, monkeypatch) -> None:
+    """`registry add tools` should pass the CLI name as `tool_name` to the registry."""
+    tool_contract_path = tmp_path / "tool-contract.yaml"
+    tool_contract_path.write_text(
+        yaml.safe_dump(
+            {
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"order_id": {"type": "string"}},
+                },
+                "output_schema": {
+                    "type": "object",
+                    "properties": {"status": {"type": "string"}},
+                },
+                "side_effect_class": "pure",
+                "replay_mode": "deterministic_stub",
+                "description": "Look up an order.",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    add_result = runner.invoke(
+        cli,
+        [
+            "registry",
+            "add",
+            "tools",
+            "order_lookup",
+            "--file",
+            str(tool_contract_path),
+            "--db",
+            "registry.db",
+        ],
+    )
+
+    assert add_result.exit_code == 0
+    assert "Registered tools/order_lookup -> v1" in add_result.output
+
+    show_result = runner.invoke(
+        cli,
+        ["registry", "show", "tools", "order_lookup", "--version", "1", "--db", "registry.db"],
+    )
+
+    assert show_result.exit_code == 0
+    assert '"tool_name": "order_lookup"' in show_result.output
+
+
+def test_curriculum_generate_uses_conversation_failures(tmp_path, monkeypatch) -> None:
+    """`curriculum generate` should synthesize a batch from failed conversations."""
+    store = ConversationStore(db_path=str(tmp_path / "conversations.db"))
+    store.log(
+        ConversationRecord(
+            conversation_id="conv-fail-1",
+            session_id="sess-fail-1",
+            user_message="My refund never arrived and I need help tracking it.",
+            agent_response="No update.",
+            tool_calls=[{"name": "order_lookup", "status": "error", "error": "missing order context"}],
+            outcome="fail",
+            error_message="missing order context",
+            specialist_used="support",
+            config_version="v001",
+        )
+    )
+
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "curriculum",
+            "generate",
+            "--limit",
+            "3",
+            "--prompts-per-cluster",
+            "2",
+            "--output-dir",
+            ".autoagent/curriculum",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "Generated" in result.output
+
+    list_result = runner.invoke(
+        cli,
+        ["curriculum", "list", "--limit", "5", "--output-dir", ".autoagent/curriculum"],
+    )
+
+    assert list_result.exit_code == 0
+    assert "Curriculum Batches" in list_result.output

@@ -1,0 +1,26 @@
+[
+  {
+    "conversation_id": "svc-001",
+    "session_id": "s1",
+    "user_message": "Where is my order? I do not have the order number.",
+    "agent_response": "I need to transfer you to live support.",
+    "outcome": "transfer",
+    "intent": "order_tracking"
+  },
+  {
+    "conversation_id": "svc-002",
+    "session_id": "s2",
+    "user_message": "Please cancel my order.",
+    "agent_response": "First verify identity, then open the order and cancel it.",
+    "outcome": "success",
+    "intent": "cancellation"
+  },
+  {
+    "conversation_id": "svc-003",
+    "session_id": "s3",
+    "user_message": "Can I get a refund for the wrong size?",
+    "agent_response": "Check the refund window, then explain the return options.",
+    "outcome": "success",
+    "intent": "refund"
+  }
+]

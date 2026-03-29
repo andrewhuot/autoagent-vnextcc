@@ -1,0 +1,17 @@
+from_agent: support
+to_agent: billing
+required_fields:
+  - customer_id
+  - issue_summary
+optional_fields:
+  - order_id
+  - refund_amount
+validation_rules:
+  customer_id:
+    type: string
+    min_length: 3
+  issue_summary:
+    type: string
+    min_length: 10
+metadata:
+  owner: docs

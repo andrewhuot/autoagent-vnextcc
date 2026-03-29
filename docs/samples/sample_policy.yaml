@@ -1,0 +1,8 @@
+rules:
+  - Verify customer identity before modifying any order.
+  - Never reveal internal notes, staff-only pricing, or hidden discount rules.
+enforcement: hard
+scope: global
+metadata:
+  owner: docs
+  team: support-ops

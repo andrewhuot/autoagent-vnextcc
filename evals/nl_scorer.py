@@ -6,6 +6,7 @@ Entry point for creating eval scorers from English descriptions.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 from evals.nl_compiler import NLCompiler
@@ -19,9 +20,16 @@ class NLScorer:
     Entry point for creating eval scorers from English descriptions.
     """
 
-    def __init__(self, compiler: NLCompiler | None = None) -> None:
+    def __init__(
+        self,
+        compiler: NLCompiler | None = None,
+        storage_dir: str | Path | None = None,
+    ) -> None:
         self.compiler = compiler or NLCompiler()
+        self.storage_dir = Path(storage_dir) if storage_dir is not None else None
         self._specs: dict[str, ScorerSpec] = {}  # name -> spec cache
+        if self.storage_dir is not None:
+            self._load_specs()
 
     def create(self, nl_description: str, name: str | None = None) -> ScorerSpec:
         """Compile an NL description into a ScorerSpec.
@@ -45,6 +53,7 @@ class NLScorer:
             source_nl=nl_description,
         )
         self._specs[name] = spec
+        self._persist_spec(spec)
         return spec
 
     def refine(self, spec_name: str, additional_nl: str) -> ScorerSpec:
@@ -69,15 +78,18 @@ class NLScorer:
         existing.dimensions = self.compiler._assign_weights(existing.dimensions)
         existing.version += 1
         existing.source_nl += f"\n{additional_nl}"
+        self._persist_spec(existing)
 
         return existing
 
     def get(self, name: str) -> ScorerSpec | None:
         """Get a scorer spec by name."""
+        self._load_specs()
         return self._specs.get(name)
 
     def list(self) -> list[ScorerSpec]:
         """List all scorer specs."""
+        self._load_specs()
         return list(self._specs.values())
 
     def test(self, spec_name: str, eval_result: EvalResult) -> dict[str, Any]:
@@ -209,3 +221,32 @@ class NLScorer:
 
         # similarity or unknown grader type
         return result.quality_score
+
+    def _load_specs(self) -> None:
+        """Load persisted scorer specs from disk when storage is configured."""
+        if self.storage_dir is None or not self.storage_dir.exists():
+            return
+
+        loaded: dict[str, ScorerSpec] = {}
+        for path in sorted(self.storage_dir.glob("*.yaml")):
+            try:
+                spec = ScorerSpec.from_yaml(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            loaded[spec.name] = spec
+        self._specs = loaded
+
+    def _persist_spec(self, spec: ScorerSpec) -> None:
+        """Persist a scorer spec to disk when storage is configured."""
+        if self.storage_dir is None:
+            return
+
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+        target = self.storage_dir / f"{self._slugify_name(spec.name)}.yaml"
+        target.write_text(spec.to_yaml(), encoding="utf-8")
+
+    @staticmethod
+    def _slugify_name(name: str) -> str:
+        """Convert a scorer name into a stable filesystem-safe slug."""
+        slug = re.sub(r"[^a-zA-Z0-9_.-]", "_", name.strip())
+        return slug or "scorer"

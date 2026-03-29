@@ -1,0 +1,11 @@
+model: gemini-2.0-flash
+optimizer:
+  search_strategy: adaptive
+  bandit_policy: ucb1
+budget:
+  per_cycle_dollars: 2.5
+  daily_dollars: 15.0
+prompts:
+  root: You are a support agent. Be helpful and concise.
+thresholds:
+  confidence_threshold: 0.6

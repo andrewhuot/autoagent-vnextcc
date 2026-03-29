@@ -184,6 +184,15 @@ class TestDemoCommand:
         result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert "autoagent quickstart" in result.output
 
+    def test_demo_quickstart_forces_mock_mode_even_if_api_keys_exist(self, runner, tmp_dir, monkeypatch):
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir, "--no-open"])
+
+        assert result.exit_code == 0
+        assert "Using mock mode for the guided demo quickstart." in result.output
+        assert "Demo complete" in result.output
+
     def test_demo_quickstart_keeps_runtime_state_inside_target_directory(self, runner, tmp_path, monkeypatch):
         target = tmp_path / "workspace"
         monkeypatch.chdir(tmp_path)

@@ -1,0 +1,13 @@
+instructions: >-
+  Expand routing coverage for order tracking, cancellations, and refund
+  requests. Prefer additive changes over replacements.
+examples:
+  - input: "Where is my package?"
+    output: "Route to orders specialist."
+tool_requirements:
+  - orders_db
+constraints:
+  - Do not weaken safety refusal behavior.
+metadata:
+  owner: docs
+  domain: customer-support

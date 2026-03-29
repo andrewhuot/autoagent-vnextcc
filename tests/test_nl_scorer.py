@@ -5,6 +5,8 @@ Covers NLCompiler, ScorerSpec, ScorerDimension, and NLScorer.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from core.types import GraderBundle, GraderSpec, GraderType
@@ -448,6 +450,33 @@ class TestNLScorer:
         names = {s.name for s in specs}
         assert "list_a" in names
         assert "list_b" in names
+
+    def test_storage_dir_persists_specs_across_instances(self, tmp_path: Path) -> None:
+        storage_dir = tmp_path / "scorers"
+        first = NLScorer(storage_dir=storage_dir)
+        first.create("accurate and fast", name="persisted_score")
+
+        second = NLScorer(storage_dir=storage_dir)
+        spec = second.get("persisted_score")
+
+        assert spec is not None
+        assert spec.name == "persisted_score"
+        assert len(second.list()) == 1
+
+    def test_refine_updates_persisted_version(self, tmp_path: Path) -> None:
+        storage_dir = tmp_path / "scorers"
+        scorer = NLScorer(storage_dir=storage_dir)
+        scorer.create("accurate", name="versioned_score")
+
+        reloaded = NLScorer(storage_dir=storage_dir)
+        refined = reloaded.refine("versioned_score", "and be complete")
+
+        assert refined.version == 2
+
+        latest = NLScorer(storage_dir=storage_dir).get("versioned_score")
+        assert latest is not None
+        assert latest.version == 2
+        assert len(latest.dimensions) == 2
 
     def test_test_scores_eval_result(self, scorer: NLScorer) -> None:
         scorer.create("accurate and respond in under 3 seconds", name="test_scorer")

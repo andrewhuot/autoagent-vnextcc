@@ -94,6 +94,7 @@ CONFIGS_DIR = os.environ.get("AUTOAGENT_CONFIGS", "configs")
 MEMORY_DB = os.environ.get("AUTOAGENT_MEMORY_DB", "optimizer_memory.db")
 REGISTRY_DB = os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db")
 TRACE_DB = os.environ.get("AUTOAGENT_TRACE_DB", ".autoagent/traces.db")
+SCORER_SPECS_DIR = os.environ.get("AUTOAGENT_SCORER_SPECS_DIR", ".autoagent/scorers")
 AUTOAGENT_VERSION = get_autoagent_version()
 
 
@@ -134,6 +135,14 @@ def _load_config_dict(config_path: str) -> dict:
     """Load a raw config dictionary from disk."""
     with Path(config_path).open("r", encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def _make_nl_scorer():
+    """Build a scorer instance backed by the CLI's persisted scorer store."""
+    from evals.nl_compiler import NLCompiler
+    from evals.nl_scorer import NLScorer
+
+    return NLScorer(compiler=NLCompiler(), storage_dir=SCORER_SPECS_DIR)
 
 
 def _ensure_active_config(deployer: Deployer) -> dict:
@@ -2714,17 +2723,19 @@ def context_analyze(trace_id: str) -> None:
     trace_store = TraceStore(db_path=".autoagent/traces.db")
     analyzer = ContextAnalyzer(trace_store=trace_store)
 
-    events = trace_store.get_events(trace_id=trace_id)
+    events = trace_store.get_trace(trace_id=trace_id)
     if not events:
         click.echo(f"No events found for trace: {trace_id}")
         return
 
     event_dicts = [
         {
+            "trace_id": e.trace_id,
             "event_type": e.event_type.value if hasattr(e.event_type, "value") else str(e.event_type),
             "tokens_in": e.tokens_in,
             "tokens_out": e.tokens_out,
             "error_message": e.error_message,
+            "agent_path": e.agent_path,
             "metadata": e.metadata if isinstance(e.metadata, dict) else {},
         }
         for e in events
@@ -3571,7 +3582,11 @@ def registry_add(registry_type: str, name: str, file_path: str, db: str) -> None
         data = json.loads(raw)
 
     if isinstance(data, dict):
-        data["name"] = name
+        if registry_type == "tools":
+            data.pop("name", None)
+            data["tool_name"] = name
+        else:
+            data["name"] = name
         result = reg.register(**data)
         click.echo(f"Registered {registry_type}/{name} -> v{result[1]}")
     else:
@@ -3636,17 +3651,204 @@ register_skill_commands(skill_group)
 
 @skill_group.command("export-md")
 @click.argument("skill_name")
-@click.option("--output", default=None)
-def skill_export_md(skill_name: str, output: str | None) -> None:
+@click.option("--output", default=None, help="Destination file or directory.")
+@click.option("--db", default=".autoagent/skills.db", show_default=True, help="Skills database path.")
+def skill_export_md(skill_name: str, output: str | None, db: str) -> None:
     """Export a skill as SKILL.md."""
-    click.echo(f"Exporting {skill_name} as SKILL.md...")
+    from registry.skill_md import SkillMdSerializer
+
+    def _portable_scalar(value: object) -> object:
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return yaml.safe_dump(value, sort_keys=False).strip()
+
+    store = SkillStore(db)
+    try:
+        skill = store.get(skill_name) or store.get_by_name(skill_name)
+        if skill is None:
+            click.echo(f"Skill not found: {skill_name}", err=True)
+            raise SystemExit(1)
+    finally:
+        store.close()
+
+    output_path = output or f"{skill.id}.SKILL.md"
+    portable_skill = {
+        "name": skill.name,
+        "version": skill.version,
+        "kind": skill.kind.value,
+        "category": skill.domain,
+        "platform": skill.metadata.get("platform", "universal"),
+        "description": skill.description,
+        "author": skill.author,
+        "tags": skill.tags,
+        "dependencies": [dep.to_dict() for dep in skill.dependencies],
+        "allowed_tools": skill.metadata.get("allowed_tools", [tool.name for tool in skill.tools]),
+        "supported_frameworks": skill.metadata.get("supported_frameworks", []),
+        "required_approvals": skill.metadata.get("required_approvals", []),
+        "eval_contract": skill.metadata.get("eval_contract", {}),
+        "rollout_policy": skill.metadata.get("rollout_policy", "gradual"),
+        "provenance": skill.metadata.get("provenance", ""),
+        "trust_level": skill.metadata.get("trust_level", "unverified"),
+        "triggers": [trigger.to_dict() for trigger in skill.triggers],
+        "mutations": [
+            {
+                "name": mutation.name,
+                "mutation_type": mutation.operator_type,
+                "target_surface": mutation.target_surface,
+                "description": mutation.description,
+                "template": mutation.template,
+            }
+            for mutation in skill.mutations
+        ],
+        "examples": [
+            {
+                "name": example.name,
+                "surface": skill.mutations[0].target_surface if skill.mutations else "instruction",
+                "before": _portable_scalar(example.before),
+                "after": _portable_scalar(example.after),
+                "improvement": example.improvement,
+                "context": example.context,
+            }
+            for example in skill.examples
+        ],
+        "eval_criteria": [criterion.to_dict() for criterion in skill.eval_criteria],
+        "guardrails": skill.guardrails,
+        "instructions": skill.instructions,
+        "references": skill.metadata.get("references", ""),
+    }
+
+    serializer = SkillMdSerializer()
+    output_abs = Path(output_path)
+    if output_abs.is_dir() or output_path.endswith(os.sep):
+        output_abs.mkdir(parents=True, exist_ok=True)
+        output_abs = output_abs / "SKILL.md"
+    else:
+        output_abs.parent.mkdir(parents=True, exist_ok=True)
+    serializer.serialize_to_file(portable_skill, str(output_abs))
+    exported_path = str(output_abs.resolve())
+
+    click.echo(f"Exported {skill.name} to {exported_path}")
 
 
 @skill_group.command("import-md")
 @click.argument("path")
-def skill_import_md(path: str) -> None:
+@click.option("--db", default=".autoagent/skills.db", show_default=True, help="Skills database path.")
+def skill_import_md(path: str, db: str) -> None:
     """Import a skill from SKILL.md file."""
-    click.echo(f"Importing skill from {path}...")
+    import re
+
+    from core.skills.types import EvalCriterion, MutationOperator, Skill, SkillDependency, SkillExample, SkillKind, TriggerCondition
+    from registry.skill_md import SkillMdParser
+
+    parser = SkillMdParser()
+    source = Path(path)
+    parsed = parser.parse_directory(str(source)) if source.is_dir() else parser.parse_file(str(source))
+    frontmatter = parsed.get("frontmatter", {})
+    name = str(frontmatter.get("name", parsed.get("title", "imported-skill")))
+    version = str(frontmatter.get("version", "1.0.0"))
+    kind_value = str(frontmatter.get("kind", "build")).lower()
+    kind = SkillKind(kind_value) if kind_value in {member.value for member in SkillKind} else SkillKind.BUILD
+
+    skill_id = re.sub(r"[^a-z0-9]+", "-", f"{name}-{version}".lower()).strip("-") or "imported-skill"
+    triggers = [
+        TriggerCondition(
+            failure_family=trigger.get("failure_family"),
+            metric_name=trigger.get("metric_name"),
+            threshold=trigger.get("threshold"),
+            operator=trigger.get("operator", "gt"),
+            blame_pattern=trigger.get("blame_pattern"),
+        )
+        for trigger in frontmatter.get("triggers", [])
+        if isinstance(trigger, dict)
+    ]
+    mutations = [
+        MutationOperator(
+            name=mutation.get("name", "unnamed-mutation"),
+            description=mutation.get("description", ""),
+            target_surface=mutation.get("target_surface", "instruction"),
+            operator_type=mutation.get("mutation_type", "append"),
+            template=mutation.get("template"),
+        )
+        for mutation in parsed.get("mutations", [])
+        if isinstance(mutation, dict)
+    ]
+    examples = [
+        SkillExample(
+            name=example.get("name", "example"),
+            description=example.get("context", "") or example.get("description", ""),
+            before=example.get("before", ""),
+            after=example.get("after", ""),
+            improvement=float(example.get("improvement", 0.0) or 0.0),
+            context=example.get("context", ""),
+        )
+        for example in parsed.get("examples", [])
+        if isinstance(example, dict)
+    ]
+    eval_criteria = [
+        EvalCriterion(
+            metric=criterion.get("metric", ""),
+            target=float(criterion.get("target", 0.0) or 0.0),
+            operator=criterion.get("operator", "gt"),
+            weight=float(criterion.get("weight", 1.0) or 1.0),
+        )
+        for criterion in parsed.get("eval_criteria", [])
+        if isinstance(criterion, dict)
+    ]
+    dependencies = []
+    for dependency in frontmatter.get("dependencies", []):
+        if isinstance(dependency, dict):
+            dependencies.append(
+                SkillDependency(
+                    skill_id=str(dependency.get("skill_id", dependency.get("name", "dependency"))),
+                    version_constraint=str(dependency.get("version_constraint", "*")),
+                    optional=bool(dependency.get("optional", False)),
+                )
+            )
+        elif isinstance(dependency, str):
+            dependencies.append(SkillDependency(skill_id=dependency))
+
+    imported_skill = Skill(
+        id=skill_id,
+        name=name,
+        kind=kind,
+        version=version,
+        description=str(frontmatter.get("description", parsed.get("description", ""))),
+        capabilities=[mutation.target_surface for mutation in mutations],
+        mutations=mutations,
+        triggers=triggers,
+        eval_criteria=eval_criteria,
+        guardrails=list(parsed.get("guardrails", [])) if isinstance(parsed.get("guardrails", []), list) else [],
+        examples=examples,
+        instructions=str(parsed.get("instructions", "")) if isinstance(parsed.get("instructions", ""), str) else "",
+        dependencies=dependencies,
+        tags=list(frontmatter.get("tags", [])),
+        domain=str(frontmatter.get("category", "general")),
+        metadata={
+            "platform": frontmatter.get("platform", "universal"),
+            "allowed_tools": frontmatter.get("allowed_tools", []),
+            "supported_frameworks": frontmatter.get("supported_frameworks", []),
+            "required_approvals": frontmatter.get("required_approvals", []),
+            "eval_contract": frontmatter.get("eval_contract", {}),
+            "rollout_policy": frontmatter.get("rollout_policy", "gradual"),
+            "provenance": frontmatter.get("provenance", ""),
+            "trust_level": frontmatter.get("trust_level", "unverified"),
+            "references": parsed.get("references", ""),
+        },
+        author=str(frontmatter.get("author", "autoagent")),
+        status="active",
+    )
+
+    store = SkillStore(db)
+    try:
+        existing = store.get_by_name(imported_skill.name, version=imported_skill.version)
+        if existing is not None:
+            click.echo(f"Imported skill: {existing.name} (version {existing.version})")
+            return
+        store.create(imported_skill)
+    finally:
+        store.close()
+
+    click.echo(f"Imported skill: {imported_skill.name} (version {imported_skill.version})")
 
 
 # ---------------------------------------------------------------------------
@@ -3685,7 +3887,7 @@ def curriculum_generate(
 
     # Load recent failures from conversation store
     store = ConversationStore(db_path=db)
-    recent_failures = store.list_failed(limit=limit * 10)  # Get more to cluster
+    recent_failures = store.get_failures(limit=limit * 10)  # Get more to cluster
 
     if not recent_failures:
         click.echo(click.style("  ✗ ", fg="red") + "No recent failures found")
@@ -3701,11 +3903,11 @@ def curriculum_generate(
         for cat in categories:
             if cat not in clusters_map:
                 clusters_map[cat] = []
-            clusters_map[cat].append({
-                "user_message": record.user_message,
-                "specialist_used": record.specialist_used,
-                "error": record.error_type or "",
-            })
+                clusters_map[cat].append({
+                    "user_message": record.user_message,
+                    "specialist_used": record.specialist_used,
+                    "error": record.error_message or "",
+                })
 
     # Convert to FailureCluster objects
     failure_clusters = []
@@ -3981,9 +4183,6 @@ def scorer_create(description: str | None, from_file: str | None, name: str | No
       autoagent scorer create "The agent should respond within 5 seconds"
       autoagent scorer create --from-file criteria.txt --name latency_check
     """
-    from evals.nl_compiler import NLCompiler
-    from evals.nl_scorer import NLScorer
-
     if from_file:
         nl_text = Path(from_file).read_text(encoding="utf-8").strip()
     elif description:
@@ -3992,7 +4191,7 @@ def scorer_create(description: str | None, from_file: str | None, name: str | No
         click.echo("Error: provide a description argument or --from-file.", err=True)
         raise SystemExit(1)
 
-    scorer = NLScorer(compiler=NLCompiler())
+    scorer = _make_nl_scorer()
     spec = scorer.create(nl_text, name=name)
     click.echo(f"Created scorer: {spec.name} (v{spec.version})")
     click.echo(f"Dimensions: {len(spec.dimensions)}")
@@ -4008,10 +4207,7 @@ def scorer_list() -> None:
     Examples:
       autoagent scorer list
     """
-    from evals.nl_compiler import NLCompiler
-    from evals.nl_scorer import NLScorer
-
-    scorer = NLScorer(compiler=NLCompiler())
+    scorer = _make_nl_scorer()
     specs = scorer.list()
     if not specs:
         click.echo("No scorers found. Create one with: autoagent scorer create")
@@ -4029,10 +4225,7 @@ def scorer_show(name: str) -> None:
     Examples:
       autoagent scorer show latency_check
     """
-    from evals.nl_compiler import NLCompiler
-    from evals.nl_scorer import NLScorer
-
-    scorer = NLScorer(compiler=NLCompiler())
+    scorer = _make_nl_scorer()
     spec = scorer.get(name)
     if spec is None:
         click.echo(f"Scorer '{name}' not found.")
@@ -4049,10 +4242,7 @@ def scorer_refine(name: str, additional_nl: str) -> None:
     Examples:
       autoagent scorer refine latency_check "Also check for empathy"
     """
-    from evals.nl_compiler import NLCompiler
-    from evals.nl_scorer import NLScorer
-
-    scorer = NLScorer(compiler=NLCompiler())
+    scorer = _make_nl_scorer()
     try:
         spec = scorer.refine(name, additional_nl)
     except KeyError as exc:
@@ -4074,12 +4264,10 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
     Examples:
       autoagent scorer test latency_check --trace abc-123
     """
-    from evals.nl_compiler import NLCompiler
-    from evals.nl_scorer import NLScorer
     from evals.scorer import EvalResult
     from observer.traces import TraceStore
 
-    scorer = NLScorer(compiler=NLCompiler())
+    scorer = _make_nl_scorer()
     spec = scorer.get(name)
     if spec is None:
         click.echo(f"Scorer '{name}' not found.", err=True)
@@ -4091,16 +4279,33 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
         click.echo(f"Trace '{trace_id}' not found.", err=True)
         raise SystemExit(1)
 
-    # Build a minimal EvalResult from trace events
+    error_count = sum(1 for event in events if event.error_message)
+    total_tokens = sum(event.tokens_in + event.tokens_out for event in events)
+    total_latency_ms = sum(event.latency_ms for event in events)
+    tool_events = [event for event in events if event.tool_name]
+    tool_errors = sum(1 for event in tool_events if event.error_message)
+    tool_use_accuracy = 1.0
+    if tool_events:
+        tool_use_accuracy = max(0.0, 1.0 - (tool_errors / len(tool_events)))
+
+    quality_score = 1.0 if error_count == 0 else 0.0
+    safety_passed = not any(
+        event.event_type == "safety_flag" or bool(event.error_message)
+        for event in events
+    )
+
+    # Build a minimal EvalResult from trace events.
     eval_result = EvalResult(
-        run_id=trace_id,
-        scores={},
-        conversation=[
-            {"role": "tool" if e.tool_name else "agent", "content": e.tool_output or e.error_message or ""}
-            for e in events
-        ],
-        latency_ms=sum(e.latency_ms for e in events),
-        outcome="success" if not any(e.error_message for e in events) else "error",
+        case_id=trace_id,
+        category="trace",
+        passed=error_count == 0,
+        quality_score=quality_score,
+        safety_passed=safety_passed,
+        latency_ms=total_latency_ms,
+        token_count=total_tokens,
+        tool_use_accuracy=tool_use_accuracy,
+        details=f"Scored from trace {trace_id}",
+        satisfaction_proxy=1.0 if error_count == 0 else 0.0,
     )
 
     result = scorer.test(name, eval_result)
@@ -4227,6 +4432,8 @@ def quickstart(
     # Step 2: Run eval baseline
     click.echo(click.style("\n━━━ Step 2/4: Run eval baseline", fg="cyan", bold=True))
     runtime = _scope_runtime_to_workspace(load_runtime_config(), workspace_paths["workspace"])
+    runtime.optimizer.use_mock = True
+    click.echo("  Using mock mode for the guided quickstart. Switch to real providers after setup if needed.")
     eval_runner = _build_eval_runner(
         runtime,
         cases_dir=str(workspace_paths["cases_dir"]),
@@ -4400,6 +4607,8 @@ def demo_quickstart(
     # Single eval
     click.echo(click.style("\n▸ Running evaluation...", fg="white", bold=True))
     runtime = _scope_runtime_to_workspace(load_runtime_config(), workspace_paths["workspace"])
+    runtime.optimizer.use_mock = True
+    click.echo("  Using mock mode for the guided demo quickstart. Switch to real providers after setup if needed.")
     eval_runner = _build_eval_runner(
         runtime,
         cases_dir=str(workspace_paths["cases_dir"]),

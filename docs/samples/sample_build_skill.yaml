@@ -1,0 +1,50 @@
+id: routing-keyword-expansion
+name: routing_keyword_expansion
+kind: build
+version: "1.0.0"
+description: Expand routing keywords for order tracking and refund intents.
+capabilities:
+  - broaden routing coverage
+  - catch new phrasing from failure clusters
+mutations:
+  - name: expand_orders_keywords
+    description: Append missing shipping and tracking keywords to the orders route.
+    target_surface: routing
+    operator_type: append
+    template: add keywords discovered from failure samples
+    parameters:
+      keywords:
+        - eta
+        - delayed
+        - package
+    risk_level: low
+triggers:
+  - failure_family: routing_error
+    metric_name: routing_accuracy
+    threshold: 0.8
+    operator: lt
+eval_criteria:
+  - metric: routing_accuracy
+    target: 0.9
+    operator: gte
+    weight: 1.0
+guardrails:
+  - Never remove existing safety routing rules.
+examples:
+  - name: order_tracking_keyword_gap
+    description: Add a keyword the router missed in a failed conversation.
+    before:
+      keywords:
+        - order
+        - tracking
+    after:
+      keywords:
+        - order
+        - tracking
+        - package
+    improvement: 0.08
+    context: Users often say package instead of order.
+tags:
+  - routing
+  - optimization
+domain: customer-support
