@@ -9,6 +9,7 @@ import zipfile
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -48,6 +49,24 @@ class _FakeEvalRunner:
         if "never share confidential" in root:
             score += 0.02
         return _Score(quality=score, safety=1.0, latency=0.8, cost=0.8, composite=score)
+
+
+class _StubLLMResponse:
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _StubLLMRouter:
+    def __init__(self, responses: list[str], *, mock_mode: bool = False) -> None:
+        self.responses = list(responses)
+        self.mock_mode = mock_mode
+        self.requests: list[object] = []
+
+    def generate(self, request: object) -> _StubLLMResponse:
+        self.requests.append(request)
+        if self.responses:
+            return _StubLLMResponse(self.responses.pop(0))
+        return _StubLLMResponse('{"intent": "general_support", "confidence": 0.5}')
 
 
 def _build_archive_base64() -> str:
@@ -148,6 +167,43 @@ class TestTranscriptArchiveImport:
         assert len(data["procedure_summaries"]) >= 1
         assert len(data["workflow_suggestions"]) >= 1
         assert len(data["suggested_tests"]) >= 1
+        assert "intent_accuracy" in data
+
+    def test_archive_import_uses_app_router_for_llm_intent_classification(
+        self,
+        client: TestClient,
+        app: FastAPI,
+    ) -> None:
+        app.state.proposer = SimpleNamespace(
+            llm_router=_StubLLMRouter(['{"intent": "order_tracking", "confidence": 0.96}'])
+        )
+        archive_base64 = base64.b64encode(
+            _zip_bytes(
+                [
+                    {
+                        "conversation_id": "hist-llm-001",
+                        "session_id": "archive-llm-1",
+                        "user_message": "Where is my package right now?",
+                        "agent_response": "Let me check the latest shipment status.",
+                        "outcome": "success",
+                        "intent": "order_tracking",
+                    }
+                ]
+            )
+        ).decode("ascii")
+
+        resp = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "support-history.zip",
+                "archive_base64": archive_base64,
+            },
+        )
+
+        assert resp.status_code == 201
+        data = resp.json()
+        assert data["conversations"][0]["intent"] == "order_tracking"
+        assert data["intent_accuracy"] == 1.0
 
     def test_analytics_question_quantifies_transfer_root_cause(self, client: TestClient) -> None:
         imported = client.post(
@@ -258,6 +314,13 @@ def _build_multimodal_archive_base64() -> str:
         )
 
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def _zip_bytes(transcripts_json: list[dict[str, object]]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, mode="w") as zf:
+        zf.writestr("transcripts.json", json.dumps(transcripts_json))
+    return buffer.getvalue()
 
 
 class TestGhostwriterCompetitiveCapabilities:

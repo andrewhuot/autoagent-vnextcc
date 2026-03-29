@@ -8,6 +8,7 @@ import time
 from fastapi import APIRouter, Query, Request
 
 from api.models import HealthMetricsData, HealthResponse, SystemHealthResponse
+from optimizer.providers import has_real_provider_credentials
 
 router = APIRouter(prefix="/api/health", tags=["health"])
 
@@ -59,6 +60,11 @@ async def get_health(
         total_conversations=report.metrics.total_conversations,
     )
     mock_reasons = _collect_mock_reasons(request)
+    runtime_config = getattr(request.app.state, "runtime_config", None)
+    real_provider_configured = bool(
+        runtime_config is not None
+        and has_real_provider_credentials(runtime_config.optimizer)
+    )
 
     return HealthResponse(
         metrics=metrics,
@@ -68,6 +74,7 @@ async def get_health(
         reason=report.reason,
         mock_mode=bool(mock_reasons),
         mock_reasons=mock_reasons,
+        real_provider_configured=real_provider_configured,
     )
 
 

@@ -16,6 +16,7 @@ from typing import Any
 
 from optimizer.change_card import ConfidenceInfo, DiffHunk, ProposedChangeCard
 from optimizer.nl_editor import NLEditor
+from optimizer.providers import LLMRequest, LLMRouter
 
 
 INTENT_KEYWORDS: dict[str, list[str]] = {
@@ -36,6 +37,7 @@ TRANSFER_REASON_LABELS: dict[str, str] = {
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a"}
 TEXT_EXTENSIONS = {".txt", ".md"}
+KNOWN_INTENTS = tuple(INTENT_KEYWORDS.keys()) + ("general_support",)
 
 
 @dataclass
@@ -50,6 +52,8 @@ class TranscriptConversation:
     transfer_reason: str | None
     source_file: str
     procedure_steps: list[str] = field(default_factory=list)
+    reference_intent: str | None = None
+    intent_match: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +111,8 @@ class TranscriptReport:
     workflow_suggestions: list[dict[str, Any]]
     suggested_tests: list[dict[str, Any]]
     insights: list[InsightRecord]
+    intent_accuracy: float | None = None
+    intent_accuracy_samples: int = 0
     knowledge_asset: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -122,6 +128,8 @@ class TranscriptReport:
             "workflow_suggestions": self.workflow_suggestions,
             "suggested_tests": self.suggested_tests,
             "insights": [insight.to_dict() for insight in self.insights],
+            "intent_accuracy": self.intent_accuracy,
+            "intent_accuracy_samples": self.intent_accuracy_samples,
             "knowledge_asset": self.knowledge_asset,
             "conversations": [conversation.to_dict() for conversation in self.conversations[:20]],
         }
@@ -130,11 +138,16 @@ class TranscriptReport:
 class TranscriptIntelligenceService:
     """Import transcript archives and turn them into analyzable agent intelligence."""
 
-    def __init__(self, knowledge_asset_path: str = ".autoagent/intelligence_knowledge_assets.json") -> None:
+    def __init__(
+        self,
+        knowledge_asset_path: str = ".autoagent/intelligence_knowledge_assets.json",
+        llm_router: LLMRouter | None = None,
+    ) -> None:
         self._reports: dict[str, TranscriptReport] = {}
         self._knowledge_asset_path = Path(knowledge_asset_path)
         self._knowledge_asset_path.parent.mkdir(parents=True, exist_ok=True)
         self._knowledge_assets: dict[str, dict[str, Any]] = self._load_knowledge_assets()
+        self._llm_router = llm_router
 
     def list_reports(self) -> list[dict[str, Any]]:
         reports = sorted(self._reports.values(), key=lambda report: report.created_at, reverse=True)
@@ -178,6 +191,7 @@ class TranscriptIntelligenceService:
         workflow_suggestions = self._suggest_workflows(conversations, missing_intents)
         suggested_tests = self._suggest_tests(conversations, missing_intents)
         insights = self._generate_insights(conversations)
+        intent_accuracy, intent_accuracy_samples = self._compute_intent_accuracy(conversations)
         knowledge_asset = self._create_knowledge_asset(
             archive_name=archive_name,
             conversations=conversations,
@@ -197,6 +211,8 @@ class TranscriptIntelligenceService:
             workflow_suggestions=workflow_suggestions,
             suggested_tests=suggested_tests,
             insights=insights,
+            intent_accuracy=intent_accuracy,
+            intent_accuracy_samples=intent_accuracy_samples,
             knowledge_asset=knowledge_asset,
         )
         self._reports[report.report_id] = report
@@ -594,6 +610,7 @@ class TranscriptIntelligenceService:
         session_id = str(raw.get("session_id") or raw.get("thread_id") or conversation_id)
         outcome = str(raw.get("outcome") or raw.get("status") or "unknown")
         language = self._detect_language(f"{user_message} {agent_response}")
+        reference_intent = self._normalize_reference_intent(raw.get("intent") or raw.get("expected_intent"))
         intent = self._classify_intent(user_message)
         transfer_reason = self._classify_transfer_reason(user_message, agent_response, outcome)
         procedure_steps = self._extract_steps(agent_response)
@@ -609,6 +626,8 @@ class TranscriptIntelligenceService:
             transfer_reason=transfer_reason,
             source_file=source_file,
             procedure_steps=procedure_steps,
+            reference_intent=reference_intent,
+            intent_match=reference_intent == intent if reference_intent is not None else None,
         )
 
     def _coalesce(self, raw: dict[str, Any], keys: list[str]) -> str:
@@ -627,11 +646,110 @@ class TranscriptIntelligenceService:
         return "en"
 
     def _classify_intent(self, user_message: str) -> str:
+        keyword_intent = self._classify_intent_with_keywords(user_message)
+        router = self._llm_router
+        if router is None or getattr(router, "mock_mode", False):
+            return keyword_intent
+        llm_intent = self._classify_intent_with_llm(user_message, keyword_intent)
+        return llm_intent or keyword_intent
+
+    def _classify_intent_with_keywords(self, user_message: str) -> str:
         lower = user_message.lower()
         for intent, keywords in INTENT_KEYWORDS.items():
             if any(keyword in lower for keyword in keywords):
                 return intent
         return "general_support"
+
+    def _classify_intent_with_llm(self, user_message: str, fallback_intent: str) -> str | None:
+        """Classify transcript intent via structured LLM output when a real router exists.
+
+        WHY: Semantic classification handles natural language variations that our
+        hardcoded keyword list misses, but the keyword path remains the safe
+        fallback during mock mode and provider outages.
+        """
+        if not user_message.strip() or self._llm_router is None:
+            return None
+
+        payload = {
+            "task": "classify_transcript_intent",
+            "allowed_intents": list(KNOWN_INTENTS),
+            "fallback_intent": fallback_intent,
+            "conversation": {"user_message": user_message},
+            "response_schema": {
+                "intent": "string (must be one of allowed_intents)",
+                "confidence": "number between 0 and 1",
+                "reasoning": "short string",
+            },
+        }
+        try:
+            response = self._llm_router.generate(
+                LLMRequest(
+                    prompt=json.dumps(payload, sort_keys=True),
+                    system=(
+                        "You classify customer support requests. "
+                        "Return JSON only and choose exactly one allowed intent."
+                    ),
+                    temperature=0.0,
+                    max_tokens=250,
+                    metadata={"task": "transcript_intent_classification"},
+                )
+            )
+        except Exception:
+            return None
+
+        parsed = self._extract_json_payload(response.text)
+        if parsed is None:
+            return None
+        return self._normalize_reference_intent(parsed.get("intent"))
+
+    def _normalize_reference_intent(self, raw_intent: Any) -> str | None:
+        """Normalize labeled or LLM-returned intents into the supported taxonomy."""
+        if not isinstance(raw_intent, str):
+            return None
+
+        normalized = raw_intent.strip().lower()
+        if not normalized:
+            return None
+        if normalized in KNOWN_INTENTS:
+            return normalized
+
+        slug = normalized.replace("-", "_").replace(" ", "_")
+        if slug in KNOWN_INTENTS:
+            return slug
+
+        inferred = self._classify_intent_with_keywords(normalized)
+        if inferred != "general_support":
+            return inferred
+        if normalized in {"general_support", "general support", "support", "unknown", "other"}:
+            return "general_support"
+        return None
+
+    @staticmethod
+    def _extract_json_payload(text: str) -> dict[str, Any] | None:
+        raw = text.strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else None
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", raw, flags=re.DOTALL)
+            if not match:
+                return None
+            try:
+                parsed = json.loads(match.group(0))
+                return parsed if isinstance(parsed, dict) else None
+            except json.JSONDecodeError:
+                return None
+
+    @staticmethod
+    def _compute_intent_accuracy(conversations: list[TranscriptConversation]) -> tuple[float | None, int]:
+        """Compute intent accuracy against explicit transcript labels when available."""
+        labeled = [conversation for conversation in conversations if conversation.reference_intent is not None]
+        if not labeled:
+            return None, 0
+        matches = sum(1 for conversation in labeled if conversation.intent_match)
+        return round(matches / len(labeled), 4), len(labeled)
 
     def _classify_transfer_reason(self, user_message: str, agent_response: str, outcome: str) -> str | None:
         combined = f"{user_message} {agent_response}".lower()

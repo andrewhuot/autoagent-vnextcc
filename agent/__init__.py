@@ -8,4 +8,11 @@ def create_root_agent(*args, **kwargs):
     return _create(*args, **kwargs)
 
 
-__all__ = ["create_root_agent"]
+def create_eval_agent(*args, **kwargs):
+    """Create the eval-compatible agent adapter lazily to avoid heavy imports on module load."""
+    from agent.eval_agent import create_eval_agent as _create
+
+    return _create(*args, **kwargs)
+
+
+__all__ = ["create_root_agent", "create_eval_agent"]

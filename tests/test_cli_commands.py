@@ -6,10 +6,12 @@ import json
 import os
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
 
+import runner as runner_module
 from runner import cli
 
 
@@ -22,6 +24,15 @@ def runner():
 def tmp_dir():
     with tempfile.TemporaryDirectory() as d:
         yield d
+
+
+def _env_without_api_keys() -> dict[str, str]:
+    """Return a process environment with provider credentials stripped for deterministic CLI tests."""
+    env = dict(os.environ)
+    env["OPENAI_API_KEY"] = ""
+    env["ANTHROPIC_API_KEY"] = ""
+    env["GOOGLE_API_KEY"] = ""
+    return env
 
 
 class TestCLIStructure:
@@ -141,18 +152,18 @@ class TestJourneyCommands:
 
 class TestEvalCommands:
     def test_eval_run_default(self, runner):
-        result = runner.invoke(cli, ["eval", "run"])
+        result = runner.invoke(cli, ["eval", "run"], env=_env_without_api_keys())
         assert result.exit_code == 0
         assert "Composite:" in result.output
 
     def test_eval_run_with_category(self, runner):
-        result = runner.invoke(cli, ["eval", "run", "--category", "happy_path"])
+        result = runner.invoke(cli, ["eval", "run", "--category", "happy_path"], env=_env_without_api_keys())
         assert result.exit_code == 0
         assert "Category: happy_path" in result.output
 
     def test_eval_run_with_output(self, runner, tmp_dir):
         output_file = os.path.join(tmp_dir, "results.json")
-        result = runner.invoke(cli, ["eval", "run", "--output", output_file])
+        result = runner.invoke(cli, ["eval", "run", "--output", output_file], env=_env_without_api_keys())
         assert result.exit_code == 0
         assert Path(output_file).exists()
         data = json.loads(Path(output_file).read_text())
@@ -162,7 +173,7 @@ class TestEvalCommands:
     def test_eval_results_from_file(self, runner, tmp_dir):
         # First create a results file
         output_file = os.path.join(tmp_dir, "results.json")
-        runner.invoke(cli, ["eval", "run", "--output", output_file])
+        runner.invoke(cli, ["eval", "run", "--output", output_file], env=_env_without_api_keys())
         # Then read it
         result = runner.invoke(cli, ["eval", "results", "--file", output_file])
         assert result.exit_code == 0
@@ -172,6 +183,53 @@ class TestEvalCommands:
         result = runner.invoke(cli, ["eval", "list"])
         # May or may not find files depending on cwd
         assert result.exit_code == 0
+
+    def test_eval_run_real_agent_flag_passes_override_to_builder(self, runner, monkeypatch):
+        """`eval run --real-agent` should request the real-agent eval harness path."""
+        captured: dict[str, bool] = {}
+
+        fake_score = SimpleNamespace(
+            quality=0.8,
+            safety=1.0,
+            latency=0.9,
+            cost=0.95,
+            composite=0.87,
+            confidence_intervals={},
+            safety_failures=0,
+            total_cases=1,
+            passed_cases=1,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            warnings=[],
+            provenance={},
+            run_id="run-test",
+            results=[],
+        )
+
+        class _FakeEvalRunner:
+            mock_mode_messages: list[str] = []
+
+            def run(self, config=None, dataset_path=None, split="all"):
+                return fake_score
+
+        def fake_build_eval_runner(
+            runtime,
+            *,
+            cases_dir=None,
+            trace_db_path=None,
+            use_real_agent=False,
+            default_agent_config=None,
+        ):
+            del runtime, cases_dir, trace_db_path, default_agent_config
+            captured["use_real_agent"] = use_real_agent
+            return _FakeEvalRunner()
+
+        monkeypatch.setattr(runner_module, "_build_eval_runner", fake_build_eval_runner)
+
+        result = runner.invoke(cli, ["eval", "run", "--real-agent", "--json"])
+
+        assert result.exit_code == 0
+        assert captured["use_real_agent"] is True
 
 
 class TestStatusCommand:
@@ -268,11 +326,10 @@ class TestDoctorCommand:
         assert "issue" in result.output
 
     def test_eval_run_prints_mock_warning(self, runner):
-        """eval run warns when use_mock is true (default in autoagent.yaml)."""
-        result = runner.invoke(cli, ["eval", "run"])
+        """eval run warns when the harness falls back to mock mode."""
+        result = runner.invoke(cli, ["eval", "run"], env=_env_without_api_keys())
         assert result.exit_code == 0
-        # autoagent.yaml has use_mock: true, so the warning should appear
-        assert "mock provider" in result.output.lower() or "simulated" in result.output.lower()
+        assert "mock mode" in result.output.lower() or "simulated" in result.output.lower()
 
 
 class TestFullAutoCommand:

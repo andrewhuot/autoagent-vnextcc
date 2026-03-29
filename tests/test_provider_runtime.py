@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from optimizer.providers import LLMRequest, build_router_from_runtime_config
+from optimizer.providers import LLMRequest, build_router_from_runtime_config, has_real_provider_credentials
 from agent.config.runtime import RuntimeConfig
 
 
@@ -63,3 +63,46 @@ def test_router_keeps_real_mode_when_mock_is_explicitly_disabled_and_key_exists(
     assert getattr(router, "mock_mode", True) is False
     assert getattr(router, "mock_reason", "") == ""
 
+
+def test_has_real_provider_credentials_detects_available_keys(monkeypatch) -> None:
+    """Provider credential detection should report when at least one real model can run."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    runtime = RuntimeConfig.model_validate(
+        {
+            "optimizer": {
+                "use_mock": True,
+                "models": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert has_real_provider_credentials(runtime.optimizer) is True
+
+
+def test_has_real_provider_credentials_reports_false_without_keys(monkeypatch) -> None:
+    """Provider credential detection should stay false when configured real models lack credentials."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = RuntimeConfig.model_validate(
+        {
+            "optimizer": {
+                "use_mock": False,
+                "models": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                ],
+            }
+        }
+    )
+
+    assert has_real_provider_credentials(runtime.optimizer) is False

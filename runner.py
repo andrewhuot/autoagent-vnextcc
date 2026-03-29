@@ -447,13 +447,25 @@ def _build_eval_runner(
     *,
     cases_dir: str | None = None,
     trace_db_path: str | None = None,
+    use_real_agent: bool = False,
+    default_agent_config: dict | None = None,
 ) -> EvalRunner:
     """Build an EvalRunner from runtime config with harness defaults wired in."""
+    from agent import create_eval_agent
+    from agent.eval_agent import LEGACY_EVAL_MOCK_MESSAGE
     from agent.tracing import instrument_eval_runner
     from observer.traces import TraceStore
 
+    requested_real_agent = bool(use_real_agent or not bool(runtime.optimizer.use_mock))
+    eval_agent = create_eval_agent(
+        runtime,
+        force_real_agent=use_real_agent,
+        default_config=default_agent_config,
+    ) if requested_real_agent else None
+
     eval_runner = EvalRunner(
         cases_dir=cases_dir,
+        agent_fn=(eval_agent.run if eval_agent is not None else None),
         history_db_path=runtime.eval.history_db_path,
         cache_enabled=runtime.eval.cache_enabled,
         cache_db_path=runtime.eval.cache_db_path,
@@ -463,9 +475,11 @@ def _build_eval_runner(
     )
     trace_store = TraceStore(db_path=trace_db_path or os.environ.get("AUTOAGENT_TRACE_DB", TRACE_DB))
     instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="cli")
-    eval_runner.mock_mode_messages = [
-        "Eval harness is using mock_agent_response, so eval scores remain simulated until a real agent_fn is wired in."
-    ]
+    eval_runner.mock_mode_messages = (
+        list(getattr(eval_agent, "mock_mode_messages", []))
+        if eval_agent is not None
+        else [LEGACY_EVAL_MOCK_MESSAGE]
+    )
     return eval_runner
 
 
@@ -935,6 +949,7 @@ def eval_group(ctx: click.Context) -> None:
             dataset_split="all",
             category=None,
             output=None,
+            real_agent=False,
         )
 
 
@@ -948,9 +963,16 @@ def eval_group(ctx: click.Context) -> None:
               help="Dataset split to evaluate when using --dataset.")
 @click.option("--category", default=None, help="Run only a specific category.")
 @click.option("--output", default=None, help="Write results JSON to file.")
+@click.option(
+    "--real-agent",
+    is_flag=True,
+    default=False,
+    help="Force the real-agent eval path even if optimizer.use_mock is enabled.",
+)
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
-             category: str | None, output: str | None, json_output: bool = False) -> None:
+             category: str | None, output: str | None, real_agent: bool = False,
+             json_output: bool = False) -> None:
     """Run eval suite against a config.
 
     Examples:
@@ -980,7 +1002,12 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         if not json_output:
             click.echo("Evaluating with default config")
 
-    runner = _build_eval_runner(runtime, cases_dir=suite)
+    runner = _build_eval_runner(
+        runtime,
+        cases_dir=suite,
+        use_real_agent=real_agent,
+        default_agent_config=config,
+    )
     _warn_mock_modes(eval_runner=runner, json_output=json_output)
 
     if category:

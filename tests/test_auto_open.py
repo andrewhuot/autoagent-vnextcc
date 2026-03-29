@@ -4,9 +4,18 @@ from unittest.mock import patch
 from click.testing import CliRunner
 from runner import cli, _auto_open_console
 
+
+API_KEY_ENV_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY")
+
 @pytest.fixture
 def runner():
     return CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def clear_provider_api_keys(monkeypatch):
+    for env_name in API_KEY_ENV_VARS:
+        monkeypatch.delenv(env_name, raising=False)
 
 class TestAutoOpenHelper:
     def test_auto_open_importable(self):

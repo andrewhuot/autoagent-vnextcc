@@ -8,6 +8,7 @@ import yaml
 from click.testing import CliRunner
 
 from agent.config.runtime import RuntimeConfig
+from evals.fixtures.mock_data import mock_agent_response
 from observer.traces import TraceStore
 from runner import cli
 from runner import _build_eval_runner
@@ -66,6 +67,7 @@ def test_build_eval_runner_records_trace_events(tmp_path) -> None:
     trace_db = tmp_path / "traces.db"
 
     runtime = RuntimeConfig()
+    runtime.optimizer.use_mock = True
     runtime.eval.cache_enabled = False
 
     eval_runner = _build_eval_runner(
@@ -83,3 +85,105 @@ def test_build_eval_runner_records_trace_events(tmp_path) -> None:
     assert "state_delta" in event_types
     assert "model_call" in event_types
     assert "model_response" in event_types
+
+
+def test_build_eval_runner_uses_real_agent_when_provider_credentials_exist(tmp_path, monkeypatch) -> None:
+    """The eval helper should wire a configured real agent when mock mode is disabled and keys exist."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    runtime = RuntimeConfig.model_validate(
+        {
+            "optimizer": {
+                "use_mock": False,
+                "strategy": "single",
+                "models": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                ],
+            },
+            "eval": {
+                "cache_enabled": False,
+            },
+        }
+    )
+
+    eval_runner = _build_eval_runner(
+        runtime,
+        trace_db_path=str(tmp_path / "traces.db"),
+    )
+
+    wrapped_agent = getattr(eval_runner.agent_fn, "__wrapped__", eval_runner.agent_fn)
+    assert wrapped_agent is not mock_agent_response
+    assert getattr(wrapped_agent, "__self__", None) is not None
+    assert getattr(getattr(wrapped_agent, "__self__", None), "mock_mode", True) is False
+    assert getattr(eval_runner, "mock_mode_messages", []) == []
+
+
+def test_build_eval_runner_can_force_real_agent_even_when_runtime_requests_mock(tmp_path, monkeypatch) -> None:
+    """A CLI override should allow real-agent eval wiring even if the runtime requests mock mode."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    runtime = RuntimeConfig.model_validate(
+        {
+            "optimizer": {
+                "use_mock": True,
+                "strategy": "single",
+                "models": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                ],
+            },
+            "eval": {
+                "cache_enabled": False,
+            },
+        }
+    )
+
+    eval_runner = _build_eval_runner(
+        runtime,
+        trace_db_path=str(tmp_path / "traces.db"),
+        use_real_agent=True,
+    )
+
+    wrapped_agent = getattr(eval_runner.agent_fn, "__wrapped__", eval_runner.agent_fn)
+    assert wrapped_agent is not mock_agent_response
+    assert getattr(getattr(wrapped_agent, "__self__", None), "mock_mode", True) is False
+    assert getattr(eval_runner, "mock_mode_messages", []) == []
+
+
+def test_build_eval_runner_surfaces_mock_fallback_when_real_agent_cannot_start(tmp_path, monkeypatch) -> None:
+    """Requesting the real agent without usable credentials should keep evals honest about mock fallback."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    runtime = RuntimeConfig.model_validate(
+        {
+            "optimizer": {
+                "use_mock": False,
+                "strategy": "single",
+                "models": [
+                    {
+                        "provider": "openai",
+                        "model": "gpt-test",
+                        "api_key_env": "OPENAI_API_KEY",
+                    }
+                ],
+            },
+            "eval": {
+                "cache_enabled": False,
+            },
+        }
+    )
+
+    eval_runner = _build_eval_runner(
+        runtime,
+        trace_db_path=str(tmp_path / "traces.db"),
+        use_real_agent=True,
+    )
+
+    assert any("falling back to mock mode" in message.lower() for message in eval_runner.mock_mode_messages)

@@ -26,6 +26,9 @@ export interface HealthReport {
   failure_buckets: Record<string, number>;
   needs_optimization: boolean;
   reason: string;
+  mock_mode?: boolean;
+  mock_reasons?: string[];
+  real_provider_configured?: boolean;
 }
 
 // 9-Dimension Scores (v4 enhanced scoring)

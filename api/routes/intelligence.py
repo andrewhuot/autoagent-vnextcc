@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from optimizer.providers import build_router_from_runtime_config
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
 
 router = APIRouter(prefix="/api/intelligence", tags=["intelligence"])
@@ -41,7 +42,16 @@ class AutonomousLoopRequest(BaseModel):
 def _get_service(request: Request) -> TranscriptIntelligenceService:
     service = getattr(request.app.state, "transcript_intelligence_service", None)
     if service is None:
-        service = TranscriptIntelligenceService()
+        proposer = getattr(request.app.state, "proposer", None)
+        llm_router = getattr(proposer, "llm_router", None)
+        if llm_router is None:
+            runtime_config = getattr(request.app.state, "runtime_config", None)
+            if runtime_config is not None:
+                try:
+                    llm_router = build_router_from_runtime_config(runtime_config.optimizer)
+                except Exception:
+                    llm_router = None
+        service = TranscriptIntelligenceService(llm_router=llm_router)
         request.app.state.transcript_intelligence_service = service
     return service
 

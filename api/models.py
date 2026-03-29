@@ -209,6 +209,10 @@ class HealthResponse(BaseModel):
     reason: str = Field("", description="Reason if optimization is recommended")
     mock_mode: bool = Field(False, description="Whether the active server path is currently using simulated components")
     mock_reasons: list[str] = Field(default_factory=list, description="Human-readable reasons mock mode is active")
+    real_provider_configured: bool = Field(
+        False,
+        description="Whether at least one usable non-mock provider credential is configured",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -567,3 +567,30 @@ def build_router_from_runtime_config(optimizer_config: Any) -> LLMRouter:
         requested_mock=requested_mock,
         skipped_models=skipped_models,
     )
+
+
+def has_real_provider_credentials(optimizer_config: Any) -> bool:
+    """Return whether any configured non-mock model has usable credentials.
+
+    WHY: The UI needs to know if a mock-mode warning may be dismissed because
+    the operator has already configured real providers, even if the runtime is
+    still choosing to operate in mock mode for other reasons.
+    """
+    for model in getattr(optimizer_config, "models", []):
+        model_config = ModelConfig(
+            provider=str(getattr(model, "provider")),
+            model=str(getattr(model, "model")),
+            role=str(getattr(model, "role", "default")),
+            api_key_env=getattr(model, "api_key_env", None),
+            base_url=getattr(model, "base_url", None),
+            timeout_seconds=float(getattr(model, "timeout_seconds", 30.0)),
+            requests_per_minute=int(getattr(model, "requests_per_minute", 60)),
+            input_cost_per_1k_tokens=float(getattr(model, "input_cost_per_1k_tokens", 0.0)),
+            output_cost_per_1k_tokens=float(getattr(model, "output_cost_per_1k_tokens", 0.0)),
+        )
+        if model_config.provider.strip().lower() == "mock":
+            continue
+        available, _ = _credentials_available(model_config)
+        if available:
+            return True
+    return False

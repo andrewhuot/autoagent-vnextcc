@@ -17,7 +17,9 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from agent import create_eval_agent
 from agent.config.loader import load_config, load_config_with_canary
+from agent.config.runtime import load_runtime_config
 from agent.config.schema import validate_config
 from agent.dashboard_data import DashboardDataService
 from agent.root_agent import create_root_agent
@@ -106,7 +108,12 @@ async def startup() -> None:
     _store = ConversationStore(db_path=db_path)
     _memory = OptimizationMemory(db_path=memory_db_path)
     _deployer = Deployer(configs_dir=configs_dir, store=_store)
-    _eval_runner = EvalRunner()
+    eval_agent = create_eval_agent(
+        load_runtime_config(),
+        default_config=_loaded_config,
+    )
+    _eval_runner = EvalRunner(agent_fn=eval_agent.run)
+    _eval_runner.mock_mode_messages = list(eval_agent.mock_mode_messages)
 
     # Bootstrap active config history when no config has been promoted yet.
     if _deployer.get_active_config() is None and _loaded_config:
