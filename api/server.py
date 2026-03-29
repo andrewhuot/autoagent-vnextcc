@@ -131,6 +131,7 @@ async def lifespan(app: FastAPI):
     from core.skills import SkillStore
     from optimizer.skill_engine import SkillEngine
     from optimizer.skill_autolearner import SkillAutoLearner
+    from optimizer.transcript_intelligence import TranscriptIntelligenceService
 
     runtime = load_runtime_config()
     startup_epoch = time.time()
@@ -173,6 +174,7 @@ async def lifespan(app: FastAPI):
         llm_router=router,
         mock_reason=router.mock_reason,
     )
+    transcript_intelligence_service = TranscriptIntelligenceService(llm_router=router)
 
     # Initialize skills system
     skill_store = SkillStore(db_path=".autoagent/core_skills.db")
@@ -249,6 +251,7 @@ async def lifespan(app: FastAPI):
     app.state.observer = observer
     app.state.eval_runner = eval_runner
     app.state.proposer = proposer
+    app.state.transcript_intelligence_service = transcript_intelligence_service
     app.state.optimizer = optimizer
     app.state.what_if_engine = WhatIfEngine(conversation_store=conversation_store)
     app.state.deployer = deployer
