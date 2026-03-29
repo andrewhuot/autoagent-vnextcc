@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, Play, CheckCircle2, ArrowRight, Activity, Shield, Zap, Target } from 'lucide-react';
+import { Sparkles, Play, CheckCircle2, ArrowRight, Activity, Zap, Target } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { HealthPulse } from '../components/HealthPulse';
@@ -408,7 +408,7 @@ export function Demo() {
       <section className="rounded-lg border border-gray-200 bg-white p-6">
         <h3 className="mb-4 text-sm font-semibold text-gray-900">Optimization Journey (5 Acts)</h3>
         <div className="space-y-3">
-          {scenario.acts.map((act, index) => (
+          {scenario.acts.map((act) => (
             <div key={act.act} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
               <div className="flex items-start gap-3">
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-blue-500 to-purple-600 text-sm font-bold text-white">

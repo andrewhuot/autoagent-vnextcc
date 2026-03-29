@@ -21,8 +21,6 @@ import type {
   AutonomousLoopResult,
   DeepResearchReport,
   IntelligenceAnswer,
-  PromptBuildArtifact,
-  TranscriptReport,
 } from '../lib/types';
 import { formatTimestamp, formatPercent } from '../lib/utils';
 

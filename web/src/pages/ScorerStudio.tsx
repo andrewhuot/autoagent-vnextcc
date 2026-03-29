@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Play, Save, RefreshCw, FlaskConical, Plus, Sparkles } from 'lucide-react';
+import { Save, RefreshCw, FlaskConical, Plus, Sparkles } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { classNames } from '../lib/utils';
 

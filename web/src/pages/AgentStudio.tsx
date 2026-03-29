@@ -1,6 +1,6 @@
 import { startTransition, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Sparkles, MessageSquare, GitBranch, Play, Check } from 'lucide-react';
+import { MessageSquare, GitBranch, Play, Check } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { buildStudioDraft, type StudioDraft, type StudioMetricTone } from '../lib/agentStudio';
 import { classNames } from '../lib/utils';

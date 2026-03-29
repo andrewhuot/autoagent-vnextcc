@@ -39,28 +39,27 @@ export function LiveOptimize() {
 
     const eventSource = new EventSource(`/api/optimize/stream?cycles=${totalCycles}&mode=standard`);
 
-    eventSource.addEventListener('cycle_start', (e) => {
-      const data = JSON.parse(e.data);
+    eventSource.addEventListener('cycle_start', () => {
       setCurrentPhase('diagnose');
       setCompletedPhases(new Set());
     });
 
-    eventSource.addEventListener('diagnosis', (e) => {
+    eventSource.addEventListener('diagnosis', () => {
       setCompletedPhases(prev => new Set([...prev, 'diagnose']));
       setCurrentPhase('propose');
     });
 
-    eventSource.addEventListener('proposal', (e) => {
+    eventSource.addEventListener('proposal', () => {
       setCompletedPhases(prev => new Set([...prev, 'propose']));
       setCurrentPhase('evaluate');
     });
 
-    eventSource.addEventListener('evaluation', (e) => {
+    eventSource.addEventListener('evaluation', () => {
       setCompletedPhases(prev => new Set([...prev, 'evaluate']));
       setCurrentPhase('decide');
     });
 
-    eventSource.addEventListener('decision', (e) => {
+    eventSource.addEventListener('decision', () => {
       setCompletedPhases(prev => new Set([...prev, 'decide']));
     });
 
@@ -83,8 +82,7 @@ export function LiveOptimize() {
       setCompletedPhases(new Set());
     });
 
-    eventSource.addEventListener('optimization_complete', (e) => {
-      const data = JSON.parse(e.data);
+    eventSource.addEventListener('optimization_complete', () => {
       setIsRunning(false);
       setCurrentPhase(null);
 

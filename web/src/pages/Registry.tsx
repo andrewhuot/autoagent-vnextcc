@@ -35,13 +35,6 @@ interface DiffResult {
   diff: string;
 }
 
-interface RawRegistryItem {
-  name?: string;
-  version?: number;
-  created_at?: string;
-  data?: Record<string, unknown>;
-}
-
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`Request failed: ${res.status}`);
@@ -136,16 +129,18 @@ export function Registry() {
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [diffVersions, setDiffVersions] = useState<{ v1: number; v2: number } | null>(null);
 
-  const listQuery = useQuery({
+  const listQuery = useQuery<RegistryItem[]>({
     queryKey: ['registry', activeType, searchQuery],
     queryFn: async () => {
-      const payload = searchQuery.trim()
-        ? await fetchJson<{ results?: unknown[] }>(
-            `/registry/search?q=${encodeURIComponent(searchQuery)}&type=${activeType}`
-          )
-        : await fetchJson<{ items?: unknown[] }>(`/registry/${activeType}`);
-      const items = searchQuery.trim() ? payload.results ?? [] : payload.items ?? [];
-      return items.map(normalizeRegistryItem);
+      if (searchQuery.trim()) {
+        const payload = await fetchJson<{ results?: unknown[] }>(
+          `/registry/search?q=${encodeURIComponent(searchQuery)}&type=${activeType}`
+        );
+        return (payload.results ?? []).map(normalizeRegistryItem);
+      }
+
+      const payload = await fetchJson<{ items?: unknown[] }>(`/registry/${activeType}`);
+      return (payload.items ?? []).map(normalizeRegistryItem);
     },
   });
 

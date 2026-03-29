@@ -35,15 +35,15 @@ describe('AgentStudio', () => {
     await user.type(input, 'Add safety guardrails to prevent PII disclosure');
     await user.click(screen.getByRole('button', { name: 'Queue update' }));
 
-    expect(await screen.findByText(/safety/i)).toBeInTheDocument();
-    expect(screen.getByText('Queued changes')).toBeInTheDocument();
+    expect(await screen.findByText('Add safety guardrails to prevent PII disclosure')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Queued changes' })).toBeInTheDocument();
   });
 
   it('shows initial draft on mount', () => {
     renderWithProviders(<AgentStudio />);
 
-    expect(screen.getByText('Queued changes')).toBeInTheDocument();
-    expect(screen.getByText(/Invoice-first response guardrail/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Queued changes' })).toBeInTheDocument();
+    expect(screen.getAllByText(/Invoice-first response guardrail/i).length).toBeGreaterThan(0);
   });
 
   it('allows sample prompts to be clicked', async () => {

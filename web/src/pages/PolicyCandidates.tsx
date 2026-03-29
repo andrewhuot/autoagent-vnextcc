@@ -76,18 +76,26 @@ const statusColors: Record<PolicyArtifact['status'], string> = {
   rolled_back: 'bg-red-50 text-red-700 border-red-200',
 };
 
-const defaultTrainForm = {
-  mode: 'control',
-  backend: 'vertex_sft',
-  dataset_path: '',
-};
-
 const trainingModes = ['control', 'verifier', 'preference'] as const;
+type TrainingMode = (typeof trainingModes)[number];
 const backendsByMode = {
   control: ['vertex_sft', 'vertex_continuous'],
   verifier: ['openai_rft', 'vertex_sft', 'vertex_continuous'],
   preference: ['openai_dpo', 'vertex_preference', 'vertex_continuous'],
 } as const;
+type TrainingBackend = (typeof backendsByMode)[TrainingMode][number];
+
+interface TrainingForm {
+  mode: TrainingMode;
+  backend: TrainingBackend;
+  dataset_path: string;
+}
+
+const defaultTrainForm: TrainingForm = {
+  mode: 'control',
+  backend: 'vertex_sft',
+  dataset_path: '',
+};
 
 function normalizePolicyArtifact(raw: RawPolicyArtifact): PolicyArtifact {
   return {
@@ -149,14 +157,14 @@ export function PolicyCandidates() {
   const [error, setError] = useState<string | null>(null);
 
   const [showTrainForm, setShowTrainForm] = useState(false);
-  const [trainForm, setTrainForm] = useState({ ...defaultTrainForm });
+  const [trainForm, setTrainForm] = useState<TrainingForm>({ ...defaultTrainForm });
   const [submitting, setSubmitting] = useState(false);
 
   const [selected, setSelected] = useState<PolicyArtifact | null>(null);
   const [opeReport, setOpeReport] = useState<OPEReport | null>(null);
   const [opeLoading, setOpeLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const trainingBackends = backendsByMode[trainForm.mode];
+  const trainingBackends = backendsByMode[trainForm.mode] as readonly TrainingBackend[];
 
   async function loadPolicyData(selectedId?: string) {
     setLoading(true);
@@ -243,9 +251,9 @@ export function PolicyCandidates() {
         return { ...prev, [key]: value };
       }
 
-      const nextMode = value as typeof trainingModes[number];
+      const nextMode = value as TrainingMode;
       const compatibleBackends = backendsByMode[nextMode];
-      const nextBackend = compatibleBackends.includes(prev.backend as typeof compatibleBackends[number])
+      const nextBackend = compatibleBackends.some((backend) => backend === prev.backend)
         ? prev.backend
         : compatibleBackends[0];
 

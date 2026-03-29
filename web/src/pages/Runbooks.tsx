@@ -5,7 +5,6 @@ import { PageHeader } from '../components/PageHeader';
 import { useRunbooks, useRunbookDetail, useApplyRunbook } from '../lib/api';
 import { classNames } from '../lib/utils';
 import { toastSuccess, toastError } from '../lib/toast';
-import type { Runbook } from '../lib/types';
 
 export function Runbooks() {
   const [searchParams, setSearchParams] = useSearchParams();
