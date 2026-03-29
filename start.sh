@@ -108,8 +108,11 @@ mkdir -p .autoagent
 
 # Refuse to touch ports owned by unrelated processes.
 ensure_port_available() {
-  local port=$1
-  local label=$2
+  local port="${1-}"
+  local label="${2-}"
+  if [[ -z "$port" || -z "$label" ]]; then
+    die "Internal error: ensure_port_available requires PORT and LABEL"
+  fi
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
@@ -163,8 +166,11 @@ info "Frontend process started (pid $FRONTEND_PID)"
 step "Waiting for services to be ready"
 
 wait_for_http() {
-  local url=$1
-  local label=$2
+  local url="${1-}"
+  local label="${2-}"
+  if [[ -z "$url" || -z "$label" ]]; then
+    die "Internal error: wait_for_http requires URL and LABEL"
+  fi
   local max_attempts=30
   local attempt=0
   local chars=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')

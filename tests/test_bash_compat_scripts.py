@@ -27,6 +27,9 @@ BASH32_INCOMPATIBLE_PATTERNS = {
     "prefix indirect expansion": re.compile(r"\$\{![A-Za-z_][A-Za-z0-9_]*[@*]\}"),
 }
 UNBRACED_NAMED_VARIABLE = re.compile(r"\$[A-Za-z_][A-Za-z0-9_]*")
+UNSAFE_LOCAL_POSITIONAL_ASSIGNMENT = re.compile(
+    r"\blocal\s+[A-Za-z_][A-Za-z0-9_]*=\$[1-9][0-9]*\b"
+)
 
 
 def _read_script(path: Path) -> str:
@@ -94,5 +97,21 @@ def test_scripts_do_not_use_bash32_incompatible_features(script_path: Path) -> N
             line_number = script_text.count("\n", 0, match.start()) + 1
             line = script_text.splitlines()[line_number - 1]
             failures.append(f"{script_path.name}:{line_number} uses {label}: {line}")
+
+    assert not failures, _format_failures(failures)
+
+
+@pytest.mark.parametrize("script_path", TARGET_SCRIPTS, ids=lambda path: path.name)
+def test_scripts_do_not_use_unset_unsafe_local_positional_assignments(
+    script_path: Path,
+) -> None:
+    failures: list[str] = []
+
+    for line_number, line in enumerate(_read_script(script_path).splitlines(), start=1):
+        if UNSAFE_LOCAL_POSITIONAL_ASSIGNMENT.search(line):
+            failures.append(
+                f"{script_path.name}:{line_number} assigns a local directly from "
+                f"a positional parameter under set -u: {line}"
+            )
 
     assert not failures, _format_failures(failures)

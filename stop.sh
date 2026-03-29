@@ -24,8 +24,12 @@ echo ""
 stopped=0
 
 stop_pid_file() {
-  local file=$1
-  local label=$2
+  local file="${1-}"
+  local label="${2-}"
+  if [[ -z "$file" || -z "$label" ]]; then
+    echo -e "  ${RED}✗  Internal error: stop_pid_file requires FILE and LABEL${RESET}" >&2
+    return 1
+  fi
 
   if [[ -f "$file" ]]; then
     local pid
@@ -49,19 +53,23 @@ stop_pid_file "$FRONTEND_PID_FILE" "Frontend"
 
 # Fallback: only stop processes that look like AutoAgent services.
 is_autoagent_backend_process() {
-  local command_line=$1
+  local command_line="${1-}"
   [[ "$command_line" == *"api.server:app"* ]]
 }
 
 is_autoagent_frontend_process() {
-  local command_line=$1
+  local command_line="${1-}"
   [[ "$command_line" == *"vite"* ]] || [[ "$command_line" == *"npm run dev"* ]]
 }
 
 kill_port() {
-  local port=$1
-  local label=$2
-  local kind=$3
+  local port="${1-}"
+  local label="${2-}"
+  local kind="${3-}"
+  if [[ -z "$port" || -z "$label" || -z "$kind" ]]; then
+    echo -e "  ${RED}✗  Internal error: kill_port requires PORT, LABEL, and KIND${RESET}" >&2
+    return 1
+  fi
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
