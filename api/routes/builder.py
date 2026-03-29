@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from builder.chat_service import BuilderChatService
 from builder.events import BuilderEventType, event_to_dict, serialize_sse_event
 from builder.specialists import list_specialists
 from builder.types import (
@@ -98,6 +99,16 @@ class SpecialistInvokeRequest(BaseModel):
     extra_context: dict[str, Any] | None = None
 
 
+class BuilderChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    session_id: str | None = None
+
+
+class BuilderExportRequest(BaseModel):
+    session_id: str
+    format: str = "yaml"
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -120,6 +131,43 @@ def _state(request: Request, name: str) -> Any:
     if value is None:
         raise HTTPException(status_code=500, detail=f"Builder service '{name}' is not configured")
     return value
+
+
+def _chat_service(request: Request) -> BuilderChatService:
+    service = getattr(request.app.state, "builder_chat_service", None)
+    if service is None:
+        service = BuilderChatService()
+        request.app.state.builder_chat_service = service
+    return service
+
+
+# ---------------------------------------------------------------------------
+# Conversational builder
+# ---------------------------------------------------------------------------
+
+
+@router.post("/chat")
+async def builder_chat(request: Request, body: BuilderChatRequest) -> dict[str, Any]:
+    service = _chat_service(request)
+    return service.handle_message(message=body.message, session_id=body.session_id)
+
+
+@router.get("/session/{session_id}")
+async def get_builder_chat_session(request: Request, session_id: str) -> dict[str, Any]:
+    service = _chat_service(request)
+    session = service.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Builder session not found")
+    return session
+
+
+@router.post("/export")
+async def export_builder_chat_session(request: Request, body: BuilderExportRequest) -> dict[str, str]:
+    service = _chat_service(request)
+    export = service.export_session(session_id=body.session_id, format_name=body.format)
+    if export is None:
+        raise HTTPException(status_code=404, detail="Builder session not found")
+    return export
 
 
 # ---------------------------------------------------------------------------

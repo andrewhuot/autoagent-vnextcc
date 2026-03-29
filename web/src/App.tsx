@@ -1,8 +1,7 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Layout } from './components/Layout';
 import { Dashboard } from './pages/Dashboard';
-import { BuilderWorkspace } from './pages/BuilderWorkspace';
 import { Demo } from './pages/Demo';
 import { EvalRuns } from './pages/EvalRuns';
 import { EvalDetail } from './pages/EvalDetail';
@@ -33,8 +32,6 @@ import { LiveOptimize } from './pages/LiveOptimize';
 import { AdkImport } from './pages/AdkImport';
 import { AdkDeploy } from './pages/AdkDeploy';
 import { AgentSkills } from './pages/AgentSkills';
-import { AgentStudio } from './pages/AgentStudio';
-import { Assistant } from './pages/Assistant';
 import { Notifications } from './pages/Notifications';
 import { Sandbox } from './pages/Sandbox';
 import { Knowledge } from './pages/Knowledge';
@@ -44,7 +41,7 @@ import { RewardStudio } from './pages/RewardStudio';
 import { PreferenceInbox } from './pages/PreferenceInbox';
 import { PolicyCandidates } from './pages/PolicyCandidates';
 import { RewardAudit } from './pages/RewardAudit';
-import { BuilderDemo } from './pages/BuilderDemo';
+import { Builder } from './pages/Builder';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -61,14 +58,13 @@ export default function App() {
       <BrowserRouter>
         <Layout>
           <Routes>
-            {/* Builder Workspace — primary authoring surface */}
-            <Route path="/" element={<BuilderWorkspace />} />
-            <Route path="/builder" element={<BuilderWorkspace />} />
-            {/* Demo route before dynamic :projectId to avoid shadowing */}
-            <Route path="/builder/demo" element={<BuilderDemo />} />
-            <Route path="/builder/*" element={<BuilderWorkspace />} />
-            <Route path="/builder/:projectId" element={<BuilderWorkspace />} />
-            <Route path="/builder/:projectId/:sessionId" element={<BuilderWorkspace />} />
+            <Route path="/" element={<Navigate to="/build" replace />} />
+            <Route path="/build" element={<Builder />} />
+            <Route path="/builder" element={<Navigate to="/build" replace />} />
+            <Route path="/builder/demo" element={<Navigate to="/build" replace />} />
+            <Route path="/builder/*" element={<Navigate to="/build" replace />} />
+            <Route path="/agent-studio" element={<Navigate to="/build" replace />} />
+            <Route path="/assistant" element={<Navigate to="/build" replace />} />
 
             {/* Dashboard moved to /dashboard */}
             <Route path="/dashboard" element={<Dashboard />} />
@@ -102,8 +98,6 @@ export default function App() {
             <Route path="/adk/import" element={<AdkImport />} />
             <Route path="/adk/deploy" element={<AdkDeploy />} />
             <Route path="/agent-skills" element={<AgentSkills />} />
-            <Route path="/agent-studio" element={<AgentStudio />} />
-            <Route path="/assistant" element={<Assistant />} />
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/sandbox" element={<Sandbox />} />
             <Route path="/knowledge" element={<Knowledge />} />

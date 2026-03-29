@@ -220,11 +220,11 @@ export function Dashboard() {
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
-                  onClick={() => { navigate('/builder'); dismissWelcome(); }}
+                  onClick={() => { navigate('/build'); dismissWelcome(); }}
                   className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-200 transition hover:bg-indigo-50 hover:ring-indigo-300"
                 >
                   <Hammer className="h-3.5 w-3.5" />
-                  Builder Workspace
+                  Builder
                 </button>
                 <button
                   onClick={() => { navigate('/demo'); dismissWelcome(); }}
@@ -304,10 +304,10 @@ export function Dashboard() {
               </button>
             </div>
             <button
-              onClick={() => navigate('/intelligence')}
+              onClick={() => navigate('/build')}
               className="rounded-lg border border-sky-300 bg-sky-50 px-3.5 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-100"
             >
-              Build Agent
+              Builder
             </button>
             <button
               onClick={() => navigate('/evals?new=1')}

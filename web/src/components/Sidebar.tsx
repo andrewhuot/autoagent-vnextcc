@@ -27,7 +27,6 @@ import {
   BrainCircuit,
   Download,
   Upload,
-  Bot,
   Bell,
   Award,
   Inbox,
@@ -51,8 +50,8 @@ const navSections: NavSection[] = [
   {
     title: 'Build',
     items: [
-      { to: '/builder', label: 'Builder Workspace', icon: Hammer },
-      { to: '/builder/demo', label: 'Builder Demo', icon: Sparkles },
+      { to: '/build', label: 'Builder', icon: Hammer },
+      { to: '/intelligence', label: 'Intelligence Studio', icon: BrainCircuit },
     ],
   },
   {
@@ -60,7 +59,6 @@ const navSections: NavSection[] = [
     items: [
       { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { to: '/demo', label: 'Demo', icon: Sparkles },
-      { to: '/assistant', label: 'Assistant Chat', icon: Bot },
       { to: '/evals', label: 'Eval Runs', icon: FlaskConical },
       { to: '/conversations', label: 'Conversations', icon: MessageSquare },
       { to: '/loop', label: 'Loop Monitor', icon: RefreshCw },
@@ -74,7 +72,6 @@ const navSections: NavSection[] = [
     items: [
       { to: '/optimize', label: 'Optimize', icon: Zap },
       { to: '/live-optimize', label: 'Live Optimize', icon: Sparkles },
-      { to: '/agent-studio', label: 'Agent Studio Draft', icon: Sparkles },
       { to: '/opportunities', label: 'Opportunities', icon: Flag },
       { to: '/changes', label: 'Changes', icon: GitPullRequest },
       { to: '/experiments', label: 'Experiments', icon: TestTubes },
@@ -105,7 +102,6 @@ const navSections: NavSection[] = [
     title: 'Analysis',
     items: [
       { to: '/context', label: 'Context Workbench', icon: Layers },
-      { to: '/intelligence', label: 'Build Agent', icon: BrainCircuit },
       { to: '/skills', label: 'Skills', icon: Zap },
       { to: '/registry', label: 'Registry', icon: BookOpen },
       { to: '/agent-skills', label: 'Agent Skills', icon: Sparkles },
@@ -170,7 +166,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
                   <NavLink
                     key={to}
                     to={to}
-                    end={to === '/dashboard' || to === '/builder'}
+                    end={to === '/dashboard' || to === '/build'}
                     onClick={onClose}
                     className={({ isActive }) =>
                       classNames(

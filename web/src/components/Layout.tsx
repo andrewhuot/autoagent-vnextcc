@@ -18,12 +18,13 @@ export interface RouteContext {
 }
 
 const staticRouteContexts: Record<string, RouteContext> = {
-  '/': { title: 'Builder Workspace', breadcrumbs: [] },
-  '/builder': { title: 'Builder Workspace', breadcrumbs: [] },
-  '/builder/demo': { title: 'Builder Demo', breadcrumbs: [] },
+  '/': { title: 'Builder', breadcrumbs: [{ label: 'Build' }] },
+  '/build': { title: 'Builder', breadcrumbs: [{ label: 'Build' }] },
+  '/builder': { title: 'Builder', breadcrumbs: [{ label: 'Build' }] },
+  '/builder/demo': { title: 'Builder', breadcrumbs: [{ label: 'Build' }] },
   '/dashboard': { title: 'Dashboard', breadcrumbs: [{ label: 'Operate' }] },
   '/demo': { title: 'Demo', breadcrumbs: [{ label: 'Operate' }] },
-  '/assistant': { title: 'Assistant', breadcrumbs: [] },
+  '/assistant': { title: 'Builder', breadcrumbs: [{ label: 'Build' }] },
   '/evals': { title: 'Eval Runs', breadcrumbs: [{ label: 'Operate' }] },
   '/optimize': { title: 'Optimize', breadcrumbs: [{ label: 'Improve' }] },
   '/live-optimize': { title: 'Live Optimize', breadcrumbs: [{ label: 'Improve' }] },
@@ -44,7 +45,7 @@ const staticRouteContexts: Record<string, RouteContext> = {
   '/context': { title: 'Context Workbench', breadcrumbs: [{ label: 'Analysis' }] },
   '/intelligence': {
     title: 'Intelligence Studio',
-    breadcrumbs: [{ label: 'Analysis' }, { label: 'Build Agent' }],
+    breadcrumbs: [{ label: 'Build' }],
   },
   '/runbooks': { title: 'Runbooks', breadcrumbs: [{ label: 'Governance' }] },
   '/skills': { title: 'Skills', breadcrumbs: [{ label: 'Analysis' }] },
@@ -70,8 +71,8 @@ const staticRouteContexts: Record<string, RouteContext> = {
   },
   '/agent-skills': { title: 'Agent Skills', breadcrumbs: [{ label: 'Analysis' }] },
   '/agent-studio': {
-    title: 'Agent Studio',
-    breadcrumbs: [{ label: 'Improve' }, { label: 'Agent Studio' }],
+    title: 'Builder',
+    breadcrumbs: [{ label: 'Build' }],
   },
   '/notifications': { title: 'Notifications', breadcrumbs: [{ label: 'Governance' }] },
   '/sandbox': { title: 'Sandbox', breadcrumbs: [{ label: 'Analysis' }] },
@@ -105,7 +106,7 @@ export function getRouteContext(pathname: string): RouteContext {
   }
 
   if (pathname.startsWith('/builder/')) {
-    return { title: 'Builder Workspace', breadcrumbs: [] };
+    return { title: 'Builder', breadcrumbs: [{ label: 'Build' }] };
   }
 
   return staticRouteContexts[pathname] ?? {
@@ -148,12 +149,6 @@ export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const routeContext = useMemo(() => getRouteContext(location.pathname), [location.pathname]);
   const title = routeContext.title;
-  const isAssistantRoute = location.pathname === '/assistant';
-  const isBuilderRoute =
-    location.pathname === '/' ||
-    location.pathname === '/builder' ||
-    location.pathname.startsWith('/builder/');
-  const isFullWidthRoute = isAssistantRoute || isBuilderRoute;
   const crumbItems = routeContext.breadcrumbs;
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
@@ -168,66 +163,58 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-surface)] text-gray-900">
-      {isFullWidthRoute ? null : (
-        <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
-      )}
+      <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
         <MockModeBanner />
-        {isFullWidthRoute ? null : (
-          <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-gray-200 bg-white/80 px-5 py-3 backdrop-blur-sm">
-            <div className="flex min-w-0 items-center gap-3">
-              <button
-                onClick={() => setMobileSidebarOpen(true)}
-                className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
-                aria-label="Open navigation"
-              >
-                <Menu className="h-4 w-4" />
-              </button>
-
-              <div className="min-w-0">
-                <h1 className="truncate text-[15px] font-semibold text-gray-900">{title}</h1>
-                {crumbItems.length > 0 && (
-                  <div className="flex items-center gap-1 text-xs text-gray-400">
-                    {crumbItems.map((crumb, index) => (
-                      <span key={`${crumb.label}-${index}`} className="flex items-center gap-1">
-                        {crumb.href ? (
-                          <Link to={crumb.href} className="hover:text-gray-600">
-                            {crumb.label}
-                          </Link>
-                        ) : (
-                          <span className="text-gray-500">{crumb.label}</span>
-                        )}
-                        {index < crumbItems.length - 1 && <span className="text-gray-300">/</span>}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
+        <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-gray-200 bg-white/80 px-5 py-3 backdrop-blur-sm">
+          <div className="flex min-w-0 items-center gap-3">
             <button
-              onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
-              className="hidden items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:text-gray-500 sm:inline-flex"
-              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              className="rounded-md p-1.5 text-gray-500 hover:bg-gray-100 lg:hidden"
+              aria-label="Open navigation"
             >
-              <Search className="h-3 w-3" />
-              Search...
-              <kbd className="ml-2 rounded border border-gray-200 bg-gray-50 px-1 py-0.5 font-mono text-[10px] text-gray-400">
-                &#8984;K
-              </kbd>
+              <Menu className="h-4 w-4" />
             </button>
-          </header>
-        )}
 
-        <main className={isFullWidthRoute ? 'flex-1' : 'flex-1 px-5 py-6 sm:px-6'}>
+            <div className="min-w-0">
+              <h1 className="truncate text-[15px] font-semibold text-gray-900">{title}</h1>
+              {crumbItems.length > 0 && (
+                <div className="flex items-center gap-1 text-xs text-gray-400">
+                  {crumbItems.map((crumb, index) => (
+                    <span key={`${crumb.label}-${index}`} className="flex items-center gap-1">
+                      {crumb.href ? (
+                        <Link to={crumb.href} className="hover:text-gray-600">
+                          {crumb.label}
+                        </Link>
+                      ) : (
+                        <span className="text-gray-500">{crumb.label}</span>
+                      )}
+                      {index < crumbItems.length - 1 && <span className="text-gray-300">/</span>}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          <button
+            onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
+            className="hidden items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:text-gray-500 sm:inline-flex"
+            type="button"
+          >
+            <Search className="h-3 w-3" />
+            Search...
+            <kbd className="ml-2 rounded border border-gray-200 bg-gray-50 px-1 py-0.5 font-mono text-[10px] text-gray-400">
+              &#8984;K
+            </kbd>
+          </button>
+        </header>
+
+        <main className="flex-1 px-5 py-6 sm:px-6">
           <div
             key={location.pathname}
-            className={
-              isFullWidthRoute
-                ? 'h-full w-full animate-[fadeIn_150ms_ease-out]'
-                : 'mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]'
-            }
+            className="mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]"
           >
             {children}
           </div>

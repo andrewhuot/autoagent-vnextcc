@@ -966,6 +966,50 @@ export interface PromptBuildArtifact {
   workspace_access: WorkspaceAccess;
 }
 
+export interface AgentTool {
+  name: string;
+  description: string;
+  parameters: string[];
+}
+
+export interface RoutingRule {
+  condition: string;
+  action: string;
+  priority: number;
+}
+
+export interface AgentPolicy {
+  name: string;
+  description: string;
+  enforcement: 'strict' | 'advisory';
+}
+
+export interface EvalCriterion {
+  name: string;
+  weight: number;
+  description: string;
+}
+
+export interface AgentConfigMetadata {
+  agent_name: string;
+  version: string;
+  created_from: 'prompt' | 'transcript';
+}
+
+export interface GeneratedAgentConfig {
+  system_prompt: string;
+  tools: AgentTool[];
+  routing_rules: RoutingRule[];
+  policies: AgentPolicy[];
+  eval_criteria: EvalCriterion[];
+  metadata: AgentConfigMetadata;
+}
+
+export interface ChatRefineResponse {
+  response: string;
+  config: GeneratedAgentConfig;
+}
+
 export interface ApplyInsightResult {
   status: string;
   drafted_change_prompt: string;

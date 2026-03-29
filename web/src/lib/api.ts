@@ -56,6 +56,8 @@ import type {
   ParetoFrontier,
   ProjectMemory,
   PromptBuildArtifact,
+  GeneratedAgentConfig,
+  ChatRefineResponse,
   Runbook,
   SkillLeaderboardEntry,
   SkillMarketplaceListing,
@@ -2070,6 +2072,26 @@ export function useBuildAgentArtifact() {
   return useMutation<PromptBuildArtifact, ApiRequestError, { prompt: string; connectors: string[] }>({
     mutationFn: (body) =>
       fetchApi('/intelligence/build', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  });
+}
+
+export function useGenerateAgent() {
+  return useMutation<GeneratedAgentConfig, ApiRequestError, { prompt: string; transcript_report_id?: string }>({
+    mutationFn: (body) =>
+      fetchApi('/intelligence/generate-agent', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+  });
+}
+
+export function useChatRefine() {
+  return useMutation<ChatRefineResponse, ApiRequestError, { message: string; config: GeneratedAgentConfig }>({
+    mutationFn: (body) =>
+      fetchApi('/intelligence/chat', {
         method: 'POST',
         body: JSON.stringify(body),
       }),

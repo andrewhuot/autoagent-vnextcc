@@ -152,6 +152,105 @@ class AcceptSuiteResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Generated eval review API models
+# ---------------------------------------------------------------------------
+
+class GenerateEvalSuiteRequest(BaseModel):
+    """Request to synthesize a generated eval suite from config or transcripts."""
+
+    agent_name: str = Field("agent", description="Human-readable agent name")
+    agent_config: Optional[dict[str, Any]] = Field(
+        None,
+        description="Explicit agent configuration to analyze",
+    )
+    config_path: Optional[str] = Field(
+        None,
+        description="Optional path to an agent config file",
+    )
+    transcripts: Optional[list[dict[str, Any]]] = Field(
+        None,
+        description="Optional transcript payloads for transcript-informed generation",
+    )
+    from_transcripts: bool = Field(
+        False,
+        description="When true, pull recent conversations from the conversation store",
+    )
+    conversation_limit: int = Field(
+        25,
+        ge=1,
+        le=500,
+        description="Maximum number of recent conversations to ingest when from_transcripts is enabled",
+    )
+
+
+class GenerateEvalSuiteResponse(BaseModel):
+    """Background-task response for generated eval suite synthesis."""
+
+    task_id: str = Field(..., description="Background task identifier")
+    message: str = Field(..., description="Human-readable status message")
+
+
+class GeneratedEvalSuiteSummary(BaseModel):
+    """Compact summary for a generated eval suite list row."""
+
+    suite_id: str
+    agent_name: str
+    source_kind: str = "config"
+    status: str
+    mock_mode: bool = True
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    accepted_at: Optional[str] = None
+    accepted_eval_path: Optional[str] = None
+    transcript_count: int = 0
+    category_counts: dict[str, int] = Field(default_factory=dict)
+    case_count: int = 0
+
+
+class GeneratedEvalListResponse(BaseModel):
+    """List response for generated eval suites."""
+
+    suites: list[GeneratedEvalSuiteSummary] = Field(default_factory=list)
+    count: int = 0
+
+
+class GeneratedEvalSuiteResponse(BaseModel):
+    """Detailed generated eval suite response."""
+
+    suite_id: str
+    agent_name: str
+    created_at: str
+    status: str
+    categories: dict[str, list[GeneratedCaseResponse]] = Field(default_factory=dict)
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class GeneratedEvalCasePatchRequest(BaseModel):
+    """Inline edit request for one generated eval case."""
+
+    category: Optional[str] = None
+    user_message: Optional[str] = None
+    expected_behavior: Optional[str] = None
+    expected_specialist: Optional[str] = None
+    expected_keywords: Optional[list[str]] = None
+    expected_tool: Optional[str] = None
+    safety_probe: Optional[bool] = None
+    difficulty: Optional[str] = None
+    rationale: Optional[str] = None
+    split: Optional[str] = None
+    scoring_criteria: Optional[list[str]] = None
+
+
+class AcceptGeneratedEvalSuiteRequest(BaseModel):
+    """Request to accept a generated eval suite into an eval corpus."""
+
+    eval_cases_dir: Optional[str] = Field(
+        None,
+        description="Optional directory where accepted eval case files should be written",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Optimize models
 # ---------------------------------------------------------------------------
 
