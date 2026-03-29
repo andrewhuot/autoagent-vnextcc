@@ -217,13 +217,16 @@ main() {
   info "This may take 30-60 seconds on first run..."
   info "Upgrading pip, setuptools, and wheel inside .venv..."
 
-  "$VENV_PYTHON" -m pip install --upgrade pip setuptools wheel >/dev/null
+  # Use PyPI explicitly to avoid corporate/custom index issues with build deps
+  PYPI_INDEX="--index-url https://pypi.org/simple/"
 
-  if "$VENV_PYTHON" -m pip install -e '.[dev]' --quiet 2>&1 | tail -3; then
+  "$VENV_PYTHON" -m pip install $PYPI_INDEX --upgrade pip setuptools wheel >/dev/null
+
+  if "$VENV_PYTHON" -m pip install $PYPI_INDEX -e '.[dev]' --quiet 2>&1 | tail -3; then
     ok "Python dependencies installed"
   else
     # Retry with output visible
-    "$VENV_PYTHON" -m pip install -e '.[dev]' || die "pip install failed. Check the error above."
+    "$VENV_PYTHON" -m pip install $PYPI_INDEX -e '.[dev]' || die "pip install failed. Check the error above."
     ok "Python dependencies installed"
   fi
 
