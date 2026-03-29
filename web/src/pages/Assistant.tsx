@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Paperclip, Send, Trash2, Loader2 } from 'lucide-react';
+import { AlertTriangle, Paperclip, Send, Trash2, Loader2 } from 'lucide-react';
 import { ChatMessage } from '../components/assistant/ChatMessage';
 import { FileUpload } from '../components/assistant/FileUpload';
 import { QuickActions } from '../components/assistant/QuickActions';
@@ -113,8 +113,20 @@ export function Assistant() {
         <div>
           <h1 className="text-2xl font-bold text-gray-900">AutoAgent Assistant</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Build, optimize, and debug AI agents through natural language
+            Preview conversational workflows for building, optimizing, and debugging AI agents.
           </p>
+          <div className="mt-3 max-w-2xl rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Preview mode</p>
+                <p className="mt-1">
+                  Assistant responses and actions are simulated in this build. Use the Builder Workspace,
+                  Intelligence Studio, and Deploy pages for live workflows.
+                </p>
+              </div>
+            </div>
+          </div>
           <div className="mt-3 inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
             Recommended builder:
             <button

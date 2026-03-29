@@ -391,7 +391,7 @@ export function Dashboard() {
       {/* Diagnostics (collapsible) - only in Advanced mode */}
       {viewMode === 'advanced' && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">
-          <details>
+          <details open>
             <summary className="cursor-pointer select-none text-sm font-semibold text-gray-900">Why? Diagnostic Signals</summary>
             <div className="mt-4 space-y-4">
             {/* Metric bars */}

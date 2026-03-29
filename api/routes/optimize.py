@@ -53,6 +53,8 @@ def _ensure_active_config(deployer: Any) -> dict:
 @router.post("/run", response_model=OptimizeResponse, status_code=202)
 async def start_optimization(body: OptimizeRequest, request: Request) -> OptimizeResponse:
     """Start an optimization cycle as a background task."""
+    from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
+
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
     observer = request.app.state.observer
@@ -63,19 +65,100 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
 
     window = body.window
     force = body.force
+    mode_config = ModeConfig(
+        mode=OptimizationMode(body.mode),
+        objective=body.objective,
+        guardrails=body.guardrails,
+        budget_per_cycle=body.budget_dollars,
+        budget_daily=body.budget_dollars,
+    )
+    resolved_mode = ModeRouter().resolve(mode_config)
 
     def run_optimize(task: Task) -> dict:
         import asyncio
 
-        task.progress = 10
-        report = observer.observe(window=window)
-        task.progress = 20
+        original_strategy = optimizer.search_strategy
+        original_max_candidates = optimizer.search_budget.max_candidates
+        original_max_eval_budget = optimizer.search_budget.max_eval_budget
+        original_max_cost = optimizer.search_budget.max_cost_dollars
 
-        if not report.needs_optimization and not force:
+        optimizer.search_strategy = resolved_mode.search_strategy
+        optimizer.search_budget.max_candidates = resolved_mode.max_candidates
+        optimizer.search_budget.max_eval_budget = resolved_mode.max_eval_budget
+        optimizer.search_budget.max_cost_dollars = body.budget_dollars
+
+        task.progress = 10
+        try:
+            report = observer.observe(window=window)
+            task.progress = 20
+
+            if not report.needs_optimization and not force:
+                diagnostics = optimizer.get_strategy_diagnostics()
+                result = OptimizeCycleResult(
+                    accepted=False,
+                    status_message=f"System healthy; no optimization needed (mode={body.mode})",
+                    search_strategy=diagnostics.strategy,
+                    selected_operator_family=diagnostics.selected_operator_family,
+                    pareto_front=diagnostics.pareto_front,
+                    pareto_recommendation_id=diagnostics.pareto_recommendation_id,
+                    governance_notes=diagnostics.governance_notes,
+                    global_dimensions=diagnostics.global_dimensions,
+                ).model_dump()
+                task.result = result
+                return result
+
+            task.progress = 30
+            current_config = _ensure_active_config(deployer)
+            failure_samples = _build_failure_samples(store)
+
+            task.progress = 40
+            new_config, status_msg = optimizer.optimize(
+                report,
+                current_config,
+                failure_samples=failure_samples,
+            )
+            task.progress = 70
+
+            deploy_msg: str | None = None
+            score_before: float | None = None
+            score_after: float | None = None
+
+            if new_config is not None:
+                score = eval_runner.run(config=new_config)
+                score_after = score.composite
+                # Get baseline score
+                baseline = eval_runner.run(config=current_config)
+                score_before = baseline.composite
+
+                scores_dict = {
+                    "quality": score.quality,
+                    "safety": score.safety,
+                    "latency": score.latency,
+                    "cost": score.cost,
+                    "composite": score.composite,
+                    "global_dimensions": score.global_dimensions,
+                    "per_agent_dimensions": score.per_agent_dimensions,
+                }
+                deploy_msg = deployer.deploy(new_config, scores_dict)
+                task.progress = 90
+
+            # Get the latest attempt for details
+            change_desc: str | None = None
+            config_diff: str | None = None
+            recent = request.app.state.optimization_memory.recent(limit=1)
+            if recent:
+                change_desc = recent[0].change_description
+                config_diff = recent[0].config_diff
+
             diagnostics = optimizer.get_strategy_diagnostics()
             result = OptimizeCycleResult(
-                accepted=False,
-                status_message="System healthy; no optimization needed",
+                accepted=new_config is not None,
+                status_message=f"{status_msg} (mode={body.mode})",
+                change_description=change_desc,
+                config_diff=config_diff,
+                score_before=score_before,
+                score_after=score_after,
+                deploy_message=deploy_msg,
                 search_strategy=diagnostics.strategy,
                 selected_operator_family=diagnostics.selected_operator_family,
                 pareto_front=diagnostics.pareto_front,
@@ -84,85 +167,28 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                 global_dimensions=diagnostics.global_dimensions,
             ).model_dump()
             task.result = result
+
+            # Best-effort websocket broadcast
+            try:
+                loop = asyncio.new_event_loop()
+                loop.run_until_complete(
+                    ws_manager.broadcast({
+                        "type": "optimize_complete",
+                        "task_id": task.task_id,
+                        "accepted": new_config is not None,
+                        "status": status_msg,
+                    })
+                )
+                loop.close()
+            except Exception:
+                pass
+
             return result
-
-        task.progress = 30
-        current_config = _ensure_active_config(deployer)
-        failure_samples = _build_failure_samples(store)
-
-        task.progress = 40
-        new_config, status_msg = optimizer.optimize(
-            report,
-            current_config,
-            failure_samples=failure_samples,
-        )
-        task.progress = 70
-
-        deploy_msg: str | None = None
-        score_before: float | None = None
-        score_after: float | None = None
-
-        if new_config is not None:
-            score = eval_runner.run(config=new_config)
-            score_after = score.composite
-            # Get baseline score
-            baseline = eval_runner.run(config=current_config)
-            score_before = baseline.composite
-
-            scores_dict = {
-                "quality": score.quality,
-                "safety": score.safety,
-                "latency": score.latency,
-                "cost": score.cost,
-                "composite": score.composite,
-                "global_dimensions": score.global_dimensions,
-                "per_agent_dimensions": score.per_agent_dimensions,
-            }
-            deploy_msg = deployer.deploy(new_config, scores_dict)
-            task.progress = 90
-
-        # Get the latest attempt for details
-        change_desc: str | None = None
-        config_diff: str | None = None
-        recent = request.app.state.optimization_memory.recent(limit=1)
-        if recent:
-            change_desc = recent[0].change_description
-            config_diff = recent[0].config_diff
-
-        diagnostics = optimizer.get_strategy_diagnostics()
-        result = OptimizeCycleResult(
-            accepted=new_config is not None,
-            status_message=status_msg,
-            change_description=change_desc,
-            config_diff=config_diff,
-            score_before=score_before,
-            score_after=score_after,
-            deploy_message=deploy_msg,
-            search_strategy=diagnostics.strategy,
-            selected_operator_family=diagnostics.selected_operator_family,
-            pareto_front=diagnostics.pareto_front,
-            pareto_recommendation_id=diagnostics.pareto_recommendation_id,
-            governance_notes=diagnostics.governance_notes,
-            global_dimensions=diagnostics.global_dimensions,
-        ).model_dump()
-        task.result = result
-
-        # Best-effort websocket broadcast
-        try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                ws_manager.broadcast({
-                    "type": "optimize_complete",
-                    "task_id": task.task_id,
-                    "accepted": new_config is not None,
-                    "status": status_msg,
-                })
-            )
-            loop.close()
-        except Exception:
-            pass
-
-        return result
+        finally:
+            optimizer.search_strategy = original_strategy
+            optimizer.search_budget.max_candidates = original_max_candidates
+            optimizer.search_budget.max_eval_budget = original_max_eval_budget
+            optimizer.search_budget.max_cost_dollars = original_max_cost
 
     task = task_manager.create_task("optimize", run_optimize)
     return OptimizeResponse(task_id=task.task_id, message="Optimization started")

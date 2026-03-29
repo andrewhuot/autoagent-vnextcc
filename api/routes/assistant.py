@@ -30,7 +30,7 @@ import uuid
 from typing import Any, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from api.models import (
     AssistantMessageRequest,
@@ -42,6 +42,9 @@ from api.models import (
 )
 
 router = APIRouter(prefix="/api/assistant", tags=["assistant"])
+ASSISTANT_MOCK_WARNING = (
+    "Preview mode: assistant responses and actions are simulated in this build."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +99,16 @@ def _resolve_session(session_id: str | None, *, create_if_missing: bool) -> tupl
         return _get_or_create_session(None)
 
     raise HTTPException(status_code=404, detail="No assistant session found")
+
+
+def _find_uploaded_file(file_id: str) -> dict[str, Any] | None:
+    """Locate uploaded file metadata/content across all in-memory sessions."""
+    for session_data in _sessions.values():
+        uploaded_files = session_data.get("context", {}).get("uploaded_files", [])
+        for uploaded_file in uploaded_files:
+            if uploaded_file.get("file_id") == file_id:
+                return uploaded_file
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -493,6 +506,8 @@ async def upload_files(
             "file_id": file_id,
             "filename": filename,
             "size_bytes": file_size,
+            "content": content,
+            "content_type": uploaded.content_type or "application/octet-stream",
             "description": description,
         })
 
@@ -506,6 +521,28 @@ async def upload_files(
     if uploaded_files:
         payload["url"] = f"/api/assistant/uploads/{uploaded_files[0]['file_id']}"
     return payload
+
+
+@router.get("/uploads/{file_id}")
+async def get_uploaded_file(file_id: str) -> Response:
+    """Return uploaded file bytes for the frontend URL contract."""
+    uploaded_file = _find_uploaded_file(file_id)
+    if uploaded_file is None:
+        raise HTTPException(status_code=404, detail=f"Uploaded file not found: {file_id}")
+
+    filename = uploaded_file.get("filename", "uploaded-file")
+    content_type = uploaded_file.get("content_type") or "application/octet-stream"
+    content = uploaded_file.get("content")
+    if not isinstance(content, (bytes, bytearray)):
+        raise HTTPException(status_code=410, detail=f"Uploaded file content unavailable: {file_id}")
+
+    return Response(
+        content=bytes(content),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+        },
+    )
 
 
 @router.get("/history")
@@ -621,6 +658,8 @@ async def get_suggestions(
         session_id=session_id,
         suggestions=suggestions,
         quick_actions=quick_actions,
+        mock_mode=True,
+        warning=ASSISTANT_MOCK_WARNING,
     )
 
 
@@ -670,7 +709,7 @@ async def execute_action(
             "score_before": 0.72,
             "score_after": 0.81,
         }
-        message = "Fix applied successfully. Running evaluation..."
+        message = "Preview only: simulated fix applied. No config was changed."
 
     elif action_id == "deploy":
         # Deploy change to production
@@ -679,7 +718,7 @@ async def execute_action(
             "version": "v1.2.3",
             "canary_progress": 0.0,
         }
-        message = "Deployment started. Monitoring canary rollout..."
+        message = "Preview only: simulated deployment started. No live deploy was triggered."
 
     elif action_id == "rollback":
         # Rollback deployed change
@@ -687,7 +726,7 @@ async def execute_action(
             "rolled_back": True,
             "reverted_to": "v1.2.2",
         }
-        message = "Rolled back to previous version"
+        message = "Preview only: simulated rollback completed. No live deployment changed."
 
     elif action_id == "show_examples":
         # Fetch example conversations
@@ -697,7 +736,7 @@ async def execute_action(
                 {"conversation_id": "conv_456", "snippet": "User: Where's my order?..."},
             ]
         }
-        message = "Showing example conversations"
+        message = "Preview only: showing simulated example conversations."
 
     elif action_id == "run_eval":
         # Trigger evaluation run
@@ -705,7 +744,7 @@ async def execute_action(
             "eval_id": str(uuid.uuid4()),
             "status": "running",
         }
-        message = "Started evaluation run"
+        message = "Preview only: simulated eval run started. No live eval was launched."
 
     else:
         raise HTTPException(
@@ -725,4 +764,6 @@ async def execute_action(
         action_id=action_id,
         result=result,
         message=message,
+        mock_mode=True,
+        warning=ASSISTANT_MOCK_WARNING,
     )

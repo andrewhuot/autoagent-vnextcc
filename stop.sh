@@ -47,22 +47,49 @@ stop_pid_file() {
 stop_pid_file "$BACKEND_PID_FILE"  "Backend"
 stop_pid_file "$FRONTEND_PID_FILE" "Frontend"
 
-# Fallback: kill by port if pid files weren't found
+# Fallback: only stop processes that look like AutoAgent services.
+is_autoagent_backend_process() {
+  local command_line=$1
+  [[ "$command_line" == *"api.server:app"* ]]
+}
+
+is_autoagent_frontend_process() {
+  local command_line=$1
+  [[ "$command_line" == *"vite"* ]] || [[ "$command_line" == *"npm run dev"* ]]
+}
+
 kill_port() {
   local port=$1
   local label=$2
+  local kind=$3
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
-    if kill "$pid" 2>/dev/null; then
-      echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped ${label} on port ${port} (pid ${pid})"
-      stopped=$(( stopped + 1 ))
+    local command_line
+    command_line=$(ps -p "$pid" -o command= 2>/dev/null || true)
+
+    if [[ "$kind" == "backend" ]] && is_autoagent_backend_process "$command_line"; then
+      if kill "$pid" 2>/dev/null; then
+        echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped ${label} on port ${port} (pid ${pid})"
+        stopped=$(( stopped + 1 ))
+      fi
+      return
     fi
+
+    if [[ "$kind" == "frontend" ]] && is_autoagent_frontend_process "$command_line"; then
+      if kill "$pid" 2>/dev/null; then
+        echo -e "  ${BOLD_GREEN}✓${RESET}  Stopped ${label} on port ${port} (pid ${pid})"
+        stopped=$(( stopped + 1 ))
+      fi
+      return
+    fi
+
+    echo -e "  ${DIM}ℹ  Leaving ${label} port ${port} alone (pid ${pid} does not look like AutoAgent)${RESET}"
   fi
 }
 
-kill_port $BACKEND_PORT  "Backend"
-kill_port $FRONTEND_PORT "Frontend"
+kill_port $BACKEND_PORT  "Backend" "backend"
+kill_port $FRONTEND_PORT "Frontend" "frontend"
 
 echo ""
 if [[ $stopped -gt 0 ]]; then

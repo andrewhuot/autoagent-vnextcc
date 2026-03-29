@@ -111,6 +111,7 @@ async def lifespan(app: FastAPI):
     from deployer.canary import Deployer
     from deployer.versioning import ConfigVersionManager
     from evals.runner import EvalRunner
+    from evals.what_if import WhatIfEngine
     from logger.structured import configure_structured_logging
     from logger.store import ConversationStore
     from observer import Observer
@@ -245,6 +246,7 @@ async def lifespan(app: FastAPI):
     app.state.eval_runner = eval_runner
     app.state.proposer = proposer
     app.state.optimizer = optimizer
+    app.state.what_if_engine = WhatIfEngine(conversation_store=conversation_store)
     app.state.deployer = deployer
     app.state.task_manager = task_manager
     app.state.ws_manager = ws_manager

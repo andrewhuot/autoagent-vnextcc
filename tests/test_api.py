@@ -114,6 +114,7 @@ class TestRequestModels:
         req = OptimizeRequest()
         assert req.window == 100
         assert req.force is False
+        assert req.mode == "standard"
 
     def test_deploy_request(self):
         req = DeployRequest(strategy=DeployStrategy.canary)

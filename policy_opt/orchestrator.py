@@ -83,7 +83,7 @@ class PolicyOptOrchestrator:
 
         # Try to get backend and run training
         try:
-            from policy_opt.backends.base import get_backend
+            from policy_opt.backends import get_backend
             backend_impl = get_backend(job.backend)
 
             # Validate dataset
@@ -164,6 +164,7 @@ class PolicyOptOrchestrator:
 
         # Update policy with eval report
         policy.eval_report = report
+        self._registry.update_policy(policy)
         return report
 
     def promote_policy(self, policy_id: str) -> PolicyArtifact:
@@ -177,7 +178,7 @@ class PolicyOptOrchestrator:
             raise KeyError(f"Policy not found: {policy_id}")
 
         # Check that policy has been evaluated
-        if not policy.eval_report:
+        if not policy.eval_report and not policy.ope_report:
             raise ValueError(f"Policy {policy_id} has not been evaluated yet")
 
         # Demote current active policy of same type

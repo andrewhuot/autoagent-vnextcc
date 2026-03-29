@@ -50,10 +50,11 @@ async def quickfix(request: Request, body: QuickfixRequest):
     # Mock response for UI integration
     return {
         "success": True,
+        "applied": False,
         "runbook": runbook_name,
         "score_before": 0.72,
         "score_after": 0.78,
         "improvement": 0.06,
         "source": "mock",
-        "warning": "This is a mock response. Full implementation pending.",
+        "warning": "Preview only: this quick fix is simulated and does not change the live config yet.",
     }

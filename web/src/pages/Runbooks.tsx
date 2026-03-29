@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Search, ChevronDown, ChevronRight, BookOpen, Tag, Play, FileCode, Shield, ArrowLeftRight } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { useRunbooks, useRunbookDetail, useApplyRunbook } from '../lib/api';
@@ -8,13 +8,17 @@ import { toastSuccess, toastError } from '../lib/toast';
 import type { Runbook } from '../lib/types';
 
 export function Runbooks() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [expandedName, setExpandedName] = useState<string | null>(null);
+  const hasHandledShortcut = useRef(false);
 
   const { data: runbooks = [], isLoading, isError } = useRunbooks();
   const detailQuery = useRunbookDetail(expandedName ?? undefined);
   const applyMutation = useApplyRunbook();
+  const requestedAction = searchParams.get('action');
+  const requestedRunbook = searchParams.get('runbook');
 
   // Collect all unique tags
   const allTags = Array.from(new Set(runbooks.flatMap((p) => p.tags))).sort();
@@ -46,6 +50,41 @@ export function Runbooks() {
   function toggleExpand(name: string) {
     setExpandedName((current) => (current === name ? null : name));
   }
+
+  useEffect(() => {
+    if (!requestedRunbook) {
+      hasHandledShortcut.current = false;
+      return;
+    }
+
+    const matchedRunbook = runbooks.find((runbook) => runbook.name === requestedRunbook);
+    if (!matchedRunbook) {
+      return;
+    }
+
+    if (expandedName !== requestedRunbook) {
+      setExpandedName(requestedRunbook);
+    }
+
+    if (requestedAction !== 'apply' || hasHandledShortcut.current) {
+      return;
+    }
+
+    hasHandledShortcut.current = true;
+    handleApply(requestedRunbook);
+
+    const next = new URLSearchParams(searchParams);
+    next.delete('action');
+    setSearchParams(next, { replace: true });
+  }, [
+    expandedName,
+    requestedAction,
+    requestedRunbook,
+    runbooks,
+    searchParams,
+    setSearchParams,
+    applyMutation,
+  ]);
 
   return (
     <div className="space-y-6">

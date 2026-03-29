@@ -423,7 +423,9 @@ export function PolicyCandidates() {
                     </div>
                     <StatusBadge variant={statusVariant(j.status)} label={j.status} />
                   </div>
-                  <p className="mt-1.5 truncate text-xs text-gray-500">{j.dataset_path}</p>
+                  <p className="mt-1.5 break-all font-mono text-xs leading-relaxed text-gray-500">
+                    {j.dataset_path}
+                  </p>
                   <p className="mt-1 text-[11px] text-gray-400">{formatTimestamp(j.created_at)}</p>
                 </div>
               ))}

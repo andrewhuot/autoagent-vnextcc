@@ -1,6 +1,7 @@
 """Agent skill generation API endpoints."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -13,6 +14,28 @@ def _get_skill_store(request: Request):
     if store is None:
         raise HTTPException(status_code=503, detail="Agent skill store not configured")
     return store
+
+
+def _get_apply_root(request: Request) -> Path:
+    """Return the workspace root that generated skills may write into."""
+    configured_root = getattr(request.app.state, "agent_skills_apply_root", None)
+    return Path(configured_root or Path.cwd()).resolve()
+
+
+def _resolve_within_root(root: Path, requested_path: str, *, allow_absolute: bool) -> Path:
+    """Resolve a requested path and ensure it stays within *root*."""
+    candidate = Path(requested_path)
+    if candidate.is_absolute():
+        if not allow_absolute:
+            raise HTTPException(status_code=400, detail="Generated file paths must be relative")
+        resolved = candidate.resolve()
+    else:
+        resolved = (root / candidate).resolve()
+
+    if not resolved.is_relative_to(root):
+        raise HTTPException(status_code=400, detail=f"Path escapes workspace root: {requested_path}")
+
+    return resolved
 
 
 @router.get("/gaps")
@@ -141,16 +164,16 @@ async def apply_skill(request: Request, skill_id: str) -> dict[str, Any]:
             detail=f"Skill must be approved before applying (current: {skill.status})",
         )
 
-    # Write files to target directory
-    import os
+    workspace_root = _get_apply_root(request)
+    target_root = _resolve_within_root(workspace_root, target, allow_absolute=True)
 
     files_written: list[str] = []
     for f in skill.files:
-        full_path = os.path.join(target, f.path)
-        os.makedirs(os.path.dirname(full_path), exist_ok=True)
-        with open(full_path, "w") as fh:
+        full_path = _resolve_within_root(target_root, f.path, allow_absolute=False)
+        full_path.parent.mkdir(parents=True, exist_ok=True)
+        with full_path.open("w", encoding="utf-8") as fh:
             fh.write(f.content)
-        files_written.append(full_path)
+        files_written.append(str(full_path))
 
     return {
         "skill_id": skill_id,

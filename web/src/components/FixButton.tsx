@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Wrench, Loader2, CheckCircle, XCircle } from 'lucide-react';
+import { Wrench, Loader2, CheckCircle, XCircle, AlertTriangle } from 'lucide-react';
 
 interface FixButtonProps {
   failureFamily: string;
@@ -21,6 +21,7 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
   const [showModal, setShowModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [previewWarning, setPreviewWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const runbook = RUNBOOK_MAP[failureFamily];
@@ -32,6 +33,7 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
   const handleApply = async () => {
     setLoading(true);
     setError(null);
+    setPreviewWarning(null);
 
     try {
       const response = await fetch('/api/quickfix', {
@@ -46,12 +48,23 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
       }
 
       const result = await response.json();
-      setSuccess(result.success);
-
-      if (result.success) {
+      const isPreview = result.source === 'mock' || result.applied === false;
+      if (isPreview) {
+        setSuccess(false);
+        const previewMessage = typeof result.warning === 'string' && result.warning.trim().length > 0
+          ? result.warning.trim()
+          : 'this action simulated a fix and did not change the live config.';
+        setPreviewWarning(
+          /preview only/i.test(previewMessage)
+            ? previewMessage
+            : `Preview only: ${previewMessage}`
+        );
+      } else {
+        setSuccess(Boolean(result.success));
         setTimeout(() => {
           setShowModal(false);
           setSuccess(false);
+          setPreviewWarning(null);
           onComplete?.();
         }, 2000);
       }
@@ -72,6 +85,8 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
         ) : success ? (
           <CheckCircle className="h-3.5 w-3.5 text-green-600" />
+        ) : previewWarning ? (
+          <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
         ) : error ? (
           <XCircle className="h-3.5 w-3.5 text-red-600" />
         ) : (
@@ -102,12 +117,19 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
               </div>
             )}
 
+            {previewWarning && (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                {previewWarning}
+              </div>
+            )}
+
             <div className="mt-6 flex gap-3">
               <button
                 onClick={() => {
                   setShowModal(false);
                   setError(null);
                   setSuccess(false);
+                  setPreviewWarning(null);
                 }}
                 disabled={loading}
                 className="flex-1 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
@@ -126,6 +148,8 @@ export function FixButton({ failureFamily, failureCount, onComplete }: FixButton
                   </span>
                 ) : success ? (
                   'Applied'
+                ) : previewWarning ? (
+                  'Previewed'
                 ) : (
                   'Apply & Optimize'
                 )}

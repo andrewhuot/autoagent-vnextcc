@@ -6,6 +6,13 @@ import os
 import tempfile
 from unittest.mock import MagicMock
 
+import pytest
+
+fastapi = pytest.importorskip("fastapi", reason="fastapi not installed")
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from api.routes.what_if import router as what_if_router
 from evals.what_if import (
     ReplayOutcome,
     WhatIfEngine,
@@ -21,6 +28,21 @@ def _tmp_db() -> str:
     fd, path = tempfile.mkstemp(suffix=".db")
     os.close(fd)
     return path
+
+
+@pytest.fixture
+def what_if_app(conversation_store: ConversationStore) -> FastAPI:
+    """Minimal FastAPI app with the what-if router mounted."""
+    app = FastAPI()
+    app.include_router(what_if_router)
+    app.state.conversation_store = conversation_store
+    return app
+
+
+@pytest.fixture
+def what_if_client(what_if_app: FastAPI) -> TestClient:
+    """Test client for the what-if router app."""
+    return TestClient(what_if_app)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +144,43 @@ def test_what_if_store_list_recent() -> None:
     # Most recent first
     assert jobs[0]["job_id"] == "job2"
     assert jobs[1]["job_id"] == "job1"
+
+
+def test_what_if_jobs_route_initializes_engine(what_if_client: TestClient) -> None:
+    """Listing jobs should not fail when the app omitted explicit what-if wiring."""
+    response = what_if_client.get("/api/what-if/jobs")
+
+    assert response.status_code == 200
+    assert response.json() == {"jobs": []}
+
+
+def test_what_if_replay_route_uses_lazy_initialized_engine(
+    what_if_client: TestClient,
+    conversation_store: ConversationStore,
+) -> None:
+    """Replay route should initialize a what-if engine and return results."""
+    record = build_record(
+        user_message="Can I get a refund for the duplicate charge?",
+        agent_response="Let me connect you with billing.",
+        outcome="success",
+        latency_ms=120.0,
+        token_count=80,
+    )
+    conversation_store.log(record)
+
+    response = what_if_client.post(
+        "/api/what-if/replay",
+        json={
+            "conversation_ids": [record.conversation_id],
+            "candidate_config_label": "candidate_v2",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "complete"
+    assert payload["job_id"].startswith("whatif_")
+    assert payload["total_conversations"] == 1
 
 
 # ---------------------------------------------------------------------------

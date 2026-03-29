@@ -690,7 +690,20 @@ export function useOptimizeHistory() {
 export function useStartOptimize() {
   const queryClient = useQueryClient();
 
-  return useMutation<OptimizeResult, ApiRequestError, { window: number; force: boolean }>({
+  return useMutation<
+    OptimizeResult,
+    ApiRequestError,
+    {
+      window: number;
+      force: boolean;
+      mode: 'standard' | 'advanced' | 'research';
+      objective: string;
+      guardrails: string[];
+      research_algorithm: string;
+      budget_cycles: number;
+      budget_dollars: number;
+    }
+  >({
     mutationFn: (params) =>
       fetchApi('/optimize/run', {
         method: 'POST',

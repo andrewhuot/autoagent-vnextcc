@@ -130,7 +130,16 @@ export function Optimize() {
 
   function handleStart() {
     startOptimize.mutate(
-      { window: windowSize, force },
+      {
+        window: windowSize,
+        force,
+        mode: optimizeMode,
+        objective,
+        guardrails,
+        research_algorithm: researchAlgorithm,
+        budget_cycles: budgetCycles,
+        budget_dollars: budgetDollars,
+      },
       {
         onSuccess: (response) => {
           setActiveTaskId(response.task_id);
@@ -191,6 +200,10 @@ export function Optimize() {
 
         {optimizeMode === 'research' && (
           <div className="mt-4 space-y-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
+            <div className="rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-xs text-blue-900">
+              Research mode now configures the backend search strategy and evaluation budget.
+              Objective text and algorithm selection are still informational in this build.
+            </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-700">Algorithm</label>
               <div className="flex flex-wrap gap-2">

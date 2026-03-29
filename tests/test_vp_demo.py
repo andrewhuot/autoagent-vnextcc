@@ -3,8 +3,17 @@
 from __future__ import annotations
 
 
-from evals.vp_demo_data import SyntheticDataset, generate_vp_demo_dataset, get_vp_demo_summary
-from logger.store import ConversationRecord
+from evals.vp_demo_data import (
+    SyntheticDataset,
+    generate_vp_demo_dataset,
+    get_vp_demo_summary,
+    seed_demo_data,
+    seed_optimization_history,
+    seed_trace_demo_data,
+)
+from logger.store import ConversationRecord, ConversationStore
+from observer.traces import TraceStore
+from optimizer.memory import OptimizationMemory
 
 
 def test_vp_demo_data_deterministic() -> None:
@@ -134,3 +143,39 @@ def test_vp_demo_score_progression() -> None:
         breakdown["quality_issues"]
     )
     assert total_failures >= 30, "Need enough failures for 3 cycles of optimization"
+
+
+def test_seed_demo_data_populates_conversation_store(tmp_path) -> None:
+    """seed_demo_data should persist the VP demo dataset into the provided DB."""
+    db_path = tmp_path / "vp-demo.db"
+
+    seeded_count = seed_demo_data(str(db_path))
+
+    store = ConversationStore(str(db_path))
+    records = store.get_recent(limit=100)
+    assert seeded_count == 41
+    assert len(records) == 41
+
+
+def test_seed_trace_demo_data_populates_trace_store(tmp_path) -> None:
+    """Trace seeding should create recent trace events for the demo UI."""
+    db_path = tmp_path / "traces.db"
+
+    seeded_count = seed_trace_demo_data(str(db_path))
+
+    store = TraceStore(str(db_path))
+    assert seeded_count > 0
+    assert store.count_events() == seeded_count
+
+
+def test_seed_optimization_history_populates_memory_store(tmp_path) -> None:
+    """Optimization history seeding should create accepted attempts for dashboards."""
+    db_path = tmp_path / "optimizer_memory.db"
+
+    seeded_count = seed_optimization_history(str(db_path))
+
+    memory = OptimizationMemory(str(db_path))
+    attempts = memory.recent(limit=10)
+    assert seeded_count == 3
+    assert len(attempts) == 3
+    assert all(attempt.status == "accepted" for attempt in attempts)

@@ -287,6 +287,22 @@ class TestAssistantUpload:
         assert isinstance(data["url"], str)
         assert data["url"] != ""
 
+    def test_upload_url_resolves_to_uploaded_file_content(self, client: TestClient) -> None:
+        """The upload response URL should be a real retrievable endpoint."""
+        file_content = b"conversation,outcome\n1,success"
+        files = {"file": ("transcripts.csv", BytesIO(file_content), "text/csv")}
+
+        upload_response = client.post("/api/assistant/upload", files=files)
+        assert upload_response.status_code == 200
+
+        payload = upload_response.json()
+        file_response = client.get(payload["url"])
+
+        assert file_response.status_code == 200
+        assert file_response.content == file_content
+        assert file_response.headers["content-type"].startswith("text/csv")
+        assert "attachment" in file_response.headers["content-disposition"]
+
     def test_upload_multiple_files(self, client: TestClient) -> None:
         """Test uploading multiple files."""
         files = [
@@ -533,6 +549,8 @@ class TestAssistantSuggestions:
         payload = response.json()
         assert "session_id" in payload
         assert len(payload["suggestions"]) > 0
+        assert payload["mock_mode"] is True
+        assert "simulated" in payload["warning"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -565,6 +583,9 @@ class TestAssistantActions:
         assert data["action_id"] == "approve_fix"
         assert "result" in data
         assert "applied" in data["result"]
+        assert data["mock_mode"] is True
+        assert "preview mode" in data["warning"].lower()
+        assert "preview only" in data["message"].lower()
 
     def test_deploy_action(self, client: TestClient) -> None:
         """Test executing deploy action."""
@@ -584,6 +605,8 @@ class TestAssistantActions:
         data = action_resp.json()
         assert data["success"] is True
         assert "deployed" in data["result"]
+        assert data["mock_mode"] is True
+        assert "preview only" in data["message"].lower()
 
     def test_unknown_action_returns_400(self, client: TestClient) -> None:
         """Test that unknown action returns 400."""
@@ -646,3 +669,4 @@ class TestAssistantActions:
             )
             assert action_resp.status_code == 200, f"Failed for {action_id}"
             assert action_resp.json()["action_id"] == action_id
+            assert action_resp.json()["mock_mode"] is True

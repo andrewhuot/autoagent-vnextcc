@@ -348,6 +348,7 @@ def _stream_cycle_output(
     score_before: float | None,
     p_value: float | None = None,
     all_time_best: float = 0.0,
+    best_score_file: Path | None = None,
 ) -> None:
     """Print rich streaming output for a single optimization cycle."""
     click.echo(f"\n  Cycle {cycle_num}/{total}")
@@ -386,9 +387,9 @@ def _stream_cycle_output(
 
             # Update all-time best
             if score_after > all_time_best:
-                best_score_file = Path(".autoagent/best_score.txt")
-                best_score_file.parent.mkdir(exist_ok=True)
-                best_score_file.write_text(str(score_after))
+                resolved_best_score_file = best_score_file or Path(".autoagent/best_score.txt")
+                resolved_best_score_file.parent.mkdir(parents=True, exist_ok=True)
+                resolved_best_score_file.write_text(str(score_after))
                 click.echo(click.style("\n  ✨ New personal best!", fg="yellow", bold=True))
         else:
             click.echo(click.style(
@@ -402,11 +403,43 @@ def _stream_cycle_output(
         click.echo(click.style(f"    → {proposal_desc}", fg="cyan"))
 
 
-def _build_skill_components() -> tuple[SkillStore, SkillEngine]:
+def _build_skill_components(db_path: str = ".autoagent/core_skills.db") -> tuple[SkillStore, SkillEngine]:
     """Create skill store and skill engine for optimization."""
-    skill_store = SkillStore(db_path=".autoagent/core_skills.db")
+    skill_store = SkillStore(db_path=db_path)
     skill_engine = SkillEngine(store=skill_store)
     return skill_store, skill_engine
+
+
+def _workspace_state_paths(target_dir: str) -> dict[str, Path]:
+    """Return workspace-scoped state paths for quickstart/demo flows."""
+    workspace = Path(target_dir).resolve()
+    autoagent_dir = workspace / ".autoagent"
+    autoagent_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "workspace": workspace,
+        "autoagent_dir": autoagent_dir,
+        "configs_dir": workspace / "configs",
+        "conversation_db": workspace / "conversations.db",
+        "memory_db": workspace / "optimizer_memory.db",
+        "eval_history_db": workspace / "eval_history.db",
+        "eval_cache_db": autoagent_dir / "eval_cache.db",
+        "trace_db": autoagent_dir / "traces.db",
+        "skill_db": autoagent_dir / "core_skills.db",
+        "best_score_file": autoagent_dir / "best_score.txt",
+        "cases_dir": workspace / "evals" / "cases",
+    }
+
+
+def _scope_runtime_to_workspace(runtime, workspace: Path):
+    """Return a copy of runtime config with relative state rooted in workspace."""
+    scoped = runtime.model_copy(deep=True)
+    scoped.eval.history_db_path = str(workspace / Path(runtime.eval.history_db_path).name)
+    scoped.eval.cache_db_path = str(workspace / runtime.eval.cache_db_path)
+    scoped.budget.tracker_db_path = str(workspace / runtime.budget.tracker_db_path)
+    scoped.loop.checkpoint_path = str(workspace / runtime.loop.checkpoint_path)
+    scoped.loop.dead_letter_db = str(workspace / runtime.loop.dead_letter_db)
+    scoped.loop.structured_log_path = str(workspace / runtime.loop.structured_log_path)
+    return scoped
 
 
 def _build_eval_runner(
@@ -4001,11 +4034,16 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     click.echo(click.style("━━━ Step 1/4: Initialize project", fg="cyan", bold=True))
     ctx.invoke(init_project, template="customer-support", target_dir=target_dir,
                agent_name=agent_name, platform="Google ADK", with_synthetic_data=True)
+    workspace_paths = _workspace_state_paths(target_dir)
 
     # Step 2: Run eval baseline
     click.echo(click.style("\n━━━ Step 2/4: Run eval baseline", fg="cyan", bold=True))
-    runtime = load_runtime_config()
-    eval_runner = _build_eval_runner(runtime)
+    runtime = _scope_runtime_to_workspace(load_runtime_config(), workspace_paths["workspace"])
+    eval_runner = _build_eval_runner(
+        runtime,
+        cases_dir=str(workspace_paths["cases_dir"]),
+        trace_db_path=str(workspace_paths["trace_db"]),
+    )
     _warn_mock_modes(eval_runner=eval_runner)
     baseline_score = eval_runner.run()
     click.echo(click.style("  ✓ ", fg="green") + f"Baseline composite: {baseline_score.composite:.4f}")
@@ -4015,14 +4053,13 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
 
     # Step 3: Run 3 optimisation cycles
     click.echo(click.style("\n━━━ Step 3/4: Optimize (3 cycles)", fg="cyan", bold=True))
-    db_path = str(Path(target_dir).resolve() / "conversations.db") if target_dir != "." else DB_PATH
-    store = ConversationStore(db_path=db_path)
-    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
-    memory = OptimizationMemory(db_path=MEMORY_DB)
+    store = ConversationStore(db_path=str(workspace_paths["conversation_db"]))
+    deployer = Deployer(configs_dir=str(workspace_paths["configs_dir"]), store=store)
+    memory = OptimizationMemory(db_path=str(workspace_paths["memory_db"]))
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(use_mock=router.mock_mode, llm_router=router, mock_reason=router.mock_reason)
     _warn_mock_modes(proposer=proposer)
-    _, skill_engine = _build_skill_components()
+    _, skill_engine = _build_skill_components(db_path=str(workspace_paths["skill_db"]))
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -4037,7 +4074,7 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
     )
 
     # Track all-time best score for quickstart
-    best_score_file = Path(".autoagent/best_score.txt")
+    best_score_file = workspace_paths["best_score_file"]
     all_time_best = 0.0
     if best_score_file.exists():
         all_time_best = float(best_score_file.read_text().strip())
@@ -4068,6 +4105,7 @@ def quickstart(ctx: click.Context, agent_name: str, verbose: bool, target_dir: s
             score_before=score_before_val,
             p_value=p_val,
             all_time_best=all_time_best,
+            best_score_file=best_score_file,
         )
 
         # Update all_time_best if we got a new score
@@ -4153,11 +4191,16 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     click.echo(click.style("▸ Setting up project...", fg="white", bold=True))
     ctx.invoke(init_project, template="customer-support", target_dir=target_dir,
                agent_name="Demo Agent", platform="Google ADK", with_synthetic_data=True)
+    workspace_paths = _workspace_state_paths(target_dir)
 
     # Single eval
     click.echo(click.style("\n▸ Running evaluation...", fg="white", bold=True))
-    runtime = load_runtime_config()
-    eval_runner = _build_eval_runner(runtime)
+    runtime = _scope_runtime_to_workspace(load_runtime_config(), workspace_paths["workspace"])
+    eval_runner = _build_eval_runner(
+        runtime,
+        cases_dir=str(workspace_paths["cases_dir"]),
+        trace_db_path=str(workspace_paths["trace_db"]),
+    )
     _warn_mock_modes(eval_runner=eval_runner)
     score = eval_runner.run()
     click.echo(f"  Score: {score.composite:.4f}  |  "
@@ -4166,14 +4209,13 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
 
     # Single optimise cycle
     click.echo(click.style("\n▸ Running optimization cycle...", fg="white", bold=True))
-    db_path = str(Path(target_dir).resolve() / "conversations.db") if target_dir != "." else DB_PATH
-    store = ConversationStore(db_path=db_path)
-    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
-    memory = OptimizationMemory(db_path=MEMORY_DB)
+    store = ConversationStore(db_path=str(workspace_paths["conversation_db"]))
+    deployer = Deployer(configs_dir=str(workspace_paths["configs_dir"]), store=store)
+    memory = OptimizationMemory(db_path=str(workspace_paths["memory_db"]))
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(use_mock=router.mock_mode, llm_router=router, mock_reason=router.mock_reason)
     _warn_mock_modes(proposer=proposer)
-    _, skill_engine = _build_skill_components()
+    _, skill_engine = _build_skill_components(db_path=str(workspace_paths["skill_db"]))
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -4188,7 +4230,7 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     )
 
     # Track all-time best score for demo
-    best_score_file = Path(".autoagent/best_score.txt")
+    best_score_file = workspace_paths["best_score_file"]
     all_time_best = 0.0
     if best_score_file.exists():
         all_time_best = float(best_score_file.read_text().strip())
@@ -4209,10 +4251,15 @@ def demo_quickstart(ctx: click.Context, target_dir: str, auto_open: bool) -> Non
     p_val: float | None = latest.significance_p_value if latest else None
 
     _stream_cycle_output(
-        cycle_num=1, total=1, report=report,
+        cycle_num=1,
+        total=1,
+        report=report,
         proposal_desc=proposal_desc,
-        score_after=s_after, score_before=s_before, p_value=p_val,
+        score_after=s_after,
+        score_before=s_before,
+        p_value=p_val,
         all_time_best=all_time_best,
+        best_score_file=best_score_file,
     )
 
     if new_config is not None:

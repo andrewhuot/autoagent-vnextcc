@@ -116,6 +116,21 @@ class TestQuickstartCommand:
         assert result.exit_code == 0
         assert "Test Bot" in result.output
 
+    def test_quickstart_keeps_runtime_state_inside_target_directory(self, runner, tmp_path, monkeypatch):
+        target = tmp_path / "workspace"
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(cli, ["quickstart", "--dir", str(target), "--no-open"])
+
+        assert result.exit_code == 0
+        assert (target / "optimizer_memory.db").exists()
+        assert (target / "eval_history.db").exists()
+        assert (target / ".autoagent" / "best_score.txt").exists()
+        assert (target / ".autoagent" / "eval_cache.db").exists()
+        assert (target / ".autoagent" / "traces.db").exists()
+        assert not (tmp_path / "optimizer_memory.db").exists()
+        assert not (tmp_path / ".autoagent" / "best_score.txt").exists()
+
 
 # ---------------------------------------------------------------------------
 # Demo command
@@ -143,6 +158,21 @@ class TestDemoCommand:
     def test_demo_quickstart_shows_quickstart_hint(self, runner, tmp_dir):
         result = runner.invoke(cli, ["demo", "quickstart", "--dir", tmp_dir])
         assert "autoagent quickstart" in result.output
+
+    def test_demo_quickstart_keeps_runtime_state_inside_target_directory(self, runner, tmp_path, monkeypatch):
+        target = tmp_path / "workspace"
+        monkeypatch.chdir(tmp_path)
+
+        result = runner.invoke(cli, ["demo", "quickstart", "--dir", str(target), "--no-open"])
+
+        assert result.exit_code == 0
+        assert (target / "optimizer_memory.db").exists()
+        assert (target / "eval_history.db").exists()
+        assert (target / ".autoagent" / "best_score.txt").exists()
+        assert (target / ".autoagent" / "eval_cache.db").exists()
+        assert (target / ".autoagent" / "traces.db").exists()
+        assert not (tmp_path / "optimizer_memory.db").exists()
+        assert not (tmp_path / ".autoagent" / "best_score.txt").exists()
 
     def test_demo_vp_exists(self, runner):
         result = runner.invoke(cli, ["demo", "vp", "--help"])

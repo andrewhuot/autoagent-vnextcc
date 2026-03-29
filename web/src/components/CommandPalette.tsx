@@ -46,7 +46,7 @@ const SMART_SEARCH_MAP: Array<{
     keywords: ['how', 'agent', 'doing', 'health', 'status'],
     label: 'How is my agent doing?',
     description: 'Open dashboard',
-    href: '/',
+    href: '/dashboard',
   },
   {
     keywords: ['deploy', 'production', 'ship', 'release'],
@@ -79,7 +79,7 @@ const staticItems: PaletteItem[] = [
     id: 'action-dashboard',
     label: 'Go to Dashboard',
     description: 'Open system health overview',
-    href: '/',
+    href: '/dashboard',
     group: 'Actions',
   },
   {

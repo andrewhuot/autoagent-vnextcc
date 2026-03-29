@@ -37,7 +37,8 @@ FRONTEND_LOG="$SCRIPT_DIR/.autoagent/frontend.log"
 BACKEND_PORT=8000
 FRONTEND_PORT=5173
 BACKEND_URL="http://localhost:$BACKEND_PORT"
-FRONTEND_URL="http://localhost:$FRONTEND_PORT"
+FRONTEND_BASE_URL="http://localhost:$FRONTEND_PORT"
+FRONTEND_URL="${FRONTEND_BASE_URL}/dashboard"
 
 # ─── Cleanup / Ctrl+C handler ─────────────────────────────────────────────────
 cleanup() {
@@ -105,20 +106,21 @@ fi
 # Create runtime dir
 mkdir -p .autoagent
 
-# Kill any stale processes on our ports
-freeport() {
+# Refuse to touch ports owned by unrelated processes.
+ensure_port_available() {
   local port=$1
+  local label=$2
   local pid
   pid=$(lsof -ti ":$port" 2>/dev/null || true)
   if [[ -n "$pid" ]]; then
-    warn "Port ${port} in use (pid ${pid}) - killing stale process"
-    kill "$pid" 2>/dev/null || true
-    sleep 0.5
+    local cmd
+    cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
+    die "${label} port ${port} is already in use by pid ${pid}${cmd:+ (${cmd})}.\n\n  Stop that process manually or choose a different port before running ./start.sh"
   fi
 }
 
-freeport $BACKEND_PORT
-freeport $FRONTEND_PORT
+ensure_port_available $BACKEND_PORT "Backend"
+ensure_port_available $FRONTEND_PORT "Frontend"
 
 # ─── Activate venv ─────────────────────────────────────────────────────────────
 # shellcheck source=/dev/null
@@ -194,10 +196,12 @@ if ! wait_for_http "$BACKEND_URL/api/health" "Backend"; then
 fi
 
 if ! wait_for_http "$FRONTEND_URL" "Frontend"; then
+  if ! wait_for_http "$FRONTEND_BASE_URL" "Frontend"; then
   echo -e "\n  ${DIM}Frontend log (last 20 lines):${RESET}"
   tail -20 "$FRONTEND_LOG" 2>/dev/null | sed 's/^/    /'
   cleanup
   exit 1
+fi
 fi
 
 # ─── Open browser ──────────────────────────────────────────────────────────────

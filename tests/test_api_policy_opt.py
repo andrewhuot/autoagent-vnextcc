@@ -17,8 +17,9 @@ from api.routes import policy_opt as policy_opt_routes
 
 
 @pytest.fixture()
-def app() -> FastAPI:
+def app(tmp_path, monkeypatch) -> FastAPI:
     """Minimal FastAPI app with the policy optimization router and isolated state."""
+    monkeypatch.chdir(tmp_path)
     test_app = FastAPI()
     test_app.include_router(policy_opt_routes.router)
     return test_app
@@ -122,6 +123,24 @@ class TestStartTraining:
         )
         assert response.status_code == 400
 
+    def test_train_valid_control_job_registers_policy(self, client: TestClient, tmp_path) -> None:
+        dataset_path = tmp_path / "control-dataset.jsonl"
+        dataset_path.write_text('{"input_text":"hello","output_text":"world"}\n', encoding="utf-8")
+
+        response = client.post(
+            "/api/rl/train",
+            json={"mode": "control", "backend": "vertex_sft", "dataset_path": str(dataset_path)},
+        )
+
+        assert response.status_code == 202
+        payload = response.json()
+        assert payload["job"]["status"] == "completed"
+        assert payload["job"]["result"]["mock"] is True
+
+        policies = client.get("/api/rl/policies").json()
+        assert policies["count"] == 1
+        assert policies["policies"][0]["trainer_backend"] == "vertex_sft"
+
 
 # ---------------------------------------------------------------------------
 # Evaluate endpoint — validation
@@ -163,3 +182,23 @@ class TestCanaryPromoteRollback:
     def test_rollback_nonexistent_policy(self, client: TestClient) -> None:
         response = client.post("/api/rl/rollback", json={"policy_id": "nonexistent-xyz"})
         assert response.status_code == 404
+
+    def test_ope_persists_report_and_allows_promote(self, client: TestClient, tmp_path) -> None:
+        dataset_path = tmp_path / "control-dataset.jsonl"
+        dataset_path.write_text('{"input_text":"hello","output_text":"world"}\n', encoding="utf-8")
+
+        train_response = client.post(
+            "/api/rl/train",
+            json={"mode": "control", "backend": "vertex_sft", "dataset_path": str(dataset_path)},
+        )
+        policy_id = client.get("/api/rl/policies").json()["policies"][0]["policy_id"]
+
+        ope_response = client.post("/api/rl/ope", json={"policy_id": policy_id})
+        assert ope_response.status_code == 200
+
+        refreshed_policy = client.get(f"/api/rl/policies/{policy_id}").json()
+        assert refreshed_policy["ope_report"]["policy_id"] == policy_id
+
+        promote_response = client.post("/api/rl/promote", json={"policy_id": policy_id})
+        assert promote_response.status_code == 200
+        assert promote_response.json()["policy"]["status"] == "promoted"

@@ -211,6 +211,24 @@ class PolicyArtifactRegistry:
         self._conn.commit()
         return cursor.rowcount > 0
 
+    def update_policy(self, artifact: PolicyArtifact) -> bool:
+        """Persist the latest full artifact payload for an existing policy."""
+        cursor = self._conn.execute(
+            """
+            UPDATE policy_artifacts
+               SET data = ?, status = ?, created_at = ?
+             WHERE policy_id = ?
+            """,
+            (
+                json.dumps(artifact.to_dict(), sort_keys=True),
+                artifact.status,
+                artifact.created_at,
+                artifact.policy_id,
+            ),
+        )
+        self._conn.commit()
+        return cursor.rowcount > 0
+
     def get_active_policy(self, policy_type: str) -> PolicyArtifact | None:
         """Get the currently promoted policy for a given type."""
         row = self._conn.execute(

@@ -101,6 +101,16 @@ class OptimizeRequest(BaseModel):
     """Request to start an optimization cycle."""
     window: int = Field(100, ge=1, le=10000, description="Number of recent conversations to analyze")
     force: bool = Field(False, description="Force optimization even if system appears healthy")
+    mode: str = Field(
+        "standard",
+        pattern="^(standard|advanced|research)$",
+        description="User-facing optimization mode",
+    )
+    objective: str = Field("", description="Optional optimization objective description")
+    guardrails: list[str] = Field(default_factory=list, description="Optional user-defined guardrails")
+    research_algorithm: str = Field("", description="Requested research algorithm (preview)")
+    budget_cycles: int = Field(10, ge=1, le=1000, description="Requested cycle budget for longer runs")
+    budget_dollars: float = Field(50.0, gt=0, description="Maximum dollar budget for the run")
 
 
 class OptimizeCycleResult(BaseModel):
@@ -471,6 +481,8 @@ class AssistantSuggestionsResponse(BaseModel):
     session_id: str
     suggestions: list[str]
     quick_actions: list[dict[str, Any]]
+    mock_mode: bool = False
+    warning: Optional[str] = None
 
 
 class AssistantActionRequest(BaseModel):
@@ -485,6 +497,8 @@ class AssistantActionResponse(BaseModel):
     action_id: str
     result: dict[str, Any] = Field(default_factory=dict)
     message: str = ""
+    mock_mode: bool = False
+    warning: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

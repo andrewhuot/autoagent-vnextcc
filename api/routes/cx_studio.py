@@ -1,12 +1,31 @@
 """CX Agent Studio API routes — import, export, deploy, widget."""
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 router = APIRouter(prefix="/api/cx", tags=["cx-studio"])
+
+
+def _get_workspace_root(request: Request) -> Path:
+    """Return the allowed filesystem root for CX preview assets."""
+    configured_root = getattr(request.app.state, "cx_workspace_root", None)
+    return Path(configured_root or Path.cwd()).resolve()
+
+
+def _resolve_workspace_file(request: Request, raw_path: str) -> Path:
+    """Resolve a file path and ensure it stays within the configured workspace root."""
+    workspace_root = _get_workspace_root(request)
+    candidate = Path(raw_path)
+    resolved = candidate.resolve() if candidate.is_absolute() else (workspace_root / candidate).resolve()
+
+    if not resolved.is_relative_to(workspace_root):
+        raise HTTPException(status_code=400, detail=f"Path escapes workspace root: {raw_path}")
+
+    return resolved
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +239,7 @@ async def get_cx_status(
 
 @router.get("/preview", response_model=CxPreviewResponse)
 async def preview_cx_export(
+    request: Request,
     config_path: str,
     snapshot_path: str,
 ) -> CxPreviewResponse:
@@ -227,8 +247,11 @@ async def preview_cx_export(
     import yaml
     from cx_studio import CxExporter, CxAuth, CxClient
 
+    resolved_config_path = _resolve_workspace_file(request, config_path)
+    resolved_snapshot_path = _resolve_workspace_file(request, snapshot_path)
+
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
+        with resolved_config_path.open("r", encoding="utf-8") as f:
             config = yaml.safe_load(f)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid config: {exc}")
@@ -243,5 +266,8 @@ async def preview_cx_export(
     client._timeout = 30.0
     client._max_retries = 3
     exporter = CxExporter(client)
-    changes = exporter.preview_changes(config, snapshot_path)
+    try:
+        changes = exporter.preview_changes(config, str(resolved_snapshot_path))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid snapshot: {exc}")
     return CxPreviewResponse(changes=changes)

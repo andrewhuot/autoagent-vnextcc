@@ -169,11 +169,19 @@ if python3 -c "
 import sys, os
 sys.path.insert(0, '.')
 os.environ.setdefault('AUTOAGENT_USE_MOCK', 'true')
+vp_seeded = False
+builder_seeded = False
 
 try:
     from evals.vp_demo_data import seed_demo_data
+    from evals.vp_demo_data import seed_trace_demo_data, seed_optimization_history
     result = seed_demo_data()
-    print(f'  Seeded {result} conversations' if isinstance(result, int) else '  VP demo data loaded')
+    trace_result = seed_trace_demo_data()
+    memory_result = seed_optimization_history()
+    print(f'  Seeded {result} VP demo conversations')
+    print(f'  Seeded {trace_result} trace events')
+    print(f'  Seeded {memory_result} optimization history entries')
+    vp_seeded = True
 except Exception as e:
     print(f'  VP demo: {e}', file=sys.stderr)
 
@@ -183,8 +191,12 @@ try:
     store = BuilderStore()
     seed_builder_demo(store)
     print('  Builder demo data loaded')
+    builder_seeded = True
 except Exception as e:
     print(f'  Builder demo: {e}', file=sys.stderr)
+
+if not (vp_seeded and builder_seeded):
+    raise SystemExit(1)
 " 2>&1; then
   ok "Demo data seeded"
 else

@@ -18,9 +18,12 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
-from logger.store import ConversationRecord
+from logger.store import ConversationRecord, ConversationStore
+from observer.traces import TraceEvent, TraceEventType, TraceSpan, TraceStore
+from optimizer.memory import OptimizationAttempt, OptimizationMemory
 
 
 # ---------------------------------------------------------------------------
@@ -869,3 +872,187 @@ def get_vp_demo_summary() -> dict[str, Any]:
             "resolution_rate": 0.71,    # 10 successful + 8 high-latency / 41
         },
     }
+
+
+def seed_demo_data(db_path: str = "conversations.db", *, force: bool = False) -> int:
+    """Persist the VP demo dataset into the target conversation database.
+
+    WHY: Setup and quickstart flows need a stable seeding entrypoint that writes
+    the curated VP demo conversations into the same storage layer the product uses.
+    """
+    store = ConversationStore(db_path)
+    existing_count = store.count()
+    if existing_count > 0 and not force:
+        return 0
+    if force and existing_count > 0:
+        store.clear()
+
+    dataset = generate_vp_demo_dataset(seed=42)
+    for conversation in dataset.conversations:
+        store.log(conversation)
+    return len(dataset.conversations)
+
+
+def seed_trace_demo_data(db_path: str = ".autoagent/traces.db", *, force: bool = False) -> int:
+    """Persist a small but realistic trace dataset for first-run demos."""
+    trace_db = Path(db_path)
+    if trace_db.exists() and not force:
+        existing_store = TraceStore(str(trace_db))
+        if existing_store.count_events() > 0:
+            return 0
+    if force and trace_db.exists():
+        trace_db.unlink()
+
+    store = TraceStore(str(trace_db))
+    base_ts = time.time() - 1800
+    traces = [
+        {
+            "trace_id": "trace_demo_routing",
+            "session_id": "demo-routing",
+            "agent_path": "root/router",
+            "branch": "v1",
+            "events": [
+                (TraceEventType.model_call.value, 0, None, 120.0, None),
+                (TraceEventType.model_response.value, 80, None, 260.0, None),
+                (TraceEventType.agent_transfer.value, 160, None, 40.0, None),
+                (TraceEventType.error.value, 240, None, 35.0, "Routed billing intent to tech_support"),
+            ],
+            "spans": [
+                ("route_intent", "ok", 0, 150),
+                ("dispatch_specialist", "error", 160, 260),
+            ],
+        },
+        {
+            "trace_id": "trace_demo_tooling",
+            "session_id": "demo-tools",
+            "agent_path": "root/tools/order_lookup",
+            "branch": "v2",
+            "events": [
+                (TraceEventType.tool_call.value, 0, "order_lookup", 0.0, None),
+                (TraceEventType.tool_response.value, 350, "order_lookup", 850.0, None),
+                (TraceEventType.partial_response.value, 480, None, 90.0, None),
+            ],
+            "spans": [
+                ("lookup_order", "ok", 0, 480),
+            ],
+        },
+        {
+            "trace_id": "trace_demo_safety",
+            "session_id": "demo-safety",
+            "agent_path": "root/compliance",
+            "branch": "v3",
+            "events": [
+                (TraceEventType.model_call.value, 0, None, 110.0, None),
+                (TraceEventType.safety_flag.value, 140, None, 12.0, None),
+                (TraceEventType.model_response.value, 180, None, 140.0, None),
+            ],
+            "spans": [
+                ("review_sensitive_request", "ok", 0, 220),
+            ],
+        },
+    ]
+
+    event_count = 0
+    for trace_index, trace in enumerate(traces):
+        invocation_id = f"invocation-{trace_index + 1}"
+        for event_index, (event_type, offset_ms, tool_name, latency_ms, error_message) in enumerate(trace["events"], start=1):
+            store.log_event(
+                TraceEvent(
+                    event_id=f"{trace['trace_id']}.{event_index}",
+                    trace_id=trace["trace_id"],
+                    event_type=event_type,
+                    timestamp=base_ts + (trace_index * 120) + (offset_ms / 1000.0),
+                    invocation_id=invocation_id,
+                    session_id=trace["session_id"],
+                    agent_path=trace["agent_path"],
+                    branch=trace["branch"],
+                    tool_name=tool_name,
+                    latency_ms=latency_ms,
+                    tokens_in=180,
+                    tokens_out=96,
+                    error_message=error_message,
+                    metadata={"seed": "vp_demo"},
+                )
+            )
+            event_count += 1
+
+        for span_index, (operation, status, start_ms, end_ms) in enumerate(trace["spans"], start=1):
+            store.log_span(
+                TraceSpan(
+                    span_id=f"{trace['trace_id']}-span-{span_index}",
+                    trace_id=trace["trace_id"],
+                    parent_span_id=None,
+                    operation=operation,
+                    agent_path=trace["agent_path"],
+                    start_time=base_ts + (trace_index * 120) + (start_ms / 1000.0),
+                    end_time=base_ts + (trace_index * 120) + (end_ms / 1000.0),
+                    status=status,
+                    attributes={"seed": "vp_demo"},
+                )
+            )
+
+    return event_count
+
+
+def seed_optimization_history(memory_db_path: str = "optimizer_memory.db", *, force: bool = False) -> int:
+    """Persist a small optimization history for the dashboard and optimize views."""
+    memory = OptimizationMemory(memory_db_path)
+    existing = memory.get_all()
+    if existing and not force:
+        return 0
+    if force and existing:
+        memory.clear()
+
+    base_ts = time.time() - 900
+    attempts = [
+        OptimizationAttempt(
+            attempt_id="attempt-routing-keywords",
+            timestamp=base_ts,
+            change_description="Expanded billing keywords in router prompt",
+            config_diff="+ invoice\n+ refund\n+ charge",
+            status="accepted",
+            config_section="routing.keywords",
+            score_before=0.62,
+            score_after=0.74,
+            significance_p_value=0.03,
+            significance_delta=0.12,
+            significance_n=41,
+            health_context='{"failure_family":"routing_error"}',
+            skills_applied='["routing_keyword_expansion"]',
+        ),
+        OptimizationAttempt(
+            attempt_id="attempt-safety-guardrails",
+            timestamp=base_ts + 180,
+            change_description="Added sensitive pricing disclosure guardrails",
+            config_diff="+ redact_internal_pricing: true",
+            status="accepted",
+            config_section="safety.policy",
+            score_before=0.74,
+            score_after=0.81,
+            significance_p_value=0.02,
+            significance_delta=0.07,
+            significance_n=41,
+            health_context='{"failure_family":"safety_violation"}',
+            skills_applied='["safety_policy_hardening"]',
+        ),
+        OptimizationAttempt(
+            attempt_id="attempt-tool-timeout",
+            timestamp=base_ts + 360,
+            change_description="Reduced order lookup timeout and added retry copy",
+            config_diff="+ timeout_ms: 800\n+ retry_copy: true",
+            status="accepted",
+            config_section="tools.order_lookup",
+            score_before=0.81,
+            score_after=0.87,
+            significance_p_value=0.01,
+            significance_delta=0.06,
+            significance_n=41,
+            health_context='{"failure_family":"timeout"}',
+            skills_applied='["reduce-tool-latency"]',
+        ),
+    ]
+
+    for attempt in attempts:
+        memory.log(attempt)
+
+    return len(attempts)

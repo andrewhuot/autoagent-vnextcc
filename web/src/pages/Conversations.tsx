@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { MessageSquare } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
 import { useConversations } from '../lib/api';
 import { DataTable, type Column } from '../components/DataTable';
 import { StatusBadge } from '../components/StatusBadge';
@@ -11,7 +12,8 @@ import { formatLatency, formatPercent, formatTimestamp, statusVariant, truncate 
 import type { ConversationRecord } from '../lib/types';
 
 export function Conversations() {
-  const [outcome, setOutcome] = useState('all');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [outcome, setOutcome] = useState(() => searchParams.get('outcome') ?? 'all');
   const [limit, setLimit] = useState(50);
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -77,6 +79,17 @@ export function Conversations() {
   const expandedConversation =
     expandedId && conversations ? conversations.find((entry) => entry.conversation_id === expandedId) : null;
 
+  function handleOutcomeChange(nextOutcome: string) {
+    setOutcome(nextOutcome);
+    const next = new URLSearchParams(searchParams);
+    if (nextOutcome === 'all') {
+      next.delete('outcome');
+    } else {
+      next.set('outcome', nextOutcome);
+    }
+    setSearchParams(next, { replace: true });
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -132,7 +145,7 @@ export function Conversations() {
             <label className="mb-1 block text-xs text-gray-500">Outcome</label>
             <select
               value={outcome}
-              onChange={(event) => setOutcome(event.target.value)}
+              onChange={(event) => handleOutcomeChange(event.target.value)}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
             >
               <option value="all">All</option>

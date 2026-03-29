@@ -124,12 +124,12 @@ export function Layout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-[var(--color-surface)] text-gray-900">
-      <MockModeBanner />
       {isFullWidthRoute ? null : (
         <Sidebar mobileOpen={mobileSidebarOpen} onClose={() => setMobileSidebarOpen(false)} />
       )}
 
       <div className="flex min-h-screen min-w-0 flex-1 flex-col">
+        <MockModeBanner />
         {isFullWidthRoute ? null : (
           <header className="sticky top-0 z-20 flex items-center justify-between gap-4 border-b border-gray-200 bg-white/80 px-5 py-3 backdrop-blur-sm">
             <div className="flex min-w-0 items-center gap-3">
@@ -182,7 +182,7 @@ export function Layout({ children }: { children: ReactNode }) {
             className={
               isFullWidthRoute
                 ? 'h-full w-full animate-[fadeIn_150ms_ease-out]'
-                : 'mx-auto max-w-6xl animate-[fadeIn_150ms_ease-out]'
+                : 'mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]'
             }
           >
             {children}

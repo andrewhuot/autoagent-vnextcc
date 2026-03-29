@@ -21,6 +21,7 @@ def _make_app(tmp_path) -> FastAPI:
     app = FastAPI()
     app.include_router(router)
     app.state.agent_skill_store = AgentSkillStore(db_path=str(tmp_path / "test.db"))
+    app.state.agent_skills_apply_root = str(tmp_path)
     return app
 
 
@@ -152,6 +153,71 @@ class TestAgentSkillsAPI:
         assert data["status"] == "applied"
         assert len(data["files_written"]) == 1
         assert (target / "tools" / "check_warranty.py").exists()
+
+    def test_apply_rejects_absolute_generated_file_paths(self, tmp_path):
+        app = _make_app(tmp_path)
+        store = app.state.agent_skill_store
+        escaped_path = (tmp_path.parent / "owned-by-skill.txt").resolve()
+        escaped_path.unlink(missing_ok=True)
+
+        skill = _make_skill(
+            files=[
+                GeneratedFile(
+                    path=str(escaped_path),
+                    content="owned\n",
+                    is_new=True,
+                )
+            ]
+        )
+        store.save(skill)
+        store.approve("test123")
+
+        client = TestClient(app)
+        resp = client.post("/api/agent-skills/test123/apply", json={"target": str(tmp_path / "output")})
+
+        assert resp.status_code == 400
+        assert "relative" in resp.json()["detail"].lower()
+        assert not escaped_path.exists()
+
+    def test_apply_rejects_paths_that_escape_target_directory(self, tmp_path):
+        app = _make_app(tmp_path)
+        store = app.state.agent_skill_store
+        escaped_path = tmp_path / "output" / ".." / "escape.py"
+        escaped_path.resolve().unlink(missing_ok=True)
+
+        skill = _make_skill(
+            files=[
+                GeneratedFile(
+                    path="../escape.py",
+                    content="owned\n",
+                    is_new=True,
+                )
+            ]
+        )
+        store.save(skill)
+        store.approve("test123")
+
+        client = TestClient(app)
+        resp = client.post("/api/agent-skills/test123/apply", json={"target": str(tmp_path / "output")})
+
+        assert resp.status_code == 400
+        assert "escapes workspace root" in resp.json()["detail"].lower()
+        assert not (tmp_path / "escape.py").exists()
+
+    def test_apply_rejects_target_outside_workspace_root(self, tmp_path):
+        app = _make_app(tmp_path)
+        store = app.state.agent_skill_store
+        store.save(_make_skill())
+        store.approve("test123")
+
+        outside_target = tmp_path.parent / "outside-output"
+        outside_target.mkdir(exist_ok=True)
+
+        client = TestClient(app)
+        resp = client.post("/api/agent-skills/test123/apply", json={"target": str(outside_target)})
+
+        assert resp.status_code == 400
+        assert "escapes workspace root" in resp.json()["detail"].lower()
 
     def test_approve_not_found(self, tmp_path):
         app = _make_app(tmp_path)
