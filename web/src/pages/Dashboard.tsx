@@ -1,6 +1,6 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck, Sparkles } from 'lucide-react';
+import { AlertTriangle, ArrowRight, BookOpen, Hammer, LayoutDashboard, PauseCircle, PlayCircle, ShieldCheck, Sparkles, X } from 'lucide-react';
 import {
   useControlState,
   useCostHealth,
@@ -73,6 +73,22 @@ export function Dashboard() {
   const [allTimeBest, setAllTimeBest] = useState(0);
   const [viewMode, setViewMode] = useState<'simple' | 'advanced'>('simple');
   const [demoStatus, setDemoStatus] = useState<{ has_demo_data: boolean } | null>(null);
+  const [showWelcome, setShowWelcome] = useState(() => {
+    try {
+      return localStorage.getItem('autoagent_welcome_dismissed') !== 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  const dismissWelcome = useCallback(() => {
+    try {
+      localStorage.setItem('autoagent_welcome_dismissed', 'true');
+    } catch {
+      // ignore
+    }
+    setShowWelcome(false);
+  }, []);
 
   const loading = health.isLoading || controlState.isLoading;
 
@@ -181,6 +197,56 @@ export function Dashboard() {
   return (
     <div className="space-y-6">
       <Confetti trigger={showConfetti} />
+
+      {/* First-run Welcome Banner */}
+      {showWelcome && (
+        <div className="relative overflow-hidden rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 via-violet-50 to-purple-50 p-5 shadow-sm">
+          <button
+            onClick={dismissWelcome}
+            className="absolute right-3 top-3 rounded-md p-1 text-gray-400 transition hover:bg-white/60 hover:text-gray-600"
+            aria-label="Dismiss"
+          >
+            <X className="h-4 w-4" />
+          </button>
+
+          <div className="flex items-start gap-4">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 shadow">
+              <Sparkles className="h-5 w-5 text-white" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <h3 className="text-base font-semibold text-gray-900">Welcome to AutoAgent!</h3>
+              <p className="mt-0.5 text-sm text-gray-600">
+                Your dashboard is pre-loaded with demo data. Explore how the platform traces, diagnoses, and fixes agent failures automatically.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  onClick={() => { navigate('/builder'); dismissWelcome(); }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-indigo-700 shadow-sm ring-1 ring-indigo-200 transition hover:bg-indigo-50 hover:ring-indigo-300"
+                >
+                  <Hammer className="h-3.5 w-3.5" />
+                  Builder Workspace
+                </button>
+                <button
+                  onClick={() => { navigate('/demo'); dismissWelcome(); }}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-violet-700 shadow-sm ring-1 ring-violet-200 transition hover:bg-violet-50 hover:ring-violet-300"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Run Demo
+                </button>
+                <a
+                  href="/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-gray-700 shadow-sm ring-1 ring-gray-200 transition hover:bg-gray-50 hover:ring-gray-300"
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  Docs
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Demo Data Banner */}
       {demoStatus?.has_demo_data && (

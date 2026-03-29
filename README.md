@@ -21,26 +21,138 @@ TRACE → DIAGNOSE → SEARCH → EVAL → GATE → DEPLOY → LEARN → REPEAT
 ## Quick start
 
 ```bash
-# Install
-pip install -e ".[dev]"
-
-# Configure
-cp .env.example .env   # Add at least one API key (or skip for mock mode)
-
-# Run
-autoagent init
-autoagent server       # Web console at http://localhost:8000
+git clone <repo-url> autoagent-vnextcc
+cd autoagent-vnextcc
+./setup.sh   # one-time setup (≈2 min)
+./start.sh   # start everything + open browser
 ```
 
-Start an optimization loop:
+That's it. No manual venv activation, no config editing required — it works in mock mode with no API keys.
 
-```bash
-autoagent loop --max-cycles 20 --stop-on-plateau
+### Prerequisites
+
+| Tool | Version | How to get it |
+|------|---------|--------------|
+| Python | 3.11+ | [python.org/downloads](https://python.org/downloads) |
+| Node.js | 18+ | [nodejs.org](https://nodejs.org) |
+
+> **Never used Python virtual environments?** No problem — `setup.sh` handles the venv for you automatically.
+
+---
+
+### What each script does
+
+**`./setup.sh`** — Run once when you first clone the repo:
+- Checks Python 3.11+ and Node 18+ are installed (with clear errors if not)
+- Creates a `.venv` Python virtual environment
+- Installs all Python and frontend (npm) dependencies
+- Copies `.env.example` to `.env`
+- Seeds demo data (conversations, traces, optimization history)
+- Prints next steps when done
+
+**`./start.sh`** — Run every time you want to use AutoAgent:
+- Activates the venv and starts the FastAPI backend (port 8000)
+- Starts the Vite frontend dev server (port 5173)
+- Waits for both to be healthy before reporting ready
+- Opens `http://localhost:5173` in your browser automatically
+- Handles Ctrl+C cleanly — kills both processes
+
+**`./stop.sh`** — Shut everything down:
+- Stops backend and frontend processes
+- Falls back to killing by port if pid files are missing
+
+---
+
+### What you'll see on first run
+
+```
+  ┌─────────────────────────────────────────────────────────┐
+  │   AutoAgent  ·  Agent Optimization Platform             │
+  │   First-time setup                                      │
+  └─────────────────────────────────────────────────────────┘
+
+  ◆ Checking Python version
+  ✓  Python 3.11.9
+  ◆ Checking Node.js version
+  ✓  Node.js v20.11.0
+  ◆ Setting up Python virtual environment
+  ✓  Created .venv
+  ◆ Installing Python dependencies
+  ✓  Python dependencies installed
+  ◆ Installing frontend dependencies
+  ✓  Frontend dependencies installed
+  ◆ Configuring environment
+  ✓  Created .env from .env.example
+  ◆ Seeding demo data
+  ✓  Demo data seeded
+
+  ✓  Setup complete in 47s
+
+  What's next:
+    ./start.sh   Start AutoAgent (backend + frontend)
 ```
 
-Or try the 5-minute demo:
+Then `./start.sh` opens the dashboard automatically. You'll land on a dashboard pre-loaded with synthetic agent conversations, failure traces, and an optimization history — ready to explore without any real API keys.
+
+---
+
+### API keys (optional)
+
+The platform runs in **mock mode** by default — all optimization cycles use deterministic mock responses. To run live optimization, add at least one key to `.env`:
 
 ```bash
+ANTHROPIC_API_KEY=sk-ant-...   # Claude models
+OPENAI_API_KEY=sk-...          # GPT models
+GOOGLE_API_KEY=AI...           # Gemini models
+```
+
+---
+
+### Troubleshooting
+
+**`./setup.sh: Permission denied`**
+```bash
+chmod +x setup.sh start.sh stop.sh
+./setup.sh
+```
+
+**`Python 3.11+ required`**
+macOS ships with Python 3.9. Install a newer version:
+```bash
+brew install python@3.12   # Homebrew
+# or download from https://python.org/downloads
+```
+
+**`Node.js 18+ required`**
+```bash
+brew install node          # Homebrew
+# or use nvm: nvm install 20 && nvm use 20
+```
+
+**Port already in use**
+```bash
+./stop.sh           # kills previous AutoAgent processes
+./start.sh          # start fresh
+```
+
+**Backend starts but frontend doesn't load**
+```bash
+cat .autoagent/frontend.log   # check for npm errors
+cd web && npm install         # reinstall deps if needed
+```
+
+**`ModuleNotFoundError` on backend start**
+```bash
+source .venv/bin/activate
+pip install -e '.[dev]'
+```
+
+---
+
+### Or try the 5-minute demo
+
+```bash
+source .venv/bin/activate
 autoagent demo vp --company "Acme Corp" --web
 ```
 

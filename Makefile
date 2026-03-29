@@ -1,17 +1,24 @@
-.PHONY: setup dev test lint build deploy docker-build docker-run clean help
+.PHONY: setup start stop dev test lint build deploy docker-build docker-run clean help
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-setup: ## Install dependencies and set up development environment
-	python3 -m venv .venv
-	. .venv/bin/activate && pip install -e ".[dev]"
-	@echo ""
-	@echo "Setup complete. Activate with: source .venv/bin/activate"
-	@echo "Copy .env.example to .env and add your API keys."
+setup: ## One-time setup: venv, deps, .env, demo data
+	@chmod +x setup.sh start.sh stop.sh
+	./setup.sh
 
-dev: ## Start API server in development mode
-	python runner.py server --host 127.0.0.1 --port 8000
+start: ## Start backend + frontend (opens browser)
+	@chmod +x start.sh
+	./start.sh
+
+stop: ## Stop backend + frontend
+	@chmod +x stop.sh
+	./stop.sh
+
+dev: ## Setup + start (full first-run experience)
+	@chmod +x setup.sh start.sh
+	@if [ ! -d ".venv" ]; then ./setup.sh; fi
+	./start.sh
 
 test: ## Run full test suite
 	python3 -m pytest tests/ --tb=short -q
@@ -49,8 +56,12 @@ deploy-gcp: ## Deploy to Google Cloud Run (requires gcloud CLI)
 deploy-fly: ## Deploy to fly.io (requires flyctl)
 	cd deploy && fly deploy --config fly.toml --dockerfile ../Dockerfile ..
 
-clean: ## Remove build artifacts and caches
+clean: ## Remove .venv, node_modules, .autoagent/, build artifacts, and caches
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name .pytest_cache -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
 	rm -rf dist/ build/
+	rm -rf .venv
+	rm -rf web/node_modules
+	rm -rf .autoagent/
+	@echo "Clean complete. Run 'make setup' to start fresh."
