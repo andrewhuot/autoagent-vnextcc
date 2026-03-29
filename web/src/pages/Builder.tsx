@@ -1,4 +1,4 @@
-import { startTransition, useState } from 'react';
+import { startTransition, useEffect, useRef, useState } from 'react';
 import { Download, Play, Send, Sparkles } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import {
@@ -16,9 +16,12 @@ const STARTER_PROMPTS = [
   'Add a policy that it should never reveal internal codes',
 ];
 
-function StatPill({ label }: { label: string }) {
+function StatPill({ label, testId }: { label: string; testId?: string }) {
   return (
-    <div className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600">
+    <div
+      data-testid={testId}
+      className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs font-medium text-gray-600"
+    >
       {label}
     </div>
   );
@@ -47,7 +50,10 @@ function ConfigLine({ line }: { line: string }) {
 function ConfigPreview({ config }: { config: BuilderConfig | null }) {
   if (!config) {
     return (
-      <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-4 text-sm text-gray-500">
+      <div
+        data-testid="builder-config-preview"
+        className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-4 text-sm text-gray-500"
+      >
         Start the conversation on the left and the draft config will appear here in real time.
       </div>
     );
@@ -55,7 +61,10 @@ function ConfigPreview({ config }: { config: BuilderConfig | null }) {
 
   const content = JSON.stringify(config, null, 2).split('\n');
   return (
-    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950">
+    <div
+      data-testid="builder-config-preview"
+      className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950"
+    >
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 text-xs text-slate-400">
         <span>Live Config</span>
         <span>JSON preview</span>
@@ -74,6 +83,7 @@ export function Builder() {
   const [session, setSession] = useState<BuilderSessionPayload | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -120,8 +130,13 @@ export function Builder() {
       const anchor = document.createElement('a');
       anchor.href = url;
       anchor.download = payload.filename;
+      anchor.style.display = 'none';
+      document.body.appendChild(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+        anchor.remove();
+      }, 0);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Config export failed');
     } finally {
@@ -139,15 +154,23 @@ export function Builder() {
     },
   ];
 
+  useEffect(() => {
+    const container = messageListRef.current;
+    if (!container) {
+      return;
+    }
+    container.scrollTop = container.scrollHeight;
+  }, [messages.length]);
+
   return (
-    <div className="space-y-6">
+    <div data-testid="builder-page" className="space-y-6">
       <PageHeader
         title="Builder"
         description="Describe the agent you want to build, refine it in conversation, and watch the config update live."
       />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]">
-        <section className="flex min-h-[720px] flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70">
+        <section className="flex min-h-[560px] flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
           <div className="border-b border-gray-200 px-5 py-4">
             <div className="flex items-start justify-between gap-4">
               <div>
@@ -165,7 +188,11 @@ export function Builder() {
             </div>
           </div>
 
-          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+          <div
+            ref={messageListRef}
+            data-testid="builder-message-list"
+            className="flex-1 space-y-4 overflow-y-auto px-5 py-5"
+          >
             {messages.map((message) => (
               <div
                 key={message.message_id}
@@ -205,6 +232,7 @@ export function Builder() {
 
             <div className="rounded-[24px] border border-gray-200 bg-white p-3 shadow-sm">
               <textarea
+                data-testid="builder-composer"
                 value={composer}
                 onChange={(event) => setComposer(event.target.value)}
                 placeholder="Describe the agent you want to build..."
@@ -222,6 +250,7 @@ export function Builder() {
                   Ask for a base agent, then refine tools, policies, tone, and evals.
                 </p>
                 <button
+                  data-testid="builder-send"
                   onClick={() => void submitMessage(composer)}
                   disabled={pending}
                   className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
@@ -234,13 +263,16 @@ export function Builder() {
           </div>
         </section>
 
-        <aside className="flex min-h-[720px] flex-col rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm shadow-gray-100/70">
+        <aside className="flex min-h-[560px] flex-col rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
           <div className="mb-4">
             <h3 className="text-lg font-semibold tracking-tight text-gray-900">Live Config</h3>
             <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
               Preview
             </p>
-            <p className="mt-1 text-lg font-semibold tracking-tight text-gray-900">
+            <p
+              data-testid="builder-preview-agent-name"
+              className="mt-1 text-lg font-semibold tracking-tight text-gray-900"
+            >
               {session?.config.agent_name ?? 'Preview pending'}
             </p>
             <p className="mt-1 text-sm text-gray-600">
@@ -249,9 +281,15 @@ export function Builder() {
           </div>
 
           <div className="mb-4 flex flex-wrap gap-2">
-            <StatPill label={`${session?.stats.tool_count ?? 0} tools`} />
-            <StatPill label={`${session?.stats.policy_count ?? 0} policies`} />
-            <StatPill label={`${session?.stats.routing_rule_count ?? 0} routes`} />
+            <StatPill testId="builder-stat-tools" label={`${session?.stats.tool_count ?? 0} tools`} />
+            <StatPill
+              testId="builder-stat-policies"
+              label={`${session?.stats.policy_count ?? 0} policies`}
+            />
+            <StatPill
+              testId="builder-stat-routes"
+              label={`${session?.stats.routing_rule_count ?? 0} routes`}
+            />
           </div>
 
           <div className="space-y-4">
@@ -261,7 +299,7 @@ export function Builder() {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
                 Eval Readiness
               </p>
-              <p className="mt-2 text-sm font-medium text-gray-900">
+              <p data-testid="builder-eval-summary" className="mt-2 text-sm font-medium text-gray-900">
                 {session?.evals ? `${session.evals.case_count} draft evals` : 'No evals generated yet'}
               </p>
               <div className="mt-3 space-y-2">
@@ -277,6 +315,7 @@ export function Builder() {
 
           <div className="mt-auto flex gap-3 pt-4">
             <button
+              data-testid="builder-download"
               onClick={handleExport}
               disabled={!session?.session_id || pending}
               className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
@@ -285,6 +324,7 @@ export function Builder() {
               Download Config
             </button>
             <button
+              data-testid="builder-run-eval"
               onClick={() => void submitMessage('Generate evals for this')}
               disabled={!session?.session_id || pending}
               className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
