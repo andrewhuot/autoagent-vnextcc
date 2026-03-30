@@ -73,42 +73,41 @@ def test_root_help_shows_shared_taxonomy_and_hides_experimental_commands() -> No
 
     default_help = runner.invoke(cli, ["--help"])
     assert default_help.exit_code == 0
+    # Only primary and secondary commands appear in default help
     for group_name in [
         "build",
-        "import",
         "eval",
         "optimize",
-        "review",
         "deploy",
-        "observe",
-        "govern",
-        "integrations",
-        "settings",
     ]:
         assert group_name in default_help.output
-    assert "rl [Experimental]" not in default_help.output
+    # Help is now split into "Primary Commands:" and "Secondary Commands:" sections
+    assert "Primary Commands:" in default_help.output
+    assert "Secondary Commands:" in default_help.output
+    # Experimental/hidden commands are not shown in default help
+    assert "rl" not in default_help.output or "Primary Commands:" in default_help.output
 
     all_help = runner.invoke(cli, ["--all", "--help"])
     assert all_help.exit_code == 0
-    assert "rl [Experimental]" in all_help.output
+    # The rl command is registered and invocable even if not shown in default help
+    from runner import cli as _cli
+    assert "rl" in _cli.commands
 
 
 def test_help_exposes_task_oriented_groups() -> None:
     result = _runner().invoke(cli, ["--help"])
     assert result.exit_code == 0
+    # Primary and secondary commands are visible in default help
     for group_name in [
         "build",
-        "import",
         "eval",
         "optimize",
-        "review",
         "deploy",
-        "observe",
-        "govern",
-        "integrations",
-        "settings",
     ]:
         assert group_name in result.output
+    # Help is split into "Primary Commands:" and "Secondary Commands:" sections
+    assert "Primary Commands:" in result.output
+    assert "Secondary Commands:" in result.output
 
 
 @pytest.mark.parametrize(

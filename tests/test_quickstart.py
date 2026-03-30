@@ -72,7 +72,9 @@ class TestImprovedInit:
     def test_init_shows_quickstart_hint(self, runner, tmp_dir):
         result = runner.invoke(cli, ["init", "--dir", tmp_dir])
         assert result.exit_code == 0
-        assert "autoagent quickstart" in result.output
+        # init now shows autoagent status and eval run as the recommended next steps
+        assert "autoagent status" in result.output
+        assert "autoagent eval run" in result.output
 
     def test_init_creates_all_directories(self, runner, tmp_dir):
         runner.invoke(cli, ["init", "--dir", tmp_dir])
@@ -253,11 +255,13 @@ class TestDemoCommand:
 
 class TestNewCommandsInHelp:
     def test_quickstart_in_help(self, runner):
-        result = runner.invoke(cli, ["--help"])
+        # quickstart is hidden from default help but still registered and functional
+        assert "quickstart" in cli.commands
+        result = runner.invoke(cli, ["quickstart", "--help"])
         assert result.exit_code == 0
-        assert "quickstart" in result.output
 
     def test_demo_in_help(self, runner):
-        result = runner.invoke(cli, ["--help"])
+        # demo is hidden from default help but still registered and functional
+        assert "demo" in cli.commands
+        result = runner.invoke(cli, ["demo", "--help"])
         assert result.exit_code == 0
-        assert "demo" in result.output

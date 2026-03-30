@@ -196,7 +196,7 @@ class TestOnboardingAndTemplates:
             assert (workspace / ".autoagent" / "autofix.db").exists()
             assert (workspace / "configs" / "v001.yaml").exists()
             assert (workspace / "evals" / "cases").is_dir()
-            assert "MOCK mode" in result.output
+            assert "Mode:" in result.output
             assert "cd my-project" in result.output
             assert "autoagent status" in result.output
 
@@ -357,14 +357,22 @@ class TestWorkflowCommands:
 
     def test_improve_json_runs_eval_and_diagnosis_pipeline(self, runner: CliRunner) -> None:
         """`autoagent improve --json` should return a structured improvement payload."""
+        no_api_keys = {
+            **{k: v for k, v in __import__("os").environ.items()},
+            "OPENAI_API_KEY": "",
+            "ANTHROPIC_API_KEY": "",
+            "GOOGLE_API_KEY": "",
+        }
         with runner.isolated_filesystem():
             init_result = runner.invoke(cli, ["init", "--dir", "."])
             assert init_result.exit_code == 0, init_result.output
 
-            result = runner.invoke(cli, ["improve", "--json"])
+            result = runner.invoke(cli, ["improve", "--json"], env=no_api_keys)
 
             assert result.exit_code == 0, result.output
-            payload = json.loads(result.output)
+            # The improve command prints a deprecation tip before JSON output; strip non-JSON prefix.
+            json_start = result.output.index("{")
+            payload = json.loads(result.output[json_start:])
             assert payload["api_version"] == "1"
             assert payload["status"] == "ok"
             assert "eval" in payload["data"]
@@ -521,7 +529,9 @@ class TestWorkflowCommands:
             result = runner.invoke(cli, ["ship", "--yes", "--config-version", "2", "--json"])
 
             assert result.exit_code == 0, result.output
-            payload = json.loads(result.output)
+            # The ship command prints a deprecation tip before JSON output; strip non-JSON prefix.
+            json_start = result.output.index("{")
+            payload = json.loads(result.output[json_start:])
             manifest = json.loads(Path("configs/manifest.json").read_text(encoding="utf-8"))
             releases = list((Path(".autoagent") / "releases").glob("rel-*.json"))
             assert payload["status"] == "ok"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -569,6 +570,18 @@ def seed_demo_workspace(workspace: AutoAgentWorkspace) -> dict[str, Any]:
     }
 
 
+def _has_api_key() -> bool:
+    """Check if any common LLM provider API key is set in the environment."""
+    key_vars = [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GOOGLE_GENAI_API_KEY",
+        "GEMINI_API_KEY",
+    ]
+    return any(os.environ.get(var) for var in key_vars)
+
+
 def bootstrap_workspace(
     workspace: AutoAgentWorkspace,
     *,
@@ -580,7 +593,7 @@ def bootstrap_workspace(
 ) -> dict[str, Any]:
     """Create the workspace structure, starter config, sample evals, and seed data."""
     workspace.ensure_structure()
-    write_runtime_config(workspace, use_mock=True)
+    write_runtime_config(workspace, use_mock=not _has_api_key())
     active_config = seed_base_config(workspace)
     eval_files = write_eval_case_files(workspace)
     autoagent_path = write_project_memory(workspace, agent_name=agent_name, platform=platform)

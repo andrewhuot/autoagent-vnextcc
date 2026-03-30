@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import {
   type LucideIcon,
   Hammer,
@@ -33,7 +34,7 @@ import {
   Target,
   ShieldCheck,
 } from 'lucide-react';
-import { getNavigationSections } from '../lib/navigation';
+import { getNavigationSections, getSimpleNavigationSections } from '../lib/navigation';
 import { classNames } from '../lib/utils';
 
 interface NavItem {
@@ -89,21 +90,39 @@ const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/settings': Settings,
 };
 
-const navSections: NavSection[] = getNavigationSections().map((section) => ({
-  title: section.label,
-  items: section.items.map((item) => ({
-    to: item.path,
-    label: item.label,
-    icon: ICON_BY_PATH[item.path] ?? Sparkles,
-  })),
-}));
-
 interface SidebarProps {
   mobileOpen: boolean;
   onClose: () => void;
 }
 
 export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
+  const [simpleMode, setSimpleMode] = useState(() => {
+    try {
+      return localStorage.getItem('autoagent-sidebar-mode') !== 'pro';
+    } catch {
+      return true;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('autoagent-sidebar-mode', simpleMode ? 'simple' : 'pro');
+    } catch {
+      // ignore
+    }
+  }, [simpleMode]);
+
+  const sections = (simpleMode ? getSimpleNavigationSections() : getNavigationSections()).map(
+    (section) => ({
+      title: section.label,
+      items: section.items.map((item) => ({
+        to: item.path,
+        label: item.label,
+        icon: ICON_BY_PATH[item.path] ?? Sparkles,
+      })),
+    })
+  );
+
   return (
     <>
       {mobileOpen && (
@@ -135,7 +154,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         </div>
 
         <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-2">
-          {navSections.map((section) => (
+          {sections.map((section) => (
             <div key={section.title}>
               <h3 className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                 {section.title}
@@ -164,6 +183,20 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
             </div>
           ))}
         </nav>
+
+        <div className="border-t border-gray-100 px-3 py-2">
+          <button
+            onClick={() => setSimpleMode(!simpleMode)}
+            className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-[12px] text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-700"
+          >
+            <span>{simpleMode ? 'Show all pages →' : '← Simple view'}</span>
+            {simpleMode && (
+              <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-600">
+                Pro
+              </span>
+            )}
+          </button>
+        </div>
 
         <div className="border-t border-gray-100 px-5 py-3">
           <kbd className="text-[11px] text-gray-400">&#8984;K</kbd>

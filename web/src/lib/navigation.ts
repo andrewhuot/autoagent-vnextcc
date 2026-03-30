@@ -204,6 +204,25 @@ export function getNavigationSections(): NavigationSection[] {
   }));
 }
 
+/** Essential pages shown in Simple mode. */
+const SIMPLE_MODE_PATHS = new Set([
+  '/dashboard',
+  '/build',
+  '/evals',
+  '/optimize',
+  '/reviews',
+  '/deploy',
+]);
+
+export function getSimpleNavigationSections(): NavigationSection[] {
+  return NAVIGATION_SECTIONS
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => SIMPLE_MODE_PATHS.has(item.path)),
+    }))
+    .filter((section) => section.items.length > 0);
+}
+
 export function getRouteTitle(pathname: string): string {
   return getRouteMetadata(pathname).title;
 }

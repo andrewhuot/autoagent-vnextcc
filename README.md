@@ -24,7 +24,7 @@ The CLI now uses a workspace-first UX:
 >
 > **[Architecture and process diagrams](docs/architecture-diagram.md)** — Visual guide to system design and data flow
 >
-> **[CLI quick start guide](docs/QUICKSTART_GUIDE.md)** — Workspace-first quickstart covering init, status, build/import, eval, intelligence, MCP setup, mode control, deploy, and the full command surface
+> **[Quick Start](docs/QUICKSTART_GUIDE.md)** — Get a working agent in 2 minutes. See the [Detailed Guide](docs/DETAILED_GUIDE.md) for the full walkthrough.
 
 ---
 
@@ -48,7 +48,7 @@ autoagent review
 autoagent deploy canary
 ```
 
-The full walkthrough, including config import, selectors, `--json`, transcript intelligence, MCP setup, and mode control, lives in [docs/QUICKSTART_GUIDE.md](docs/QUICKSTART_GUIDE.md).
+The full walkthrough, including config import, selectors, `--json`, transcript intelligence, MCP setup, and mode control, lives in [docs/DETAILED_GUIDE.md](docs/DETAILED_GUIDE.md).
 
 ## Full repo quick start
 
@@ -763,7 +763,7 @@ make fmt
 
 **Guides:**
 - [Getting Started](docs/getting-started.md)
-- [CLI Quick Start Guide](docs/QUICKSTART_GUIDE.md)
+- [Quick Start](docs/QUICKSTART_GUIDE.md) | [Detailed Guide](docs/DETAILED_GUIDE.md)
 - [Agentic Coding Tools Guide](docs/guides/agentic-coding-tools.md)
 - [Concepts](docs/concepts.md)
 - [CLI Reference](docs/cli-reference.md)

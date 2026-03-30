@@ -143,6 +143,21 @@ AUTOAGENT_VERSION = get_autoagent_version()
 EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 
+# Command visibility tiers for simplified help output
+PRIMARY_COMMANDS = {"new", "build", "eval", "optimize", "deploy", "status", "doctor", "shell"}
+SECONDARY_COMMANDS = {"review", "config", "model", "provider", "mode", "memory", "template"}
+HIDDEN_COMMANDS = {
+    "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
+    "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
+    "permissions", "usage", "export", "trace", "knowledge", "quickstart", "demo",
+    "init", "serve", "server", "full-auto", "edit", "cx", "adk", "dataset",
+    "outcomes", "pref", "rl", "benchmark", "run", "build-show", "build-inspect",
+    "policy", "mcp-server", "scorer", "curriculum", "context", "judges",
+    "changes", "experiment", "runbook", "registry", "logs", "pause", "resume",
+    "reject", "pin", "unpin",
+}
+
+
 def _banner_flag_options(command):
     """Add shared banner suppression flags so key startup commands stay script-friendly."""
     command = click.option(
@@ -176,23 +191,45 @@ class AutoAgentGroup(click.Group):
         """Hide experimental commands from default help unless `--all` is set."""
         commands = super().list_commands(ctx)
         if ctx.parent is None and not ctx.meta.get("show_all", False):
-            commands = [name for name in commands if name != "rl"]
+            commands = [name for name in commands if name not in HIDDEN_COMMANDS and name != "rl"]
         return commands
 
     def get_help(self, ctx: click.Context) -> str:
         help_text = super().get_help(ctx)
         if ctx.parent is None:
-            task_groups = [
-                f"  {group:<12} {COMMAND_TAXONOMY[group].description}"
-                for group in COMMAND_GROUPS
-            ]
-            if ctx.meta.get("show_all", False):
-                task_groups.append("  rl [Experimental]")
-            taxonomy_block = "Task Groups:\n" + "\n".join(task_groups) + "\n\n"
+            # Replace the flat "Commands:" block with grouped output
             if "Commands:\n" in help_text:
-                help_text = help_text.replace("Commands:\n", taxonomy_block + "Commands:\n", 1)
-            else:
-                help_text = help_text + "\n\n" + taxonomy_block
+                # Extract the commands block and rebuild it grouped
+                before_commands, _, after_commands = help_text.partition("Commands:\n")
+                # Parse existing command lines
+                cmd_lines: dict[str, str] = {}
+                remaining_lines: list[str] = []
+                for line in after_commands.split("\n"):
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("─"):
+                        parts = stripped.split(None, 1)
+                        if parts:
+                            cmd_lines[parts[0]] = line
+                    else:
+                        remaining_lines.append(line)
+
+                primary_block = []
+                secondary_block = []
+                for name in sorted(PRIMARY_COMMANDS):
+                    if name in cmd_lines:
+                        primary_block.append(cmd_lines[name])
+                for name in sorted(SECONDARY_COMMANDS):
+                    if name in cmd_lines:
+                        secondary_block.append(cmd_lines[name])
+
+                grouped = "Primary Commands:\n"
+                grouped += "\n".join(primary_block) + "\n"
+                grouped += "\nSecondary Commands:\n"
+                grouped += "\n".join(secondary_block) + "\n"
+                grouped += "\n  Run `autoagent advanced` to see all commands.\n"
+
+                help_text = before_commands + grouped
+
         show_banner = ctx.meta.get("banner_enabled", banner_enabled(ctx))
         if ctx.parent is None and show_banner:
             return f"{render_startup_banner(AUTOAGENT_VERSION)}\n{help_text}"
@@ -1386,6 +1423,36 @@ from cli.usage import usage_command
 
 cli.add_command(model_group)
 cli.add_command(usage_command)
+permissions_group.hidden = True
+usage_command.hidden = True
+
+
+@cli.command("advanced")
+@click.pass_context
+def advanced_commands(ctx: click.Context) -> None:
+    """Show all available commands, including hidden power-user commands."""
+    click.echo(click.style("\n✦ AutoAgent — All Commands", fg="cyan", bold=True))
+    click.echo("")
+    click.echo("These commands are available but hidden from default --help output.")
+    click.echo("They are fully functional — use them when you need advanced control.\n")
+
+    all_commands = cli.list_commands(ctx)
+    # Also include hidden commands
+    hidden_cmds = {}
+    for name, cmd in sorted(cli.commands.items()):
+        if name in HIDDEN_COMMANDS or getattr(cmd, 'hidden', False):
+            help_text = cmd.get_short_help_str(limit=60) if hasattr(cmd, 'get_short_help_str') else (cmd.help or "").split("\n")[0]
+            hidden_cmds[name] = help_text
+
+    if hidden_cmds:
+        click.echo("Hidden Commands:")
+        for name in sorted(hidden_cmds):
+            click.echo(f"  {name:<20} {hidden_cmds[name]}")
+
+    click.echo("")
+    click.echo("Primary commands:   " + ", ".join(sorted(PRIMARY_COMMANDS)))
+    click.echo("Secondary commands: " + ", ".join(sorted(SECONDARY_COMMANDS)))
+    click.echo("")
 
 
 # ---------------------------------------------------------------------------
@@ -1435,7 +1502,7 @@ def continue_command(ctx: click.Context) -> None:
 # autoagent session — session management
 # ---------------------------------------------------------------------------
 
-@cli.group("session")
+@cli.group("session", hidden=True)
 def session_group() -> None:
     """Manage shell sessions."""
 
@@ -1518,7 +1585,7 @@ def session_delete(ctx: click.Context, session_id: str) -> None:
 # autoagent init
 # ---------------------------------------------------------------------------
 
-@cli.command("init")
+@cli.command("init", hidden=True)
 @click.option("--template", default="customer-support", show_default=True,
               type=click.Choice((*STARTER_TEMPLATE_NAMES, "minimal")),
               help="Project template to scaffold.")
@@ -1597,7 +1664,6 @@ def init_project(
     click.echo("")
     click.echo(click.style("  Next step:", bold=True))
     click.echo("    autoagent status")
-    click.echo("    autoagent quickstart")
     click.echo("    autoagent build \"Build a support agent for order tracking\"")
     click.echo("    autoagent eval run")
     click.echo("")
@@ -1647,7 +1713,8 @@ def new_workspace(name: str, template: str, demo: bool) -> None:
         )
     click.echo("")
     click.echo(f"  Mode: {mode_summary['message']}")
-    click.echo("  Live setup: run `autoagent provider configure` when you are ready to use real models.")
+    if "mock" in mode_summary.get("message", "").lower():
+        click.echo("  Live setup: run `autoagent provider configure` when you are ready to use real models.")
     click.echo("")
     click.echo(click.style("  Next 3 commands:", bold=True))
     click.echo(f"    cd {name}")
@@ -2874,7 +2941,7 @@ def optimize(
                 )
 
 
-@cli.group("improve", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
+@cli.group("improve", cls=DefaultCommandGroup, default_command="run", default_on_empty=True, hidden=True)
 def improve_group() -> None:
     """Improvement workflows and compatibility aliases."""
 
@@ -2884,6 +2951,10 @@ def improve_group() -> None:
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def improve_run(auto: bool, json_output: bool = False) -> None:
     """Run the eval -> diagnose -> suggest -> optional apply improvement flow."""
+    click.echo(click.style(
+        "Tip: use `autoagent optimize --cycles 1` for the same result.",
+        fg="yellow",
+    ))
     from cli.stream2_helpers import apply_autofix_to_config, json_response
     from optimizer.autofix import AutoFixEngine, AutoFixStore
     from optimizer.autofix_proposers import (
@@ -3609,6 +3680,8 @@ def _open_in_editor(file_path: Path) -> None:
     show_default=True,
     help="Render text, a final JSON envelope, or stream JSON progress events.",
 )
+@click.option("--auto-review", is_flag=True, default=False,
+              help="Apply all pending review cards before deploying (replicates ship behavior).")
 def deploy(
     workflow: str | None,
     config_version: int | None,
@@ -3627,6 +3700,7 @@ def deploy(
     acknowledge: bool,
     json_output: bool = False,
     output_format: str = "text",
+    auto_review: bool = False,
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
 
@@ -3637,6 +3711,17 @@ def deploy(
       autoagent deploy canary --yes
       autoagent deploy --target cx-studio
     """
+    if auto_review:
+        try:
+            from optimizer.change_card import ChangeCardStore
+            card_store = ChangeCardStore()
+            pending = card_store.list_pending(limit=200)
+            for card in pending:
+                card_store.approve(card.card_id)
+            if pending and output_format == "text":
+                click.echo(click.style(f"  Auto-reviewed: {len(pending)} pending card(s)", fg="green"))
+        except Exception:
+            pass
     from cli.output import resolve_output_format
     from cli.permissions import PermissionManager
     from cli.progress import ProgressRenderer
@@ -3853,7 +3938,7 @@ def deploy(
 # autoagent loop
 # ---------------------------------------------------------------------------
 
-@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
+@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True, hidden=True)
 def loop_group() -> None:
     """Run the optimization loop or control its execution state.
 
@@ -3907,6 +3992,10 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
       autoagent loop
       autoagent loop --max-cycles 100 --stop-on-plateau
     """
+    click.echo(click.style(
+        "Tip: use `autoagent optimize --continuous` for the same result.",
+        fg="yellow",
+    ))
     from cli.output import resolve_output_format
     from cli.progress import ProgressRenderer
     from cli.usage import enforce_workspace_budget
@@ -8972,13 +9061,17 @@ def release_create(
     click.echo(f"  Path:       .autoagent/releases/{release['release_id']}.json")
 
 
-@cli.command("ship")
+@cli.command("ship", hidden=True)
 @click.option("--config-version", type=int, default=None, help="Config version to package and deploy.")
 @click.option("--experiment-id", default=None, help="Experiment ID to associate with the release.")
 @click.option("--yes", is_flag=True, default=False, help="Skip the interactive confirmation prompt.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def ship(config_version: int | None, experiment_id: str | None, yes: bool, json_output: bool = False) -> None:
     """Create a release and deploy the selected config as a canary."""
+    click.echo(click.style(
+        "Tip: use `autoagent deploy --auto-review` for the same result.",
+        fg="yellow",
+    ))
     from cli.stream2_helpers import ReleaseStore, json_response
 
     store = ConversationStore(db_path=DB_PATH)

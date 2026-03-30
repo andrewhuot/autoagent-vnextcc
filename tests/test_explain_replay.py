@@ -60,9 +60,13 @@ class TestReplayCommand:
 
 class TestCLIRegistration:
     def test_explain_in_help(self, runner):
-        result = runner.invoke(cli, ["--help"])
-        assert "explain" in result.output
+        # explain is hidden from default help but still registered and functional
+        assert "explain" in cli.commands
+        result = runner.invoke(cli, ["explain", "--help"])
+        assert result.exit_code == 0
 
     def test_replay_in_help(self, runner):
-        result = runner.invoke(cli, ["--help"])
-        assert "replay" in result.output
+        # replay is hidden from default help but still registered and functional
+        assert "replay" in cli.commands
+        result = runner.invoke(cli, ["replay", "--help"])
+        assert result.exit_code == 0
