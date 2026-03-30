@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { Activity, ChevronDown, ChevronRight, Search } from 'lucide-react';
+import { Activity, ChevronDown, ChevronRight, GitBranchPlus, Search, Workflow } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { TraceTimeline } from '../components/TraceTimeline';
-import { useRecentTraces } from '../lib/api';
+import { usePromoteTrace, useRecentTraces, useTraceGrades, useTraceGraph } from '../lib/api';
 import type { Trace, TraceEvent } from '../lib/types';
+import { toastError, toastSuccess } from '../lib/toast';
 import { classNames } from '../lib/utils';
 
 const eventTypes = ['all', 'model_call', 'model_response', 'tool_call', 'tool_response', 'error', 'agent_transfer'];
@@ -152,7 +153,7 @@ export function Traces() {
                   {/* Expanded trace timeline */}
                   {isExpanded && (
                     <div className="border-t border-gray-100 px-4 py-4">
-                      <TraceTimeline events={filtered.events} />
+                      <ExpandedTracePanel traceId={trace.trace_id} events={filtered.events} />
                     </div>
                   )}
                 </div>
@@ -161,6 +162,156 @@ export function Traces() {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ExpandedTracePanel({ traceId, events }: { traceId: string; events: TraceEvent[] }) {
+  const gradesQuery = useTraceGrades(traceId);
+  const graphQuery = useTraceGraph(traceId);
+  const promoteTrace = usePromoteTrace();
+
+  const passingGrades = (gradesQuery.data ?? []).filter((grade) => grade.passed).length;
+  const failingGrades = (gradesQuery.data ?? []).filter((grade) => !grade.passed).length;
+  const criticalPath = graphQuery.data?.critical_path ?? [];
+  const bottlenecks = graphQuery.data?.bottlenecks ?? [];
+
+  function handlePromote() {
+    promoteTrace.mutate(
+      { traceId },
+      {
+        onSuccess: (result) => {
+          toastSuccess('Trace promoted', `Created eval case at ${result.path}.`);
+        },
+        onError: (error) => {
+          toastError('Promote failed', error.message);
+        },
+      }
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="grid min-w-0 flex-1 gap-3 sm:grid-cols-3">
+          <TraceMetric label="Events" value={String(events.length)} />
+          <TraceMetric
+            label="Grades"
+            value={
+              gradesQuery.isLoading
+                ? 'Loading...'
+                : `${passingGrades} pass / ${failingGrades} fail`
+            }
+          />
+          <TraceMetric
+            label="Graph"
+            value={
+              graphQuery.isLoading
+                ? 'Loading...'
+                : `${criticalPath.length} critical / ${bottlenecks.length} bottlenecks`
+            }
+          />
+        </div>
+
+        <button
+          onClick={handlePromote}
+          disabled={promoteTrace.isPending}
+          className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+        >
+          <GitBranchPlus className="h-4 w-4" />
+          {promoteTrace.isPending ? 'Promoting...' : 'Promote to Eval'}
+        </button>
+      </div>
+
+      {gradesQuery.data && gradesQuery.data.length > 0 ? (
+        <section className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+          <h4 className="text-sm font-semibold text-gray-900">Grade Detail</h4>
+          <div className="mt-3 space-y-2">
+            {gradesQuery.data.map((grade) => (
+              <div
+                key={`${grade.grader_name}-${grade.span_id}`}
+                className="flex flex-wrap items-start justify-between gap-3 rounded-lg border border-gray-200 bg-white px-3 py-2"
+              >
+                <div>
+                  <p className="text-sm font-medium text-gray-900">{grade.grader_name}</p>
+                  <p className="text-xs text-gray-500">Span {grade.span_id}</p>
+                  {grade.failure_reason ? (
+                    <p className="mt-1 text-xs text-rose-700">{grade.failure_reason}</p>
+                  ) : null}
+                </div>
+                <div className="text-right">
+                  <p className="text-sm font-semibold text-gray-900">{grade.score.toFixed(2)}</p>
+                  <p className={classNames('text-xs font-medium', grade.passed ? 'text-emerald-700' : 'text-rose-700')}>
+                    {grade.passed ? 'PASS' : 'FAIL'}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : gradesQuery.isError ? (
+        <section className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          Unable to load trace grades.
+        </section>
+      ) : null}
+
+      {graphQuery.data ? (
+        <section className="grid gap-4 xl:grid-cols-2">
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <Workflow className="h-4 w-4 text-gray-500" />
+              <h4 className="text-sm font-semibold text-gray-900">Critical Path</h4>
+            </div>
+            {criticalPath.length > 0 ? (
+              <div className="space-y-2">
+                {criticalPath.map((node) => (
+                  <div key={`${node.span_id}-critical`} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                    <p className="text-sm font-medium text-gray-900">{node.operation}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {node.duration_ms.toFixed(1)}ms · {node.status}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No critical path nodes available.</p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+            <h4 className="mb-3 text-sm font-semibold text-gray-900">Bottlenecks</h4>
+            {bottlenecks.length > 0 ? (
+              <div className="space-y-2">
+                {bottlenecks.map((node) => (
+                  <div key={`${node.span_id}-bottleneck`} className="rounded-lg border border-gray-200 bg-white px-3 py-2">
+                    <p className="text-sm font-medium text-gray-900">{node.operation}</p>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {node.duration_ms.toFixed(1)}ms · span {node.span_id}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-gray-500">No bottlenecks detected.</p>
+            )}
+          </div>
+        </section>
+      ) : graphQuery.isError ? (
+        <section className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          Unable to load trace graph detail.
+        </section>
+      ) : null}
+
+      <TraceTimeline events={events} />
+    </div>
+  );
+}
+
+function TraceMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-gray-50 px-3 py-2">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">{label}</p>
+      <p className="mt-2 text-sm font-medium text-gray-900">{value}</p>
     </div>
   );
 }

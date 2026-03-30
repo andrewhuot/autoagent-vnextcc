@@ -5,16 +5,22 @@ import userEvent from '@testing-library/user-event';
 import { Configs } from './Configs';
 
 const apiMocks = vi.hoisted(() => ({
+  useActivateConfig: vi.fn(),
   useConfigs: vi.fn(),
   useConfigShow: vi.fn(),
   useConfigDiff: vi.fn(),
+  useImportConfig: vi.fn(),
+  useMigrateConfig: vi.fn(),
   useNaturalLanguageConfigEdit: vi.fn(),
 }));
 
 vi.mock('../lib/api', () => ({
+  useActivateConfig: apiMocks.useActivateConfig,
   useConfigs: apiMocks.useConfigs,
   useConfigShow: apiMocks.useConfigShow,
   useConfigDiff: apiMocks.useConfigDiff,
+  useImportConfig: apiMocks.useImportConfig,
+  useMigrateConfig: apiMocks.useMigrateConfig,
   useNaturalLanguageConfigEdit: apiMocks.useNaturalLanguageConfigEdit,
 }));
 
@@ -58,6 +64,9 @@ describe('Configs', () => {
     });
     apiMocks.useConfigShow.mockReturnValue({ data: null, isLoading: false });
     apiMocks.useConfigDiff.mockReturnValue({ data: null, isLoading: false });
+    apiMocks.useActivateConfig.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useImportConfig.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useMigrateConfig.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useNaturalLanguageConfigEdit.mockReturnValue({
       mutate: vi.fn(),
       isPending: false,

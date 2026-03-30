@@ -406,6 +406,33 @@ class TestTraceGraph:
         assert len(data["critical_path"]) >= 1
 
 
+class TestTracePromote:
+    def test_promote_trace_writes_eval_case(self, client: TestClient, trace_store: TraceStore, tmp_path: Path) -> None:
+        now = time.time()
+        trace_store.log_event(
+            TraceEvent(
+                event_id="promote.1",
+                trace_id="tp1",
+                event_type=TraceEventType.model_response.value,
+                timestamp=now,
+                invocation_id="inv-promote",
+                session_id="session-promote",
+                agent_path="/root",
+                branch="main",
+            )
+        )
+
+        response = client.post(
+            "/api/traces/tp1/promote",
+            json={"eval_cases_dir": str(tmp_path / "evals" / "cases")},
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["promoted"] is True
+        assert Path(payload["path"]).exists()
+
+
 # ---------------------------------------------------------------------------
 # Scorers — Create
 # ---------------------------------------------------------------------------

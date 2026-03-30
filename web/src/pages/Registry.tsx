@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Search, ChevronDown, ChevronRight, BookOpen, Tag, FileCode, ArrowLeftRight } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, BookOpen, Tag, FileCode, ArrowLeftRight, FileUp, PlusSquare } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
+import { toastError, toastSuccess } from '../lib/toast';
 import { classNames } from '../lib/utils';
 
 const API_BASE = '/api';
@@ -38,6 +39,27 @@ interface DiffResult {
 async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`);
   if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+  return res.json() as Promise<T>;
+}
+
+async function postJson<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = `Request failed: ${res.status}`;
+    try {
+      const payload = await res.json();
+      if (typeof payload?.detail === 'string') {
+        detail = payload.detail;
+      }
+    } catch {
+      // Preserve the fallback status message.
+    }
+    throw new Error(detail);
+  }
   return res.json() as Promise<T>;
 }
 
@@ -128,6 +150,10 @@ export function Registry() {
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedItem, setExpandedItem] = useState<string | null>(null);
   const [diffVersions, setDiffVersions] = useState<{ v1: number; v2: number } | null>(null);
+  const [newItemName, setNewItemName] = useState('');
+  const [newItemPayload, setNewItemPayload] = useState('{\n  "description": ""\n}');
+  const [importPath, setImportPath] = useState('');
+  const [submitting, setSubmitting] = useState(false);
 
   const listQuery = useQuery<RegistryItem[]>({
     queryKey: ['registry', activeType, searchQuery],
@@ -169,6 +195,54 @@ export function Registry() {
     setDiffVersions(null);
   }
 
+  async function handleCreateItem() {
+    const name = newItemName.trim();
+    if (!name) {
+      toastError('Name required', 'Provide a registry item name before creating it.');
+      return;
+    }
+
+    let parsedBody: Record<string, unknown>;
+    try {
+      parsedBody = JSON.parse(newItemPayload) as Record<string, unknown>;
+    } catch {
+      toastError('Invalid JSON', 'The registry payload must be valid JSON.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await postJson(`/registry/${activeType}`, { ...parsedBody, name });
+      toastSuccess('Registry item created', `${activeType}/${name} is now registered.`);
+      setNewItemName('');
+      listQuery.refetch();
+    } catch (error) {
+      toastError('Create failed', error instanceof Error ? error.message : 'Unable to create registry item.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function handleImportRegistry() {
+    const filePath = importPath.trim();
+    if (!filePath) {
+      toastError('Import path required', 'Provide a YAML or JSON file to import.');
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await postJson('/registry/import', { file_path: filePath });
+      toastSuccess('Registry imported', `Imported registry bundle from ${filePath}.`);
+      setImportPath('');
+      listQuery.refetch();
+    } catch (error) {
+      toastError('Import failed', error instanceof Error ? error.message : 'Unable to import registry bundle.');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
   const items = listQuery.data ?? [];
 
   return (
@@ -177,6 +251,64 @@ export function Registry() {
         title="Registry Browser"
         description="Browse and inspect skills, policies, tool contracts, and handoff schemas"
       />
+
+      <section className="grid gap-4 xl:grid-cols-2">
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2">
+            <PlusSquare className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Register Item</h3>
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Add a new {registryTypes.find((type) => type.key === activeType)?.label?.toLowerCase() ?? 'registry item'} without leaving the browser.
+          </p>
+          <div className="mt-4 space-y-3">
+            <input
+              value={newItemName}
+              onChange={(event) => setNewItemName(event.target.value)}
+              placeholder="returns_handling"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+            <textarea
+              value={newItemPayload}
+              onChange={(event) => setNewItemPayload(event.target.value)}
+              rows={8}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          <div className="mt-4 flex justify-end">
+            <button
+              onClick={handleCreateItem}
+              disabled={submitting}
+              className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+            >
+              Create Item
+            </button>
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2">
+            <FileUp className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Import Bundle</h3>
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Import a YAML or JSON registry export produced by the CLI or another workspace.
+          </p>
+          <input
+            value={importPath}
+            onChange={(event) => setImportPath(event.target.value)}
+            placeholder="registry_export.yaml"
+            className="mt-4 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            onClick={handleImportRegistry}
+            disabled={submitting}
+            className="mt-3 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
+          >
+            Import Registry File
+          </button>
+        </div>
+      </section>
 
       {/* Tab navigation */}
       <div className="flex flex-wrap items-center gap-1 rounded-xl border border-gray-200 bg-white px-2 py-2">

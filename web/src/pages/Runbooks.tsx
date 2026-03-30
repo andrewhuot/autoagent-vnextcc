@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, ChevronDown, ChevronRight, BookOpen, Tag, Play, FileCode, Shield, ArrowLeftRight } from 'lucide-react';
+import { Search, ChevronDown, ChevronRight, BookOpen, Tag, Play, FileCode, Shield, ArrowLeftRight, PlusSquare } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
-import { useRunbooks, useRunbookDetail, useApplyRunbook } from '../lib/api';
+import { useRunbooks, useRunbookDetail, useApplyRunbook, useCreateRunbook } from '../lib/api';
 import { classNames } from '../lib/utils';
 import { toastSuccess, toastError } from '../lib/toast';
 
@@ -12,10 +12,20 @@ export function Runbooks() {
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [expandedName, setExpandedName] = useState<string | null>(null);
   const hasHandledShortcut = useRef(false);
+  const [createForm, setCreateForm] = useState({
+    name: '',
+    description: '',
+    tags: '',
+    skills: '',
+    policies: '',
+    toolContracts: '',
+    surfaces: '',
+  });
 
   const { data: runbooks = [], isLoading, isError } = useRunbooks();
   const detailQuery = useRunbookDetail(expandedName ?? undefined);
   const applyMutation = useApplyRunbook();
+  const createMutation = useCreateRunbook();
   const requestedAction = searchParams.get('action');
   const requestedRunbook = searchParams.get('runbook');
 
@@ -48,6 +58,50 @@ export function Runbooks() {
 
   function toggleExpand(name: string) {
     setExpandedName((current) => (current === name ? null : name));
+  }
+
+  function parseCommaSeparated(value: string) {
+    return value
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function handleCreateRunbook() {
+    const name = createForm.name.trim();
+    if (!name) {
+      toastError('Runbook name required', 'Provide a stable runbook name before creating it.');
+      return;
+    }
+
+    createMutation.mutate(
+      {
+        name,
+        description: createForm.description.trim(),
+        tags: parseCommaSeparated(createForm.tags),
+        skills: parseCommaSeparated(createForm.skills),
+        policies: parseCommaSeparated(createForm.policies),
+        tool_contracts: parseCommaSeparated(createForm.toolContracts),
+        surfaces: parseCommaSeparated(createForm.surfaces),
+      },
+      {
+        onSuccess: (result) => {
+          toastSuccess('Runbook created', `${result.name} v${result.version} is ready to apply.`);
+          setCreateForm({
+            name: '',
+            description: '',
+            tags: '',
+            skills: '',
+            policies: '',
+            toolContracts: '',
+            surfaces: '',
+          });
+        },
+        onError: (error) => {
+          toastError('Create failed', error.message);
+        },
+      }
+    );
   }
 
   useEffect(() => {
@@ -100,6 +154,72 @@ export function Runbooks() {
           </Link>
         }
       />
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5">
+        <div className="flex items-center gap-2">
+          <PlusSquare className="h-4 w-4 text-gray-500" />
+          <h3 className="text-sm font-semibold text-gray-900">Create Runbook</h3>
+        </div>
+        <p className="mt-2 text-sm text-gray-600">
+          Add a new operator runbook directly from the UI, then apply it from the same page.
+        </p>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2">
+          <input
+            value={createForm.name}
+            onChange={(event) => setCreateForm((current) => ({ ...current, name: event.target.value }))}
+            placeholder="returns-hardening"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            value={createForm.tags}
+            onChange={(event) => setCreateForm((current) => ({ ...current, tags: event.target.value }))}
+            placeholder="safety, retrieval, escalation"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <textarea
+            value={createForm.description}
+            onChange={(event) => setCreateForm((current) => ({ ...current, description: event.target.value }))}
+            rows={3}
+            placeholder="Explain what this runbook packages together."
+            className="md:col-span-2 rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            value={createForm.skills}
+            onChange={(event) => setCreateForm((current) => ({ ...current, skills: event.target.value }))}
+            placeholder="skill_a, skill_b"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            value={createForm.policies}
+            onChange={(event) => setCreateForm((current) => ({ ...current, policies: event.target.value }))}
+            placeholder="policy_a, policy_b"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            value={createForm.toolContracts}
+            onChange={(event) => setCreateForm((current) => ({ ...current, toolContracts: event.target.value }))}
+            placeholder="tool_contract_a, tool_contract_b"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <input
+            value={createForm.surfaces}
+            onChange={(event) => setCreateForm((current) => ({ ...current, surfaces: event.target.value }))}
+            placeholder="routing, prompts, tools"
+            className="rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+
+        <div className="mt-4 flex justify-end">
+          <button
+            onClick={handleCreateRunbook}
+            disabled={createMutation.isPending}
+            className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+          >
+            {createMutation.isPending ? 'Creating...' : 'Create Runbook'}
+          </button>
+        </div>
+      </section>
 
       {/* Search */}
       <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-3">

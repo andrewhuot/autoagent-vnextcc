@@ -6,8 +6,13 @@ import dataclasses
 from typing import Optional
 
 from fastapi import APIRouter, Query, Request, HTTPException
+from pydantic import BaseModel
 
 router = APIRouter(prefix="/api/traces", tags=["traces"])
+
+
+class PromoteTraceRequest(BaseModel):
+    eval_cases_dir: str = "evals/cases"
 
 
 def _event_to_dict(event) -> dict:
@@ -158,4 +163,38 @@ async def get_trace(
         "trace_id": trace_id,
         "events": [_event_to_dict(e) for e in events],
         "spans": [_span_to_dict(s) for s in spans],
+    }
+
+
+@router.post("/{trace_id}/promote")
+async def promote_trace(
+    trace_id: str,
+    body: PromoteTraceRequest,
+    request: Request,
+) -> dict:
+    """Promote a trace into an eval case file for future regressions."""
+    from cli.stream2_helpers import write_trace_eval_case
+    from observer.trace_promoter import TraceCandidate, TracePromoter
+
+    trace_store = getattr(request.app.state, "trace_store", None)
+    if trace_store is None:
+        raise HTTPException(status_code=503, detail="Trace store not configured")
+
+    promoter = TracePromoter()
+    candidate = TraceCandidate(
+        trace_id=trace_id,
+        reason="manual promotion",
+        confidence=1.0,
+        suggested_category="promoted",
+    )
+
+    if not trace_store.get_trace(trace_id):
+        raise HTTPException(status_code=404, detail=f"Trace not found: {trace_id}")
+
+    promoted = promoter.promote_to_eval_case(candidate)
+    output_path = write_trace_eval_case(trace_id, promoted, eval_cases_dir=body.eval_cases_dir)
+    return {
+        "trace_id": trace_id,
+        "path": output_path,
+        "promoted": True,
     }

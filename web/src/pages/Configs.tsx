@@ -1,6 +1,14 @@
 import { useState } from 'react';
-import { Columns3, Settings2 } from 'lucide-react';
-import { useConfigDiff, useConfigs, useConfigShow, useNaturalLanguageConfigEdit } from '../lib/api';
+import { ArrowUpRight, Columns3, FileUp, Settings2, WandSparkles } from 'lucide-react';
+import {
+  useActivateConfig,
+  useConfigDiff,
+  useConfigs,
+  useConfigShow,
+  useImportConfig,
+  useMigrateConfig,
+  useNaturalLanguageConfigEdit,
+} from '../lib/api';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
@@ -20,6 +28,10 @@ export function Configs() {
   const [editDescription, setEditDescription] = useState('');
   const [previewedDescription, setPreviewedDescription] = useState('');
   const [editPreview, setEditPreview] = useState<ConfigEditResult | null>(null);
+  const [importPath, setImportPath] = useState('');
+  const [migrateInputPath, setMigrateInputPath] = useState('');
+  const [migrateOutputPath, setMigrateOutputPath] = useState('');
+  const [migrationPreview, setMigrationPreview] = useState<string | null>(null);
 
   const { data: selectedConfig, isLoading: configLoading } = useConfigShow(selectedVersion);
   const { data: diffData, isLoading: diffLoading } = useConfigDiff(
@@ -27,6 +39,9 @@ export function Configs() {
     compareMode ? compareB : null
   );
   const nlEdit = useNaturalLanguageConfigEdit();
+  const activateConfig = useActivateConfig();
+  const importConfig = useImportConfig();
+  const migrateConfig = useMigrateConfig();
 
   function handleToggleCompare() {
     setCompareMode((current) => !current);
@@ -96,6 +111,80 @@ export function Configs() {
     );
   }
 
+  function handleActivateSelected() {
+    if (selectedVersion === null) {
+      toastError('Select a version', 'Choose a config version before activating it.');
+      return;
+    }
+
+    activateConfig.mutate(
+      { version: selectedVersion },
+      {
+        onSuccess: (result) => {
+          toastSuccess(
+            'Config activated',
+            result.workspace_updated
+              ? `v${result.version} is now active in the workspace and manifest.`
+              : `v${result.version} is now active in the config manifest.`
+          );
+          refetch();
+        },
+        onError: (error) => {
+          toastError('Activation failed', error.message);
+        },
+      }
+    );
+  }
+
+  function handleImportConfig() {
+    const filePath = importPath.trim();
+    if (!filePath) {
+      toastError('Import path required', 'Provide a YAML or JSON file path to import.');
+      return;
+    }
+
+    importConfig.mutate(
+      { file_path: filePath },
+      {
+        onSuccess: (result) => {
+          toastSuccess('Config imported', `Imported ${result.source_file} as v${result.version}.`);
+          setImportPath('');
+          refetch();
+        },
+        onError: (error) => {
+          toastError('Import failed', error.message);
+        },
+      }
+    );
+  }
+
+  function handleMigrateConfig() {
+    const inputFile = migrateInputPath.trim();
+    if (!inputFile) {
+      toastError('Input path required', 'Provide the legacy config file you want to migrate.');
+      return;
+    }
+
+    migrateConfig.mutate(
+      {
+        input_file: inputFile,
+        output_file: migrateOutputPath.trim() || undefined,
+      },
+      {
+        onSuccess: (result) => {
+          setMigrationPreview(result.yaml_content);
+          toastSuccess(
+            'Migration complete',
+            result.output_file ? `Wrote migrated config to ${result.output_file}.` : 'Showing migrated YAML preview below.'
+          );
+        },
+        onError: (error) => {
+          toastError('Migration failed', error.message);
+        },
+      }
+    );
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -141,6 +230,96 @@ export function Configs() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Failed to load config metadata.
         </div>
+      )}
+
+      <section className="grid gap-4 xl:grid-cols-3">
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2">
+            <ArrowUpRight className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Activate</h3>
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Promote the selected version into the active workspace slot without leaving the browser.
+          </p>
+          <p className="mt-3 text-xs text-gray-500">
+            Selected version: {selectedVersion !== null ? `v${selectedVersion}` : 'None'}
+          </p>
+          <button
+            onClick={handleActivateSelected}
+            disabled={selectedVersion === null || activateConfig.isPending}
+            className="mt-4 w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+          >
+            {activateConfig.isPending ? 'Activating...' : 'Activate Selected Version'}
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2">
+            <FileUp className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Import</h3>
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Pull an external YAML or JSON config into the versioned config history.
+          </p>
+          <input
+            value={importPath}
+            onChange={(event) => setImportPath(event.target.value)}
+            placeholder="configs/incoming/support-agent.yaml"
+            className="mt-4 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            onClick={handleImportConfig}
+            disabled={importConfig.isPending}
+            className="mt-3 w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
+          >
+            {importConfig.isPending ? 'Importing...' : 'Import Config'}
+          </button>
+        </div>
+
+        <div className="rounded-lg border border-gray-200 bg-white p-5">
+          <div className="flex items-center gap-2">
+            <WandSparkles className="h-4 w-4 text-gray-500" />
+            <h3 className="text-sm font-semibold text-gray-900">Migrate</h3>
+          </div>
+          <p className="mt-2 text-sm text-gray-600">
+            Convert a legacy optimizer config into the current optimization layout before importing it.
+          </p>
+          <div className="mt-4 space-y-2">
+            <input
+              value={migrateInputPath}
+              onChange={(event) => setMigrateInputPath(event.target.value)}
+              placeholder="legacy/autoagent.yaml"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+            <input
+              value={migrateOutputPath}
+              onChange={(event) => setMigrateOutputPath(event.target.value)}
+              placeholder="Optional output path"
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+            />
+          </div>
+          <button
+            onClick={handleMigrateConfig}
+            disabled={migrateConfig.isPending}
+            className="mt-3 w-full rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
+          >
+            {migrateConfig.isPending ? 'Migrating...' : 'Preview Migration'}
+          </button>
+        </div>
+      </section>
+
+      {migrationPreview && (
+        <section className="rounded-lg border border-gray-200 bg-white p-5">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">Migrated Config Preview</h3>
+              <p className="mt-1 text-sm text-gray-600">
+                Review the migrated YAML before importing or applying it elsewhere.
+              </p>
+            </div>
+          </div>
+          <YamlViewer content={migrationPreview} />
+        </section>
       )}
 
       <section className="rounded-lg border border-gray-200 bg-white p-5">
@@ -321,12 +500,21 @@ export function Configs() {
         <section className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">Config v{selectedVersion}</h3>
-            <button
-              onClick={() => setSelectedVersion(null)}
-              className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
-            >
-              Close
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleActivateSelected}
+                disabled={activateConfig.isPending}
+                className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60"
+              >
+                {activateConfig.isPending ? 'Activating...' : 'Activate'}
+              </button>
+              <button
+                onClick={() => setSelectedVersion(null)}
+                className="rounded border border-gray-300 px-2.5 py-1 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                Close
+              </button>
+            </div>
           </div>
 
           {configLoading ? (
