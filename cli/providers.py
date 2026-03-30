@@ -26,6 +26,19 @@ DEFAULT_PROVIDER_ENV_VARS: dict[str, str] = {
 }
 
 
+def normalize_model_name(provider: str, model: str) -> str:
+    """Accept either bare model names or `provider:model` strings for one provider."""
+    normalized_provider = provider.strip().lower()
+    cleaned = model.strip()
+    if ":" not in cleaned:
+        return cleaned
+
+    prefix, remainder = cleaned.split(":", 1)
+    if prefix.strip().lower() == normalized_provider and remainder.strip():
+        return remainder.strip()
+    return cleaned
+
+
 def providers_file_path(workspace: AutoAgentWorkspace | None) -> Path:
     """Return the provider registry path for the current CLI scope."""
     if workspace is not None:
@@ -73,6 +86,7 @@ def upsert_provider(
 ) -> dict[str, Any]:
     """Insert or replace one configured provider entry."""
     normalized_provider = provider.strip().lower()
+    normalized_model = normalize_model_name(normalized_provider, model)
     registry = load_provider_registry(path)
     providers = [
         item
@@ -82,7 +96,7 @@ def upsert_provider(
     providers.append(
         {
             "provider": normalized_provider,
-            "model": model.strip(),
+            "model": normalized_model,
             "api_key_env": api_key_env.strip(),
             "base_url": base_url.strip() if base_url else None,
             "configured_at": time.time(),
@@ -122,10 +136,12 @@ def sync_runtime_config(
     """Update `autoagent.yaml` so CLI live-mode setup matches provider registry state."""
     runtime = load_runtime_config(str(runtime_config_path))
     runtime.optimizer.use_mock = False
+    normalized_provider = provider.strip().lower()
+    normalized_model = normalize_model_name(normalized_provider, model)
     runtime.optimizer.models = [
         RuntimeModelConfig(
-            provider=provider.strip().lower(),
-            model=model.strip(),
+            provider=normalized_provider,
+            model=normalized_model,
             api_key_env=api_key_env.strip(),
             base_url=base_url.strip() if base_url else None,
         )

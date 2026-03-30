@@ -56,3 +56,30 @@ def test_model_set_writes_workspace_settings_overrides(runner: CliRunner) -> Non
         show_payload = json.loads(show_result.output)
         assert show_payload["data"]["proposer"]["key"] == "anthropic:claude-sonnet-4-5"
         assert show_payload["data"]["evaluator"]["key"] == "google:gemini-2.5-pro"
+
+
+def test_provider_configure_normalizes_fully_qualified_model_input(runner: CliRunner) -> None:
+    """Provider setup should accept `provider:model` input without duplicating the provider prefix."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", "."])
+        assert init_result.exit_code == 0, init_result.output
+
+        configure_result = runner.invoke(
+            cli,
+            ["provider", "configure"],
+            input="openai\nopenai:gpt-4o\nOPENAI_API_KEY\n",
+        )
+        assert configure_result.exit_code == 0, configure_result.output
+        assert "Applied: provider openai:gpt-4o" in configure_result.output
+
+        list_result = runner.invoke(cli, ["model", "list", "--json"])
+        assert list_result.exit_code == 0, list_result.output
+        list_payload = json.loads(list_result.output)
+        assert list_payload["status"] == "ok"
+        assert [item["key"] for item in list_payload["data"]] == ["openai:gpt-4o"]
+
+        show_result = runner.invoke(cli, ["model", "show", "--json"])
+        assert show_result.exit_code == 0, show_result.output
+        show_payload = json.loads(show_result.output)
+        assert show_payload["data"]["proposer"]["key"] == "openai:gpt-4o"
+        assert show_payload["data"]["evaluator"]["key"] == "openai:gpt-4o"

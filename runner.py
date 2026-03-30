@@ -89,6 +89,7 @@ from cli.providers import (
     configured_providers,
     default_api_key_env_for,
     default_model_for,
+    normalize_model_name,
     provider_health_checks,
     providers_file_path,
     sync_runtime_config,
@@ -1713,6 +1714,7 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
         default=default_model_for(resolved_provider),
         show_default=True,
     )
+    normalized_model = normalize_model_name(resolved_provider, resolved_model)
     resolved_env = api_key_env or click.prompt(
         "API key env var",
         default=default_api_key_env_for(resolved_provider),
@@ -1723,17 +1725,17 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
     upsert_provider(
         registry_path,
         provider=resolved_provider,
-        model=resolved_model,
+        model=normalized_model,
         api_key_env=resolved_env,
     )
     sync_runtime_config(
         workspace.runtime_config_path,
         provider=resolved_provider,
-        model=resolved_model,
+        model=normalized_model,
         api_key_env=resolved_env,
     )
 
-    click.echo(click.style(f"Applied: provider {resolved_provider}:{resolved_model}", fg="green"))
+    click.echo(click.style(f"Applied: provider {resolved_provider}:{normalized_model}", fg="green"))
     click.echo(f"  Registry: {registry_path}")
     click.echo(f"  Runtime:  {workspace.runtime_config_path}")
     click.echo(f"  Next:     export {resolved_env}=... && autoagent provider test")

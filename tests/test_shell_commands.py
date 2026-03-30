@@ -136,3 +136,52 @@ def test_config_edit_with_workspace(tmp_path: Path, monkeypatch) -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["config", "edit"])
     assert result.exit_code == 0
+
+
+def test_shell_status_slash_command_runs_embedded_cli(tmp_path: Path, monkeypatch) -> None:
+    """The REPL `/status` command should render the status screen instead of an internal runner error."""
+    workspace = tmp_path / "ws"
+    runner = CliRunner()
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    result = runner.invoke(cli, ["shell"], input="/status\n/exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert "AutoAgent Status" in result.output
+    assert "unexpected keyword argument 'mix_stderr'" not in result.output
+
+
+def test_shell_free_text_build_routes_to_build_command(tmp_path: Path, monkeypatch) -> None:
+    """Free-text build requests should execute the build command with the full prompt preserved."""
+    workspace = tmp_path / "ws"
+    runner = CliRunner()
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    result = runner.invoke(
+        cli,
+        ["shell"],
+        input="build a customer support agent for refunds and cancellations\n/exit\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "AutoAgent Build" in result.output
+    assert "Prompt: build a customer support agent for refunds and cancellations" in result.output
+    assert "unexpected keyword argument 'mix_stderr'" not in result.output
+
+
+def test_shell_free_text_deploy_routes_to_deploy_status(tmp_path: Path, monkeypatch) -> None:
+    """Free-text deploy requests should show the deploy surface instead of becoming a no-op."""
+    workspace = tmp_path / "ws"
+    runner = CliRunner()
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    result = runner.invoke(cli, ["shell"], input="deploy\n/exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Deployment status" in result.output

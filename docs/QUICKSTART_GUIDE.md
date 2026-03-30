@@ -1,37 +1,49 @@
 # AutoAgent Quick Start Guide
 
-Get from zero to a deployed agent in under 10 minutes.
+Get from zero to a working AutoAgent workspace in under 10 minutes.
+
+This guide follows the most reliable first-run path:
+
+- Stay in **mock mode** while you learn the workflow
+- Build, eval, optimize, review, and deploy locally
+- Switch to **live mode** only after the basics make sense
+
+If you want the one-command version of this flow, run `autoagent quickstart`.
 
 ## 1. Install AutoAgent
 
+From this repository:
+
 ```bash
-pip install autoagent
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
 ```
 
 Requirements: Python 3.11+, macOS / Linux / WSL.
 
-> **From Source**: Clone the repo, then `pip install -e .` inside a virtualenv.
+## 2. List the Starter Templates
 
-## 2. Choose a Starter Template
-
-AutoAgent ships with bundled starter templates. List them first:
+AutoAgent ships with bundled starter templates:
 
 ```bash
 autoagent template list
 ```
 
-You should see templates like:
+You should see:
 
-```
+```text
 Starter templates
 =================
-- customer-support
-- it-helpdesk
-- sales-qualification
-- healthcare-intake
+- customer-support: Handle order questions, support troubleshooting, and product recommendations.
+- it-helpdesk: Triage employee IT support requests, device issues, and access problems.
+- sales-qualification: Qualify inbound leads, identify urgency, and route to the right sales motion.
+- healthcare-intake: Collect patient intake information safely before clinical follow-up.
 ```
 
 ## 3. Create a Workspace
+
+Create a starter workspace with seeded demo data:
 
 ```bash
 autoagent new my-project --template customer-support --demo
@@ -39,14 +51,15 @@ cd my-project
 autoagent status
 ```
 
-You should see the status home screen:
+You should see a status screen similar to:
 
-```
+```text
 AutoAgent Status
 ━━━━━━━━━━━━━━━━━
   Workspace:  my-project
+  Path:       /path/to/my-project
   Mode:       MOCK
-  Config:     v001 — gemini-2.0-flash | You are AutoAgent, a customer support...
+  Config:     v001 — gemini-2.0-flash | You are AutoAgent, a customer support assistant...
   Eval score: n/a (never)
   Safety:     0.117
   Pending:    1 review card(s), 1 autofix proposal(s)
@@ -55,47 +68,65 @@ AutoAgent Status
   MCP:        0 server(s)
   Memory:     1 active source(s)
 
-  Next step:  autoagent quickstart
+  Next step:  autoagent eval run
 ```
 
-**Mock vs Live**: AutoAgent starts in **mock mode** — all LLM calls are simulated so you can explore without API keys. Switch to live mode when you are ready:
+`--demo` seeds a friendlier first workspace:
+
+- Starter eval cases and scorer specs
+- Sample traces
+- One pending review card
+- One pending autofix proposal
+
+### Mock vs Live
+
+AutoAgent starts in **mock mode**. That is the intended way to learn the product because:
+
+- All model calls are simulated
+- The CLI is deterministic
+- You do not need credentials to complete the walkthrough below
+
+The rest of this guide assumes you stay in mock mode.
+
+When you are ready to use real providers, configure them explicitly:
 
 ```bash
-autoagent provider configure          # interactive provider setup
-export OPENAI_API_KEY=sk-...          # set your API key
-autoagent provider test               # verify credentials work
-autoagent mode set live               # switch to real providers
-autoagent mode show                   # verify current mode and provider status
+autoagent provider configure
+export OPENAI_API_KEY=sk-...
+autoagent provider test
+autoagent mode set live
+autoagent mode show
 ```
 
-> `provider configure` writes `.autoagent/providers.json` and updates `autoagent.yaml`. `provider test` checks whether the required environment variable is actually set. `mode set live` will fail if no configured provider credential is available.
+Notes:
+
+- `provider configure` writes `.autoagent/providers.json` and updates `autoagent.yaml`
+- The model prompt defaults to the bare model name like `gpt-4o`
+- Fully qualified input like `openai:gpt-4o` also works
+- `provider test` checks that the required environment variable is set
+- `mode set live` fails when no configured provider credential is available
 
 Your workspace looks like this:
 
-```
+```text
 my-project/
-├── autoagent.yaml          # runtime config (models, budgets, loop settings)
-├── AUTOAGENT.md            # agent instructions (editable project memory)
+├── autoagent.yaml           # runtime config (models, budgets, loop settings)
+├── AUTOAGENT.md             # project memory / agent instructions
 ├── configs/
-│   ├── v001.yaml           # versioned agent config (active)
-│   └── v001_base.yaml      # base config snapshot
+│   ├── v001.yaml            # active versioned config
+│   └── v001_base.yaml       # base config snapshot
 ├── evals/
-│   └── cases/              # eval test cases
+│   └── cases/               # eval case files
 └── .autoagent/
-    ├── workspace.json      # workspace state (mode, metadata)
-    ├── settings.json        # permission mode and CLI settings
-    └── sessions/            # shell session history
+    ├── workspace.json       # workspace metadata + mode preference
+    ├── settings.json        # permissions + model overrides
+    ├── sessions/            # shell session history
+    └── providers.json       # optional provider registry
 ```
-
-**Glossary**:
-- **Workspace** — a project directory with configs, evals, and state
-- **Config** — a versioned YAML file defining agent behavior
-- **Eval suite** — test cases that score your agent
-- **Trace** — a recorded agent conversation with timing and tool calls
-- **Review card** — a proposed change awaiting approval
-- **Release** — a promoted config snapshot ready for deployment
 
 ## 4. Build Your First Agent
+
+Generate a config and eval draft from a natural-language prompt:
 
 ```bash
 autoagent build "Build a customer support agent for order tracking, refunds, and cancellations"
@@ -103,7 +134,7 @@ autoagent build "Build a customer support agent for order tracking, refunds, and
 
 You should see:
 
-```
+```text
 ✦ AutoAgent Build
 Prompt: Build a customer support agent for order tracking, refunds, and cancellations
 Connectors: None
@@ -116,43 +147,71 @@ Artifact coverage
   Integration templates: 1
 
 Generated handoff files
-  Config:   configs/v002_built_from_prompt.yaml
-  Evals:    evals/cases/generated_build.yaml
-  Artifact: .autoagent/build_artifact_latest.json
+  Config:   /path/to/my-project/configs/v002.yaml
+  Active:   v002
+  Evals:    /path/to/my-project/evals/cases/generated_build.yaml
+  Artifact: /path/to/my-project/.autoagent/build_artifact_latest.json
 
 Next step:
   autoagent eval run
 ```
 
-Inspect the build output:
+Inspect the latest build artifact:
 
 ```bash
 autoagent build show latest
 ```
 
-**What gets created**: The `build` command generates a config file (the agent definition) and an eval suite (test cases). The build artifact is metadata — the config is what matters.
+What the build step creates:
 
-**Starting points**: You can build from a prompt (shown above), from transcripts (`intelligence import` then `intelligence generate-agent`), or by importing an existing config (`config import my-config.yaml`).
+- A new versioned config file
+- A generated eval case file
+- A build artifact JSON file for inspection/debugging
+
+Advanced entry points:
+
+- Import transcripts, then generate from them:
+
+```bash
+autoagent intelligence import /path/to/transcripts.zip
+autoagent intelligence report list
+autoagent intelligence generate-agent <report-id> --output configs/v003_transcript.yaml
+```
+
+- Import an existing config:
+
+```bash
+autoagent config import /path/to/config.yaml
+```
 
 ## 5. Run Evals
+
+Evaluate the active config:
 
 ```bash
 autoagent eval run
 ```
 
-You should see:
+In mock mode, you will see a note that scores are simulated. A successful run looks like:
 
-```
+```text
 ✦ Running the gauntlet. Truth comes from test cases.
+
+Eval plan
+  1. Load active runtime + config
+  2. Run eval suite against selected scope
+  3. Summarize scores and suggested follow-up
+Evaluating active config: /path/to/my-project/configs/v002.yaml
+⚠ Eval harness is using mock_agent_response, so eval scores remain simulated until a real agent_fn is wired in.
 
 Full eval suite
   Cases: 53/55 passed
-  Quality:   0.9764  (95% CI 0.9400..1.0000)
+  Quality:   0.9764
   Safety:    0.9818 (1 failures)
-  Latency:   0.9756
-  Cost:      0.8472
-  Composite: 0.9582  (95% CI 0.9363..0.9739)
-  Tokens:    16804  |  Est. USD: $0.000000
+  Latency:   0.9751
+  Cost:      0.8586
+  Composite: 0.9598
+  Tokens:    15554  |  Est. USD: $0.000000
 
   Mood: Flying
 
@@ -161,13 +220,13 @@ Full eval suite
     → autoagent status
 ```
 
-Show results again anytime:
+Show the latest results again any time:
 
 ```bash
 autoagent eval show latest
 ```
 
-The **composite score** (0.0–1.0) blends quality, safety, latency, and cost. Higher is better. A score above 0.85 is production-ready for most use cases.
+The **composite score** (0.0–1.0) blends quality, safety, latency, and cost. Higher is better.
 
 ## 6. Improve the Agent
 
@@ -177,19 +236,19 @@ The **composite score** (0.0–1.0) blends quality, safety, latency, and cost. H
 autoagent improve
 ```
 
-This runs the full improvement loop in one command:
+`improve` does four things in one pass:
 
-1. **Evaluate** — run the current eval suite
-2. **Diagnose** — cluster recent failures by type
-3. **Propose** — generate a fix targeting the top failure
-4. **Prompt** — asks whether to apply the top proposal (use `--auto` to skip the prompt)
+1. Evaluates the current agent
+2. Diagnoses the biggest failure clusters
+3. Generates a top fix proposal
+4. Prompts you to apply it now or inspect it later
 
-You should see:
+Typical output:
 
-```
+```text
 ✦ Improve
 
-Eval composite: 0.9582
+Eval composite: 0.9598
 AutoAgent Diagnosis
 ───────────────────
 Found 6 failure cluster(s) across 11 total failures.
@@ -199,238 +258,295 @@ Found 6 failure cluster(s) across 11 total failures.
   3. unhelpful_response — 2 failures (3.3% impact)
 
 Suggested fixes: 1
-  Top proposal: abc12345 (few_shot_edit, risk=low, expected_lift=50.0%)
+  Top proposal: e41d1cf8cab1 (few_shot_edit, risk=low, expected_lift=50.0%)
 
-Apply the top proposal now (abc12345)? [y/N]:
+Apply the top proposal now (e41d1cf8cab1)? [y/N]:
 ```
 
 ### Multi-cycle optimization
+
+Run multiple optimization cycles:
 
 ```bash
 autoagent optimize --cycles 5
 ```
 
-This runs multiple rounds of diagnose-propose-evaluate-accept/reject. Each accepted change bumps the config version.
+Each cycle:
 
-### Compare candidates side by side
+1. Diagnoses the dominant failure
+2. Proposes a change
+3. Evaluates the candidate
+4. Accepts or rejects it based on the result
+
+### Optional: compare candidate-like versions
 
 ```bash
 autoagent compare candidates
 ```
 
+This command only shows versions whose status is already `candidate`, `canary`, `imported`, or `evaluated`. If it prints `No candidate configs found.`, that is expected in many normal mock-mode runs.
+
 ## 7. Review and Deploy
 
-### Quick ship (review + canary deploy in one step)
+### Step by step
+
+Inspect and apply the top pending review card:
+
+```bash
+autoagent review show pending
+autoagent review apply pending
+```
+
+Mark the latest version as canary and inspect rollout state:
+
+```bash
+autoagent deploy canary --yes
+autoagent deploy status
+```
+
+### Quick ship
+
+If you want release creation and canary deployment in one command:
 
 ```bash
 autoagent ship --yes
 ```
 
-### Step by step
+Typical `ship` output:
 
-```bash
-autoagent review show pending       # inspect the top pending review card
-autoagent review apply pending      # accept it
-autoagent deploy canary --yes       # deploy as canary (10% traffic)
-```
-
-You should see:
-
-```
+```text
 ✦ Ship
-  Pending review items: 1
+  Pending review items: 0
 Applied: created release rel-abc12345
-  Deploying: v001 from configs/v001.yaml
+  Deploying: v002 from configs/v002.yaml
   Target:    autoagent canary
-Applied: deployed v001 as canary
+Applied: deployed v002 as canary
 ```
 
-> **Warning**: `deploy canary` and `deploy immediate` are mutating commands. They push config to your deployment target. Use `--dry-run` to preview first. Deploy is blocked in mock mode — switch to live mode first.
-
-Create a release for audit trail:
+### Create a release object explicitly
 
 ```bash
 autoagent release create --experiment-id exp-001
 ```
 
-## 8. Interactive Shell
+Important clarification:
 
-Launch an interactive shell session inside your workspace:
+- `deploy canary`, `deploy status`, and `ship` update AutoAgent's local rollout/version state
+- External deployment targets are separate flows, for example `autoagent deploy --target cx-studio`
+
+## 8. Use the Interactive Shell
+
+Launch the workspace shell:
 
 ```bash
 autoagent shell
 ```
 
-You'll see a status bar and prompt:
+You will see:
 
-```
-  AutoAgent Shell
-  [my-project | v001 | 1 reviews]
-  Type /help for commands, or enter free text.
+```text
+AutoAgent Shell
+[my-project | v002]
+Type /help for commands, or enter free text.
 
 autoagent>
 ```
 
-**Slash commands** inside the shell:
+### Slash commands
 
-| Command     | Action                          |
-|-------------|---------------------------------|
-| `/status`   | Show workspace status           |
-| `/config`   | Show active config info         |
-| `/memory`   | Show AUTOAGENT.md contents      |
-| `/doctor`   | Run workspace diagnostics       |
-| `/review`   | Show pending review cards       |
-| `/mcp`      | Show MCP integration status     |
-| `/compact`  | Save session summary to disk    |
-| `/resume`   | Resume the most recent session  |
-| `/exit`     | Exit the shell                  |
+| Command | Action |
+|---------|--------|
+| `/status` | Show workspace status |
+| `/config` | Show active config info |
+| `/memory` | Show `AUTOAGENT.md` contents |
+| `/doctor` | Run workspace diagnostics |
+| `/review` | Show pending review cards |
+| `/mcp` | Show MCP integration status |
+| `/compact` | Save a session summary to `.autoagent/memory/latest_session.md` |
+| `/resume` | Show the most recent saved session |
+| `/exit` | Exit the shell |
 
-**Free-text input** is routed automatically — type "evaluate my agent" and it runs `autoagent eval run`. Type "deploy" and it routes to the deploy flow.
+### Free-text routing
+
+Examples:
+
+- Type `evaluate my agent` and the shell runs `autoagent eval run`
+- Type `deploy` and the shell shows the deploy status surface
+- Type a build request like `build a customer support agent for refunds` and the shell routes it into `autoagent build`
 
 ### Sessions
 
-Sessions are persisted automatically. Resume a previous session:
+Sessions are persisted automatically.
 
 ```bash
-autoagent continue              # resume the most recent session
-autoagent session list           # list all sessions
-autoagent session delete <id>    # delete a session
+autoagent continue
+autoagent session list
+autoagent session delete <id>
 ```
 
 ## 9. Models, Usage, and Providers
 
-### See which models are active
+Show the effective proposer/evaluator models:
 
 ```bash
 autoagent model show
 ```
 
-```
-Effective models
-  Proposer:  openai:gpt-4o
-  Evaluator: anthropic:claude-sonnet-4-5
-```
-
-### Override the proposer or evaluator model
+List the available runtime models:
 
 ```bash
-autoagent model list                           # see available models
-autoagent model set proposer anthropic:claude-sonnet-4-5
+autoagent model list
 ```
 
-### Monitor spending
+Set an override using a key that appears in `autoagent model list`:
+
+```bash
+autoagent model set proposer openai:gpt-4o
+```
+
+Show spend and budget state:
 
 ```bash
 autoagent usage
 ```
 
-```
-AutoAgent Usage
-━━━━━━━━━━━━━━━
-Last eval: tokens=16804 cost=$0.00
-Last optimize: n/a
-Workspace spend: $0.00
-Configured budget: $10.00
-Budget remaining: $10.00
-```
-
-### Configure providers
+Provider helpers:
 
 ```bash
-autoagent provider configure    # interactive provider setup
-autoagent provider list         # show configured providers
+autoagent provider configure
+autoagent provider list
+autoagent provider test
 ```
 
 ## 10. MCP Integration
 
-Connect workspace-scoped MCP servers for tool use:
+See both workspace MCP servers and installed client configs:
+
+```bash
+autoagent mcp status
+```
+
+Manage workspace MCP servers:
 
 ```bash
 autoagent mcp add my-tool --command "npx" --arg "-y" --arg "@my/tool-server"
-autoagent mcp list              # list configured MCP servers
-autoagent mcp inspect my-tool   # inspect a specific server
-autoagent mcp remove my-tool    # remove a server
+autoagent mcp list
+autoagent mcp inspect my-tool
+autoagent mcp remove my-tool
 ```
 
-## 11. Diagnostics
+## 11. Diagnostics and Permissions
 
-Run `doctor` to check workspace health:
+Run workspace diagnostics:
 
 ```bash
 autoagent doctor
-autoagent doctor --fix          # auto-repair fixable issues
+autoagent doctor --fix
 ```
 
-Doctor checks: workspace structure, config state, API keys, mock/live mode, memory sources, MCP runtime, data stores, and eval history.
+Inspect or change the workspace permission mode:
 
-## 12. Permissions
-
-AutoAgent supports permission modes that control which actions require confirmation:
-
-| Mode          | Behavior                                                     |
-|---------------|--------------------------------------------------------------|
-| `plan`        | Blocks all writes — read-only exploration                    |
-| `default`     | Prompts before deploy, review apply, MCP, and model changes  |
-| `acceptEdits` | Auto-allows config/memory/model writes, prompts for deploys  |
-| `dontAsk`     | Allows everything without prompting                          |
-
-View or change the permission mode in `.autoagent/settings.json`:
-
-```json
-{
-  "permissions": {
-    "mode": "default"
-  }
-}
+```bash
+autoagent permissions show
+autoagent permissions set acceptEdits
 ```
 
-## 13. Recommended Daily Flow
+Available permission modes:
 
-Once your workspace exists, the normal loop is:
+| Mode | Behavior |
+|------|----------|
+| `plan` | Read-only exploration; blocks writes like deploy and review apply |
+| `default` | Prompts for risky actions |
+| `acceptEdits` | Auto-allows config/memory/model writes, still prompts for deploy/review/MCP |
+| `dontAsk` | Auto-allows everything |
+| `bypass` | Same practical effect as `dontAsk`; typically reserved for automation |
+
+## 12. Recommended Daily Flow
+
+Once the workspace exists, the normal loop is:
 
 ```bash
 autoagent status
 autoagent build "Describe the next refinement"
 autoagent eval run
 autoagent optimize --cycles 3
+autoagent review show pending
+autoagent review apply pending
 autoagent deploy canary --yes
 autoagent deploy status
 ```
 
-Use the shell when you want an interactive control surface:
+If you already trust the current change and want the shortcut:
 
 ```bash
-autoagent shell
+autoagent ship --yes
 ```
 
-## 14. Next Steps
+## 13. Next Steps
 
-- **[Skills & Registry Guide](guides/skills-and-registry.md)** — install and manage reusable agent skills
-- **[Scoring & Judges Guide](guides/scoring-and-judges.md)** — create custom scorers and calibrate judges
-- **[Transcript Intelligence Guide](guides/transcript-intelligence.md)** — learn from real conversations
-- **[MCP Integration Guide](guides/mcp-integration.md)** — connect to Claude Code, Cursor, Codex
-- **[Context Engineering Guide](guides/context-engineering.md)** — optimize token usage and context windows
-- **[Continuous Optimization Guide](guides/continuous-optimization.md)** — run overnight improvement loops
-- **[Command Reference](COMMAND_REFERENCE.md)** — every command with examples
+- [CLI Reference](cli-reference.md) — full command surface
+- [App Guide](app-guide.md) — how the web console maps onto the product
+- [MCP Integration](mcp-integration.md) — connect coding clients and tool servers
+- [AutoFix](features/autofix.md) — proposal generation and review loops
+- [Prompt Optimization](features/prompt-optimization.md) — optimization concepts and workflows
+- [Judge Ops](features/judge-ops.md) — calibration, drift, and human review
+- [Registry](features/registry.md) — reusable configs, skills, and contracts
+- [Context Workbench](features/context-workbench.md) — context-window diagnostics
 
 ## Troubleshooting
 
 **"No workspace found"**
-You are outside a workspace directory. Run `autoagent init --name my-project` or `cd` into an existing workspace.
 
-**"No active config"**
-No config version is set as active. Run `autoagent config list` to see versions, then `autoagent config set-active <version>`.
+You are outside a workspace directory. Either `cd` into one, or create one:
+
+```bash
+autoagent new my-project --template customer-support
+```
+
+or
+
+```bash
+autoagent init --name my-project
+```
 
 **"Provider credentials missing"**
-You are in live mode but no API key is set. Export `OPENAI_API_KEY` or run `autoagent mode set mock` to use simulated mode.
+
+Stay in mock mode while learning:
+
+```bash
+autoagent mode set mock
+```
+
+Or finish live setup:
+
+```bash
+autoagent provider configure
+autoagent provider test
+autoagent mode set live
+```
 
 **"No pending review card"**
-No changes are waiting for approval. Run `autoagent optimize --cycles 1` to generate a candidate, or `autoagent autofix suggest`.
 
-**"Deploy blocked in mock mode"**
-Switch to live mode first: `autoagent mode set live`. Deploy requires real API credentials.
+Generate fresh improvement output:
 
-**Selectors**: Commands that accept a position argument support these selectors:
-- `latest` — the most recently created item
-- `active` — the currently active item (configs only)
-- `pending` — the first item awaiting action (review cards, autofix proposals)
+```bash
+autoagent optimize --cycles 1
+```
+
+or
+
+```bash
+autoagent autofix suggest
+```
+
+**`autoagent compare candidates` prints `No candidate configs found.`**
+
+That command only lists versions already marked as `candidate`, `canary`, `imported`, or `evaluated`. It is optional, not required for the main loop.
+
+**Selectors**
+
+Commands that accept a position argument support selectors such as:
+
+- `latest` — most recently created item
+- `active` — currently active item
+- `pending` — the next item awaiting action

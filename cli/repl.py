@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shlex
 import time
 import uuid
 from typing import Any
@@ -137,8 +138,11 @@ def _run_click_command(command_path: str) -> None:
         from click.testing import CliRunner
         from runner import cli as root_cli
 
-        runner = CliRunner(mix_stderr=False)
-        result = runner.invoke(root_cli, command_path.split(), catch_exceptions=False)
+        try:
+            runner = CliRunner(mix_stderr=False)
+        except TypeError:
+            runner = CliRunner()
+        result = runner.invoke(root_cli, shlex.split(command_path), catch_exceptions=False)
         if result.output:
             click.echo(result.output.rstrip())
     except Exception as exc:
@@ -184,10 +188,11 @@ def _compact_session(session: Session, workspace: Any) -> None:
 def _route_free_text(text: str, workspace: Any) -> None:
     """Route free-text input to the most likely CLI surface."""
     lower = text.lower().strip()
+    del workspace
 
     if any(keyword in lower for keyword in ("build", "create", "scaffold", "generate")):
         click.echo(click.style("  -> routing to: autoagent build", fg="green"))
-        _run_click_command(f'build run "{text}"')
+        _run_click_command(f"build {shlex.quote(text)}")
     elif any(keyword in lower for keyword in ("eval", "test", "score", "grade")):
         click.echo(click.style("  -> routing to: autoagent eval run", fg="green"))
         _run_click_command("eval run")
@@ -198,7 +203,8 @@ def _route_free_text(text: str, workspace: Any) -> None:
         click.echo(click.style("  -> routing to: autoagent review", fg="green"))
         _run_click_command("review")
     elif any(keyword in lower for keyword in ("deploy", "release", "ship")):
-        click.echo(click.style("  -> routing to: autoagent deploy", fg="green"))
+        click.echo(click.style("  -> routing to: autoagent deploy status", fg="green"))
+        _run_click_command("deploy status")
     elif any(keyword in lower for keyword in ("status", "state", "dashboard")):
         _run_click_command("status")
     else:
