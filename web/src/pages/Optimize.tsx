@@ -1,20 +1,25 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Play, Sparkles, Zap, Plus, Trash2 } from 'lucide-react';
-import { useOptimizeHistory, useStartOptimize, useTaskStatus } from '../lib/api';
-import { wsClient } from '../lib/websocket';
+import { ChangeReview } from './ChangeReview';
 import { EmptyState } from '../components/EmptyState';
+import { Experiments } from './Experiments';
 import { DiffViewer } from '../components/DiffViewer';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
+import { LiveOptimize } from './LiveOptimize';
+import { Opportunities } from './Opportunities';
 import { PageHeader } from '../components/PageHeader';
 import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { TimelineEntry } from '../components/TimelineEntry';
+import { useOptimizeHistory, useStartOptimize, useTaskStatus } from '../lib/api';
+import { wsClient } from '../lib/websocket';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
 import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
 import type { DiffLine } from '../lib/types';
 
 type OptimizeMode = 'standard' | 'advanced' | 'research';
+type OptimizeTab = 'run' | 'live' | 'experiments' | 'review' | 'opportunities';
 
 const modeDescriptions: Record<OptimizeMode, string> = {
   standard: 'Default optimization with safety gates and regression checks.',
@@ -27,6 +32,14 @@ const researchAlgorithms = [
   { key: 'evolutionary', label: 'Evolutionary Search' },
   { key: 'mcts', label: 'Monte Carlo Tree Search' },
   { key: 'gradient_free', label: 'Gradient-Free Methods' },
+];
+
+const optimizeTabs: Array<{ key: OptimizeTab; label: string }> = [
+  { key: 'run', label: 'Run' },
+  { key: 'live', label: 'Live' },
+  { key: 'experiments', label: 'Experiments' },
+  { key: 'review', label: 'Review' },
+  { key: 'opportunities', label: 'Opportunities' },
 ];
 
 function parseDiffLines(diff: string): DiffLine[] {
@@ -61,7 +74,96 @@ function parseDiffLines(diff: string): DiffLine[] {
     });
 }
 
+function OptimizeTabButton({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={classNames(
+        'rounded-md px-4 py-2 text-sm font-medium transition-colors',
+        active ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function Optimize() {
+  const [activeTab, setActiveTab] = useState<OptimizeTab>('run');
+  const [visitedTabs, setVisitedTabs] = useState<Set<OptimizeTab>>(() => new Set(['run']));
+
+  function selectTab(tab: OptimizeTab) {
+    setActiveTab(tab);
+    setVisitedTabs((current) => {
+      if (current.has(tab)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(tab);
+      return next;
+    });
+  }
+
+  return (
+    <div className="space-y-6">
+      <PageHeader
+        title="Optimize Hub"
+        description="Tabbed access to optimization runs, live cycles, experiments, review, and opportunities."
+      />
+
+      <section className="rounded-lg border border-gray-200 bg-white p-2">
+        <div className="flex flex-wrap gap-1">
+          {optimizeTabs.map((tab) => (
+            <OptimizeTabButton
+              key={tab.key}
+              active={activeTab === tab.key}
+              label={tab.label}
+              onClick={() => selectTab(tab.key)}
+            />
+          ))}
+        </div>
+      </section>
+
+      {visitedTabs.has('run') && (
+        <section hidden={activeTab !== 'run'}>
+          <OptimizeRunSection />
+        </section>
+      )}
+      {visitedTabs.has('live') && (
+        <section hidden={activeTab !== 'live'}>
+          <LiveOptimize />
+        </section>
+      )}
+      {visitedTabs.has('experiments') && (
+        <section hidden={activeTab !== 'experiments'}>
+          <Experiments />
+        </section>
+      )}
+      {visitedTabs.has('review') && (
+        <section hidden={activeTab !== 'review'}>
+          <ChangeReview />
+        </section>
+      )}
+      {visitedTabs.has('opportunities') && (
+        <section hidden={activeTab !== 'opportunities'}>
+          <Opportunities />
+        </section>
+      )}
+    </div>
+  );
+}
+
+function OptimizeRunSection() {
   const [searchParams] = useSearchParams();
   const { data: history, isLoading, refetch } = useOptimizeHistory();
   const startOptimize = useStartOptimize();
@@ -178,7 +280,6 @@ export function Optimize() {
         }
       />
 
-      {/* Mode selector */}
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <div className="mb-3 flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
           {(['standard', 'advanced', 'research'] as OptimizeMode[]).map((mode) => (
