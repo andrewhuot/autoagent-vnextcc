@@ -15,6 +15,7 @@ import yaml
 WORKSPACE_DIRNAME = ".autoagent"
 WORKSPACE_METADATA_FILENAME = "workspace.json"
 DEFAULT_LIFECYCLE_SKILL_DB = Path(WORKSPACE_DIRNAME) / "core_skills.db"
+SETTINGS_FILENAME = "settings.json"
 _CONFIG_VERSION_RE = re.compile(r"^v(?P<version>\d{3})(?:$|_.*$)")
 
 
@@ -103,6 +104,10 @@ class AutoAgentWorkspace:
         return self.root / "autoagent.yaml"
 
     @property
+    def settings_path(self) -> Path:
+        return self.autoagent_dir / SETTINGS_FILENAME
+
+    @property
     def conversation_db(self) -> Path:
         return self.root / "conversations.db"
 
@@ -129,6 +134,22 @@ class AutoAgentWorkspace:
     @property
     def skill_db(self) -> Path:
         return self.root / DEFAULT_LIFECYCLE_SKILL_DB
+
+    @property
+    def rules_dir(self) -> Path:
+        return self.autoagent_dir / "rules"
+
+    @property
+    def memory_dir(self) -> Path:
+        return self.autoagent_dir / "memory"
+
+    @property
+    def local_memory_path(self) -> Path:
+        return self.root / "AUTOAGENT.local.md"
+
+    @property
+    def mcp_config_path(self) -> Path:
+        return self.root / ".mcp.json"
 
     @property
     def best_score_file(self) -> Path:
@@ -188,6 +209,8 @@ class AutoAgentWorkspace:
         self.cases_dir.mkdir(parents=True, exist_ok=True)
         (self.root / "agent" / "config").mkdir(parents=True, exist_ok=True)
         self.scorer_specs_dir.mkdir(parents=True, exist_ok=True)
+        self.rules_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
         (self.autoagent_dir / "logs").mkdir(parents=True, exist_ok=True)
         self.best_score_file.touch(exist_ok=True)
 

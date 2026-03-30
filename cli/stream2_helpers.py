@@ -16,6 +16,10 @@ from typing import Any
 
 import yaml
 
+from cli.json_envelope import render_json_envelope
+from cli.selectors import is_selector as shared_is_selector
+from cli.selectors import resolve_selector as shared_resolve_selector
+
 
 # ---------------------------------------------------------------------------
 # FR-05: Config importer
@@ -178,10 +182,7 @@ def apply_autofix_to_config(
 
 def json_response(status: str, data: Any, next_cmd: str | None = None) -> str:
     """Build a standard JSON response string."""
-    envelope: dict[str, Any] = {"status": status, "data": data}
-    if next_cmd:
-        envelope["next"] = next_cmd
-    return json.dumps(envelope, indent=2, default=str)
+    return render_json_envelope(status=status, data=data, next_command=next_cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -196,28 +197,12 @@ def resolve_selector(selector: str, items: list[dict], status_key: str = "status
 
     Items should be sorted newest-first.
     """
-    if not items:
-        return None
-
-    sel = selector.lower()
-    if sel == "latest":
-        return items[0]
-    if sel in ("current", "active"):
-        for item in items:
-            if item.get(status_key) in ("active", "current", "applied"):
-                return item
-        return items[0]  # fallback to latest
-    if sel == "pending":
-        for item in items:
-            if item.get(status_key) in ("pending", "candidate", "imported"):
-                return item
-        return None
-    return None
+    return shared_resolve_selector(selector, items, status_key=status_key)
 
 
 def is_selector(value: str) -> bool:
     """Check if a value is a standard selector keyword."""
-    return value.lower() in STANDARD_SELECTORS
+    return shared_is_selector(value)
 
 
 # ---------------------------------------------------------------------------

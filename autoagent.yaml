@@ -1,12 +1,12 @@
 optimizer:
-  use_mock: false
-  strategy: round_robin
+  use_mock: true
+  strategy: single
   search_strategy: simple
   bandit_policy: thompson
   search_max_candidates: 10
   search_max_eval_budget: 5
   search_max_cost_dollars: 1.0
-  search_time_budget_seconds: 300
+  search_time_budget_seconds: 300.0
   holdout_tolerance: 0.0
   holdout_rotation_interval: 5
   drift_threshold: 0.12
@@ -16,49 +16,56 @@ optimizer:
   adversarial_simulation_max_drop: 0.05
   skill_autolearn_enabled: true
   skill_autolearn_min_improvement: 0.01
+  models:
+  - provider: openai
+    model: gpt-4o
+    role: default
+    api_key_env: OPENAI_API_KEY
+    base_url: null
+    timeout_seconds: 30.0
+    requests_per_minute: 120
+    input_cost_per_1k_tokens: 0.005
+    output_cost_per_1k_tokens: 0.015
+  - provider: anthropic
+    model: claude-sonnet-4-5
+    role: default
+    api_key_env: ANTHROPIC_API_KEY
+    base_url: null
+    timeout_seconds: 30.0
+    requests_per_minute: 120
+    input_cost_per_1k_tokens: 0.003
+    output_cost_per_1k_tokens: 0.015
+  - provider: google
+    model: gemini-2.5-pro
+    role: default
+    api_key_env: GOOGLE_API_KEY
+    base_url: null
+    timeout_seconds: 30.0
+    requests_per_minute: 120
+    input_cost_per_1k_tokens: 0.00125
+    output_cost_per_1k_tokens: 0.005
   retry:
     max_attempts: 3
     base_delay_seconds: 0.5
     max_delay_seconds: 8.0
     jitter_seconds: 0.25
-  models:
-    - provider: openai
-      model: gpt-4o
-      api_key_env: OPENAI_API_KEY
-      requests_per_minute: 120
-      input_cost_per_1k_tokens: 0.005
-      output_cost_per_1k_tokens: 0.015
-    - provider: anthropic
-      model: claude-sonnet-4-5
-      api_key_env: ANTHROPIC_API_KEY
-      requests_per_minute: 120
-      input_cost_per_1k_tokens: 0.003
-      output_cost_per_1k_tokens: 0.015
-    - provider: google
-      model: gemini-2.5-pro
-      api_key_env: GOOGLE_API_KEY
-      requests_per_minute: 120
-      input_cost_per_1k_tokens: 0.00125
-      output_cost_per_1k_tokens: 0.005
-
 loop:
   schedule_mode: continuous
   interval_minutes: 5.0
-  cron: "*/5 * * * *"
+  cron: '*/5 * * * *'
   checkpoint_path: .autoagent/loop_checkpoint.json
   dead_letter_db: .autoagent/dead_letters.db
-  watchdog_timeout_seconds: 300
-  resource_warn_memory_mb: 2048
-  resource_warn_cpu_percent: 90
+  watchdog_timeout_seconds: 300.0
+  resource_warn_memory_mb: 2048.0
+  resource_warn_cpu_percent: 90.0
   structured_log_path: .autoagent/logs/backend.jsonl
   log_max_bytes: 5000000
   log_backup_count: 5
-
 eval:
   history_db_path: eval_history.db
   cache_enabled: true
   cache_db_path: .autoagent/eval_cache.db
-  dataset_path:
+  dataset_path: null
   dataset_split: test
   dataset_strict_integrity: false
   random_seed: 7
@@ -66,25 +73,19 @@ eval:
   significance_alpha: 0.05
   significance_min_effect_size: 0.005
   significance_iterations: 2000
-
-# Production cost controls (from R2 simplicity thesis)
 budget:
   per_cycle_dollars: 1.0
   daily_dollars: 10.0
   stall_threshold_cycles: 5
   tracker_db_path: .autoagent/cost_tracker.db
-
-# Human escape hatches (from R2 simplicity thesis)
-human_control:
-  immutable_surfaces: ["safety_instructions"]
-  state_path: .autoagent/human_control.json
-  permission_profile: dev
-  audit_db_path: .autoagent/audit.db
-  side_effect_isolation: true
-
-observability:
-  otel_enabled: false
-  otel_exporter: otlp_http
-  otel_endpoint: ""
-  otel_service_name: autoagent
-  cloud_trace_project_id: ""
+optimization:
+  mode: standard
+  objective: Maximize task success while honoring guardrails.
+  guardrails: []
+  budget_per_cycle: 1.0
+  budget_daily: 10.0
+  autonomy: supervised
+  allowed_surfaces:
+  - instructions
+  - examples
+  - tool_descriptions

@@ -276,9 +276,10 @@ def test_optimize_handles_empty_best_score_file_in_fresh_workspace(
 
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert isinstance(payload, list)
-    assert len(payload) == 1
-    assert payload[0]["cycle"] == 1
+    assert payload["api_version"] == "1"
+    assert isinstance(payload["data"], list)
+    assert len(payload["data"]) == 1
+    assert payload["data"][0]["cycle"] == 1
 
 
 def test_init_then_build_supports_repo_free_user_flow(

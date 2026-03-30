@@ -136,7 +136,9 @@ class TestSkillList:
         """List skills with JSON output."""
         result = runner.invoke(cli, ["skill", "list", "--json", "--db", populated_db])
         assert result.exit_code == 0
-        data = json.loads(result.output)
+        payload = json.loads(result.output)
+        assert payload["api_version"] == "1"
+        data = payload["data"]
         assert isinstance(data, list)
         assert len(data) == 2
         assert data[0]["name"] in ["Test Skill", "Another Test Skill"]

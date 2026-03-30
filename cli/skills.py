@@ -30,6 +30,7 @@ from pathlib import Path
 import click
 import yaml
 
+from cli.json_envelope import render_json_envelope
 from core.skills.composer import SkillComposer
 from core.skills.marketplace import SkillMarketplace
 from core.skills.store import SkillStore
@@ -103,7 +104,7 @@ def skill_list(
 
         if not skills:
             if json_output:
-                click.echo(json.dumps([], indent=2))
+                click.echo(render_json_envelope("ok", []))
             else:
                 click.echo("No skills found.")
             return
@@ -126,7 +127,7 @@ def skill_list(
                 }
                 for s in skills
             ]
-            click.echo(json.dumps(data, indent=2))
+            click.echo(render_json_envelope("ok", data))
             return
 
         # Table output
@@ -702,7 +703,7 @@ def skill_recommend(
 
         if not matching_skills:
             if json_output:
-                click.echo(json.dumps([], indent=2))
+                click.echo(render_json_envelope("ok", []))
             else:
                 click.echo("No matching skills found.")
             return
@@ -718,7 +719,7 @@ def skill_recommend(
                 }
                 for s in matching_skills
             ]
-            click.echo(json.dumps(data, indent=2))
+            click.echo(render_json_envelope("ok", data))
             return
 
         # Table output

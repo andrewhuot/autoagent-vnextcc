@@ -84,7 +84,21 @@ from cli.intelligence import (
 )
 from cli.mcp_setup import mcp_group
 from cli.mode import mode_group, summarize_mode_state
+from cli.providers import (
+    configured_providers,
+    default_api_key_env_for,
+    default_model_for,
+    provider_health_checks,
+    providers_file_path,
+    sync_runtime_config,
+    upsert_provider,
+)
 from cli.status import StatusSnapshot, render_status as render_status_home
+from cli.templates import (
+    STARTER_TEMPLATE_NAMES,
+    apply_template_to_workspace,
+    list_templates,
+)
 from cli.workspace import AutoAgentWorkspace, discover_workspace
 from deployer import Deployer
 from evals import EvalRunner
@@ -124,6 +138,7 @@ REGISTRY_DB = os.environ.get("AUTOAGENT_REGISTRY_DB", "registry.db")
 TRACE_DB = os.environ.get("AUTOAGENT_TRACE_DB", ".autoagent/traces.db")
 SCORER_SPECS_DIR = os.environ.get("AUTOAGENT_SCORER_SPECS_DIR", ".autoagent/scorers")
 AUTOAGENT_VERSION = get_autoagent_version()
+EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 
 def _banner_flag_options(command):
@@ -182,15 +197,46 @@ class AutoAgentGroup(click.Group):
         return help_text
 
 
+class DefaultCommandGroup(click.Group):
+    """Treat bare invocations as a hidden default subcommand while supporting visible verbs."""
+
+    def __init__(
+        self,
+        *args,
+        default_command: str,
+        default_on_empty: bool = False,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.default_command = default_command
+        self.default_on_empty = default_on_empty
+
+    def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
+        """Rewrite default invocations so Click can route to the hidden subcommand."""
+        help_flags = set(self.get_help_option_names(ctx))
+        if not args and self.default_on_empty:
+            return super().parse_args(ctx, [self.default_command])
+        if args and args[0] not in self.commands and args[0] not in help_flags:
+            return super().parse_args(ctx, [self.default_command, *args])
+        return super().parse_args(ctx, args)
+
+
 def _load_config_dict(config_path: str) -> dict:
     """Load a raw config dictionary from disk."""
-    with Path(config_path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+    from cli.errors import click_error
+
+    try:
+        with Path(config_path).open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+    except FileNotFoundError as exc:
+        raise click_error(f"Config file not found: {config_path}") from exc
+    except yaml.YAMLError as exc:
+        raise click_error(f"Could not parse config file: {config_path}") from exc
 
 
 def _enter_discovered_workspace(command_name: str | None) -> AutoAgentWorkspace | None:
     """Switch cwd to the nearest discovered workspace for workspace-aware commands."""
-    if command_name == "init":
+    if command_name in {"init", "new"}:
         return None
     workspace = discover_workspace()
     if workspace is not None and Path.cwd() != workspace.root:
@@ -198,11 +244,18 @@ def _enter_discovered_workspace(command_name: str | None) -> AutoAgentWorkspace 
     return workspace
 
 
+def _is_tty() -> bool:
+    """Return True when stdin is connected to an interactive terminal."""
+    return hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+
+
 def _require_workspace(command_name: str | None = None) -> AutoAgentWorkspace:
     """Return the current workspace or raise a helpful CLI error."""
+    from cli.errors import click_error
+
     workspace = _enter_discovered_workspace(command_name)
     if workspace is None:
-        raise click.ClickException("No AutoAgent workspace found. Run autoagent init")
+        raise click_error("No AutoAgent workspace found. Run autoagent init to create one.")
     return workspace
 
 
@@ -247,6 +300,87 @@ def _resolve_invocation_input_path(path: Path) -> Path:
     raw_cwd = meta.get("invocation_cwd")
     invocation_cwd = Path(raw_cwd).resolve() if raw_cwd else Path.cwd().resolve()
     return path if path.is_absolute() else (invocation_cwd / path).resolve()
+
+
+def _echo_deprecation(old: str, new: str) -> None:
+    """Print a consistent deprecation warning for hidden compatibility aliases."""
+    click.echo(
+        click.style(
+            f"Deprecated: `{old}` is kept for backward compatibility. Use `{new}` instead.",
+            fg="yellow",
+        )
+    )
+
+
+def _create_workspace(
+    *,
+    template: str,
+    target_dir: str,
+    name: str | None,
+    agent_name: str,
+    platform: str,
+    with_synthetic_data: bool,
+    demo: bool,
+) -> tuple[AutoAgentWorkspace, dict]:
+    """Create or update a workspace using the shared bootstrap path."""
+    base_dir = Path(target_dir).resolve()
+    workspace_root = (base_dir / name) if name else base_dir
+    workspace_root.mkdir(parents=True, exist_ok=True)
+
+    workspace_name = name or workspace_root.name
+    workspace = AutoAgentWorkspace.create(
+        workspace_root,
+        name=workspace_name,
+        template=template,
+        agent_name=agent_name,
+        platform=platform,
+        demo_seeded=demo,
+    )
+
+    summary = bootstrap_workspace(
+        workspace,
+        template=template,
+        agent_name=agent_name,
+        platform=platform,
+        with_synthetic_data=with_synthetic_data,
+        demo=demo,
+    )
+    if template in STARTER_TEMPLATE_NAMES:
+        summary["template_summary"] = apply_template_to_workspace(workspace, template)
+    return workspace, summary
+
+
+def _doctor_fix_workspace(workspace: AutoAgentWorkspace) -> list[str]:
+    """Repair fixable workspace issues for `doctor --fix`."""
+    fixes: list[str] = []
+
+    if not workspace.autoagent_dir.exists():
+        workspace.autoagent_dir.mkdir(parents=True, exist_ok=True)
+        fixes.append("Created .autoagent/")
+    if not workspace.configs_dir.exists():
+        workspace.configs_dir.mkdir(parents=True, exist_ok=True)
+        fixes.append("Created configs/")
+    if not workspace.cases_dir.exists():
+        workspace.cases_dir.mkdir(parents=True, exist_ok=True)
+        fixes.append("Created evals/cases/")
+    if not workspace.scorer_specs_dir.exists():
+        workspace.scorer_specs_dir.mkdir(parents=True, exist_ok=True)
+        fixes.append("Created .autoagent/scorers/")
+    logs_dir = workspace.autoagent_dir / "logs"
+    if not logs_dir.exists():
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        fixes.append("Created .autoagent/logs/")
+    if not workspace.best_score_file.exists():
+        workspace.best_score_file.touch()
+        fixes.append("Created .autoagent/best_score.txt")
+
+    if workspace.metadata.active_config_version is None or workspace.metadata.active_config_file is None:
+        resolved = workspace.resolve_active_config()
+        if resolved is not None:
+            workspace.set_active_config(resolved.version, filename=resolved.path.name)
+            fixes.append(f"Set active config to v{resolved.version:03d}")
+
+    return fixes
 
 
 def _print_score(score, heading: str) -> None:
@@ -316,6 +450,153 @@ def _score_to_dict(score) -> dict:
         "total_tokens": getattr(score, "total_tokens", 0),
         "estimated_cost_usd": getattr(score, "estimated_cost_usd", 0.0),
         "warnings": getattr(score, "warnings", []),
+    }
+
+
+def _unwrap_eval_payload(data: dict) -> dict:
+    """Return the embedded eval payload when a JSON envelope wraps the result."""
+    payload = data.get("data")
+    if isinstance(payload, dict) and isinstance(data.get("status"), str):
+        return payload
+    return data
+
+
+def _extract_eval_scores(data: dict) -> dict[str, float]:
+    """Normalize eval metrics from nested `scores` payloads or flatter result shapes."""
+    payload = _unwrap_eval_payload(data)
+    raw_scores = payload.get("scores") if isinstance(payload.get("scores"), dict) else payload
+    if not isinstance(raw_scores, dict):
+        raw_scores = {}
+
+    scores: dict[str, float] = {}
+    for metric in EVAL_METRIC_NAMES:
+        value = raw_scores.get(metric, 0.0)
+        try:
+            scores[metric] = float(value)
+        except (TypeError, ValueError):
+            scores[metric] = 0.0
+    return scores
+
+
+def _eval_result_search_roots() -> list[Path]:
+    """Return unique search roots for eval result files from cwd and invocation cwd."""
+    roots = [
+        Path.cwd(),
+        Path.cwd() / ".autoagent",
+        _resolve_invocation_input_path(Path(".")),
+        _resolve_invocation_input_path(Path(".autoagent")),
+    ]
+    unique_roots: list[Path] = []
+    seen: set[Path] = set()
+    for root in roots:
+        resolved = root.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_roots.append(root)
+    return unique_roots
+
+
+def _load_eval_result(ref: str) -> tuple[Path, dict]:
+    """Load eval results from an explicit file path or a fuzzy run reference."""
+    path = _resolve_invocation_input_path(Path(ref))
+    if path.exists():
+        target = path
+    else:
+        candidates: list[Path] = []
+        if Path(ref).parent == Path("."):
+            for root in _eval_result_search_roots():
+                if not root.exists():
+                    continue
+                candidates.extend(candidate for candidate in root.glob(f"*{ref}*.json") if candidate.is_file())
+        if not candidates:
+            raise click.ClickException(f"Eval result not found: {ref}")
+        target = max(candidates, key=lambda candidate: candidate.stat().st_mtime)
+
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise click.ClickException(f"Could not read eval result {target}: {exc}") from exc
+    return target, data
+
+
+def _latest_eval_result_file() -> Path | None:
+    """Return the newest eval result JSON from cwd or `.autoagent/`."""
+    candidates: dict[Path, Path] = {}
+    for root in _eval_result_search_roots():
+        if not root.exists():
+            continue
+        for pattern in ("eval_results*.json", "*results*.json"):
+            for candidate in root.glob(pattern):
+                if not candidate.is_file():
+                    continue
+                candidates[candidate.resolve()] = candidate
+    if not candidates:
+        return None
+    return max(candidates.values(), key=lambda candidate: candidate.stat().st_mtime)
+
+
+def _collect_failure_clusters(data: dict) -> dict[str, int]:
+    """Return failure buckets from explicit metadata or derive them from failed cases."""
+    payload = _unwrap_eval_payload(data)
+    explicit = payload.get("failure_clusters") or payload.get("failure_buckets")
+    if isinstance(explicit, dict) and explicit:
+        return {str(name): int(count) for name, count in explicit.items()}
+
+    failures: dict[str, int] = {}
+    results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    for result in results:
+        if not isinstance(result, dict) or result.get("passed", True):
+            continue
+        details = result.get("details") if isinstance(result.get("details"), dict) else {}
+        cluster = (
+            details.get("failure_cluster")
+            or details.get("failure_bucket")
+            or result.get("failure_cluster")
+            or result.get("failure_bucket")
+            or result.get("category")
+            or "unknown"
+        )
+        label = str(cluster)
+        failures[label] = failures.get(label, 0) + 1
+    return failures
+
+
+def _build_eval_comparison(left_run: str, right_run: str) -> dict:
+    """Build a shared comparison payload for both eval comparison commands."""
+    left_path, left_data = _load_eval_result(left_run)
+    right_path, right_data = _load_eval_result(right_run)
+    left_scores = _extract_eval_scores(left_data)
+    right_scores = _extract_eval_scores(right_data)
+    deltas = {
+        metric: round(right_scores[metric] - left_scores[metric], 6)
+        for metric in EVAL_METRIC_NAMES
+    }
+    winner = "left" if left_scores["composite"] >= right_scores["composite"] else "right"
+    return {
+        "left": {"run": str(left_path), "scores": left_scores},
+        "right": {"run": str(right_path), "scores": right_scores},
+        "winner": winner,
+        "delta_composite": deltas["composite"],
+        "deltas": deltas,
+    }
+
+
+def _build_eval_breakdown() -> dict:
+    """Build a metric and failure-cluster breakdown for the latest eval result."""
+    latest = _latest_eval_result_file()
+    if latest is None:
+        raise click.ClickException("No eval results found. Run `autoagent eval run --output eval_results.json` first.")
+
+    try:
+        data = json.loads(latest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise click.ClickException(f"Could not read eval result {latest}: {exc}") from exc
+
+    return {
+        "source": str(latest),
+        "scores": _extract_eval_scores(data),
+        "failure_clusters": _collect_failure_clusters(data),
     }
 
 
@@ -715,6 +996,24 @@ def _continuous_status_line(
     )
 
 
+def _proposer_total_cost(proposer: Proposer) -> float:
+    """Return the accumulated router cost for the current proposer."""
+    if proposer.llm_router is None:
+        return 0.0
+    summary = proposer.llm_router.cost_summary()
+    return round(sum(float(item.get("total_cost", 0.0)) for item in summary.values()), 8)
+
+
+def _runtime_budget_config(runtime: object) -> tuple[str, float, float, int]:
+    """Return budget tracker settings, tolerating lightweight test doubles."""
+    budget = getattr(runtime, "budget", None)
+    tracker_db_path = str(getattr(budget, "tracker_db_path", ".autoagent/cost_tracker.db"))
+    per_cycle_dollars = float(getattr(budget, "per_cycle_dollars", 1.0))
+    daily_dollars = float(getattr(budget, "daily_dollars", 10.0))
+    stall_threshold_cycles = int(getattr(budget, "stall_threshold_cycles", 5))
+    return tracker_db_path, per_cycle_dollars, daily_dollars, stall_threshold_cycles
+
+
 def _build_runtime_components() -> tuple[
     object,
     EvalRunner,
@@ -724,7 +1023,10 @@ def _build_runtime_components() -> tuple[
     SkillAutoLearner | None,
 ]:
     """Create runtime-configured optimizer dependencies."""
+    from cli.model import apply_model_overrides
+
     runtime = load_runtime_config()
+    runtime = apply_model_overrides(runtime)
     eval_runner = _build_eval_runner(runtime)
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(
@@ -966,16 +1268,186 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
     CLI-first, API-ready, with a web console for visual insight.
     """
     del quiet, no_banner
-    if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
-        click.echo(ctx.get_help())
-        ctx.exit()
     ctx.obj = ctx.obj or {}
     ctx.obj["workspace"] = _enter_discovered_workspace(ctx.invoked_subcommand)
+    if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
+        workspace = ctx.obj.get("workspace")
+        if _is_tty():
+            if workspace is not None:
+                from cli.repl import run_shell
+
+                run_shell(workspace)
+            else:
+                from cli.onboarding import run_onboarding
+
+                choice = run_onboarding()
+                if choice == "demo":
+                    ctx.invoke(
+                        init_project,
+                        template="customer-support",
+                        target_dir=".",
+                        name=None,
+                        agent_name="My Agent",
+                        platform="Google ADK",
+                        with_synthetic_data=True,
+                        demo=True,
+                    )
+                elif choice == "empty":
+                    ctx.invoke(
+                        init_project,
+                        template="minimal",
+                        target_dir=".",
+                        name=None,
+                        agent_name="My Agent",
+                        platform="Google ADK",
+                        with_synthetic_data=False,
+                        demo=False,
+                    )
+        else:
+            ctx.invoke(
+                status,
+                db=DB_PATH,
+                configs_dir=CONFIGS_DIR,
+                memory_db=MEMORY_DB,
+                json_output=False,
+            )
+        return
 
 
 cli.add_command(mode_group)
 cli.add_command(mcp_group)
 cli.add_command(intelligence_group)
+from cli.model import model_group
+from cli.usage import usage_command
+
+cli.add_command(model_group)
+cli.add_command(usage_command)
+
+
+# ---------------------------------------------------------------------------
+# autoagent shell — interactive REPL
+# ---------------------------------------------------------------------------
+
+@cli.command("shell")
+@click.pass_context
+def shell_command(ctx: click.Context) -> None:
+    """Launch the interactive AutoAgent shell."""
+    from cli.repl import run_shell
+
+    workspace = ctx.obj.get("workspace")
+    run_shell(workspace)
+
+
+# ---------------------------------------------------------------------------
+# autoagent continue — resume last session
+# ---------------------------------------------------------------------------
+
+@cli.command("continue")
+@click.pass_context
+def continue_command(ctx: click.Context) -> None:
+    """Resume the most recent shell session."""
+    from cli.repl import run_shell
+    from cli.sessions import SessionStore
+
+    workspace = ctx.obj.get("workspace")
+    if workspace is None:
+        raise click.ClickException("No workspace found. Run: autoagent init")
+
+    store = SessionStore(workspace.root)
+    latest = store.latest()
+    if latest is None:
+        click.echo("No previous session found. Starting a new shell.")
+        run_shell(workspace, session_store=store)
+        return
+
+    click.echo(f"Resuming session: {latest.title} ({latest.session_id})")
+    click.echo(f"  Goal: {latest.active_goal or '(none)'}")
+    click.echo(f"  Commands: {len(latest.command_history)}")
+    click.echo(f"  Transcript entries: {len(latest.transcript)}")
+    run_shell(workspace, session_store=store)
+
+
+# ---------------------------------------------------------------------------
+# autoagent session — session management
+# ---------------------------------------------------------------------------
+
+@cli.group("session")
+def session_group() -> None:
+    """Manage shell sessions."""
+
+
+@session_group.command("list")
+@click.option("--limit", default=20, show_default=True, help="Maximum sessions to list.")
+@click.option("--json", "json_output", is_flag=True, help="Output as JSON.")
+@click.pass_context
+def session_list(ctx: click.Context, limit: int, json_output: bool) -> None:
+    """List recent shell sessions."""
+    import json as json_mod
+
+    from cli.sessions import SessionStore
+
+    workspace = ctx.obj.get("workspace")
+    if workspace is None:
+        raise click.ClickException("No workspace found. Run: autoagent init")
+
+    store = SessionStore(workspace.root)
+    sessions = store.list_sessions(limit=limit)
+
+    if json_output:
+        click.echo(json_mod.dumps([session.to_dict() for session in sessions], indent=2))
+        return
+
+    if not sessions:
+        click.echo("No sessions found.")
+        return
+
+    click.echo(f"\nRecent sessions ({len(sessions)}):")
+    for session in sessions:
+        timestamp = time.strftime("%Y-%m-%d %H:%M", time.localtime(session.updated_at))
+        goal = session.active_goal[:40] if session.active_goal else "(no goal)"
+        click.echo(f"  {session.session_id}  {timestamp}  {session.title:<30}  {goal}")
+    click.echo("")
+
+
+@session_group.command("resume")
+@click.argument("session_id")
+@click.pass_context
+def session_resume(ctx: click.Context, session_id: str) -> None:
+    """Resume a specific shell session by ID."""
+    from cli.repl import run_shell
+    from cli.sessions import SessionStore
+
+    workspace = ctx.obj.get("workspace")
+    if workspace is None:
+        raise click.ClickException("No workspace found. Run: autoagent init")
+
+    store = SessionStore(workspace.root)
+    session = store.get(session_id)
+    if session is None:
+        raise click.ClickException(f"Session not found: {session_id}")
+
+    click.echo(f"Resuming session: {session.title} ({session.session_id})")
+    click.echo(f"  Goal: {session.active_goal or '(none)'}")
+    click.echo(f"  Commands: {len(session.command_history)}")
+    run_shell(workspace, session_store=store)
+
+
+@session_group.command("delete")
+@click.argument("session_id")
+@click.pass_context
+def session_delete(ctx: click.Context, session_id: str) -> None:
+    """Delete a shell session by ID."""
+    from cli.sessions import SessionStore
+
+    workspace = ctx.obj.get("workspace")
+    if workspace is None:
+        raise click.ClickException("No workspace found. Run: autoagent init")
+
+    store = SessionStore(workspace.root)
+    if store.delete(session_id):
+        click.echo(f"Deleted session: {session_id}")
+        return
+    raise click.ClickException(f"Session not found: {session_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -984,7 +1456,7 @@ cli.add_command(intelligence_group)
 
 @cli.command("init")
 @click.option("--template", default="customer-support", show_default=True,
-              type=click.Choice(["customer-support", "minimal"]),
+              type=click.Choice((*STARTER_TEMPLATE_NAMES, "minimal")),
               help="Project template to scaffold.")
 @click.option("--dir", "target_dir", default=".", show_default=True,
               help="Directory to initialize in.")
@@ -1008,28 +1480,16 @@ def init_project(
     demo: bool,
 ) -> None:
     """Scaffold a new AutoAgent workspace with workspace metadata and starter data."""
-    base_dir = Path(target_dir).resolve()
-    workspace_root = (base_dir / name) if name else base_dir
-    workspace_root.mkdir(parents=True, exist_ok=True)
-
-    workspace_name = name or workspace_root.name
-    workspace = AutoAgentWorkspace.create(
-        workspace_root,
-        name=workspace_name,
+    workspace, summary = _create_workspace(
         template=template,
-        agent_name=agent_name,
-        platform=platform,
-        demo_seeded=demo,
-    )
-
-    summary = bootstrap_workspace(
-        workspace,
-        template=template,
+        target_dir=target_dir,
+        name=name,
         agent_name=agent_name,
         platform=platform,
         with_synthetic_data=with_synthetic_data,
         demo=demo,
     )
+    workspace_root = workspace.root
 
     click.echo(click.style("\n✦ AutoAgent Init", fg="cyan", bold=True))
     click.echo("")
@@ -1079,11 +1539,192 @@ def init_project(
     click.echo("")
 
 
+@cli.command("new")
+@click.argument("name")
+@click.option(
+    "--template",
+    default="customer-support",
+    show_default=True,
+    type=click.Choice(STARTER_TEMPLATE_NAMES),
+    help="Starter template to scaffold into the new workspace.",
+)
+@click.option("--demo/--no-demo", default=False, show_default=True, help="Seed a reviewable demo workspace.")
+def new_workspace(name: str, template: str, demo: bool) -> None:
+    """Create a new starter workspace and print the first three commands to run."""
+    workspace, summary = _create_workspace(
+        template=template,
+        target_dir=".",
+        name=name,
+        agent_name="My Agent",
+        platform="Google ADK",
+        with_synthetic_data=True,
+        demo=demo,
+    )
+    mode_summary = summarize_mode_state(str(workspace.runtime_config_path))
+    template_summary = summary.get("template_summary", {}) or {}
+
+    click.echo(click.style("\n✦ AutoAgent New", fg="cyan", bold=True))
+    click.echo("")
+    click.echo(click.style("  ✓ ", fg="green") + f"Created workspace: {workspace.root}")
+    click.echo(click.style("  ✓ ", fg="green") + f"Template: {template}")
+    click.echo(
+        click.style("  ✓ ", fg="green")
+        + f"Starter assets: {template_summary.get('eval_file_count', 0)} eval files, "
+        + f"{template_summary.get('scorer_count', 0)} scorer specs"
+    )
+    if demo:
+        demo_summary = summary.get("demo_summary", {}) or {}
+        click.echo(
+            click.style("  ✓ ", fg="green")
+            + "Demo data seeded: "
+            + f"{len(demo_summary.get('trace_ids', []))} traces, "
+            + f"review {demo_summary.get('change_card_id', 'n/a')}, "
+            + f"autofix {demo_summary.get('autofix_id', 'n/a')}"
+        )
+    click.echo("")
+    click.echo(f"  Mode: {mode_summary['message']}")
+    click.echo("  Live setup: run `autoagent provider configure` when you are ready to use real models.")
+    click.echo("")
+    click.echo(click.style("  Next 3 commands:", bold=True))
+    click.echo(f"    cd {name}")
+    click.echo("    autoagent status")
+    click.echo("    autoagent eval run")
+    click.echo("")
+
+
+@cli.group("template")
+def template_group() -> None:
+    """List and apply bundled starter workspace templates."""
+
+
+@template_group.command("list")
+def template_list() -> None:
+    """Show bundled starter templates."""
+    click.echo("\nStarter templates")
+    click.echo("=================")
+    for template in list_templates():
+        click.echo(f"- {template.name}: {template.description}")
+
+
+@template_group.command("apply")
+@click.argument("name", type=click.Choice(STARTER_TEMPLATE_NAMES))
+def template_apply(name: str) -> None:
+    """Apply a starter template to the current workspace."""
+    workspace = _require_workspace("template")
+    summary = apply_template_to_workspace(workspace, name)
+
+    click.echo(click.style(f"Applied: template {name}", fg="green"))
+    click.echo(f"  Config:    {summary['config_path']}")
+    click.echo(f"  Evals:     {summary['eval_file_count']} files / {summary['eval_case_count']} cases")
+    click.echo(f"  Scorers:   {summary['scorer_count']}")
+    if summary["suggested_skills"]:
+        click.echo(f"  Skills:    {', '.join(summary['suggested_skills'])}")
+
+
+@cli.group("provider")
+def provider_group() -> None:
+    """Configure and validate workspace provider settings."""
+
+
+@provider_group.command("configure")
+@click.option(
+    "--provider",
+    "provider_name",
+    type=click.Choice(["openai", "anthropic", "google"], case_sensitive=False),
+    default=None,
+    help="Provider to configure. Prompts when omitted.",
+)
+@click.option("--model", default=None, help="Model name to store. Prompts when omitted.")
+@click.option("--api-key-env", default=None, help="API key environment variable. Prompts when omitted.")
+def provider_configure(provider_name: str | None, model: str | None, api_key_env: str | None) -> None:
+    """Interactively configure a workspace provider profile."""
+    workspace = _require_workspace("provider")
+    resolved_provider = provider_name or click.prompt(
+        "Provider",
+        type=click.Choice(["openai", "anthropic", "google"], case_sensitive=False),
+        default="openai",
+        show_default=True,
+    )
+    resolved_model = model or click.prompt(
+        "Model",
+        default=default_model_for(resolved_provider),
+        show_default=True,
+    )
+    resolved_env = api_key_env or click.prompt(
+        "API key env var",
+        default=default_api_key_env_for(resolved_provider),
+        show_default=True,
+    )
+
+    registry_path = providers_file_path(workspace)
+    upsert_provider(
+        registry_path,
+        provider=resolved_provider,
+        model=resolved_model,
+        api_key_env=resolved_env,
+    )
+    sync_runtime_config(
+        workspace.runtime_config_path,
+        provider=resolved_provider,
+        model=resolved_model,
+        api_key_env=resolved_env,
+    )
+
+    click.echo(click.style(f"Applied: provider {resolved_provider}:{resolved_model}", fg="green"))
+    click.echo(f"  Registry: {registry_path}")
+    click.echo(f"  Runtime:  {workspace.runtime_config_path}")
+    click.echo(f"  Next:     export {resolved_env}=... && autoagent provider test")
+
+
+@provider_group.command("list")
+def provider_list() -> None:
+    """List configured providers for the current workspace."""
+    workspace = _require_workspace("provider")
+    providers = configured_providers(providers_file_path(workspace))
+    if not providers:
+        click.echo("No providers configured. Run `autoagent provider configure`.")
+        return
+
+    click.echo("\nConfigured providers")
+    click.echo("====================")
+    for provider in providers:
+        env_name = provider.get("api_key_env") or "n/a"
+        click.echo(f"- {provider['provider']}  model={provider['model']}  env={env_name}")
+
+
+@provider_group.command("test")
+def provider_test() -> None:
+    """Validate configured providers have the credentials needed for live use."""
+    workspace = _require_workspace("provider")
+    checks = provider_health_checks(providers_file_path(workspace))
+    if not checks:
+        raise click.ClickException("No providers configured. Run `autoagent provider configure` first.")
+
+    failures = [check for check in checks if not check["credential_present"]]
+    for check in checks:
+        marker = click.style("✓", fg="green") if check["credential_present"] else click.style("✗", fg="red")
+        click.echo(f"{marker} {check['message']}")
+    if failures:
+        raise click.ClickException("Provider check failed. Export the missing credentials and retry.")
+
+    click.echo("Provider check passed.")
+
+
 # ---------------------------------------------------------------------------
 # autoagent build
 # ---------------------------------------------------------------------------
 
-@cli.command("build")
+@cli.group("build", cls=DefaultCommandGroup, default_command="run")
+def build_group() -> None:
+    """Build agent artifacts or inspect the latest build output.
+
+    Examples:
+      autoagent build "Build a support agent for order tracking"
+      autoagent build show latest
+    """
+
+
+@build_group.command("run", hidden=True)
 @click.argument("prompt")
 @click.option(
     "--connector",
@@ -1093,9 +1734,28 @@ def init_project(
 )
 @click.option("--output-dir", default=".", show_default=True, help="Directory for generated build artifacts.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output artifact as JSON only.")
-def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_output: bool = False) -> None:
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render human text, a final JSON envelope, or stream JSON progress events.",
+)
+def build_agent(
+    prompt: str,
+    connectors: tuple[str, ...],
+    output_dir: str,
+    json_output: bool = False,
+    output_format: str = "text",
+) -> None:
     """Build an agent artifact from natural language and scaffold eval/deploy handoff files."""
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("build", message="Generate build artifact from prompt")
 
     target = Path(output_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
@@ -1116,12 +1776,15 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
     config_path = _next_built_config_path(target / "configs")
     config_yaml = yaml.safe_dump(config, sort_keys=False)
     config_path.write_text(config_yaml, encoding="utf-8")
+    progress.artifact_written("config", path=str(config_path))
 
     eval_path = target / "evals" / "cases" / "generated_build.yaml"
     _write_generated_eval_cases(eval_path, artifact)
+    progress.artifact_written("evals", path=str(eval_path))
 
     artifact_path = target / ".autoagent" / "build_artifact_latest.json"
     artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    progress.artifact_written("artifact", path=str(artifact_path))
 
     prompt_summary = " ".join(prompt.split())
     title = prompt_summary[:72] if len(prompt_summary) <= 72 else f"{prompt_summary[:69]}..."
@@ -1155,8 +1818,13 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
         ),
         legacy_payload=artifact,
     )
+    progress.phase_completed("build", message="Build artifact ready")
+    progress.next_action("autoagent eval run")
 
-    if json_output:
+    if resolved_output_format == "stream-json":
+        return
+
+    if resolved_output_format == "json":
         click.echo(json.dumps(artifact, indent=2))
         return
 
@@ -1187,16 +1855,13 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
 # autoagent build show (FR-13: inspect without knowing .autoagent paths)
 # ---------------------------------------------------------------------------
 
-@cli.command("build-show")
-@click.argument("selector", default="latest")
-@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def build_show(selector: str, json_output: bool = False) -> None:
-    """Show build output. Currently supports 'latest'.
-
-    Examples:
-      autoagent build-show latest
-      autoagent build-show latest --json
-    """
+def _build_show_impl(
+    selector: str,
+    json_output: bool = False,
+    id_only: bool = False,
+    path_only: bool = False,
+) -> None:
+    """Render build-show style output for both canonical and legacy routes."""
     from cli.stream2_helpers import get_latest_build_artifact, json_response
 
     artifact = get_latest_build_artifact()
@@ -1206,6 +1871,15 @@ def build_show(selector: str, json_output: bool = False) -> None:
         else:
             click.echo("No build artifact found.")
             click.echo("Run: autoagent build \"Describe your agent\"")
+        return
+
+    artifact_path = Path(".autoagent") / "build_artifact_latest.json"
+    artifact_id = artifact.get("artifact_id") or artifact.get("id") or selector
+    if id_only:
+        click.echo(str(artifact_id))
+        return
+    if path_only:
+        click.echo(str(artifact_path))
         return
 
     if json_output:
@@ -1221,31 +1895,49 @@ def build_show(selector: str, json_output: bool = False) -> None:
     click.echo(f"  Skills:      {len(artifact.get('skills', []))}")
 
 
+@build_group.command("show")
+@click.argument("selector", default="latest")
+@click.option("--id-only", is_flag=True, help="Print only the resolved artifact identifier.")
+@click.option("--path-only", is_flag=True, help="Print only the resolved artifact path.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def build_show(selector: str, id_only: bool, path_only: bool, json_output: bool = False) -> None:
+    """Show build output. Currently supports 'latest'.
+
+    Examples:
+      autoagent build show latest
+      autoagent build show latest --json
+    """
+    _build_show_impl(selector, json_output=json_output, id_only=id_only, path_only=path_only)
+
+
+@cli.command("build-show", hidden=True)
+@click.argument("selector", default="latest")
+@click.option("--id-only", is_flag=True, help="Print only the resolved artifact identifier.")
+@click.option("--path-only", is_flag=True, help="Print only the resolved artifact path.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def build_show_alias(selector: str, id_only: bool, path_only: bool, json_output: bool = False) -> None:
+    """Deprecated alias for `autoagent build show`."""
+    if not json_output:
+        _echo_deprecation(f"autoagent build-show {selector}", f"autoagent build show {selector}")
+    _build_show_impl(selector, json_output=json_output, id_only=id_only, path_only=path_only)
+
+
 # ---------------------------------------------------------------------------
 # autoagent eval (subgroup)
 # ---------------------------------------------------------------------------
 
-@cli.group("eval", invoke_without_command=True)
-@click.pass_context
-def eval_group(ctx: click.Context) -> None:
+@cli.group("eval", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
+def eval_group() -> None:
     """Evaluate agent configs against test suites.
 
     Examples:
       autoagent eval run
       autoagent eval show latest
+      autoagent eval compare left.json right.json
+      autoagent eval breakdown
       autoagent eval generate --config configs/v001.yaml --output generated_eval_suite.json
     """
-    if ctx.invoked_subcommand is None:
-        ctx.invoke(
-            eval_run,
-            config_path=None,
-            suite=None,
-            dataset=None,
-            dataset_split="all",
-            category=None,
-            output=None,
-            real_agent=False,
-        )
+    return None
 
 
 @eval_group.command("run")
@@ -1265,9 +1957,16 @@ def eval_group(ctx: click.Context) -> None:
     help="Force the real-agent eval path even if optimizer.use_mock is enabled.",
 )
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
              category: str | None, output: str | None, real_agent: bool = False,
-             json_output: bool = False) -> None:
+             json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
 
     Examples:
@@ -1276,8 +1975,16 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
       autoagent eval run --config configs/v003.yaml --category safety
       autoagent eval run --output results.json
     """
+    from cli.stream2_helpers import json_response
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("eval", message="Run evaluation suite")
+
     runtime = load_runtime_config()
-    if not json_output:
+    if resolved_output_format == "text":
         click.echo(click.style(f"✦ {_soul_line('eval')}", fg="cyan"))
         _print_cli_plan(
             "Eval plan",
@@ -1291,7 +1998,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     config = None
     if config_path:
         config = _load_config_dict(config_path)
-        if not json_output:
+        if resolved_output_format == "text":
             click.echo(f"Evaluating config: {config_path}")
     else:
         workspace = discover_workspace()
@@ -1300,9 +2007,9 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             if resolved is not None:
                 config = resolved.config
                 config_path = str(resolved.path)
-                if not json_output:
+                if resolved_output_format == "text":
                     click.echo(f"Evaluating active config: {resolved.path}")
-        if config is None and not json_output:
+        if config is None and resolved_output_format == "text":
             click.echo("Evaluating with default config")
 
     runner = _build_eval_runner(
@@ -1311,22 +2018,30 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         use_real_agent=real_agent,
         default_agent_config=config,
     )
-    _warn_mock_modes(eval_runner=runner, json_output=json_output)
+    _warn_mock_modes(eval_runner=runner, json_output=(resolved_output_format == "json"))
 
     if category:
         score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
-        if json_output:
-            click.echo(json.dumps(_score_to_dict(score), indent=2))
+        progress.phase_completed("eval", message=f"Category '{category}' complete")
+        progress.next_action("autoagent improve")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
+            click.echo(json_response("ok", _score_to_dict(score), next_cmd="autoagent improve"))
             return
         _print_score(score, f"Category: {category}")
     else:
         score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
-        if json_output:
-            click.echo(json.dumps(_score_to_dict(score), indent=2))
+        progress.phase_completed("eval", message="Full eval suite complete")
+        progress.next_action("autoagent improve")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
+            click.echo(json_response("ok", _score_to_dict(score), next_cmd="autoagent improve"))
             return
         _print_score(score, "Full eval suite")
 
-    if not json_output:
+    if resolved_output_format == "text":
         click.echo(click.style(f"\n  Mood: {_score_mood(score.composite)}", fg="magenta"))
         _print_next_actions(
             [
@@ -1361,6 +2076,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             ],
         }
         Path(output).write_text(json.dumps(result, indent=2), encoding="utf-8")
+        progress.artifact_written("eval_results", path=output)
         click.echo(f"\nResults written to {output}")
 
 
@@ -1573,6 +2289,61 @@ def eval_generate(
             click.echo(f"\n  Written to {output}")
 
 
+@eval_group.command("compare")
+@click.argument("left_run")
+@click.argument("right_run")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def eval_compare(left_run: str, right_run: str, json_output: bool = False) -> None:
+    """Show a side-by-side comparison of two eval runs."""
+    from cli.stream2_helpers import json_response
+
+    payload = _build_eval_comparison(left_run, right_run)
+    if json_output:
+        click.echo(json_response("ok", payload))
+        return
+
+    click.echo("\nEval comparison")
+    click.echo(f"  Run 1: {payload['left']['run']}")
+    click.echo(f"  Run 2: {payload['right']['run']}")
+    click.echo("")
+    click.echo(f"  {'Metric':<12} {'Run 1':>10} {'Run 2':>10} {'Delta':>10}")
+    click.echo(f"  {'-' * 12} {'-' * 10} {'-' * 10} {'-' * 10}")
+    for metric in EVAL_METRIC_NAMES:
+        left_value = payload["left"]["scores"][metric]
+        right_value = payload["right"]["scores"][metric]
+        delta = payload["deltas"][metric]
+        click.echo(f"  {metric:<12} {left_value:>10.4f} {right_value:>10.4f} {delta:>+10.4f}")
+    click.echo(f"\n  Winner: {payload['winner']}")
+
+
+@eval_group.command("breakdown")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def eval_breakdown(json_output: bool = False) -> None:
+    """Show score breakdown bars and failure clusters for the latest eval result."""
+    from cli.stream2_helpers import json_response
+
+    payload = _build_eval_breakdown()
+    if json_output:
+        click.echo(json_response("ok", payload))
+        return
+
+    source_name = Path(payload["source"]).name
+    click.echo(f"\nEval Breakdown (from {source_name})")
+    click.echo(f"  {'-' * 50}")
+    for metric in EVAL_METRIC_NAMES:
+        value = max(0.0, min(1.0, payload["scores"][metric]))
+        click.echo(f"  {metric:<12} {_bar_chart(value)} {payload['scores'][metric]:.4f}")
+
+    click.echo("\n  Failure Clusters:")
+    clusters = payload["failure_clusters"]
+    if not clusters:
+        click.echo("    none recorded")
+        return
+
+    for cluster, count in sorted(clusters.items(), key=lambda item: (-item[1], item[0])):
+        click.echo(f"    {count:>3}x {cluster}")
+
+
 def _run_optimize_cycle(
     *,
     cycle_number: int,
@@ -1745,7 +2516,16 @@ def _run_optimize_cycle(
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
 @click.option("--full-auto", is_flag=True, default=False,
               help="Danger mode: auto-promote accepted configs without manual review.")
+@click.option("--dry-run", is_flag=True, help="Preview the optimization run without mutating state.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def optimize(
     cycles: int,
     continuous: bool,
@@ -1755,7 +2535,10 @@ def optimize(
     configs_dir: str,
     memory_db: str,
     full_auto: bool,
+    dry_run: bool,
     json_output: bool = False,
+    max_budget_usd: float | None = None,
+    output_format: str = "text",
 ) -> None:
     """Run optimization cycles to improve agent config.
 
@@ -1765,8 +2548,17 @@ def optimize(
       autoagent optimize --continuous
       autoagent optimize --mode advanced --cycles 3
     """
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+    from cli.usage import enforce_workspace_budget
+    from optimizer.cost_tracker import CostTracker
     from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
-    if not json_output:
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("optimize", message="Run optimization cycle(s)")
+
+    if resolved_output_format == "text":
         click.echo(click.style(f"\n✦ {_soul_line('optimize')}", fg="cyan"))
         if full_auto:
             click.echo(click.style("⚠ FULL AUTO ENABLED: skipping manual promotion gates.", fg="yellow"))
@@ -1792,8 +2584,44 @@ def optimize(
         mode_enum = OptimizationMode(mode)
         mode_config = ModeConfig(mode=mode_enum)
         resolved = ModeRouter().resolve(mode_config)
-        click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
-                   f"candidates={resolved.max_candidates})")
+        if resolved_output_format == "text":
+            click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
+                       f"candidates={resolved.max_candidates})")
+
+    if dry_run:
+        from cli.stream2_helpers import json_response
+
+        preview = {
+            "cycles": cycles,
+            "continuous": continuous,
+            "mode": mode or "default",
+            "full_auto": full_auto,
+            "db": db,
+            "configs_dir": configs_dir,
+            "memory_db": memory_db,
+            "max_budget_usd": max_budget_usd,
+        }
+        if resolved_output_format == "json":
+            click.echo(json_response("ok", preview, next_cmd="autoagent optimize"))
+        else:
+            click.echo("Dry run: optimization would execute with the following plan:")
+            click.echo(f"  cycles:      {cycles}")
+            click.echo(f"  continuous:  {continuous}")
+            click.echo(f"  mode:        {mode or 'default'}")
+            click.echo(f"  full_auto:   {full_auto}")
+            click.echo(f"  configs_dir: {configs_dir}")
+        return
+
+    budget_ok, budget_message, budget_snapshot = enforce_workspace_budget(max_budget_usd)
+    if not budget_ok:
+        progress.warning(message=budget_message or "Budget reached")
+        if resolved_output_format == "json":
+            from cli.stream2_helpers import json_response
+
+            click.echo(json_response("ok", {"message": budget_message, "usage": budget_snapshot}, next_cmd="autoagent usage"))
+            return
+        click.echo(budget_message)
+        return
 
     (
         runtime,
@@ -1803,11 +2631,18 @@ def optimize(
         adversarial_simulator,
         skill_autolearner,
     ) = _build_runtime_components()
-    _warn_mock_modes(proposer=proposer, json_output=json_output)
+    _warn_mock_modes(proposer=proposer, json_output=(resolved_output_format == "json"))
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
+    tracker_db_path, per_cycle_dollars, daily_dollars, stall_threshold_cycles = _runtime_budget_config(runtime)
+    cost_tracker = CostTracker(
+        db_path=tracker_db_path,
+        per_cycle_budget_dollars=per_cycle_dollars,
+        daily_budget_dollars=daily_dollars,
+        stall_threshold_cycles=stall_threshold_cycles,
+    )
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -1837,17 +2672,18 @@ def optimize(
     skipped_count = 0
     display_cycle = 1
 
-    if continuous and not json_output:
+    if continuous and resolved_output_format == "text":
         click.echo("Starting continuous optimization. Press Ctrl+C to stop.")
 
     try:
         while True:
+            cost_before = _proposer_total_cost(proposer)
             cycle_result, all_time_best = _run_optimize_cycle(
                 cycle_number=next_cycle_number,
                 display_cycle=display_cycle,
                 display_total=None if continuous else cycles,
                 continuous=continuous,
-                json_output=json_output,
+                json_output=(resolved_output_format == "json"),
                 full_auto=full_auto,
                 store=store,
                 observer=observer,
@@ -1859,6 +2695,21 @@ def optimize(
                 all_time_best=all_time_best,
                 log_path=log_path,
             )
+            cost_after = _proposer_total_cost(proposer)
+            cycle_cost = max(0.0, round(cost_after - cost_before, 8))
+            cycle_delta = float(cycle_result.get("delta") or 0.0)
+            cost_tracker.record_cycle(
+                cycle_id=f"optimize-{cycle_result['experiment_cycle']}",
+                spent_dollars=cycle_cost,
+                improvement_delta=cycle_delta,
+            )
+            progress.phase_completed(
+                "optimize-cycle",
+                message=(
+                    f"Cycle {cycle_result['experiment_cycle']} "
+                    f"{cycle_result['status']} ({cycle_delta:+.2f})"
+                ),
+            )
 
             experiments_run += 1
             if cycle_result["status"] == "keep":
@@ -1869,8 +2720,12 @@ def optimize(
                 skipped_count += 1
 
             if continuous:
-                if json_output:
-                    click.echo(json.dumps(cycle_result))
+                if resolved_output_format == "json":
+                    from cli.stream2_helpers import json_response
+
+                    click.echo(json_response("ok", cycle_result))
+                elif resolved_output_format == "stream-json":
+                    progress.next_action("autoagent status")
                 else:
                     click.echo(
                         _continuous_status_line(
@@ -1889,7 +2744,7 @@ def optimize(
             display_cycle += 1
     except KeyboardInterrupt:
         if continuous:
-            if not json_output:
+            if resolved_output_format == "text":
                 best_entry = best_experiment_log_entry(read_experiment_log_entries(log_path))
                 best_score = best_entry.score_after if best_entry is not None and best_entry.score_after is not None else all_time_best
                 click.echo(
@@ -1901,8 +2756,16 @@ def optimize(
             return
         raise
 
-    if json_output:
-        click.echo(json.dumps(json_cycle_results, indent=2))
+    progress.phase_completed("optimize", message="Optimization run complete")
+    progress.next_action("autoagent status")
+
+    if resolved_output_format == "stream-json":
+        return
+
+    if resolved_output_format == "json":
+        from cli.stream2_helpers import json_response
+
+        click.echo(json_response("ok", json_cycle_results, next_cmd="autoagent status"))
         return
 
     if cycles > 1 and not continuous:
@@ -1939,9 +2802,121 @@ def optimize(
                 )
 
 
-@cli.group("improve")
+@cli.group("improve", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
 def improve_group() -> None:
     """Improvement workflows and compatibility aliases."""
+
+
+@improve_group.command("run", hidden=True)
+@click.option("--auto", is_flag=True, help="Apply the top suggested fix without prompting.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def improve_run(auto: bool, json_output: bool = False) -> None:
+    """Run the eval -> diagnose -> suggest -> optional apply improvement flow."""
+    from cli.stream2_helpers import apply_autofix_to_config, json_response
+    from optimizer.autofix import AutoFixEngine, AutoFixStore
+    from optimizer.autofix_proposers import (
+        CostOptimizationProposer,
+        FailurePatternProposer,
+        RegressionProposer,
+    )
+    from optimizer.diagnose_session import DiagnoseSession
+    from optimizer.mutations import create_default_registry
+
+    runtime = load_runtime_config()
+    workspace = discover_workspace()
+    resolved_config = workspace.resolve_active_config() if workspace is not None else None
+    config = resolved_config.config if resolved_config is not None else None
+    eval_runner = _build_eval_runner(runtime, default_agent_config=config)
+    score = eval_runner.run(config=config)
+
+    store = ConversationStore(db_path=DB_PATH)
+    observer = Observer(store)
+    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
+    diagnose_session = DiagnoseSession(store=store, observer=observer, deployer=deployer)
+    diagnosis_summary = diagnose_session.start()
+
+    proposal_store = AutoFixStore()
+    engine = AutoFixEngine(
+        proposers=[FailurePatternProposer(), RegressionProposer(), CostOptimizationProposer()],
+        mutation_registry=create_default_registry(),
+        store=proposal_store,
+    )
+    current_config = config or _ensure_active_config(deployer)
+    proposals = engine.suggest(_build_failure_samples(store), current_config)
+    proposal_payload = [
+        {
+            "proposal_id": proposal.proposal_id,
+            "mutation_name": proposal.mutation_name,
+            "surface": proposal.surface,
+            "risk_class": proposal.risk_class,
+            "expected_lift": proposal.expected_lift,
+            "status": getattr(proposal, "status", "pending"),
+        }
+        for proposal in proposals
+    ]
+
+    applied: dict | None = None
+    top_proposal = proposals[0] if proposals else None
+    should_apply = bool(top_proposal and auto)
+    if top_proposal and not auto and not json_output:
+        should_apply = click.confirm(f"Apply the top proposal now ({top_proposal.proposal_id})?", default=False)
+
+    if should_apply and top_proposal is not None:
+        new_config, status_msg = engine.apply(top_proposal.proposal_id, current_config)
+        if new_config:
+            version_info = apply_autofix_to_config(top_proposal.proposal_id, new_config, configs_dir=CONFIGS_DIR)
+            applied = {
+                "proposal_id": top_proposal.proposal_id,
+                "status": status_msg,
+                "config_version": version_info["version"],
+                "config_path": version_info["path"],
+            }
+        else:
+            applied = {
+                "proposal_id": top_proposal.proposal_id,
+                "status": status_msg,
+                "config_version": None,
+            }
+
+    payload = {
+        "eval": _score_to_dict(score),
+        "diagnosis": diagnose_session.to_dict(),
+        "diagnosis_summary": diagnosis_summary,
+        "proposal_count": len(proposal_payload),
+        "proposals": proposal_payload,
+        "applied": applied,
+    }
+    if json_output:
+        next_cmd = "autoagent status"
+        if applied and applied.get("config_path"):
+            next_cmd = f"autoagent eval run --config {applied['config_path']}"
+        click.echo(json_response("ok", payload, next_cmd=next_cmd))
+        return
+
+    click.echo(click.style("\n✦ Improve", fg="cyan", bold=True))
+    click.echo("")
+    click.echo(f"Eval composite: {_score_to_dict(score)['composite']:.4f}")
+    click.echo(diagnosis_summary)
+    if proposal_payload:
+        click.echo(f"\nSuggested fixes: {len(proposal_payload)}")
+        top = proposal_payload[0]
+        click.echo(
+            f"  Top proposal: {top['proposal_id']} "
+            f"({top['mutation_name']}, risk={top['risk_class']}, expected_lift={top['expected_lift']:.1%})"
+        )
+    else:
+        click.echo("\nSuggested fixes: none")
+
+    if applied is not None:
+        click.echo("")
+        click.echo(f"Applied: {applied['status']}")
+        if applied.get("config_version") is not None:
+            click.echo(f"  New config version: v{applied['config_version']:03d}")
+            click.echo(f"  Path: {applied['config_path']}")
+    else:
+        click.echo("")
+        click.echo("Next step:")
+        click.echo("  autoagent autofix suggest")
 
 
 @improve_group.command("optimize")
@@ -1955,6 +2930,7 @@ def improve_group() -> None:
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
 @click.option("--full-auto", is_flag=True, default=False,
               help="Danger mode: auto-promote accepted configs without manual review.")
+@click.option("--dry-run", is_flag=True, help="Preview the optimization run without mutating state.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 @click.pass_context
 def improve_optimize(
@@ -1967,6 +2943,7 @@ def improve_optimize(
     configs_dir: str,
     memory_db: str,
     full_auto: bool,
+    dry_run: bool,
     json_output: bool = False,
 ) -> None:
     """Compatibility alias for `autoagent optimize`."""
@@ -1980,8 +2957,120 @@ def improve_optimize(
         configs_dir=configs_dir,
         memory_db=memory_db,
         full_auto=full_auto,
+        dry_run=dry_run,
         json_output=json_output,
     )
+
+
+# ---------------------------------------------------------------------------
+# autoagent compare (subgroup)
+# ---------------------------------------------------------------------------
+
+@cli.group("compare")
+def compare_group() -> None:
+    """Compare configs, eval runs, and candidate versions."""
+
+
+@compare_group.command("configs")
+@click.argument("left_version", type=int)
+@click.argument("right_version", type=int)
+@click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def compare_configs(left_version: int, right_version: int, configs_dir: str, json_output: bool = False) -> None:
+    """Compare two config versions side by side."""
+    from cli.stream2_helpers import json_response
+
+    store = ConversationStore(db_path=DB_PATH)
+    deployer = Deployer(configs_dir=configs_dir, store=store)
+    history = {entry["version"]: entry for entry in deployer.version_manager.get_version_history()}
+    if left_version not in history or right_version not in history:
+        raise click.ClickException("Both config versions must exist before they can be compared.")
+
+    left_path = Path(configs_dir) / history[left_version]["filename"]
+    right_path = Path(configs_dir) / history[right_version]["filename"]
+    left_config = yaml.safe_load(left_path.read_text(encoding="utf-8"))
+    right_config = yaml.safe_load(right_path.read_text(encoding="utf-8"))
+    diff_text = schema_config_diff(validate_config(left_config), validate_config(right_config))
+
+    payload = {
+        "left": {"version": left_version, "path": str(left_path), "status": history[left_version]["status"]},
+        "right": {"version": right_version, "path": str(right_path), "status": history[right_version]["status"]},
+        "diff": diff_text,
+    }
+    if json_output:
+        click.echo(json_response("ok", payload))
+        return
+
+    click.echo(f"\nConfig comparison: v{left_version:03d} vs v{right_version:03d}")
+    click.echo(f"  Left:  {left_path}")
+    click.echo(f"  Right: {right_path}")
+    click.echo("")
+    click.echo(diff_text)
+
+
+@compare_group.command("evals")
+@click.argument("left_run")
+@click.argument("right_run")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def compare_evals(left_run: str, right_run: str, json_output: bool = False) -> None:
+    """Compare two eval result JSON files."""
+    from cli.stream2_helpers import json_response
+
+    comparison = _build_eval_comparison(left_run, right_run)
+    payload = {
+        "left": {
+            "run": comparison["left"]["run"],
+            "composite": comparison["left"]["scores"]["composite"],
+            "quality": comparison["left"]["scores"]["quality"],
+        },
+        "right": {
+            "run": comparison["right"]["run"],
+            "composite": comparison["right"]["scores"]["composite"],
+            "quality": comparison["right"]["scores"]["quality"],
+        },
+        "winner": comparison["winner"],
+        "delta_composite": comparison["delta_composite"],
+        "deltas": comparison["deltas"],
+    }
+    if json_output:
+        click.echo(json_response("ok", payload))
+        return
+
+    click.echo("\nEval comparison")
+    click.echo(f"  Left:   {payload['left']['run']}  composite={payload['left']['composite']:.4f}")
+    click.echo(f"  Right:  {payload['right']['run']}  composite={payload['right']['composite']:.4f}")
+    click.echo(f"  Winner: {payload['winner']}")
+    click.echo(f"  Delta:  {payload['delta_composite']:+.4f}")
+
+
+@compare_group.command("candidates")
+@click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def compare_candidates(configs_dir: str, json_output: bool = False) -> None:
+    """Show candidate configs with their stored scores."""
+    from cli.stream2_helpers import json_response
+
+    store = ConversationStore(db_path=DB_PATH)
+    deployer = Deployer(configs_dir=configs_dir, store=store)
+    history = deployer.version_manager.get_version_history()
+    candidates = [
+        entry for entry in history
+        if entry.get("status") in {"candidate", "canary", "imported", "evaluated"}
+    ]
+
+    if json_output:
+        click.echo(json_response("ok", candidates))
+        return
+
+    if not candidates:
+        click.echo("No candidate configs found.")
+        return
+
+    click.echo("\nCandidate configs")
+    click.echo("=================")
+    for entry in candidates:
+        composite = float((entry.get("scores") or {}).get("composite", 0.0))
+        click.echo(f"- v{entry['version']:03d}  status={entry['status']}  composite={composite:.4f}")
 
 
 # ---------------------------------------------------------------------------
@@ -2001,8 +3090,10 @@ def config_group() -> None:
 
 @config_group.command("list")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--id-only", is_flag=True, help="Print only config version identifiers.")
+@click.option("--path-only", is_flag=True, help="Print only config file paths.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def config_list(configs_dir: str, json_output: bool = False) -> None:
+def config_list(configs_dir: str, id_only: bool, path_only: bool, json_output: bool = False) -> None:
     """List all config versions.
 
     Examples:
@@ -2021,6 +3112,15 @@ def config_list(configs_dir: str, json_output: bool = False) -> None:
         else:
             click.echo("No config versions found.")
             click.echo("Run: autoagent init")
+        return
+
+    if id_only:
+        for entry in history:
+            click.echo(f"v{entry['version']:03d}")
+        return
+    if path_only:
+        for entry in history:
+            click.echo(str(Path(configs_dir) / entry["filename"]))
         return
 
     workspace = _workspace_for_configs_dir(configs_dir)
@@ -2064,8 +3164,10 @@ def config_list(configs_dir: str, json_output: bool = False) -> None:
 @config_group.command("show")
 @click.argument("version", type=str, required=False)
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--id-only", is_flag=True, help="Print only the resolved config identifier.")
+@click.option("--path-only", is_flag=True, help="Print only the resolved config path.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def config_show(version: str | None, configs_dir: str, json_output: bool = False) -> None:
+def config_show(version: str | None, configs_dir: str, id_only: bool, path_only: bool, json_output: bool = False) -> None:
     """Show config YAML for a version (defaults to active).
 
     Supports standard selectors: latest, active, current.
@@ -2117,6 +3219,12 @@ def config_show(version: str | None, configs_dir: str, json_output: bool = False
                 else:
                     click.echo("No active config. Run: autoagent init")
                 return
+            if id_only:
+                click.echo(f"v{resolved.version:03d}")
+                return
+            if path_only:
+                click.echo(str(resolved.path))
+                return
             if json_output:
                 click.echo(json_response("ok", {"version": resolved.version, "config": resolved.config}))
             else:
@@ -2132,6 +3240,12 @@ def config_show(version: str | None, configs_dir: str, json_output: bool = False
                 click.echo("No active config. Run: autoagent init")
             return
         active_ver = deployer.version_manager.manifest.get("active_version", "?")
+        if id_only:
+            click.echo(f"v{active_ver:03d}")
+            return
+        if path_only:
+            click.echo(str(Path(configs_dir) / f"v{active_ver:03d}.yaml"))
+            return
         if json_output:
             click.echo(json_response("ok", {"version": active_ver, "config": config}))
         else:
@@ -2163,6 +3277,13 @@ def config_show(version: str | None, configs_dir: str, json_output: bool = False
     filepath = Path(configs_dir) / found["filename"]
     with filepath.open("r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
+
+    if id_only:
+        click.echo(f"v{resolved_version:03d}")
+        return
+    if path_only:
+        click.echo(str(filepath))
+        return
 
     if json_output:
         click.echo(json_response("ok", {"version": resolved_version, "status": found["status"], "config": config}))
@@ -2232,8 +3353,9 @@ def config_diff(v1: int, v2: int, configs_dir: str) -> None:
 @config_group.command("import")
 @click.argument("file_path", type=click.Path(exists=True))
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--dry-run", is_flag=True, help="Preview the imported version without writing files.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def config_import(file_path: str, configs_dir: str, json_output: bool = False) -> None:
+def config_import(file_path: str, configs_dir: str, dry_run: bool, json_output: bool = False) -> None:
     """Import a plain YAML or JSON config file into the versioned config store.
 
     Converts the file to a versioned config in the configs directory with
@@ -2247,6 +3369,24 @@ def config_import(file_path: str, configs_dir: str, json_output: bool = False) -
     from cli.stream2_helpers import ConfigImporter, json_response
 
     importer = ConfigImporter(configs_dir=configs_dir)
+    if dry_run:
+        manifest = importer._load_manifest()
+        versions = manifest.get("versions", [])
+        next_version = max((entry["version"] for entry in versions), default=0) + 1
+        preview = {
+            "source_file": Path(file_path).name,
+            "version": next_version,
+            "dest_path": str(Path(configs_dir) / f"v{next_version:03d}_imported.yaml"),
+        }
+        if json_output:
+            click.echo(json_response("ok", preview, next_cmd="autoagent config import <file>"))
+        else:
+            click.echo("Dry run: config import preview")
+            click.echo(f"  Source:  {preview['source_file']}")
+            click.echo(f"  Version: v{preview['version']:03d}")
+            click.echo(f"  Path:    {preview['dest_path']}")
+        return
+
     try:
         result = importer.import_config(file_path)
     except (FileNotFoundError, ValueError) as exc:
@@ -2261,6 +3401,7 @@ def config_import(file_path: str, configs_dir: str, json_output: bool = False) -
         return
 
     click.echo(click.style("\n✦ Config Imported", fg="cyan", bold=True))
+    click.echo(click.style(f"Applied: imported config as v{result['version']:03d}", fg="green"))
     click.echo(f"  Source:  {result['source_file']}")
     click.echo(f"  Version: v{result['version']:03d}")
     click.echo(f"  Hash:    {result['config_hash']}")
@@ -2271,6 +3412,37 @@ def config_import(file_path: str, configs_dir: str, json_output: bool = False) -
         f"autoagent eval run --config {result['dest_path']}",
         "autoagent config list",
     ])
+
+
+@config_group.command("rollback")
+@click.argument("version", type=int, required=False)
+@click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+def config_rollback(version: int | None, configs_dir: str) -> None:
+    """Roll back the active config to a prior saved version."""
+    store = ConversationStore(db_path=DB_PATH)
+    deployer = Deployer(configs_dir=configs_dir, store=store)
+    history = deployer.version_manager.get_version_history()
+    if not history:
+        raise click.ClickException("No config versions available to roll back.")
+
+    active_version = deployer.version_manager.manifest.get("active_version")
+    target_version = version
+    if target_version is None:
+        eligible = [entry["version"] for entry in history if entry["version"] != active_version]
+        if not eligible:
+            raise click.ClickException("No rollback target is available.")
+        target_version = max(eligible)
+
+    resolved = next((entry for entry in history if entry["version"] == target_version), None)
+    if resolved is None:
+        raise click.ClickException(f"Config version not found: v{target_version:03d}")
+
+    deployer.version_manager.promote(target_version)
+    workspace = _workspace_for_configs_dir(configs_dir)
+    if workspace is not None:
+        workspace.set_active_config(target_version, filename=resolved["filename"])
+
+    click.echo(click.style(f"Applied: rolled back config to v{target_version:03d}", fg="green"))
 
 
 @config_group.command("migrate")
@@ -2301,12 +3473,40 @@ def config_migrate(input_file: str, output: str | None) -> None:
         click.echo(output_yaml)
 
 
+@config_group.command("edit")
+def config_edit() -> None:
+    """Open the active config file in the user's editor."""
+    workspace = _require_workspace("config")
+    active = workspace.resolve_active_config()
+    if active is None:
+        raise click.ClickException("No active config. Run: autoagent init")
+    _open_in_editor(active.path)
+
+
+def _open_in_editor(file_path: Path) -> None:
+    """Open *file_path* in the configured editor, or print the path."""
+    import subprocess
+
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL")
+    if editor is None:
+        for candidate in ("code", "vim", "vi", "nano"):
+            if shutil.which(candidate):
+                editor = candidate
+                break
+
+    if editor:
+        click.echo(f"Opening {file_path} in {editor}")
+        subprocess.run([editor, str(file_path)], check=False)
+        return
+    click.echo(f"Edit this file: {file_path}")
+
+
 # ---------------------------------------------------------------------------
 # autoagent deploy
 # ---------------------------------------------------------------------------
 
 @cli.command("deploy")
-@click.argument("workflow", required=False, type=click.Choice(["canary", "immediate"]))
+@click.argument("workflow", required=False, type=click.Choice(["canary", "immediate", "release", "rollback"]))
 @click.option("--config-version", type=int, default=None,
               help="Config version to deploy. Defaults to latest accepted.")
 @click.option("--strategy", type=click.Choice(["canary", "immediate"]),
@@ -2327,8 +3527,16 @@ def config_migrate(input_file: str, output: str | None) -> None:
 @click.option("--credentials", default=None, help="Path to service account JSON for CX calls.")
 @click.option("--output", default=None, help="Output path for CX export package JSON.")
 @click.option("--push/--no-push", default=False, show_default=True, help="Push to CX now (otherwise package only).")
+@click.option("--dry-run", is_flag=True, help="Preview the deployment plan without mutating state.")
 @click.option("--yes", "acknowledge", is_flag=True, default=False, help="Skip interactive deployment confirmation.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def deploy(
     workflow: str | None,
     config_version: int | None,
@@ -2343,8 +3551,10 @@ def deploy(
     credentials: str | None,
     output: str | None,
     push: bool,
+    dry_run: bool,
     acknowledge: bool,
     json_output: bool = False,
+    output_format: str = "text",
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
 
@@ -2355,8 +3565,19 @@ def deploy(
       autoagent deploy canary --yes
       autoagent deploy --target cx-studio
     """
+    from cli.output import resolve_output_format
+    from cli.permissions import PermissionManager
+    from cli.progress import ProgressRenderer
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("deploy", message="Prepare deployment")
+
     if workflow is not None:
-        strategy = workflow
+        if workflow == "release":
+            strategy = "immediate"
+        elif workflow != "rollback":
+            strategy = workflow
 
     if target == "cx-studio":
         try:
@@ -2379,7 +3600,9 @@ def deploy(
             "config": config,
         }
         output_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
-        click.echo(f"CX export package written: {output_path}")
+        progress.artifact_written("cx-export", path=str(output_path))
+        if resolved_output_format == "text":
+            click.echo(f"CX export package written: {output_path}")
 
         if snapshot:
             try:
@@ -2398,9 +3621,15 @@ def deploy(
                 changes = exporter.preview_changes(config, snapshot)
                 click.echo(f"Preview: {len(changes)} change(s) ready for CX export")
             except Exception as exc:
-                click.echo(click.style(f"Warning: CX preview unavailable ({exc})", fg="yellow"))
+                progress.warning(message=f"CX preview unavailable ({exc})", phase="deploy")
+                if resolved_output_format == "text":
+                    click.echo(click.style(f"Warning: CX preview unavailable ({exc})", fg="yellow"))
 
         if not push:
+            progress.phase_completed("deploy", message="CX package ready")
+            progress.next_action("autoagent cx export --project <project> --location <location> --agent <agent-id> --config <config> --snapshot <snapshot>")
+            if resolved_output_format == "stream-json":
+                return
             click.echo("No remote CX push performed (`--no-push`).")
             click.echo("Next step:")
             click.echo(
@@ -2421,6 +3650,10 @@ def deploy(
         exporter = CxExporter(client)
         ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
         result = exporter.export_agent(config, ref, snapshot_path=snapshot, dry_run=False)
+        progress.phase_completed("deploy", message="CX export pushed")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
         click.echo(f"CX export pushed: {result.resources_updated} resource(s) updated")
         return
 
@@ -2435,6 +3668,30 @@ def deploy(
             click.echo(json_response("error", {"message": "No config versions available"}))
         else:
             click.echo("No config versions available. Run: autoagent optimize")
+        return
+
+    if workflow == "rollback":
+        rollback_version = config_version or deployer.version_manager.manifest.get("canary_version")
+        if rollback_version is None:
+            if json_output:
+                click.echo(json_response("error", {"message": "No active canary deployment to roll back"}))
+            else:
+                click.echo("No active canary deployment to roll back.")
+            return
+        if dry_run:
+            payload = {"version": rollback_version, "strategy": "rollback", "target": target}
+            if json_output:
+                click.echo(json_response("ok", payload, next_cmd="autoagent deploy rollback"))
+            else:
+                click.echo("Dry run: deployment rollback preview")
+                click.echo(f"  Version: {rollback_version}")
+                click.echo(f"  Target:  {target}")
+            return
+        deployer.version_manager.rollback(rollback_version)
+        if json_output:
+            click.echo(json_response("ok", {"version": rollback_version, "strategy": "rollback", "status": "rolled_back"}, next_cmd="autoagent status"))
+        else:
+            click.echo(click.style(f"Applied: rolled back canary v{rollback_version:03d}", fg="green"))
         return
 
     if config_version is None:
@@ -2459,26 +3716,51 @@ def deploy(
         config = yaml.safe_load(f)
 
     scores = found.get("scores", {"composite": 0.0})
+    del scores
 
-    if not json_output and not acknowledge:
-        click.confirm(
-            f"Deploy v{config_version:03d} using the {strategy} strategy?",
-            abort=True,
+    if dry_run:
+        payload = {"version": config_version, "strategy": strategy, "target": target}
+        progress.phase_completed("deploy", message="Dry-run deployment preview ready")
+        progress.next_action("autoagent deploy")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
+            click.echo(json_response("ok", payload, next_cmd="autoagent deploy"))
+        else:
+            click.echo("Dry run: deployment preview")
+            click.echo(f"  Version:  v{config_version:03d}")
+            click.echo(f"  Strategy: {strategy}")
+            click.echo(f"  Target:   {target}")
+        return
+
+    if not acknowledge:
+        PermissionManager().require(
+            f"deploy.{strategy}",
+            prompt=f"Deploy v{config_version:03d} using the {strategy} strategy?",
+            default=False,
         )
 
     if strategy == "immediate":
         deployer.version_manager.promote(config_version)
-        if json_output:
+        progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} immediately")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", {"version": config_version, "strategy": "immediate", "status": "active"}, next_cmd="autoagent status"))
         else:
-            click.echo(f"Deployed v{config_version:03d} immediately (promoted to active).")
+            click.echo(click.style(f"Applied: deployed v{config_version:03d} immediately (promoted to active).", fg="green"))
     else:
         deployer.version_manager.mark_canary(config_version)
         result = f"Deployed v{config_version:03d} as canary (10% traffic)"
-        if json_output:
+        progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} as canary")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", {"version": config_version, "strategy": "canary", "result": str(result)}, next_cmd="autoagent status"))
         else:
-            click.echo(f"Deployed v{config_version:03d} as canary.")
+            click.echo(click.style(f"Applied: deployed v{config_version:03d} as canary.", fg="green"))
             click.echo(f"  {result}")
 
 
@@ -2486,7 +3768,19 @@ def deploy(
 # autoagent loop
 # ---------------------------------------------------------------------------
 
-@cli.command("loop")
+@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
+def loop_group() -> None:
+    """Run the optimization loop or control its execution state.
+
+    Examples:
+      autoagent loop
+      autoagent loop --max-cycles 20
+      autoagent loop pause
+      autoagent loop resume
+    """
+
+
+@loop_group.command("run", hidden=True)
 @click.option("--max-cycles", default=50, show_default=True, type=int, help="Maximum optimization cycles.")
 @click.option("--stop-on-plateau", is_flag=True, default=False,
               help="Stop if no improvement for 5 consecutive cycles.")
@@ -2507,9 +3801,18 @@ def deploy(
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
-def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
-         interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
-         resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str) -> None:
+@click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text or stream JSON progress events.",
+)
+def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
+             interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
+             resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str,
+             max_budget_usd: float | None = None, output_format: str = "text") -> None:
     """Run the continuous autoresearch loop.
 
     Observes agent health, proposes improvements, evaluates them, and deploys
@@ -2519,6 +3822,20 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
       autoagent loop
       autoagent loop --max-cycles 100 --stop-on-plateau
     """
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+    from cli.usage import enforce_workspace_budget
+
+    resolved_output_format = resolve_output_format(output_format)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("loop", message="Start optimization loop")
+
+    budget_ok, budget_message, _ = enforce_workspace_budget(max_budget_usd)
+    if not budget_ok:
+        progress.warning(message=budget_message or "Budget reached")
+        click.echo(budget_message)
+        return
+
     (
         runtime,
         eval_runner,
@@ -2581,19 +3898,20 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
             plateau_count = max(0, checkpoint.plateau_count)
             completed_cycles = max(0, checkpoint.completed_cycles)
 
-    click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
-    click.echo(f"  Schedule: {effective_schedule}")
-    if effective_schedule == "interval":
-        click.echo(f"  Interval: {effective_interval:.2f} minutes")
-    if effective_schedule == "cron":
-        click.echo(f"  Cron (UTC): {effective_cron}")
-    click.echo(f"  Checkpoint: {effective_checkpoint}")
-    if full_auto:
-        click.echo(click.style("  ⚠ FULL AUTO ENABLED (danger mode)", fg="yellow"))
-    if start_cycle > 1:
-        click.echo(f"  Resuming from cycle {start_cycle}")
-    if stop_on_plateau:
-        click.echo(f"  Will stop after {plateau_threshold} cycles with no improvement")
+    if resolved_output_format == "text":
+        click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
+        click.echo(f"  Schedule: {effective_schedule}")
+        if effective_schedule == "interval":
+            click.echo(f"  Interval: {effective_interval:.2f} minutes")
+        if effective_schedule == "cron":
+            click.echo(f"  Cron (UTC): {effective_cron}")
+        click.echo(f"  Checkpoint: {effective_checkpoint}")
+        if full_auto:
+            click.echo(click.style("  ⚠ FULL AUTO ENABLED (danger mode)", fg="yellow"))
+        if start_cycle > 1:
+            click.echo(f"  Resuming from cycle {start_cycle}")
+        if stop_on_plateau:
+            click.echo(f"  Will stop after {plateau_threshold} cycles with no improvement")
 
     with shutdown.install():
         for cycle in range(start_cycle, max_cycles + 1):
@@ -2609,17 +3927,20 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                 )
             )
 
-            click.echo(f"\n{'═' * 50}")
-            click.echo(f" Cycle {cycle}/{max_cycles}")
-            click.echo(f"{'═' * 50}")
+            progress.phase_started("loop-cycle", message=f"Cycle {cycle}/{max_cycles}")
+            if resolved_output_format == "text":
+                click.echo(f"\n{'═' * 50}")
+                click.echo(f" Cycle {cycle}/{max_cycles}")
+                click.echo(f"{'═' * 50}")
 
             improved = False
             try:
                 report = observer.observe()
-                click.echo(
-                    f"  Health: success={report.metrics.success_rate:.2%}, "
-                    f"errors={report.metrics.error_rate:.2%}"
-                )
+                if resolved_output_format == "text":
+                    click.echo(
+                        f"  Health: success={report.metrics.success_rate:.2%}, "
+                        f"errors={report.metrics.error_rate:.2%}"
+                    )
 
                 if report.needs_optimization:
                     current_config = _ensure_active_config(deployer)
@@ -2629,25 +3950,30 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                         current_config,
                         failure_samples=failure_samples,
                     )
-                    click.echo(f"  Optimizer: {status}")
+                    if resolved_output_format == "text":
+                        click.echo(f"  Optimizer: {status}")
                     if new_config is not None:
                         improved = True
                         score = eval_runner.run(config=new_config)
                         deploy_result = deployer.deploy(new_config, _score_to_dict(score))
-                        click.echo(f"  Deploy: {deploy_result}")
+                        if resolved_output_format == "text":
+                            click.echo(f"  Deploy: {deploy_result}")
                         if full_auto:
                             promoted = _promote_latest_version(deployer)
-                            if promoted is not None:
+                            if promoted is not None and resolved_output_format == "text":
                                 click.echo(click.style(
                                     f"  FULL AUTO: promoted v{promoted:03d} to active",
                                     fg="yellow",
                                 ))
-                        click.echo(f"  Score: {score.composite:.4f}")
+                        if resolved_output_format == "text":
+                            click.echo(f"  Score: {score.composite:.4f}")
                 else:
-                    click.echo("  Healthy; skipping optimization.")
+                    if resolved_output_format == "text":
+                        click.echo("  Healthy; skipping optimization.")
 
                 canary_result = deployer.check_and_act()
-                click.echo(f"  Canary: {canary_result}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Canary: {canary_result}")
             except Exception as exc:
                 tb = traceback.format_exc()
                 dead_letter_queue.push(
@@ -2656,11 +3982,13 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                     error=str(exc),
                     traceback_text=tb,
                 )
-                click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
                 log.error(
                     "loop_cycle_failed",
                     extra={"event": "loop_cycle_failed", "cycle": cycle, "status": "failed"},
                 )
+                progress.error(message=str(exc), phase="loop-cycle")
 
             completed_cycles = cycle
             cycle_finished = time.time()
@@ -2671,7 +3999,8 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                 else:
                     plateau_count += 1
                     if plateau_count >= plateau_threshold:
-                        click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
+                        if resolved_output_format == "text":
+                            click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
                         checkpoint_store.save(
                             LoopCheckpoint(
                                 next_cycle=cycle + 1,
@@ -2687,18 +4016,22 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
             snapshot = resource_monitor.sample()
             if snapshot.memory_mb > runtime.loop.resource_warn_memory_mb:
                 warning = f"Memory usage high: {snapshot.memory_mb:.2f}MB"
-                click.echo(f"  Warning: {warning}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_memory",
                     extra={"event": "resource_warning", "memory_mb": snapshot.memory_mb, "cycle": cycle},
                 )
+                progress.warning(message=warning, phase="loop-cycle")
             if snapshot.cpu_percent > runtime.loop.resource_warn_cpu_percent:
                 warning = f"CPU usage high: {snapshot.cpu_percent:.2f}%"
-                click.echo(f"  Warning: {warning}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_cpu",
                     extra={"event": "resource_warning", "cpu_percent": snapshot.cpu_percent, "cycle": cycle},
                 )
+                progress.warning(message=warning, phase="loop-cycle")
 
             if watchdog.is_stalled(now=cycle_finished):
                 stall_error = (
@@ -2710,9 +4043,12 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                     payload={"cycle": cycle},
                     error=stall_error,
                 )
-                click.echo(f"  Watchdog: {stall_error}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Watchdog: {stall_error}")
                 log.warning("watchdog_stall", extra={"event": "watchdog_stall", "cycle": cycle})
+                progress.warning(message=stall_error, phase="loop-cycle")
             watchdog.beat()
+            progress.phase_completed("loop-cycle", message=f"Cycle {cycle} complete")
 
             checkpoint_store.save(
                 LoopCheckpoint(
@@ -2726,7 +4062,8 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
             )
 
             if shutdown.stop_requested:
-                click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
+                if resolved_output_format == "text":
+                    click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
                 break
 
             if cycle < max_cycles:
@@ -2737,7 +4074,8 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
                 )
                 _sleep_interruptibly(wait_seconds, shutdown)
                 if shutdown.stop_requested:
-                    click.echo("\nGraceful shutdown requested during wait. Exiting.")
+                    if resolved_output_format == "text":
+                        click.echo("\nGraceful shutdown requested during wait. Exiting.")
                     break
 
     final_status = "completed" if completed_cycles >= max_cycles and not shutdown.stop_requested else "stopped"
@@ -2750,7 +4088,10 @@ def loop(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: st
             last_cycle_finished_at=time.time(),
         )
     )
-    click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
+    progress.phase_completed("loop", message=f"{completed_cycles} cycle(s) executed ({final_status})")
+    progress.next_action("autoagent status")
+    if resolved_output_format == "text":
+        click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
 
 
 # ---------------------------------------------------------------------------
@@ -2769,6 +4110,11 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
       autoagent status
     """
     workspace = _require_workspace("status")
+    from cli.mcp_runtime import mcp_status_snapshot
+    from cli.model import effective_model_surface
+    from cli.usage import build_usage_snapshot
+    from core.project_memory import load_layered_project_context
+
     store = ConversationStore(db_path=db)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
@@ -2786,6 +4132,10 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
     buckets = report.failure_buckets
 
     mode_summary = summarize_mode_state(str(workspace.runtime_config_path))
+    usage_snapshot = build_usage_snapshot(workspace.root)
+    memory_snapshot = load_layered_project_context(workspace.root).summary()
+    mcp_snapshot = mcp_status_snapshot(workspace.root)
+    model_snapshot = effective_model_surface(workspace.root)
     pending_review_cards = 0
     pending_autofix_proposals = 0
 
@@ -2819,6 +4169,8 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
     next_action = _status_next_action(report, len(all_attempts), len(accepted_attempts))
 
     if json_output:
+        from cli.stream2_helpers import json_response
+
         data = {
             "workspace_name": workspace.workspace_label,
             "workspace_path": str(workspace.root),
@@ -2835,9 +4187,17 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
             "pending_autofix_proposals": pending_autofix_proposals,
             "deployment": deployment_label,
             "loop_status": "idle",
+            "memory": memory_snapshot,
+            "mcp": mcp_snapshot,
+            "models": model_snapshot,
+            "last_eval_tokens": (usage_snapshot.get("last_eval") or {}).get("total_tokens"),
+            "last_eval_cost_usd": (usage_snapshot.get("last_eval") or {}).get("estimated_cost_usd"),
+            "last_optimize_cost_usd": (usage_snapshot.get("last_optimize") or {}).get("spent_dollars"),
+            "workspace_spend_usd": usage_snapshot.get("workspace_spend_usd"),
+            "budget_remaining_usd": usage_snapshot.get("budget_remaining_usd"),
             "next_action": next_action,
         }
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_response("ok", data, next_cmd="autoagent explain --json"))
         return
 
     snapshot = StatusSnapshot(
@@ -2855,6 +4215,19 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
         pending_autofix_proposals=pending_autofix_proposals,
         deployment_label=deployment_label,
         loop_label="idle",
+        memory_label=(
+            f"{memory_snapshot['active_count']} active source(s)"
+            if memory_snapshot["active_count"]
+            else "no layered context"
+        ),
+        mcp_label=f"{mcp_snapshot['server_count']} server(s)",
+        model_label=(
+            f"{(model_snapshot.get('proposer') or {}).get('key', 'n/a')} | "
+            f"{(model_snapshot.get('evaluator') or {}).get('key', 'n/a')}"
+        ),
+        last_eval_tokens_label=str((usage_snapshot.get("last_eval") or {}).get("total_tokens", "n/a")),
+        last_eval_cost_label=f"${float((usage_snapshot.get('last_eval') or {}).get('estimated_cost_usd', 0.0)):.2f}",
+        last_optimize_cost_label=f"${float((usage_snapshot.get('last_optimize') or {}).get('spent_dollars', 0.0)):.2f}",
         next_action=next_action,
     )
     render_status_home(snapshot)
@@ -2905,7 +4278,9 @@ def logs(limit: int, outcome: str | None, db: str) -> None:
 @cli.command("doctor")
 @click.option("--config", "config_path", default="autoagent.yaml", show_default=True,
               help="Path to runtime config YAML.")
-def doctor(config_path: str) -> None:
+@click.option("--fix", is_flag=True, help="Automatically repair fixable workspace issues.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     """Check system health and configuration.
 
     Reports on API keys, mock mode, data stores, eval cases, and config versions.
@@ -2915,10 +4290,85 @@ def doctor(config_path: str) -> None:
     """
     import sqlite3
 
+    from cli.mcp_runtime import mcp_status_snapshot
+    from cli.stream2_helpers import json_response
+    from core.project_memory import load_layered_project_context
+
     issues: list[str] = []
+    fixes_applied: list[str] = []
+    workspace = discover_workspace()
+
+    if fix and workspace is not None:
+        fixes_applied = _doctor_fix_workspace(workspace)
+
+    if json_output:
+        runtime = load_runtime_config(config_path)
+        mode_summary = summarize_mode_state(config_path)
+        memory_snapshot = (
+            load_layered_project_context(workspace.root).summary()
+            if workspace is not None
+            else {"active_count": 0, "paths": []}
+        )
+        mcp_snapshot = mcp_status_snapshot(workspace.root if workspace is not None else Path("."))
+        if workspace is None:
+            issues.append("No AutoAgent workspace found")
+        if runtime.optimizer.use_mock:
+            issues.append("Mock mode is enabled")
+        for env_var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            if not os.environ.get(env_var):
+                issues.append(f"{env_var} is not set")
+        data = {
+            "workspace": str(workspace.root) if workspace is not None else None,
+            "issues": issues,
+            "fixes_applied": fixes_applied,
+            "mode": mode_summary["effective_mode"],
+            "memory": memory_snapshot,
+            "mcp": mcp_snapshot,
+        }
+        click.echo(json_response("ok", data, next_cmd="autoagent status"))
+        return
 
     click.echo("\nAutoAgent Doctor")
     click.echo("================")
+
+    # ------------------------------------------------------------------
+    # Workspace
+    # ------------------------------------------------------------------
+    click.echo("\nWorkspace")
+    if workspace is None:
+        issues.append("No AutoAgent workspace found")
+        click.echo(
+            "  Workspace:          "
+            + click.style("\u2717 Not found (run autoagent init or autoagent new)", fg="red")
+        )
+    else:
+        click.echo("  Workspace:          " + click.style(str(workspace.root), fg="green"))
+        active_version = workspace.metadata.active_config_version
+        if active_version is None:
+            issues.append("Active config is not set in workspace metadata")
+            click.echo(
+                "  Active config:      "
+                + click.style("\u2717 Not set", fg="red")
+            )
+        else:
+            click.echo(
+                "  Active config:      "
+                + click.style(f"\u2713 v{active_version:03d}", fg="green")
+            )
+        click.echo(
+            "  Template:           "
+            + click.style(workspace.metadata.template or "unknown", fg="green")
+        )
+        memory_snapshot = load_layered_project_context(workspace.root).summary()
+        click.echo(
+            "  Memory sources:     "
+            + click.style(f"\u2713 {memory_snapshot['active_count']} active", fg="green")
+        )
+        mcp_snapshot = mcp_status_snapshot(workspace.root)
+        click.echo(
+            "  MCP runtime:        "
+            + click.style(f"\u2713 {mcp_snapshot['server_count']} server(s)", fg="green")
+        )
 
     # ------------------------------------------------------------------
     # Configuration
@@ -2961,6 +4411,38 @@ def doctor(config_path: str) -> None:
             click.echo(
                 f"  {label + ':':<22}" + click.style("\u2717 Not set", fg="red")
             )
+
+    # ------------------------------------------------------------------
+    # Provider Profiles
+    # ------------------------------------------------------------------
+    click.echo("\nProvider Profiles")
+    provider_path = providers_file_path(workspace)
+    providers = configured_providers(provider_path)
+    if providers:
+        checks = provider_health_checks(provider_path)
+        for check in checks:
+            if check["credential_present"]:
+                click.echo(
+                    f"  {check['provider'] + ':':<22}"
+                    + click.style(f"\u2713 {check['model']} ready", fg="green")
+                )
+            else:
+                issues.append(check["message"])
+                click.echo(
+                    f"  {check['provider'] + ':':<22}"
+                    + click.style(f"\u2717 {check['model']} missing {check['api_key_env']}", fg="red")
+                )
+    else:
+        message = "No provider profiles configured"
+        if not runtime.optimizer.use_mock:
+            issues.append(message)
+        click.echo(
+            "  Registry:           "
+            + click.style(
+                "\u2717 Not configured (run autoagent provider configure)",
+                fg="red" if not runtime.optimizer.use_mock else "yellow",
+            )
+        )
 
     # ------------------------------------------------------------------
     # Data Stores
@@ -3100,9 +4582,38 @@ def doctor(config_path: str) -> None:
         )
 
     # ------------------------------------------------------------------
+    # Writable Paths
+    # ------------------------------------------------------------------
+    click.echo("\nWritable Paths")
+    writable_targets = [
+        ("Runtime config", Path(config_path)),
+    ]
+    if workspace is not None:
+        writable_targets.extend(
+            [
+                ("Workspace root", workspace.root),
+                ("Configs", workspace.configs_dir),
+                ("Eval cases", workspace.cases_dir),
+                ("AutoAgent state", workspace.autoagent_dir),
+            ]
+        )
+    for label, path in writable_targets:
+        parent = path if path.is_dir() else path.parent
+        if parent.exists() and os.access(parent, os.W_OK):
+            click.echo(f"  {label + ':':<22}" + click.style("\u2713 Writable", fg="green"))
+        else:
+            issues.append(f"{label} is not writable")
+            click.echo(f"  {label + ':':<22}" + click.style("\u2717 Not writable", fg="red"))
+
+    # ------------------------------------------------------------------
     # Summary
     # ------------------------------------------------------------------
     click.echo("")
+    if fixes_applied:
+        click.echo(click.style("Fixes", bold=True))
+        for item in fixes_applied:
+            click.echo(f"  Fixed: {item}")
+        click.echo("")
     if issues:
         click.echo(
             click.style(
@@ -3130,29 +4641,53 @@ def _event_log():
     return EventLog()
 
 
-@cli.command("pause")
+def _pause_optimizer_impl() -> None:
+    """Pause the optimization loop and log the human intervention event."""
+    store = _control_store()
+    store.pause()
+    _event_log().append(event_type="human_pause", payload={"paused": True})
+    click.echo("Optimizer paused. Run 'autoagent loop resume' to continue. Legacy alias: 'autoagent resume'.")
+
+
+@loop_group.command("pause")
+def loop_pause() -> None:
+    """Pause the optimization loop (human escape hatch)."""
+    _pause_optimizer_impl()
+
+
+@cli.command("pause", hidden=True)
 def pause_optimizer() -> None:
     """Pause the optimization loop (human escape hatch).
 
     Examples:
       autoagent pause
     """
+    _echo_deprecation("autoagent pause", "autoagent loop pause")
+    _pause_optimizer_impl()
+
+
+def _resume_optimizer_impl() -> None:
+    """Resume the optimization loop after a pause."""
     store = _control_store()
-    store.pause()
-    _event_log().append(event_type="human_pause", payload={"paused": True})
-    click.echo("Optimizer paused. Run 'autoagent resume' to continue.")
+    store.resume()
+    click.echo("Optimizer resumed.")
 
 
-@cli.command("resume")
+@loop_group.command("resume")
+def loop_resume() -> None:
+    """Resume the optimization loop after a pause."""
+    _resume_optimizer_impl()
+
+
+@cli.command("resume", hidden=True)
 def resume_optimizer() -> None:
     """Resume the optimization loop after a pause.
 
     Examples:
       autoagent resume
     """
-    store = _control_store()
-    store.resume()
-    click.echo("Optimizer resumed.")
+    _echo_deprecation("autoagent resume", "autoagent loop resume")
+    _resume_optimizer_impl()
 
 
 @cli.command("reject")
@@ -3249,7 +4784,7 @@ def autofix_group(ctx: click.Context) -> None:
     action = click.prompt("Action", type=click.Choice(["apply", "reject", "skip"]), default="skip")
     if action == "apply":
         if click.confirm("Apply this proposal?", default=False):
-            ctx.invoke(autofix_apply, proposal_id=proposal.proposal_id, json_output=False)
+            ctx.invoke(autofix_apply, proposal_id=proposal.proposal_id, dry_run=False, json_output=False)
     elif action == "reject":
         store.update_status(proposal.proposal_id, "rejected")
         click.echo(f"Rejected proposal {proposal.proposal_id}.")
@@ -3320,8 +4855,9 @@ def autofix_suggest(json_output: bool = False) -> None:
 
 @autofix_group.command("apply")
 @click.argument("proposal_id", type=str)
+@click.option("--dry-run", is_flag=True, help="Preview the autofix application without writing a new config.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def autofix_apply(proposal_id: str, json_output: bool = False) -> None:
+def autofix_apply(proposal_id: str, dry_run: bool, json_output: bool = False) -> None:
     """Apply a specific AutoFix proposal and write a new config version.
 
     Examples:
@@ -3357,6 +4893,19 @@ def autofix_apply(proposal_id: str, json_output: bool = False) -> None:
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=ConversationStore(db_path=DB_PATH))
     current_config = _ensure_active_config(deployer)
 
+    if dry_run:
+        preview = {
+            "proposal_id": proposal_id,
+            "current_active_version": deployer.version_manager.manifest.get("active_version"),
+        }
+        if json_output:
+            click.echo(json_response("ok", preview, next_cmd=f"autoagent autofix apply {proposal_id}"))
+        else:
+            click.echo("Dry run: autofix apply preview")
+            click.echo(f"  Proposal: {proposal_id}")
+            click.echo(f"  Active config: v{preview['current_active_version']:03d}" if preview["current_active_version"] else "  Active config: none")
+        return
+
     try:
         new_config, status_msg = engine.apply(proposal_id, current_config)
         if new_config:
@@ -3384,6 +4933,32 @@ def autofix_apply(proposal_id: str, json_output: bool = False) -> None:
             click.echo(json_response("error", {"message": str(exc)}))
         else:
             click.echo(click.style(f"Error: {exc}", fg="red"))
+
+
+@autofix_group.command("revert")
+@click.argument("proposal_id", type=str)
+def autofix_revert(proposal_id: str) -> None:
+    """Mark an applied autofix proposal as reverted."""
+    from cli.stream2_helpers import is_selector
+    from optimizer.autofix import AutoFixStore
+
+    store = AutoFixStore()
+    resolved_proposal_id = proposal_id
+    if is_selector(proposal_id):
+        history = store.history(limit=50)
+        if proposal_id.lower() == "latest" and history:
+            resolved_proposal_id = history[0].proposal_id
+        elif proposal_id.lower() == "pending":
+            pending = store.list_pending(limit=1) if hasattr(store, "list_pending") else []
+            if pending:
+                resolved_proposal_id = pending[0].proposal_id
+
+    proposal = store.get(resolved_proposal_id)
+    if proposal is None:
+        raise click.ClickException(f"Proposal not found: {resolved_proposal_id}")
+
+    store.update_status(resolved_proposal_id, "reverted")
+    click.echo(click.style(f"Applied: reverted autofix proposal {resolved_proposal_id}", fg="green"))
 
 
 @autofix_group.command("history")
@@ -3766,14 +5341,27 @@ def review_show(card_id: str, json_output: bool = False) -> None:
 
 @review_group.command("apply")
 @click.argument("card_id")
-def review_apply(card_id: str) -> None:
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text or stream JSON progress events.",
+)
+def review_apply(card_id: str, output_format: str = "text") -> None:
     """Apply (accept) a change card.
 
     Examples:
       autoagent review apply abc12345
     """
+    from cli.output import resolve_output_format
+    from cli.permissions import PermissionManager
+    from cli.progress import ProgressRenderer
     from optimizer.change_card import ChangeCardStore
 
+    resolved_output_format = resolve_output_format(output_format)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("review-apply", message=f"Apply change card {card_id}")
     store = ChangeCardStore()
     card = store.get(card_id)
     if card is None:
@@ -3783,7 +5371,16 @@ def review_apply(card_id: str) -> None:
         click.echo(f"Card is not pending (status={card.status})")
         raise SystemExit(1)
 
+    PermissionManager().require(
+        "review.apply",
+        prompt=f"Apply change card {card_id}?",
+        default=False,
+    )
     store.update_status(card_id, "applied")
+    progress.phase_completed("review-apply", message=f"Applied change card {card_id}")
+    progress.next_action("autoagent status")
+    if resolved_output_format == "stream-json":
+        return
     click.echo(f"Applied change card {card_id}: {card.title}")
 
 
@@ -4129,6 +5726,73 @@ def memory_show() -> None:
     click.echo(mem.raw_content)
 
 
+@memory_group.command("list")
+def memory_list() -> None:
+    """List layered memory sources for the current workspace."""
+    from core.project_memory import list_memory_sources
+
+    sources = list_memory_sources()
+    click.echo("Memory sources")
+    for source in sources:
+        status = "active" if source.exists else "missing"
+        click.echo(f"  {source.kind:<10} {status:<8} {source.path}")
+
+
+@memory_group.command("where")
+def memory_where() -> None:
+    """Show where layered memory files live on disk."""
+    from core.project_memory import load_layered_project_context
+
+    snapshot = load_layered_project_context()
+    click.echo("Layered memory paths")
+    click.echo(f"  Shared:  {snapshot.shared_path}")
+    click.echo(f"  Local:   {snapshot.local_path}")
+    click.echo(f"  Rules:   {snapshot.rules_dir}")
+    click.echo(f"  Memory:  {snapshot.memory_dir}")
+    for source in snapshot.active_sources:
+        click.echo(f"  Active:  {source.path}")
+
+
+@memory_group.command("edit")
+@click.argument("target", default="shared")
+@click.option("--append", "append_text", default=None, help="Append markdown content instead of opening an editor.")
+def memory_edit(target: str, append_text: str | None) -> None:
+    """Edit a layered memory target by appending markdown or opening an editor."""
+    from cli.permissions import PermissionManager
+    from core.project_memory import append_memory_text, resolve_memory_target
+
+    PermissionManager().require(
+        "memory.write",
+        prompt=f"Update memory target '{target}'?",
+        default=True,
+    )
+    if append_text:
+        path = append_memory_text(".", target, append_text)
+        click.echo(f"Updated memory target: {path}")
+        return
+    memory_path = resolve_memory_target(".", target)
+    if not memory_path.exists():
+        raise click.ClickException(f"No memory file found at {memory_path}. Use --append or run autoagent init")
+    _open_in_editor(memory_path)
+
+
+@memory_group.command("summarize-session")
+@click.argument("summary")
+@click.option("--title", default="Session Summary", show_default=True, help="Title for the generated summary file.")
+def memory_summarize_session(summary: str, title: str) -> None:
+    """Write a generated session summary into `.autoagent/memory/`."""
+    from cli.permissions import PermissionManager
+    from core.project_memory import write_session_summary
+
+    PermissionManager().require(
+        "memory.write",
+        prompt="Write a generated session summary to project memory?",
+        default=True,
+    )
+    path = write_session_summary(".", title=title, summary=summary)
+    click.echo(f"Session summary written: {path}")
+
+
 @memory_group.command("add")
 @click.argument("note")
 @click.option("--section", required=True,
@@ -4142,7 +5806,13 @@ def memory_add(note: str, section: str) -> None:
       autoagent memory add "Never use gpt-3.5 for safety checks" --section bad
     """
     from core.project_memory import ProjectMemory
+    from cli.permissions import PermissionManager
 
+    PermissionManager().require(
+        "memory.write",
+        prompt=f"Add a note to memory section '{section}'?",
+        default=True,
+    )
     mem = ProjectMemory.load()
     if mem is None:
         click.echo("No AUTOAGENT.md found. Creating one first...")
@@ -5430,7 +7100,9 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
     Similar intent to 'dangerously skip permissions': auto-promotes accepted
     configs and skips manual promotion/review gates.
     """
-    if not acknowledge:
+    from cli.permissions import PermissionManager
+
+    if not acknowledge and PermissionManager().decision_for("full_auto.run") != "allow":
         click.echo(click.style(
             "Refusing to run full-auto without explicit acknowledgement.\n"
             "Re-run with: autoagent full-auto --yes",
@@ -5449,10 +7121,23 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         ],
     )
 
-    ctx.invoke(optimize, cycles=cycles, continuous=False, mode=None, strategy=None, db=DB_PATH,
-               configs_dir=CONFIGS_DIR, memory_db=MEMORY_DB, full_auto=True, json_output=False)
     ctx.invoke(
-        loop,
+        optimize,
+        cycles=cycles,
+        continuous=False,
+        mode=None,
+        strategy=None,
+        db=DB_PATH,
+        configs_dir=CONFIGS_DIR,
+        memory_db=MEMORY_DB,
+        full_auto=True,
+        dry_run=False,
+        json_output=False,
+        max_budget_usd=None,
+        output_format="text",
+    )
+    ctx.invoke(
+        loop_run,
         max_cycles=max_loop_cycles,
         stop_on_plateau=True,
         delay=1.0,
@@ -5465,6 +7150,8 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         db=DB_PATH,
         configs_dir=CONFIGS_DIR,
         memory_db=MEMORY_DB,
+        max_budget_usd=None,
+        output_format="text",
     )
 
 
@@ -6272,12 +7959,18 @@ def edit(description: str | None, interactive: bool, dry_run: bool, json_output:
     editor = NLEditor()
 
     if interactive:
-        click.echo("AutoAgent Edit (type 'quit' to exit)")
+        workspace = discover_workspace()
+        click.echo("AutoAgent Edit")
+        click.echo(f"Workspace: {workspace.root if workspace is not None else Path.cwd()}")
+        click.echo("Type 'help' for examples, or 'quit' to exit.")
         while True:
             try:
                 user_input = click.prompt(">", prompt_suffix=" ")
             except (EOFError, KeyboardInterrupt):
                 break
+            if user_input.strip().lower() == "help":
+                click.echo("Example: 'Make the billing agent more empathetic'. Type 'quit' to exit.")
+                continue
             if user_input.strip().lower() in ("quit", "exit", "q"):
                 break
             result = editor.apply_and_eval(user_input, current_config)
@@ -6328,6 +8021,8 @@ def edit(description: str | None, interactive: bool, dry_run: bool, json_output:
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def explain(verbose: bool, db: str, configs_dir: str, memory_db: str, json_output: bool = False) -> None:
     """Generate a plain-English summary of the agent's current state."""
+    from cli.stream2_helpers import json_response
+
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     report: "HealthReport" = observer.observe()
@@ -6385,7 +8080,7 @@ def explain(verbose: bool, db: str, configs_dir: str, memory_db: str, json_outpu
             "cycle_count": cycle_count,
             "config_version": dep_status.get("active_version"),
         }
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_response("ok", data, next_cmd="autoagent status"))
         return
 
     click.echo(click.style(header, bold=True))
@@ -6519,8 +8214,10 @@ def explain(verbose: bool, db: str, configs_dir: str, memory_db: str, json_outpu
 @click.option("--memory-db", default=MEMORY_DB, show_default=True)
 def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, memory_db: str) -> None:
     """Run failure diagnosis and optionally fix issues interactively."""
+    from cli.stream2_helpers import json_response
     from optimizer.diagnose_session import DiagnoseSession
 
+    workspace = discover_workspace()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -6533,7 +8230,7 @@ def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, me
     summary = session.start()
 
     if json_output:
-        click.echo(json.dumps(session.to_dict(), indent=2))
+        click.echo(json_response("ok", session.to_dict(), next_cmd="autoagent explain"))
         return
 
     click.echo(summary)
@@ -6542,13 +8239,18 @@ def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, me
         return
 
     # Interactive REPL
-    click.echo("\nAutoAgent Diagnosis (type 'quit' to exit)")
+    click.echo("\nAutoAgent Diagnosis")
+    click.echo(f"Workspace: {workspace.root if workspace is not None else Path.cwd()}")
+    click.echo("Type 'help' for guidance, or 'quit' to exit.")
     while True:
         try:
             user_input = click.prompt(">", prompt_suffix=" ")
         except (EOFError, KeyboardInterrupt):
             break
         if not user_input.strip():
+            continue
+        if user_input.strip().lower() == "help":
+            click.echo("Ask for a summary, top failure clusters, or remediation ideas. Type 'quit' to exit.")
             continue
         response = session.handle_input(user_input)
         click.echo(response)
@@ -6562,6 +8264,8 @@ def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, me
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def replay(limit: int, memory_db: str, json_output: bool = False) -> None:
     """Show optimization history like git log --oneline."""
+    from cli.stream2_helpers import json_response
+
     memory = OptimizationMemory(db_path=memory_db)
     attempts = memory.recent(limit=limit)
 
@@ -6578,7 +8282,7 @@ def replay(limit: int, memory_db: str, json_output: bool = False) -> None:
             }
             for i, attempt in enumerate(reversed(attempts))
         ]
-        click.echo(json.dumps(data, indent=2))
+        click.echo(json_response("ok", data, next_cmd="autoagent status"))
         return
 
     click.echo(click.style("AutoAgent Optimization History", bold=True))
@@ -7099,8 +8803,14 @@ def release_list(json_output: bool = False) -> None:
 @release.command("create")
 @click.option("--experiment-id", required=True, help="Experiment ID to create release from")
 @click.option("--config-version", type=int, default=None, help="Config version to include.")
+@click.option("--dry-run", is_flag=True, help="Preview the release object without writing it.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def release_create(experiment_id: str, config_version: int | None = None, json_output: bool = False) -> None:
+def release_create(
+    experiment_id: str,
+    config_version: int | None = None,
+    dry_run: bool = False,
+    json_output: bool = False,
+) -> None:
     """Create a new release object from an experiment.
 
     Persists the release to .autoagent/releases/ as a JSON file.
@@ -7110,6 +8820,21 @@ def release_create(experiment_id: str, config_version: int | None = None, json_o
     """
     from cli.stream2_helpers import ReleaseStore, json_response
 
+    if dry_run:
+        preview = {
+            "release_id": "dry-run",
+            "experiment_id": experiment_id,
+            "config_version": config_version,
+            "status": "DRAFT",
+        }
+        if json_output:
+            click.echo(json_response("ok", preview, next_cmd="autoagent release create --experiment-id <id>"))
+        else:
+            click.echo("Dry run: release create preview")
+            click.echo(f"  Experiment: {experiment_id}")
+            click.echo(f"  Config:     {config_version if config_version is not None else 'auto'}")
+        return
+
     store = ReleaseStore()
     release = store.create(experiment_id, config_version=config_version)
 
@@ -7117,11 +8842,72 @@ def release_create(experiment_id: str, config_version: int | None = None, json_o
         click.echo(json_response("ok", release, next_cmd=f"autoagent release list"))
         return
 
-    click.echo(click.style("  ✓ ", fg="green") + f"Release created: {release['release_id']}")
+    click.echo(click.style(f"Applied: created release {release['release_id']}", fg="green"))
+    click.echo(f"  Release created: {release['release_id']}")
     click.echo(f"  Experiment: {experiment_id}")
     click.echo(f"  Status:     {release['status']}")
     click.echo(f"  Created:    {release['created_at']}")
     click.echo(f"  Path:       .autoagent/releases/{release['release_id']}.json")
+
+
+@cli.command("ship")
+@click.option("--config-version", type=int, default=None, help="Config version to package and deploy.")
+@click.option("--experiment-id", default=None, help="Experiment ID to associate with the release.")
+@click.option("--yes", is_flag=True, default=False, help="Skip the interactive confirmation prompt.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def ship(config_version: int | None, experiment_id: str | None, yes: bool, json_output: bool = False) -> None:
+    """Create a release and deploy the selected config as a canary."""
+    from cli.stream2_helpers import ReleaseStore, json_response
+
+    store = ConversationStore(db_path=DB_PATH)
+    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
+    history = deployer.version_manager.get_version_history()
+    if not history:
+        raise click.ClickException("No config versions are available to ship.")
+
+    selected_version = config_version if config_version is not None else history[-1]["version"]
+    selected = next((entry for entry in history if entry["version"] == selected_version), None)
+    if selected is None:
+        raise click.ClickException(f"Config version not found: v{selected_version:03d}")
+
+    pending_reviews = 0
+    try:
+        from optimizer.change_card import ChangeCardStore
+
+        pending_reviews = len(ChangeCardStore().list_pending(limit=200))
+    except Exception:
+        pending_reviews = 0
+
+    generated_experiment_id = experiment_id or f"ship-v{selected_version:03d}"
+    if not yes and not json_output:
+        click.confirm(
+            f"Ship v{selected_version:03d} to the autoagent canary target?",
+            abort=True,
+        )
+
+    release_store = ReleaseStore()
+    release = release_store.create(generated_experiment_id, config_version=selected_version)
+    deployer.version_manager.mark_canary(selected_version)
+
+    payload = {
+        "config_version": selected_version,
+        "config_path": str(Path(CONFIGS_DIR) / selected["filename"]),
+        "release_id": release["release_id"],
+        "experiment_id": generated_experiment_id,
+        "pending_review_cards": pending_reviews,
+        "target": "autoagent",
+        "deployment": "canary",
+    }
+    if json_output:
+        click.echo(json_response("ok", payload, next_cmd="autoagent status"))
+        return
+
+    click.echo(click.style("\n✦ Ship", fg="cyan", bold=True))
+    click.echo(f"  Pending review items: {pending_reviews}")
+    click.echo(click.style(f"Applied: created release {release['release_id']}", fg="green"))
+    click.echo(f"  Deploying: v{selected_version:03d} from {Path(CONFIGS_DIR) / selected['filename']}")
+    click.echo("  Target:    autoagent canary")
+    click.echo(click.style(f"Applied: deployed v{selected_version:03d} as canary", fg="green"))
 
 
 # ---------------------------------------------------------------------------
@@ -7424,7 +9210,7 @@ def pref_export(fmt):
     click.echo("No preference pairs to export yet. Submit pairs first via API or CLI.")
 
 
-@cli.group("import")
+@cli.group("import", hidden=True)
 def import_group() -> None:
     """Compatibility aliases for importing configs and transcript archives."""
 
@@ -7437,6 +9223,7 @@ def import_config_alias(file_path: str, configs_dir: str, json_output: bool = Fa
     """Alias for `autoagent config import`."""
     from cli.stream2_helpers import ConfigImporter, json_response
 
+    _echo_deprecation("autoagent import config", "autoagent config import")
     importer = ConfigImporter(configs_dir=configs_dir)
     try:
         result = importer.import_config(file_path)
@@ -7458,7 +9245,7 @@ def import_config_alias(file_path: str, configs_dir: str, json_output: bool = Fa
     click.echo(f"  Path:    {result['dest_path']}")
 
 
-@import_group.group("transcript")
+@import_group.group("transcript", hidden=True)
 def import_transcript_group() -> None:
     """Compatibility alias for transcript intelligence commands."""
 
@@ -7471,6 +9258,7 @@ def import_transcript_upload(archive: Path) -> None:
 
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
 
+    _echo_deprecation("autoagent import transcript upload", "autoagent intelligence import")
     archive = _resolve_invocation_input_path(archive)
     if not archive.exists():
         raise click.ClickException(f"File does not exist: {archive}")
@@ -7493,6 +9281,7 @@ def import_transcript_upload(archive: Path) -> None:
 @click.argument("report_id")
 def import_transcript_report(report_id: str) -> None:
     """Show a stored transcript report as JSON for backward compatibility."""
+    _echo_deprecation("autoagent import transcript report", "autoagent intelligence report show")
     entry = TranscriptReportStore().get_report(report_id)
     if entry is None:
         raise click.ClickException(f"Unknown transcript intelligence report: {report_id}")
@@ -7505,6 +9294,10 @@ def import_transcript_report(report_id: str) -> None:
 @click.option("--output", "output_path", type=click.Path(dir_okay=False, path_type=Path), required=True)
 def import_transcript_generate_agent(report_id: str, prompt: str | None, output_path: Path) -> None:
     """Generate an agent config from a stored transcript report."""
+    _echo_deprecation(
+        "autoagent import transcript generate-agent",
+        "autoagent intelligence generate-agent",
+    )
     entry = TranscriptReportStore().get_report(report_id)
     if entry is None:
         raise click.ClickException(f"Unknown transcript intelligence report: {report_id}")

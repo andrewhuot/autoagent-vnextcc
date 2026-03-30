@@ -1,0 +1,76 @@
+name: sales-qualification
+description: Qualify inbound leads, identify urgency, and route to the right sales motion.
+suggested_skills:
+  - qualification-frameworks
+  - crm-handoff
+  - objection-handling
+starter_config:
+  model: gemini-2.0-flash
+  routing:
+    rules:
+      - specialist: smb
+        keywords:
+          - startup
+          - small team
+          - trial
+      - specialist: enterprise
+        keywords:
+          - enterprise
+          - security
+          - procurement
+          - compliance
+      - specialist: partnerships
+        keywords:
+          - reseller
+          - partner
+          - channel
+  prompts:
+    root: >
+      You are a sales qualification assistant. Determine fit, urgency, decision
+      process, and routing path without sounding robotic.
+    smb: >
+      Help smaller teams understand the product, pricing, and fastest path to value.
+    enterprise: >
+      Qualify enterprise opportunities and capture security, procurement, and rollout needs.
+    partnerships: >
+      Qualify partner opportunities and identify the right follow-up motion.
+  tools:
+    crm:
+      enabled: true
+    pricing:
+      enabled: true
+    knowledge_base:
+      enabled: true
+  thresholds:
+    confidence_threshold: 0.62
+    max_turns: 18
+eval_cases:
+  qualification.yaml:
+    cases:
+      - id: sq_001
+        category: enterprise
+        user_message: We are evaluating your product for 300 agents and need SOC 2 details.
+        expected_specialist: enterprise
+        expected_behavior: answer
+        expected_keywords:
+          - security
+          - procurement
+      - id: sq_002
+        category: smb
+        user_message: I run a five person support team. Which plan should I start with?
+        expected_specialist: smb
+        expected_behavior: answer
+        expected_keywords:
+          - plan
+          - team
+scorers:
+  fit.yaml:
+    name: sales_fit_detection
+    rubric:
+      - Identifies likely segment and urgency.
+      - Captures next-step qualification details clearly.
+  handoff.yaml:
+    name: sales_handoff_quality
+    rubric:
+      - Produces notes a salesperson can act on immediately.
+      - Avoids overcommitting on pricing or custom terms.

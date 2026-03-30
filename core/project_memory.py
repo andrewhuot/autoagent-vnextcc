@@ -1,4 +1,4 @@
-"""Project memory — load/save/update AUTOAGENT.md persistent project context."""
+"""Project memory helpers for shared, local, rules, and generated context."""
 
 from __future__ import annotations
 
@@ -9,6 +9,9 @@ from typing import Any
 
 
 AUTOAGENT_MD_FILENAME = "AUTOAGENT.md"
+AUTOAGENT_LOCAL_MD_FILENAME = "AUTOAGENT.local.md"
+RULES_DIRNAME = ".autoagent/rules"
+MEMORY_DIRNAME = ".autoagent/memory"
 
 INTEL_BEGIN = "<!-- BEGIN AUTOAGENT INTELLIGENCE — auto-updated, do not edit -->"
 INTEL_END = "<!-- END AUTOAGENT INTELLIGENCE -->"
@@ -39,9 +42,156 @@ AUTOAGENT_MD_TEMPLATE = '''# AUTOAGENT.md — Project Memory
 '''
 
 
+@dataclass(frozen=True)
+class MemorySource:
+    """One physical context source participating in the merged memory view."""
+
+    kind: str
+    path: Path
+    label: str
+    exists: bool = True
+
+
+@dataclass
+class LayeredProjectContext:
+    """Merged view across shared, local, rules, and generated memory sources."""
+
+    root: Path
+    shared_path: Path
+    local_path: Path
+    rules_dir: Path
+    memory_dir: Path
+    sources: list[MemorySource]
+    merged_content: str
+
+    @property
+    def active_sources(self) -> list[MemorySource]:
+        """Return only sources that currently exist on disk."""
+        return [source for source in self.sources if source.exists]
+
+    def summary(self) -> dict[str, Any]:
+        """Return a compact summary suitable for status/doctor surfaces."""
+        return {
+            "active_count": len(self.active_sources),
+            "shared_present": self.shared_path.exists(),
+            "local_present": self.local_path.exists(),
+            "rule_count": sum(1 for source in self.active_sources if source.kind == "rule"),
+            "generated_count": sum(1 for source in self.active_sources if source.kind == "generated"),
+            "paths": [str(source.path) for source in self.active_sources],
+        }
+
+
+def _paths(root: str | Path = ".") -> dict[str, Path]:
+    base = Path(root)
+    return {
+        "root": base,
+        "shared": base / AUTOAGENT_MD_FILENAME,
+        "local": base / AUTOAGENT_LOCAL_MD_FILENAME,
+        "rules_dir": base / RULES_DIRNAME,
+        "memory_dir": base / MEMORY_DIRNAME,
+    }
+
+
+def ensure_layered_memory_dirs(root: str | Path = ".") -> tuple[Path, Path]:
+    """Create the `.autoagent/rules` and `.autoagent/memory` directories."""
+    resolved = _paths(root)
+    resolved["rules_dir"].mkdir(parents=True, exist_ok=True)
+    resolved["memory_dir"].mkdir(parents=True, exist_ok=True)
+    return resolved["rules_dir"], resolved["memory_dir"]
+
+
+def list_memory_sources(root: str | Path = ".") -> list[MemorySource]:
+    """Return all layered memory sources in deterministic order."""
+    resolved = _paths(root)
+    ensure_layered_memory_dirs(root)
+
+    sources: list[MemorySource] = [
+        MemorySource(kind="shared", path=resolved["shared"], label=AUTOAGENT_MD_FILENAME, exists=resolved["shared"].exists()),
+        MemorySource(kind="local", path=resolved["local"], label=AUTOAGENT_LOCAL_MD_FILENAME, exists=resolved["local"].exists()),
+    ]
+
+    for path in sorted(resolved["rules_dir"].glob("*.md")):
+        sources.append(MemorySource(kind="rule", path=path, label=path.name, exists=True))
+    for path in sorted(resolved["memory_dir"].glob("*.md")):
+        sources.append(MemorySource(kind="generated", path=path, label=path.name, exists=True))
+    return sources
+
+
+def load_layered_project_context(root: str | Path = ".") -> LayeredProjectContext:
+    """Load and merge layered project memory content."""
+    resolved = _paths(root)
+    sources = list_memory_sources(root)
+    sections: list[str] = []
+    for source in sources:
+        if not source.exists:
+            continue
+        body = source.path.read_text(encoding="utf-8").strip()
+        if not body:
+            continue
+        sections.append(f"<!-- {source.kind}:{source.path.name} -->\n{body}")
+    merged = "\n\n".join(sections)
+    return LayeredProjectContext(
+        root=resolved["root"],
+        shared_path=resolved["shared"],
+        local_path=resolved["local"],
+        rules_dir=resolved["rules_dir"],
+        memory_dir=resolved["memory_dir"],
+        sources=sources,
+        merged_content=merged,
+    )
+
+
+def resolve_memory_target(root: str | Path, target: str) -> Path:
+    """Resolve a logical memory target name to a concrete file path."""
+    resolved = _paths(root)
+    ensure_layered_memory_dirs(root)
+    normalized = target.strip().lower()
+    if normalized in {"shared", "project"}:
+        return resolved["shared"]
+    if normalized in {"local", "personal"}:
+        return resolved["local"]
+    if normalized.startswith("rules/"):
+        return resolved["rules_dir"] / f"{normalized.split('/', 1)[1]}.md".removesuffix(".md.md")
+    if normalized.startswith("memory/"):
+        return resolved["memory_dir"] / f"{normalized.split('/', 1)[1]}.md".removesuffix(".md.md")
+    if normalized.endswith(".md"):
+        return resolved["root"] / normalized
+    return resolved["rules_dir"] / f"{normalized}.md"
+
+
+def append_memory_text(root: str | Path, target: str, text: str) -> Path:
+    """Append markdown text to a target memory file."""
+    path = resolve_memory_target(root, target)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = path.read_text(encoding="utf-8").rstrip() if path.exists() else ""
+    addition = text.strip()
+    combined = f"{existing}\n\n{addition}\n" if existing else f"{addition}\n"
+    path.write_text(combined, encoding="utf-8")
+    return path
+
+
+def write_session_summary(root: str | Path, *, title: str, summary: str) -> Path:
+    """Write a generated session summary into `.autoagent/memory/`."""
+    _, memory_dir = ensure_layered_memory_dirs(root)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+    path = memory_dir / f"{timestamp}_session.md"
+    body = "\n".join(
+        [
+            f"# {title}",
+            "",
+            f"_Generated {datetime.now(timezone.utc).isoformat()}_",
+            "",
+            summary.strip(),
+            "",
+        ]
+    )
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
 @dataclass
 class ProjectMemory:
-    """Structured representation of AUTOAGENT.md project memory."""
+    """Structured representation of `AUTOAGENT.md` project memory."""
 
     agent_name: str = ""
     platform: str = ""
@@ -67,7 +217,7 @@ class ProjectMemory:
         }
 
     def get_optimizer_context(self) -> dict[str, Any]:
-        """Return context relevant for the optimizer loop."""
+        """Return the context most relevant to the optimizer loop."""
         return {
             "agent_identity": f"{self.agent_name} ({self.platform}) — {self.use_case}",
             "constraints": self.business_constraints,
@@ -77,12 +227,11 @@ class ProjectMemory:
         }
 
     def get_immutable_surfaces(self) -> set[str]:
-        """Extract immutable surfaces from team preferences and constraints."""
+        """Extract immutable optimization surfaces from written preferences."""
         immutable: set[str] = set()
         for pref in self.team_preferences + self.known_bad_patterns:
             lower = pref.lower()
             if "immutable" in lower or "don't optimize" in lower or "don't change" in lower:
-                # Try to extract the surface name
                 for keyword in ["greeting", "safety", "routing", "model"]:
                     if keyword in lower:
                         immutable.add(keyword)
@@ -95,10 +244,9 @@ class ProjectMemory:
         recent_changes: list[dict] | None,
         skill_gaps: list[dict] | None,
     ) -> str:
-        """Build the markdown content for the intelligence section."""
+        """Build the auto-generated intelligence section."""
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
-        # Extract metrics from report
         safety = "n/a"
         routing = "n/a"
         latency = "n/a"
@@ -110,7 +258,6 @@ class ProjectMemory:
             routing = f"{sr * 100:.0f}" if sr is not None else "n/a"
             lat = report.get("avg_latency_ms")
             latency = f"{lat / 1000:.1f}" if lat is not None else "n/a"
-            # Collect issues from report
             for key, val in report.items():
                 if key.endswith("_issues") and isinstance(val, list):
                     issues.extend(val)
@@ -129,8 +276,8 @@ class ProjectMemory:
 
         lines.append("## Active Issues")
         if issues:
-            for i, issue in enumerate(issues, 1):
-                lines.append(f"{i}. {issue}")
+            for index, issue in enumerate(issues, 1):
+                lines.append(f"{index}. {issue}")
         else:
             lines.append("No active issues")
         lines.append("")
@@ -157,7 +304,6 @@ class ProjectMemory:
         else:
             lines.append("No skill gaps identified")
         lines.append(INTEL_END)
-
         return "\n".join(lines)
 
     def update_with_intelligence(
@@ -167,33 +313,24 @@ class ProjectMemory:
         recent_changes: list[dict] | None = None,
         skill_gaps: list[dict] | None = None,
     ) -> None:
-        """Update AUTOAGENT.md with current agent intelligence.
-
-        Manages content between sentinel markers. Preserves all user-written
-        content outside the markers.
-        """
-        # Ensure file_path is set
+        """Update `AUTOAGENT.md` with current agent intelligence."""
         if not self.file_path:
             self.save()
 
-        # Reload from disk in case of external modifications
         path = Path(self.file_path)
-        if path.exists():
-            current_content = path.read_text(encoding="utf-8")
-        else:
-            current_content = self.raw_content
-
+        current_content = path.read_text(encoding="utf-8") if path.exists() else self.raw_content
         intel_section = self._build_intelligence_section(
-            report, eval_score, recent_changes, skill_gaps
+            report,
+            eval_score,
+            recent_changes,
+            skill_gaps,
         )
 
         if INTEL_BEGIN in current_content and INTEL_END in current_content:
-            # Replace existing section (inclusive of markers)
             before = current_content[: current_content.index(INTEL_BEGIN)]
             after = current_content[current_content.index(INTEL_END) + len(INTEL_END):]
             new_content = before + intel_section + after
         else:
-            # Append at the end, ensuring a newline separator
             separator = "" if current_content.endswith("\n") else "\n"
             new_content = current_content + separator + intel_section + "\n"
 
@@ -202,7 +339,7 @@ class ProjectMemory:
 
     @classmethod
     def load(cls, directory: str = ".") -> ProjectMemory | None:
-        """Load AUTOAGENT.md from the given directory. Returns None if not found."""
+        """Load `AUTOAGENT.md` from disk, returning `None` when absent."""
         path = Path(directory) / AUTOAGENT_MD_FILENAME
         if not path.exists():
             return None
@@ -213,7 +350,7 @@ class ProjectMemory:
         return memory
 
     def save(self, directory: str = ".") -> str:
-        """Save AUTOAGENT.md to the given directory. Returns the file path."""
+        """Save `AUTOAGENT.md` and return the file path."""
         path = Path(directory) / AUTOAGENT_MD_FILENAME
         content = self._render()
         path.write_text(content, encoding="utf-8")
@@ -222,12 +359,12 @@ class ProjectMemory:
         return str(path)
 
     def add_history_entry(self, entry: str) -> None:
-        """Add an optimization history entry with timestamp."""
+        """Add a dated optimization history entry."""
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         self.optimization_history.append(f"- {ts}: {entry}")
 
     def add_note(self, section: str, note: str) -> None:
-        """Add a note to a specific section."""
+        """Add a note to a supported memory section."""
         section_lower = section.lower()
         if "good" in section_lower:
             self.known_good_patterns.append(f"- {note}")
@@ -245,7 +382,7 @@ class ProjectMemory:
         platform: str = "Google ADK",
         use_case: str = "General purpose assistant",
     ) -> str:
-        """Generate a fresh AUTOAGENT.md template."""
+        """Generate a fresh starter template for `AUTOAGENT.md`."""
         return AUTOAGENT_MD_TEMPLATE.format(
             agent_name=agent_name,
             platform=platform,
@@ -254,35 +391,30 @@ class ProjectMemory:
 
     @classmethod
     def _parse(cls, content: str) -> ProjectMemory:
-        """Parse AUTOAGENT.md content into structured ProjectMemory."""
+        """Parse markdown content into a `ProjectMemory` object."""
         memory = cls()
-
         sections = _split_sections(content)
 
-        # Parse Agent Identity
         identity = sections.get("agent identity", "")
         for line in identity.strip().splitlines():
-            line = line.strip().lstrip("- ")
-            if line.lower().startswith("name:"):
-                memory.agent_name = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("platform:"):
-                memory.platform = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("primary use case:"):
-                memory.use_case = line.split(":", 1)[1].strip()
+            stripped = line.strip().lstrip("- ")
+            if stripped.lower().startswith("name:"):
+                memory.agent_name = stripped.split(":", 1)[1].strip()
+            elif stripped.lower().startswith("platform:"):
+                memory.platform = stripped.split(":", 1)[1].strip()
+            elif stripped.lower().startswith("primary use case:"):
+                memory.use_case = stripped.split(":", 1)[1].strip()
 
-        # Parse list sections
         memory.business_constraints = _parse_list_section(sections.get("business constraints", ""))
         memory.known_good_patterns = _parse_list_section(sections.get("known good patterns", ""))
         memory.known_bad_patterns = _parse_list_section(sections.get("known bad patterns", ""))
         memory.team_preferences = _parse_list_section(sections.get("team preferences", ""))
         memory.optimization_history = _parse_list_section(sections.get("optimization history", ""))
-
         return memory
 
     def _render(self) -> str:
-        """Render ProjectMemory back to AUTOAGENT.md format."""
+        """Render the object back into `AUTOAGENT.md` format."""
         lines = ["# AUTOAGENT.md — Project Memory", ""]
-
         lines.append("## Agent Identity")
         lines.append(f"- Name: {self.agent_name}")
         lines.append(f"- Platform: {self.platform}")
@@ -290,40 +422,34 @@ class ProjectMemory:
         lines.append("")
 
         lines.append("## Business Constraints")
-        for c in self.business_constraints:
-            line = c if c.startswith("- ") else f"- {c}"
-            lines.append(line)
+        for item in self.business_constraints:
+            lines.append(item if item.startswith("- ") else f"- {item}")
         lines.append("")
 
         lines.append("## Known Good Patterns")
-        for p in self.known_good_patterns:
-            line = p if p.startswith("- ") else f"- {p}"
-            lines.append(line)
+        for item in self.known_good_patterns:
+            lines.append(item if item.startswith("- ") else f"- {item}")
         lines.append("")
 
         lines.append("## Known Bad Patterns")
-        for p in self.known_bad_patterns:
-            line = p if p.startswith("- ") else f"- {p}"
-            lines.append(line)
+        for item in self.known_bad_patterns:
+            lines.append(item if item.startswith("- ") else f"- {item}")
         lines.append("")
 
         lines.append("## Team Preferences")
-        for p in self.team_preferences:
-            line = p if p.startswith("- ") else f"- {p}"
-            lines.append(line)
+        for item in self.team_preferences:
+            lines.append(item if item.startswith("- ") else f"- {item}")
         lines.append("")
 
         lines.append("## Optimization History")
-        for h in self.optimization_history:
-            line = h if h.startswith("- ") else f"- {h}"
-            lines.append(line)
+        for item in self.optimization_history:
+            lines.append(item if item.startswith("- ") else f"- {item}")
         lines.append("")
-
         return "\n".join(lines)
 
 
 def _split_sections(content: str) -> dict[str, str]:
-    """Split markdown content into sections by ## headers."""
+    """Split markdown content by `##` section headings."""
     sections: dict[str, str] = {}
     current_header = ""
     current_lines: list[str] = []
@@ -339,12 +465,11 @@ def _split_sections(content: str) -> dict[str, str]:
 
     if current_header:
         sections[current_header] = "\n".join(current_lines)
-
     return sections
 
 
 def _parse_list_section(text: str) -> list[str]:
-    """Parse a section with bullet points into a list of strings."""
+    """Parse a markdown bullet section into plain string entries."""
     items: list[str] = []
     for line in text.strip().splitlines():
         stripped = line.strip()
@@ -353,6 +478,5 @@ def _parse_list_section(text: str) -> list[str]:
         elif stripped.startswith("* "):
             items.append(stripped[2:].strip())
         elif stripped and not stripped.startswith("#") and not stripped.startswith("("):
-            # Non-empty, non-comment lines
             items.append(stripped)
     return items

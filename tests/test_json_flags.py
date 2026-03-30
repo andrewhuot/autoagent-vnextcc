@@ -11,6 +11,14 @@ from runner import cli
 API_KEY_ENV_VARS = ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY")
 
 
+def _envelope_data(output: str):
+    """Parse a versioned CLI JSON envelope and return its `data` payload."""
+    payload = json.loads(output)
+    assert payload["api_version"] == "1"
+    assert payload["status"] == "ok"
+    return payload["data"]
+
+
 @pytest.fixture
 def runner():
     return CliRunner()
@@ -26,7 +34,7 @@ class TestJsonFlags:
     def test_status_json(self, runner):
         result = runner.invoke(cli, ["status", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert "config_version" in data
         assert "eval_score" in data
         assert "conversations" in data
@@ -39,7 +47,7 @@ class TestJsonFlags:
     def test_status_json_structure_types(self, runner):
         result = runner.invoke(cli, ["status", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data["conversations"], int)
         assert isinstance(data["safety_violation_rate"], float)
         assert isinstance(data["cycles_run"], int)
@@ -55,7 +63,7 @@ class TestJsonFlags:
     def test_replay_json(self, runner):
         result = runner.invoke(cli, ["replay", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
 
     def test_replay_json_entry_fields(self, runner, tmp_path):
@@ -79,7 +87,7 @@ class TestJsonFlags:
 
         result = runner.invoke(cli, ["replay", "--memory-db", mem_db, "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
         assert len(data) == 1
         entry = data[0]
@@ -94,7 +102,7 @@ class TestJsonFlags:
     def test_explain_json(self, runner):
         result = runner.invoke(cli, ["explain", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert "health_label" in data
         assert "success_rate" in data
         assert "failure_buckets" in data
@@ -105,7 +113,7 @@ class TestJsonFlags:
     def test_explain_json_health_label_valid(self, runner):
         result = runner.invoke(cli, ["explain", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert data["health_label"] in ("Excellent", "Good", "Needs Work", "Critical")
         assert isinstance(data["success_rate"], float)
         assert 0.0 <= data["success_rate"] <= 1.0
@@ -113,7 +121,7 @@ class TestJsonFlags:
     def test_eval_run_json(self, runner):
         result = runner.invoke(cli, ["eval", "run", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert "quality" in data
         assert "safety" in data
         assert "latency" in data
@@ -123,14 +131,27 @@ class TestJsonFlags:
     def test_eval_run_json_category(self, runner):
         result = runner.invoke(cli, ["eval", "run", "--category", "safety", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert "quality" in data
         assert "composite" in data
+
+    def test_diagnose_json(self, runner):
+        result = runner.invoke(cli, ["diagnose", "--json"])
+        assert result.exit_code == 0, result.output
+        data = _envelope_data(result.output)
+        assert "summary" in data or "history" in data or "state" in data
+
+    def test_doctor_json(self, runner):
+        result = runner.invoke(cli, ["doctor", "--json"])
+        assert result.exit_code == 0, result.output
+        data = _envelope_data(result.output)
+        assert "issues" in data
+        assert "workspace" in data
 
     def test_optimize_json(self, runner):
         result = runner.invoke(cli, ["optimize", "--cycles", "1", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
         assert len(data) == 1
         entry = data[0]
@@ -145,7 +166,7 @@ class TestJsonFlags:
     def test_optimize_json_multiple_cycles(self, runner):
         result = runner.invoke(cli, ["optimize", "--cycles", "2", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
         assert len(data) == 2
         for i, entry in enumerate(data):
@@ -155,7 +176,7 @@ class TestJsonFlags:
     def test_skill_list_json(self, runner):
         result = runner.invoke(cli, ["skill", "list", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
         for skill in data:
             assert "name" in skill
@@ -167,7 +188,7 @@ class TestJsonFlags:
     def test_skill_recommend_json(self, runner):
         result = runner.invoke(cli, ["skill", "recommend", "--json"])
         assert result.exit_code == 0, result.output
-        data = json.loads(result.output)
+        data = _envelope_data(result.output)
         assert isinstance(data, list)
         for skill in data:
             assert "name" in skill
@@ -198,4 +219,4 @@ class TestJsonFlags:
         assert result.exit_code == 0, result.output
         stripped = result.output.strip()
         data = json.loads(stripped)
-        assert isinstance(data, list)
+        assert isinstance(data, dict)

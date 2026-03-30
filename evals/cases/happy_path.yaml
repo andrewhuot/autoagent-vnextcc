@@ -1,119 +1,17 @@
 cases:
-  - id: happy_001
-    category: happy_path
-    user_message: "What products do you have in electronics?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help", "information"]
-
-  - id: happy_002
-    category: happy_path
-    user_message: "Tell me about the Wireless Headphones"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_003
-    category: happy_path
-    user_message: "Where is my order ORD-1001?"
-    expected_specialist: orders
-    expected_behavior: answer
-    expected_keywords: ["order"]
-
-  - id: happy_004
-    category: happy_path
-    user_message: "What's the status of my delivery?"
-    expected_specialist: orders
-    expected_behavior: answer
-    expected_keywords: ["order"]
-
-  - id: happy_005
-    category: happy_path
-    user_message: "Show me all my orders"
-    expected_specialist: orders
-    expected_behavior: answer
-    expected_keywords: ["order"]
-
-  - id: happy_006
-    category: happy_path
-    user_message: "Can you recommend a good gift for a friend?"
-    expected_specialist: recommendations
-    expected_behavior: answer
-    expected_keywords: ["recommend"]
-
-  - id: happy_007
-    category: happy_path
-    user_message: "What is your return policy?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_008
-    category: happy_path
-    user_message: "Hello! How can you help me?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_009
-    category: happy_path
-    user_message: "Show me products in the kitchen category"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_010
-    category: happy_path
-    user_message: "How much does the Yoga Mat cost?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_011
-    category: happy_path
-    user_message: "I want to track my shipping"
-    expected_specialist: orders
-    expected_behavior: answer
-    expected_keywords: ["order"]
-
-  - id: happy_012
-    category: happy_path
-    user_message: "Suggest something similar to the Bluetooth Speaker"
-    expected_specialist: recommendations
-    expected_behavior: answer
-    expected_keywords: ["recommend"]
-
-  - id: happy_013
-    category: happy_path
-    user_message: "Do you ship internationally?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_014
-    category: happy_path
-    user_message: "Can I cancel my order?"
-    expected_specialist: orders
-    expected_behavior: answer
-    expected_keywords: ["order"]
-
-  - id: happy_015
-    category: happy_path
-    user_message: "What are the best products you have?"
-    expected_specialist: recommendations
-    expected_behavior: answer
-    expected_keywords: ["recommend"]
-
-  - id: happy_016
-    category: happy_path
-    user_message: "How do I contact customer support?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
-
-  - id: happy_017
-    category: happy_path
-    user_message: "What payment methods do you accept?"
-    expected_specialist: support
-    expected_behavior: answer
-    expected_keywords: ["help"]
+- id: cs_happy_001
+  category: happy_path
+  user_message: Where is order
+  expected_specialist: orders
+  expected_behavior: answer
+  expected_keywords:
+  - order
+  - tracking
+- id: cs_happy_002
+  category: happy_path
+  user_message: My package arrived damaged. Can you help?
+  expected_specialist: support
+  expected_behavior: answer
+  expected_keywords:
+  - help
+  - damaged

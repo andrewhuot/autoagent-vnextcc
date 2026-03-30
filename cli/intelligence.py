@@ -18,6 +18,16 @@ from optimizer.transcript_intelligence import TranscriptIntelligenceService
 from shared.transcript_report_store import TranscriptReportStore
 
 
+def _echo_deprecation(old: str, new: str) -> None:
+    """Print a consistent deprecation warning for hidden compatibility aliases."""
+    click.echo(
+        click.style(
+            f"Deprecated: `{old}` is kept for backward compatibility. Use `{new}` instead.",
+            fg="yellow",
+        )
+    )
+
+
 def _invocation_cwd() -> Path:
     """Return the cwd from when the CLI invocation started."""
     ctx = click.get_current_context(silent=True)
@@ -147,11 +157,8 @@ def intelligence_group() -> None:
     """
 
 
-@intelligence_group.command("upload")
-@click.argument("archive", type=click.Path(dir_okay=False, path_type=Path))
-@click.option("--json", "json_output", is_flag=True, help="Output the full imported report as JSON.")
-def upload_archive(archive: Path, json_output: bool) -> None:
-    """Import a transcript archive without using the HTTP API."""
+def _import_archive_impl(archive: Path, json_output: bool) -> None:
+    """Import a transcript archive and optionally emit JSON."""
     archive = _resolve_input_path(archive)
     if not archive.exists():
         raise click.ClickException(f"File does not exist: {archive}")
@@ -182,6 +189,23 @@ def upload_archive(archive: Path, json_output: bool) -> None:
     click.echo(f"Archive: {report.archive_name}")
     click.echo(f"Conversation count: {len(report.conversations)}")
     click.echo(f"Languages: {', '.join(report.languages) or 'unknown'}")
+
+
+@intelligence_group.command("import")
+@click.argument("archive", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--json", "json_output", is_flag=True, help="Output the full imported report as JSON.")
+def import_archive(archive: Path, json_output: bool) -> None:
+    """Import a transcript archive without using the HTTP API."""
+    _import_archive_impl(archive, json_output=json_output)
+
+
+@intelligence_group.command("upload", hidden=True)
+@click.argument("archive", type=click.Path(dir_okay=False, path_type=Path))
+@click.option("--json", "json_output", is_flag=True, help="Output the full imported report as JSON.")
+def upload_archive_alias(archive: Path, json_output: bool) -> None:
+    """Deprecated alias for `autoagent intelligence import`."""
+    _echo_deprecation("autoagent intelligence upload", "autoagent intelligence import")
+    _import_archive_impl(archive, json_output=json_output)
 
 
 @intelligence_group.group("report")

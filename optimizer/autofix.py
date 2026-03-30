@@ -105,7 +105,7 @@ class AutoFixApplyOutcome:
     deploy_message: str = ""
 
 
-_VALID_STATUSES = {"pending", "evaluating", "evaluated", "applied", "rejected", "expired"}
+_VALID_STATUSES = {"pending", "evaluating", "evaluated", "applied", "rejected", "expired", "reverted"}
 
 
 class AutoFixStore:
