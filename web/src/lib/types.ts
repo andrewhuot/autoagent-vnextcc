@@ -298,6 +298,28 @@ export interface ConfigEditResult {
   } | null;
 }
 
+export interface ConfigActivateResult {
+  version: number;
+  filename: string;
+  status: string;
+  workspace_updated: boolean;
+}
+
+export interface ConfigImportResult {
+  version: number;
+  filename: string;
+  config_hash: string;
+  source_file: string;
+  dest_path: string;
+}
+
+export interface ConfigMigrateResult {
+  input_file: string;
+  output_file: string | null;
+  yaml_content: string;
+  config: Record<string, unknown>;
+}
+
 export interface ToolCallRecord {
   name?: string;
   input?: unknown;
@@ -397,6 +419,41 @@ export interface TraceEvent {
 export interface Trace {
   trace_id: string;
   events: TraceEvent[];
+}
+
+export interface TraceGrade {
+  grader_name: string;
+  score: number;
+  passed: boolean;
+  span_id: string;
+  failure_reason?: string | null;
+}
+
+export interface TraceGraphNode {
+  span_id: string;
+  operation: string;
+  duration_ms: number;
+  status: string;
+}
+
+export interface TraceGraphEdge {
+  source_span_id?: string;
+  target_span_id?: string;
+  source?: string;
+  target?: string;
+}
+
+export interface TraceGraphData {
+  nodes: TraceGraphNode[];
+  edges: TraceGraphEdge[];
+  critical_path: TraceGraphNode[];
+  bottlenecks: TraceGraphNode[];
+}
+
+export interface PromoteTraceResult {
+  trace_id: string;
+  path: string;
+  promoted: boolean;
 }
 
 export interface OptimizationOpportunity {
@@ -966,6 +1023,27 @@ export interface PromptBuildArtifact {
   workspace_access: WorkspaceAccess;
 }
 
+export type BuildArtifactSource = 'prompt' | 'transcript' | 'builder_chat' | 'cli';
+
+export type BuildArtifactStatus = 'draft' | 'complete' | 'exported';
+
+export interface BuildArtifact {
+  artifact_id: string;
+  title: string;
+  summary: string;
+  source: BuildArtifactSource;
+  status: BuildArtifactStatus;
+  created_at: string;
+  updated_at: string;
+  config_yaml: string;
+  prompt_used?: string;
+  transcript_report_id?: string;
+  builder_session_id?: string;
+  eval_draft?: string;
+  starter_config_path?: string;
+  api_artifact_id?: string;
+}
+
 export interface AgentTool {
   name: string;
   description: string;
@@ -1057,6 +1135,55 @@ export interface Runbook {
   tool_contracts: string[];
   created_at: string;
   updated_at: string;
+}
+
+export interface SetupWorkspaceSummary {
+  found: boolean;
+  path: string | null;
+  label: string | null;
+  runtime_config_path: string;
+  active_config_version: number | null;
+}
+
+export interface SetupProviderSummary {
+  provider: string;
+  model: string;
+  api_key_env: string;
+  configured: boolean;
+}
+
+export interface SetupApiKeyStatus {
+  name: string;
+  configured: boolean;
+}
+
+export interface SetupDataStoreStatus {
+  name: string;
+  path: string;
+  exists: boolean;
+  row_count: number | null;
+}
+
+export interface SetupMcpClientStatus {
+  name: string;
+  configured: boolean;
+  path: string;
+}
+
+export interface SetupOverview {
+  workspace: SetupWorkspaceSummary;
+  doctor: {
+    effective_mode: string;
+    preferred_mode: string;
+    mode_source: string;
+    message: string;
+    providers: SetupProviderSummary[];
+    api_keys: SetupApiKeyStatus[];
+    data_stores: SetupDataStoreStatus[];
+    issues: string[];
+  };
+  mcp_clients: SetupMcpClientStatus[];
+  recommended_commands: string[];
 }
 
 // ---------------------------------------------------------------------------

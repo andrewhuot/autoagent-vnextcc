@@ -17,8 +17,14 @@ import type {
   ContextHealthReport,
   ContextSimulationResult,
   ContextTraceAnalysis,
+  BuildArtifact,
+  BuildArtifactSource,
+  BuildArtifactStatus,
   ConfigDiff,
+  ConfigActivateResult,
   ConfigEditResult,
+  ConfigImportResult,
+  ConfigMigrateResult,
   ConfigShow,
   ConfigVersion,
   ConversationRecord,
@@ -59,17 +65,22 @@ import type {
   GeneratedAgentConfig,
   ChatRefineResponse,
   Runbook,
+  SetupOverview,
   SkillLeaderboardEntry,
   SkillMarketplaceListing,
   SkillCompositionResult,
   DraftSkillReview,
   TaskStatus,
   Trace,
+  TraceGraphData,
+  TraceGrade,
   TraceEvent,
+  PromoteTraceResult,
   TranscriptReport,
   TranscriptReportSummary,
   UnifiedSkill,
 } from './types';
+import type { ArtifactRef, ArtifactType } from './builder-types';
 
 const API_BASE = '/api';
 
@@ -828,6 +839,14 @@ export function useConfigs() {
   });
 }
 
+export function useSetupOverview() {
+  return useQuery<SetupOverview>({
+    queryKey: ['setupOverview'],
+    queryFn: () => fetchApi('/setup/overview'),
+    refetchInterval: 15000,
+  });
+}
+
 export function useConfigShow(version: number | null) {
   return useQuery<ConfigShow>({
     queryKey: ['configShow', version],
@@ -879,6 +898,53 @@ export function useNaturalLanguageConfigEdit() {
       queryClient.invalidateQueries({ queryKey: ['deployStatus'] });
       queryClient.invalidateQueries({ queryKey: ['optimizeHistory'] });
     },
+  });
+}
+
+export function useActivateConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ConfigActivateResult, ApiRequestError, { version: number }>({
+    mutationFn: ({ version }) =>
+      fetchApi('/config/activate', {
+        method: 'POST',
+        body: JSON.stringify({ version }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['configs'] });
+      queryClient.invalidateQueries({ queryKey: ['configShow'] });
+      queryClient.invalidateQueries({ queryKey: ['setupOverview'] });
+    },
+  });
+}
+
+export function useImportConfig() {
+  const queryClient = useQueryClient();
+
+  return useMutation<ConfigImportResult, ApiRequestError, { file_path: string }>({
+    mutationFn: ({ file_path }) =>
+      fetchApi('/config/import', {
+        method: 'POST',
+        body: JSON.stringify({ file_path }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['configs'] });
+      queryClient.invalidateQueries({ queryKey: ['setupOverview'] });
+    },
+  });
+}
+
+export function useMigrateConfig() {
+  return useMutation<
+    ConfigMigrateResult,
+    ApiRequestError,
+    { input_file: string; output_file?: string }
+  >({
+    mutationFn: ({ input_file, output_file }) =>
+      fetchApi('/config/migrate', {
+        method: 'POST',
+        body: JSON.stringify({ input_file, output_file }),
+      }),
   });
 }
 
@@ -1191,6 +1257,39 @@ export function useTraceErrors() {
       return payload.events ?? [];
     },
     refetchInterval: 10000,
+  });
+}
+
+export function useTraceGrades(traceId: string | undefined) {
+  return useQuery<TraceGrade[]>({
+    queryKey: ['traces', 'grades', traceId],
+    enabled: Boolean(traceId),
+    queryFn: async () => {
+      if (!traceId) throw new ApiRequestError('Missing trace ID', 400);
+      const payload = await fetchApi<{ trace_id: string; grades: TraceGrade[] }>(`/traces/${traceId}/grades`);
+      return payload.grades ?? [];
+    },
+  });
+}
+
+export function useTraceGraph(traceId: string | undefined) {
+  return useQuery<TraceGraphData>({
+    queryKey: ['traces', 'graph', traceId],
+    enabled: Boolean(traceId),
+    queryFn: async () => {
+      if (!traceId) throw new ApiRequestError('Missing trace ID', 400);
+      return fetchApi<TraceGraphData>(`/traces/${traceId}/graph`);
+    },
+  });
+}
+
+export function usePromoteTrace() {
+  return useMutation<PromoteTraceResult, ApiRequestError, { traceId: string; eval_cases_dir?: string }>({
+    mutationFn: ({ traceId, eval_cases_dir }) =>
+      fetchApi(`/traces/${encodeURIComponent(traceId)}/promote`, {
+        method: 'POST',
+        body: JSON.stringify({ eval_cases_dir }),
+      }),
   });
 }
 
@@ -1908,7 +2007,8 @@ export function useRunbookDetail(name: string | undefined) {
     enabled: Boolean(name),
     queryFn: async () => {
       if (!name) throw new ApiRequestError('Missing runbook name', 400);
-      return fetchApi<Runbook>(`/runbooks/${encodeURIComponent(name)}`);
+      const payload = await fetchApi<{ runbook: Runbook }>(`/runbooks/${encodeURIComponent(name)}`);
+      return payload.runbook;
     },
   });
 }
@@ -1919,6 +2019,21 @@ export function useApplyRunbook() {
   return useMutation<{ status: string; message: string }, ApiRequestError, { name: string }>({
     mutationFn: ({ name }) =>
       fetchApi(`/runbooks/${encodeURIComponent(name)}/apply`, { method: 'POST' }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['runbooks'] });
+    },
+  });
+}
+
+export function useCreateRunbook() {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ name: string; version: number }, ApiRequestError, Record<string, unknown>>({
+    mutationFn: (body) =>
+      fetchApi('/runbooks', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['runbooks'] });
     },
@@ -1970,13 +2085,14 @@ export function useAddMemoryNote() {
 // Intelligence Studio
 // ---------------------------------------------------------------------------
 
-export function useTranscriptReports() {
+export function useTranscriptReports(enabled = true) {
   return useQuery<TranscriptReportSummary[]>({
     queryKey: ['intelligence', 'reports'],
     queryFn: async () => {
       const payload = await fetchApi<{ reports: TranscriptReportSummary[] }>('/intelligence/reports');
       return payload.reports ?? [];
     },
+    enabled,
   });
 }
 
@@ -2069,22 +2185,103 @@ export function useRunAutonomousLoop() {
 }
 
 export function useBuildAgentArtifact() {
+  const queryClient = useQueryClient();
   return useMutation<PromptBuildArtifact, ApiRequestError, { prompt: string; connectors: string[] }>({
     mutationFn: (body) =>
       fetchApi('/intelligence/build', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['build-artifacts'] });
+    },
+  });
+}
+
+export function useBuilderArtifacts(params?: {
+  taskId?: string;
+  sessionId?: string;
+  artifactType?: ArtifactType;
+  enabled?: boolean;
+}) {
+  const query = new URLSearchParams();
+  if (params?.taskId) query.set('task_id', params.taskId);
+  if (params?.sessionId) query.set('session_id', params.sessionId);
+  if (params?.artifactType) query.set('artifact_type', params.artifactType);
+  const qs = query.toString();
+
+  return useQuery<ArtifactRef[]>({
+    queryKey: ['builder', 'artifacts', params?.taskId || null, params?.sessionId || null, params?.artifactType || null],
+    queryFn: async () => fetchApi<ArtifactRef[]>(`/builder/artifacts${qs ? `?${qs}` : ''}`),
+    enabled: params?.enabled ?? true,
   });
 }
 
 export function useGenerateAgent() {
+  const queryClient = useQueryClient();
   return useMutation<GeneratedAgentConfig, ApiRequestError, { prompt: string; transcript_report_id?: string }>({
     mutationFn: (body) =>
       fetchApi('/intelligence/generate-agent', {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['build-artifacts'] });
+    },
+  });
+}
+
+interface SharedBuildArtifactRecord {
+  id: string;
+  source: BuildArtifactSource;
+  status: BuildArtifactStatus;
+  created_at: string;
+  updated_at: string;
+  config_yaml: string;
+  prompt_used?: string;
+  transcript_report_id?: string;
+  builder_session_id?: string;
+  eval_draft?: string;
+  starter_config_path?: string;
+  metadata?: Record<string, unknown>;
+}
+
+function mapSharedBuildArtifact(record: SharedBuildArtifactRecord): BuildArtifact {
+  const metadata = record.metadata ?? {};
+  const title =
+    (typeof metadata.title === 'string' && metadata.title.trim()) ||
+    record.prompt_used ||
+    'Saved Build Artifact';
+  const summary =
+    (typeof metadata.summary === 'string' && metadata.summary.trim()) ||
+    'Persisted build artifact from the shared Build workspace.';
+
+  return {
+    artifact_id: record.id,
+    title,
+    summary,
+    source: record.source,
+    status: record.status,
+    created_at: record.created_at,
+    updated_at: record.updated_at,
+    config_yaml: record.config_yaml,
+    prompt_used: record.prompt_used,
+    transcript_report_id: record.transcript_report_id,
+    builder_session_id: record.builder_session_id,
+    eval_draft: record.eval_draft,
+    starter_config_path: record.starter_config_path,
+    api_artifact_id: record.id,
+  };
+}
+
+export function useSavedBuildArtifacts(enabled = true) {
+  return useQuery<BuildArtifact[]>({
+    queryKey: ['build-artifacts'],
+    enabled,
+    queryFn: async () => {
+      const payload = await fetchApi<{ artifacts: SharedBuildArtifactRecord[] }>('/intelligence/build-artifacts');
+      return (payload.artifacts ?? []).map(mapSharedBuildArtifact);
+    },
   });
 }
 
