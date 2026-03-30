@@ -63,6 +63,17 @@ from cli.branding import (
     get_autoagent_version,
     render_startup_banner,
 )
+from cli.experiment_log import (
+    append_entry as append_experiment_log_entry,
+    best_score_entry as best_experiment_log_entry,
+    default_log_path as default_experiment_log_path,
+    format_table as format_experiment_log_table,
+    make_entry as make_experiment_log_entry,
+    next_cycle_number as next_experiment_log_cycle_number,
+    read_entries as read_experiment_log_entries,
+    summarize_entries as summarize_experiment_log_entries,
+    tail_entries as tail_experiment_log_entries,
+)
 from cli.intelligence import (
     TranscriptReportStore,
     _build_generation_prompt,
@@ -274,6 +285,24 @@ def _read_best_score(path: Path) -> float:
         return 0.0
     raw_score = path.read_text(encoding="utf-8").strip()
     return float(raw_score) if raw_score else 0.0
+
+
+def _persist_best_score(
+    score_after: float | None,
+    all_time_best: float,
+    best_score_file: Path,
+    *,
+    announce: bool,
+) -> float:
+    """Persist new personal-best scores so optimize history survives across runs."""
+    if score_after is None or score_after <= all_time_best:
+        return all_time_best
+
+    best_score_file.parent.mkdir(parents=True, exist_ok=True)
+    best_score_file.write_text(str(score_after), encoding="utf-8")
+    if announce:
+        click.echo(click.style("\n  ✨ New personal best!", fg="yellow", bold=True))
+    return score_after
 
 
 def _score_to_dict(score) -> dict:
@@ -526,12 +555,13 @@ def _stream_cycle_output(
             ))
             click.echo(click.style("    → Accepted", fg="green"))
 
-            # Update all-time best
-            if score_after > all_time_best:
-                resolved_best_score_file = best_score_file or Path(".autoagent/best_score.txt")
-                resolved_best_score_file.parent.mkdir(parents=True, exist_ok=True)
-                resolved_best_score_file.write_text(str(score_after))
-                click.echo(click.style("\n  ✨ New personal best!", fg="yellow", bold=True))
+            resolved_best_score_file = best_score_file or Path(".autoagent/best_score.txt")
+            _persist_best_score(
+                score_after,
+                all_time_best,
+                resolved_best_score_file,
+                announce=True,
+            )
         else:
             click.echo(click.style(
                 f"    ↳ ✗ composite={score_after:.4f} ({improvement:+.4f})", fg="yellow"
@@ -650,6 +680,41 @@ def _warn_mock_modes(
             continue
         seen.add(message)
         click.echo(click.style(f"⚠ {message}", fg="yellow"))
+
+
+def _optimize_cycle_status(
+    *,
+    report_needs_optimization: bool,
+    new_config: dict | None,
+    score_before: float | None,
+    score_after: float | None,
+) -> str:
+    """Normalize optimize outcomes into stable experiment-log statuses."""
+    if not report_needs_optimization:
+        return "skip"
+    if (
+        new_config is not None
+        and score_before is not None
+        and score_after is not None
+        and score_after > score_before
+    ):
+        return "keep"
+    return "discard"
+
+
+def _continuous_status_line(
+    *,
+    cycle: int,
+    best_score: float,
+    last_status: str,
+    delta: float | None,
+) -> str:
+    """Render a compact between-cycle heartbeat for continuous optimize mode."""
+    delta_fragment = f" ({delta:+.2f})" if delta is not None else ""
+    return (
+        f"Cycle {cycle} | Best: {best_score:.2f} | "
+        f"Last: {last_status}{delta_fragment} | Press Ctrl+C to stop"
+    )
 
 
 def _build_runtime_components() -> tuple[
@@ -1476,12 +1541,170 @@ def eval_generate(
             click.echo(f"\n  Written to {output}")
 
 
+def _run_optimize_cycle(
+    *,
+    cycle_number: int,
+    display_cycle: int,
+    display_total: int | None,
+    continuous: bool,
+    json_output: bool,
+    full_auto: bool,
+    store: ConversationStore,
+    observer: Observer,
+    optimizer: Optimizer,
+    deployer: Deployer,
+    memory: OptimizationMemory,
+    eval_runner: EvalRunner,
+    best_score_file: Path,
+    all_time_best: float,
+    log_path: Path,
+) -> tuple[dict, float]:
+    """Run one optimize iteration and persist a matching experiment-log entry."""
+    try:
+        report = observer.observe()
+
+        if not report.needs_optimization:
+            if not json_output and not continuous and display_total is not None:
+                click.echo(
+                    f"\n  Cycle {display_cycle}/{display_total} — System healthy; skipping optimization."
+                )
+
+            entry = make_experiment_log_entry(
+                cycle=cycle_number,
+                status="skip",
+                description="System healthy; no optimization needed",
+                score_before=None,
+                score_after=None,
+            )
+            append_experiment_log_entry(entry, path=log_path)
+            return (
+                {
+                    "cycle": cycle_number if continuous else display_cycle,
+                    "experiment_cycle": cycle_number,
+                    "total_cycles": None if continuous else display_total,
+                    "status": entry.status,
+                    "accepted": False,
+                    "score_before": entry.score_before,
+                    "score_after": entry.score_after,
+                    "delta": entry.delta,
+                    "change_description": entry.description,
+                },
+                all_time_best,
+            )
+
+        current_config = _ensure_active_config(deployer)
+        failure_samples = _build_failure_samples(store)
+        new_config, opt_status = optimizer.optimize(
+            report,
+            current_config,
+            failure_samples=failure_samples,
+        )
+
+        latest_attempts = memory.recent(limit=1)
+        latest = latest_attempts[0] if latest_attempts else None
+        proposal_desc = latest.change_description if latest else None
+        score_after: float | None = latest.score_after if latest else None
+        score_before: float | None = latest.score_before if latest else None
+        p_value: float | None = latest.significance_p_value if latest else None
+
+        normalized_status = _optimize_cycle_status(
+            report_needs_optimization=report.needs_optimization,
+            new_config=new_config,
+            score_before=score_before,
+            score_after=score_after,
+        )
+        description = proposal_desc or opt_status
+        entry = make_experiment_log_entry(
+            cycle=cycle_number,
+            status=normalized_status,
+            description=description,
+            score_before=score_before,
+            score_after=score_after,
+        )
+        append_experiment_log_entry(entry, path=log_path)
+
+        if not json_output and not continuous and display_total is not None:
+            _stream_cycle_output(
+                cycle_num=display_cycle,
+                total=display_total,
+                report=report,
+                proposal_desc=proposal_desc,
+                score_after=score_after,
+                score_before=score_before,
+                p_value=p_value,
+                all_time_best=all_time_best,
+                best_score_file=best_score_file,
+            )
+        else:
+            all_time_best = _persist_best_score(
+                score_after,
+                all_time_best,
+                best_score_file,
+                announce=False,
+            )
+
+        if score_after is not None and score_after > all_time_best:
+            all_time_best = score_after
+
+        if new_config is not None:
+            score = eval_runner.run(config=new_config)
+            deploy_result = deployer.deploy(new_config, _score_to_dict(score))
+            if not json_output and not continuous:
+                click.echo(f"  Deploy: {deploy_result}")
+            if full_auto:
+                promoted = _promote_latest_version(deployer)
+                if not json_output and not continuous and promoted is not None:
+                    click.echo(click.style(f"  FULL AUTO: promoted v{promoted:03d} to active", fg="yellow"))
+
+        return (
+            {
+                "cycle": cycle_number if continuous else display_cycle,
+                "experiment_cycle": cycle_number,
+                "total_cycles": None if continuous else display_total,
+                "status": entry.status,
+                "accepted": entry.status == "keep",
+                "score_before": score_before,
+                "score_after": score_after,
+                "delta": entry.delta,
+                "change_description": description,
+            },
+            all_time_best,
+        )
+    except Exception as exc:
+        entry = make_experiment_log_entry(
+            cycle=cycle_number,
+            status="crash",
+            description=str(exc),
+            score_before=None,
+            score_after=None,
+        )
+        append_experiment_log_entry(entry, path=log_path)
+
+        cycle_result = {
+            "cycle": cycle_number if continuous else display_cycle,
+            "experiment_cycle": cycle_number,
+            "total_cycles": None if continuous else display_total,
+            "status": entry.status,
+            "accepted": False,
+            "score_before": entry.score_before,
+            "score_after": entry.score_after,
+            "delta": entry.delta,
+            "change_description": entry.description,
+        }
+        if continuous:
+            if not json_output:
+                click.echo(click.style(f"  Cycle {cycle_number} crashed: {exc}", fg="magenta"))
+            return cycle_result, all_time_best
+        raise
+
+
 # ---------------------------------------------------------------------------
 # autoagent optimize
 # ---------------------------------------------------------------------------
 
 @cli.command("optimize")
 @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
+@click.option("--continuous", is_flag=True, default=False, help="Loop indefinitely until Ctrl+C.")
 @click.option("--mode", default=None, type=click.Choice(["standard", "advanced", "research"]),
               help="Optimization mode (replaces --strategy).")
 @click.option("--strategy", default=None, hidden=True, help="[DEPRECATED] Use --mode instead.")
@@ -1491,13 +1714,23 @@ def eval_generate(
 @click.option("--full-auto", is_flag=True, default=False,
               help="Danger mode: auto-promote accepted configs without manual review.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, configs_dir: str,
-             memory_db: str, full_auto: bool, json_output: bool = False) -> None:
+def optimize(
+    cycles: int,
+    continuous: bool,
+    mode: str | None,
+    strategy: str | None,
+    db: str,
+    configs_dir: str,
+    memory_db: str,
+    full_auto: bool,
+    json_output: bool = False,
+) -> None:
     """Run optimization cycles to improve agent config.
 
     Examples:
       autoagent optimize
       autoagent optimize --cycles 5
+      autoagent optimize --continuous
       autoagent optimize --mode advanced --cycles 3
     """
     from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
@@ -1562,83 +1795,85 @@ def optimize(cycles: int, mode: str | None, strategy: str | None, db: str, confi
     # Track all-time best score
     best_score_file = Path(".autoagent/best_score.txt")
     all_time_best = _read_best_score(best_score_file)
+    log_path = default_experiment_log_path()
+    next_cycle_number = next_experiment_log_cycle_number(log_path)
 
     json_cycle_results: list[dict] = []
+    experiments_run = 0
+    kept_count = 0
+    discarded_count = 0
+    skipped_count = 0
+    display_cycle = 1
 
-    for cycle in range(1, cycles + 1):
-        report = observer.observe()
+    if continuous and not json_output:
+        click.echo("Starting continuous optimization. Press Ctrl+C to stop.")
 
-        if not report.needs_optimization:
-            if not json_output:
-                click.echo(f"\n  Cycle {cycle}/{cycles} — System healthy; skipping optimization.")
-            json_cycle_results.append({
-                "cycle": cycle,
-                "total_cycles": cycles,
-                "status": "skipped",
-                "accepted": False,
-                "score_before": None,
-                "score_after": None,
-                "change_description": None,
-            })
-            continue
-
-        current_config = _ensure_active_config(deployer)
-        failure_samples = _build_failure_samples(store)
-        new_config, opt_status = optimizer.optimize(
-            report,
-            current_config,
-            failure_samples=failure_samples,
-        )
-
-        # Gather storytelling data from memory
-        latest_attempts = memory.recent(limit=1)
-        latest = latest_attempts[0] if latest_attempts else None
-        proposal_desc = latest.change_description if latest else None
-        score_after: float | None = latest.score_after if latest else None
-        score_before: float | None = latest.score_before if latest else None
-        p_value: float | None = latest.significance_p_value if latest else None
-
-        json_cycle_results.append({
-            "cycle": cycle,
-            "total_cycles": cycles,
-            "status": opt_status,
-            "accepted": new_config is not None,
-            "score_before": score_before,
-            "score_after": score_after,
-            "change_description": proposal_desc,
-        })
-
-        if not json_output:
-            _stream_cycle_output(
-                cycle_num=cycle,
-                total=cycles,
-                report=report,
-                proposal_desc=proposal_desc,
-                score_after=score_after,
-                score_before=score_before,
-                p_value=p_value,
+    try:
+        while True:
+            cycle_result, all_time_best = _run_optimize_cycle(
+                cycle_number=next_cycle_number,
+                display_cycle=display_cycle,
+                display_total=None if continuous else cycles,
+                continuous=continuous,
+                json_output=json_output,
+                full_auto=full_auto,
+                store=store,
+                observer=observer,
+                optimizer=optimizer,
+                deployer=deployer,
+                memory=memory,
+                eval_runner=eval_runner,
+                best_score_file=best_score_file,
                 all_time_best=all_time_best,
+                log_path=log_path,
             )
 
-        # Update all_time_best if we got a new score
-        if score_after is not None and score_after > all_time_best:
-            all_time_best = score_after
+            experiments_run += 1
+            if cycle_result["status"] == "keep":
+                kept_count += 1
+            elif cycle_result["status"] == "discard":
+                discarded_count += 1
+            elif cycle_result["status"] == "skip":
+                skipped_count += 1
 
-        if new_config is not None:
-            score = eval_runner.run(config=new_config)
-            deploy_result = deployer.deploy(new_config, _score_to_dict(score))
+            if continuous:
+                if json_output:
+                    click.echo(json.dumps(cycle_result))
+                else:
+                    click.echo(
+                        _continuous_status_line(
+                            cycle=cycle_result["experiment_cycle"],
+                            best_score=all_time_best,
+                            last_status=cycle_result["status"],
+                            delta=cycle_result["delta"],
+                        )
+                    )
+            else:
+                json_cycle_results.append(cycle_result)
+                if display_cycle >= cycles:
+                    break
+
+            next_cycle_number += 1
+            display_cycle += 1
+    except KeyboardInterrupt:
+        if continuous:
             if not json_output:
-                click.echo(f"  Deploy: {deploy_result}")
-            if full_auto:
-                promoted = _promote_latest_version(deployer)
-                if not json_output and promoted is not None:
-                    click.echo(click.style(f"  FULL AUTO: promoted v{promoted:03d} to active", fg="yellow"))
+                best_entry = best_experiment_log_entry(read_experiment_log_entries(log_path))
+                best_score = best_entry.score_after if best_entry is not None and best_entry.score_after is not None else all_time_best
+                click.echo(
+                    f"Ran {experiments_run} experiments: "
+                    f"{kept_count} kept, {discarded_count} discarded, {skipped_count} skipped. "
+                    f"Best score: {best_score:.2f}"
+                )
+                click.echo("Experiment log saved to .autoagent/experiment_log.tsv")
+            return
+        raise
 
     if json_output:
         click.echo(json.dumps(json_cycle_results, indent=2))
         return
 
-    if cycles > 1:
+    if cycles > 1 and not continuous:
         click.echo(f"\nOptimization complete. {cycles} cycles executed.")
     latest_attempts = memory.recent(limit=1)
     latest_score = latest_attempts[0].score_after if latest_attempts else None
@@ -1679,6 +1914,7 @@ def improve_group() -> None:
 
 @improve_group.command("optimize")
 @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
+@click.option("--continuous", is_flag=True, default=False, help="Loop indefinitely until Ctrl+C.")
 @click.option("--mode", default=None, type=click.Choice(["standard", "advanced", "research"]),
               help="Optimization mode (replaces --strategy).")
 @click.option("--strategy", default=None, hidden=True, help="[DEPRECATED] Use --mode instead.")
@@ -1692,6 +1928,7 @@ def improve_group() -> None:
 def improve_optimize(
     ctx: click.Context,
     cycles: int,
+    continuous: bool,
     mode: str | None,
     strategy: str | None,
     db: str,
@@ -1704,6 +1941,7 @@ def improve_optimize(
     ctx.invoke(
         optimize,
         cycles=cycles,
+        continuous=continuous,
         mode=mode,
         strategy=strategy,
         db=db,
@@ -5134,7 +5372,7 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         ],
     )
 
-    ctx.invoke(optimize, cycles=cycles, mode=None, strategy=None, db=DB_PATH,
+    ctx.invoke(optimize, cycles=cycles, continuous=False, mode=None, strategy=None, db=DB_PATH,
                configs_dir=CONFIGS_DIR, memory_db=MEMORY_DB, full_auto=True, json_output=False)
     ctx.invoke(
         loop,
