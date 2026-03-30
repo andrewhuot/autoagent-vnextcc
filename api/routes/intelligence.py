@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
+import uuid
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+import yaml
 
 from optimizer.providers import build_router_from_runtime_config
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
+from shared.build_artifact_store import BuildArtifactStore
+from shared.contracts import BuildArtifact
+from shared.transcript_report_store import TranscriptReportStore
 
 router = APIRouter(prefix="/api/intelligence", tags=["intelligence"])
 
@@ -61,9 +67,34 @@ def _get_service(request: Request) -> TranscriptIntelligenceService:
                     llm_router = build_router_from_runtime_config(runtime_config.optimizer)
                 except Exception:
                     llm_router = None
-        service = TranscriptIntelligenceService(llm_router=llm_router)
+        report_store = getattr(request.app.state, "transcript_report_store", None)
+        if report_store is None:
+            report_store = TranscriptReportStore()
+            request.app.state.transcript_report_store = report_store
+        service = TranscriptIntelligenceService(llm_router=llm_router, report_store=report_store)
         request.app.state.transcript_intelligence_service = service
     return service
+
+
+def _get_build_artifact_store(request: Request) -> BuildArtifactStore:
+    store = getattr(request.app.state, "build_artifact_store", None)
+    if store is None:
+        store = BuildArtifactStore()
+        request.app.state.build_artifact_store = store
+    return store
+
+
+def _artifact_title(prompt: str, fallback: str = "Build Artifact") -> str:
+    prompt_summary = " ".join(prompt.split())
+    if not prompt_summary:
+        return fallback
+    if len(prompt_summary) <= 72:
+        return prompt_summary
+    return f"{prompt_summary[:69]}..."
+
+
+def _now_iso() -> str:
+    return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
 @router.post("/archive", status_code=201)
@@ -130,13 +161,67 @@ async def apply_insight(report_id: str, body: ApplyInsightRequest, request: Requ
 @router.post("/build")
 async def build_agent_from_prompt(body: BuildAgentRequest, request: Request) -> dict[str, Any]:
     service = _get_service(request)
-    return service.build_agent_artifact(body.prompt, body.connectors)
+    artifact = service.build_agent_artifact(body.prompt, body.connectors)
+    build_artifact_store = _get_build_artifact_store(request)
+    now_iso = _now_iso()
+    build_artifact_store.save_latest(
+        BuildArtifact(
+            id=f"build-{uuid.uuid4().hex[:12]}",
+            created_at=now_iso,
+            updated_at=now_iso,
+            source="prompt",
+            status="draft",
+            config_yaml="",
+            prompt_used=body.prompt,
+            selector="latest",
+            metadata={
+                "title": _artifact_title(body.prompt, "Prompt Build"),
+                "summary": "Prompt build draft generated in the Build workspace.",
+                "connectors": artifact.get("connectors", []),
+                "intents": artifact.get("intents", []),
+                "tools": artifact.get("tools", []),
+                "guardrails": artifact.get("guardrails", []),
+                "skills": artifact.get("skills", []),
+                "integration_templates": artifact.get("integration_templates", []),
+                "legacy_payload": artifact,
+            },
+        ),
+        legacy_payload=artifact,
+    )
+    return artifact
 
 
 @router.post("/generate-agent")
 async def generate_agent(body: GenerateAgentRequest, request: Request) -> dict[str, Any]:
     service = _get_service(request)
-    return service.generate_agent_config(body.prompt, body.transcript_report_id)
+    generated = service.generate_agent_config(body.prompt, body.transcript_report_id)
+    config_yaml = yaml.safe_dump(generated, sort_keys=False)
+    source = "transcript" if body.transcript_report_id else "prompt"
+    build_artifact_store = _get_build_artifact_store(request)
+    now_iso = _now_iso()
+    build_artifact_store.save_latest(
+        BuildArtifact(
+            id=f"build-{uuid.uuid4().hex[:12]}",
+            created_at=now_iso,
+            updated_at=now_iso,
+            source=source,
+            status="complete",
+            config_yaml=config_yaml,
+            prompt_used=body.prompt,
+            transcript_report_id=body.transcript_report_id,
+            selector="latest",
+            metadata={
+                "title": generated.get("metadata", {}).get("agent_name") or _artifact_title(body.prompt),
+                "summary": (
+                    "Transcript-informed agent config generated in the Build workspace."
+                    if body.transcript_report_id
+                    else "Prompt-generated agent config saved from the Build workspace."
+                ),
+                "generated_config": generated,
+            },
+        )
+    )
+    return generated
 
 
 @router.post("/chat")
@@ -191,3 +276,18 @@ async def run_autonomous_loop(
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("/build-artifacts")
+async def list_build_artifacts(request: Request, limit: int = 50) -> dict[str, Any]:
+    store = _get_build_artifact_store(request)
+    return {"artifacts": store.list_recent(limit=limit)}
+
+
+@router.get("/build-artifacts/{artifact_id}")
+async def get_build_artifact(artifact_id: str, request: Request) -> dict[str, Any]:
+    store = _get_build_artifact_store(request)
+    artifact = store.get_by_id(artifact_id)
+    if artifact is None:
+        raise HTTPException(status_code=404, detail=f"Unknown build artifact: {artifact_id}")
+    return artifact

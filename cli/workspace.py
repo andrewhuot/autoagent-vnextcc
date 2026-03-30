@@ -14,6 +14,7 @@ import yaml
 
 WORKSPACE_DIRNAME = ".autoagent"
 WORKSPACE_METADATA_FILENAME = "workspace.json"
+DEFAULT_LIFECYCLE_SKILL_DB = Path(WORKSPACE_DIRNAME) / "core_skills.db"
 _CONFIG_VERSION_RE = re.compile(r"^v(?P<version>\d{3})(?:$|_.*$)")
 
 
@@ -127,7 +128,7 @@ class AutoAgentWorkspace:
 
     @property
     def skill_db(self) -> Path:
-        return self.autoagent_dir / "core_skills.db"
+        return self.root / DEFAULT_LIFECYCLE_SKILL_DB
 
     @property
     def best_score_file(self) -> Path:

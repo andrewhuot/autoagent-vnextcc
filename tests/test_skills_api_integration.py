@@ -73,6 +73,19 @@ def test_get_skill_store(mock_request):
     assert isinstance(store, SkillStore)
 
 
+def test_get_skill_store_defaults_to_shared_lifecycle_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Fallback store resolution should match the shared lifecycle DB path."""
+    monkeypatch.chdir(tmp_path)
+
+    request = Mock()
+    request.app.state = type("AppState", (), {})()
+
+    store = _get_skill_store(request)
+
+    assert isinstance(store, SkillStore)
+    assert store.db_path.endswith("core_skills.db")
+
+
 def test_get_skill_marketplace(mock_request):
     """Test getting skill marketplace from request."""
     marketplace = _get_skill_marketplace(mock_request)

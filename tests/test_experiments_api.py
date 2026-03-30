@@ -10,6 +10,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.routes.experiments import router
+from optimizer.experiments import ExperimentCard
+from shared.contracts import ExperimentRecord
 
 
 class _StubOptimizer:
@@ -201,3 +203,42 @@ def test_judge_calibration_route_uses_live_store_when_available(app: FastAPI) ->
     assert response.status_code == 200
     payload = response.json()
     assert payload["agreement_rate"] == 0.91
+
+
+def _make_card() -> ExperimentCard:
+    """Build a representative experiment card for API serialization tests."""
+    return ExperimentCard(
+        experiment_id="exp-api-001",
+        created_at=1711713600.0,
+        hypothesis="Improve routing",
+        touched_surfaces=["prompt"],
+        touched_agents=["root"],
+        diff_summary="Rewrote root prompt",
+        eval_set_versions={"golden": "abc123"},
+        replay_set_hash="replay-1",
+        baseline_sha="base",
+        candidate_sha="cand",
+        risk_class="low",
+        deployment_policy="pr_only",
+        rollback_handle="rollback-1",
+        total_experiment_cost=1.5,
+        status="accepted",
+        result_summary="Better quality",
+        operator_name="rewrite_prompt",
+        baseline_scores={"quality": 0.7},
+        candidate_scores={"quality": 0.8},
+        significance_p_value=0.03,
+        significance_delta=0.1,
+    )
+
+
+def test_experiment_card_serialization_matches_shared_contract() -> None:
+    """API serialization should emit the shared experiment contract shape."""
+    from api.routes.experiments import _card_to_record_dict
+
+    payload = _card_to_record_dict(_make_card())
+    record = ExperimentRecord.from_dict(payload)
+
+    assert record.experiment_id == "exp-api-001"
+    assert record.hypothesis == "Improve routing"
+    assert record.candidate_scores == {"quality": 0.8}

@@ -26,6 +26,7 @@ from logger.store import ConversationStore
 from observer import Observer
 from optimizer.change_card import ChangeCardStore
 from optimizer.memory import OptimizationMemory
+from shared.transcript_report_store import TranscriptReportStore
 
 
 @dataclass
@@ -151,6 +152,7 @@ def app(tmp_path: Path) -> FastAPI:
     test_app.state.optimization_memory = memory
     test_app.state.project_memory = ProjectMemory(agent_name="Archive Bot", platform="ADK", use_case="Support")
     test_app.state.change_card_store = change_card_store
+    test_app.state.transcript_report_store = TranscriptReportStore(str(tmp_path / "transcript-reports.json"))
 
     return test_app
 
@@ -316,6 +318,27 @@ class TestTranscriptArchiveImport:
         assert stored is not None
         assert stored.status == "pending"
         assert stored.diff_hunks
+
+    def test_report_list_survives_a_fresh_service_instance(self, client: TestClient, app: FastAPI) -> None:
+        imported = client.post(
+            "/api/intelligence/archive",
+            json={
+                "archive_name": "support-history.zip",
+                "archive_base64": _build_archive_base64(),
+            },
+        )
+        report = imported.json()
+
+        app.state.transcript_intelligence_service = None
+
+        list_resp = client.get("/api/intelligence/reports")
+        assert list_resp.status_code == 200
+        data = list_resp.json()
+        assert any(item["report_id"] == report["report_id"] for item in data["reports"])
+
+        get_resp = client.get(f"/api/intelligence/reports/{report['report_id']}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["report_id"] == report["report_id"]
 
 
 class TestPromptToAgentBuilder:

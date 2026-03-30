@@ -17,6 +17,7 @@ from typing import Any
 from optimizer.change_card import ConfidenceInfo, DiffHunk, ProposedChangeCard
 from optimizer.nl_editor import NLEditor
 from optimizer.providers import LLMRequest, LLMRouter
+from shared.transcript_report_store import TranscriptReportStore
 
 
 INTENT_KEYWORDS: dict[str, list[str]] = {
@@ -136,21 +137,66 @@ class TranscriptReport:
         }
 
 
+def _conversation_from_dict(data: dict[str, Any]) -> TranscriptConversation:
+    """Reconstruct a transcript conversation from persisted data."""
+
+    return TranscriptConversation(
+        conversation_id=str(data.get("conversation_id", "")),
+        session_id=str(data.get("session_id", "")),
+        user_message=str(data.get("user_message", "")),
+        agent_response=str(data.get("agent_response", "")),
+        outcome=str(data.get("outcome", "")),
+        language=str(data.get("language", "en")),
+        intent=str(data.get("intent", "general_support")),
+        transfer_reason=data.get("transfer_reason"),
+        source_file=str(data.get("source_file", "")),
+        procedure_steps=list(data.get("procedure_steps", [])),
+        reference_intent=data.get("reference_intent"),
+        intent_match=data.get("intent_match"),
+    )
+
+
+def _report_from_dict(data: dict[str, Any]) -> TranscriptReport:
+    """Reconstruct a transcript report from persisted data."""
+
+    conversations = [_conversation_from_dict(item) for item in data.get("conversations", [])]
+    insights = [InsightRecord(**item) for item in data.get("insights", [])]
+    return TranscriptReport(
+        report_id=str(data["report_id"]),
+        archive_name=str(data.get("archive_name", "")),
+        created_at=float(data.get("created_at", 0.0)),
+        conversations=conversations,
+        languages=list(data.get("languages", [])),
+        missing_intents=list(data.get("missing_intents", [])),
+        procedure_summaries=list(data.get("procedure_summaries", [])),
+        faq_entries=list(data.get("faq_entries", [])),
+        workflow_suggestions=list(data.get("workflow_suggestions", [])),
+        suggested_tests=list(data.get("suggested_tests", [])),
+        insights=insights,
+        intent_accuracy=data.get("intent_accuracy"),
+        intent_accuracy_samples=int(data.get("intent_accuracy_samples", 0)),
+        knowledge_asset=dict(data.get("knowledge_asset", {})),
+    )
+
+
 class TranscriptIntelligenceService:
     """Import transcript archives and turn them into analyzable agent intelligence."""
 
     def __init__(
         self,
         knowledge_asset_path: str = ".autoagent/intelligence_knowledge_assets.json",
+        report_store: TranscriptReportStore | None = None,
         llm_router: LLMRouter | None = None,
     ) -> None:
-        self._reports: dict[str, TranscriptReport] = {}
+        self._report_store = report_store or TranscriptReportStore()
         self._knowledge_asset_path = Path(knowledge_asset_path)
         self._knowledge_asset_path.parent.mkdir(parents=True, exist_ok=True)
         self._knowledge_assets: dict[str, dict[str, Any]] = self._load_knowledge_assets()
         self._llm_router = llm_router
+        self._reports: dict[str, TranscriptReport] = self._load_reports_from_store()
 
     def list_reports(self) -> list[dict[str, Any]]:
+        self._reports = self._load_reports_from_store()
         reports = sorted(self._reports.values(), key=lambda report: report.created_at, reverse=True)
         return [
             {
@@ -165,7 +211,15 @@ class TranscriptIntelligenceService:
         ]
 
     def get_report(self, report_id: str) -> TranscriptReport | None:
-        return self._reports.get(report_id)
+        report = self._reports.get(report_id)
+        if report is not None:
+            return report
+        stored_report = self._report_store.get_report(report_id)
+        if stored_report is None:
+            return None
+        report = _report_from_dict(stored_report)
+        self._reports[report_id] = report
+        return report
 
     def get_knowledge_asset(self, asset_id: str) -> dict[str, Any] | None:
         """Return a durable knowledge asset by ID."""
@@ -217,7 +271,17 @@ class TranscriptIntelligenceService:
             knowledge_asset=knowledge_asset,
         )
         self._reports[report.report_id] = report
+        self._report_store.save_report(report)
         return report
+
+    def _load_reports_from_store(self) -> dict[str, TranscriptReport]:
+        """Load durable transcript reports into the in-memory cache."""
+
+        reports: dict[str, TranscriptReport] = {}
+        for report_data in self._report_store.list_reports():
+            report = _report_from_dict(report_data)
+            reports[report.report_id] = report
+        return reports
 
     def ask_report(self, report_id: str, question: str) -> dict[str, Any]:
         report = self._require_report(report_id)

@@ -10,6 +10,10 @@ from pathlib import Path
 
 import click
 
+from optimizer.experiments import ExperimentStore
+from shared.contracts import ExperimentRecord
+from shared.experiment_store_adapter import experiment_card_to_record
+
 EXPERIMENT_LOG_HEADER = [
     "cycle",
     "timestamp",
@@ -75,11 +79,79 @@ def utc_timestamp() -> str:
     return datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _shared_store_path(log_path: Path | None = None) -> Path:
+    """Derive the shared experiment store path from the log location."""
+    resolved_path = log_path or default_log_path()
+    return resolved_path.parent / "experiments.db"
+
+
+def _timestamp_to_created_at(timestamp: str) -> float:
+    """Convert the log timestamp format into a UNIX timestamp for shared storage."""
+    parsed = datetime.strptime(timestamp, "%Y-%m-%dT%H:%M:%SZ")
+    return parsed.replace(tzinfo=timezone.utc).timestamp()
+
+
+def _created_at_to_timestamp(created_at: float) -> str:
+    """Convert a stored UNIX timestamp back into the CLI's UTC string format."""
+    return datetime.fromtimestamp(created_at, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _score_value(scores: dict[str, float]) -> float | None:
+    """Extract the composite experiment score from a shared record payload."""
+    if "composite" in scores:
+        return float(scores["composite"])
+    if scores:
+        return float(next(iter(scores.values())))
+    return None
+
+
 def compute_delta(score_before: float | None, score_after: float | None) -> float | None:
     """Compute the score delta when both endpoints are present."""
     if score_before is None or score_after is None:
         return None
     return score_after - score_before
+
+
+def _entry_to_record(entry: ExperimentLogEntry) -> ExperimentRecord:
+    """Project a CLI history row into the shared experiment record contract."""
+    return ExperimentRecord(
+        experiment_id=f"log-{entry.cycle}-{entry.timestamp}",
+        created_at=_timestamp_to_created_at(entry.timestamp),
+        hypothesis=entry.description,
+        touched_surfaces=["optimize"],
+        touched_agents=[],
+        diff_summary=entry.description,
+        eval_set_versions={},
+        replay_set_hash="",
+        baseline_sha="",
+        candidate_sha="",
+        risk_class="",
+        deployment_policy="pr_only",
+        rollback_handle="",
+        total_experiment_cost=0.0,
+        status=entry.status,
+        result_summary=entry.description,
+        operator_name="optimize",
+        baseline_scores={"composite": entry.score_before} if entry.score_before is not None else {},
+        candidate_scores={"composite": entry.score_after} if entry.score_after is not None else {},
+        significance_p_value=1.0,
+        significance_delta=entry.delta or 0.0,
+    )
+
+
+def _record_to_entry(record: ExperimentRecord, cycle: int) -> ExperimentLogEntry:
+    """Project a shared experiment record back into the CLI history view."""
+    score_before = _score_value(record.baseline_scores)
+    score_after = _score_value(record.candidate_scores)
+    return ExperimentLogEntry(
+        cycle=cycle,
+        timestamp=_created_at_to_timestamp(record.created_at),
+        score_before=score_before,
+        score_after=score_after,
+        delta=compute_delta(score_before, score_after),
+        status=record.status,
+        description=record.hypothesis or record.result_summary or record.diff_summary,
+    )
 
 
 def make_entry(
@@ -104,9 +176,15 @@ def make_entry(
 
 
 def append_entry(entry: ExperimentLogEntry, path: Path | None = None) -> None:
-    """Append one experiment row, creating the TSV and header on first write."""
+    """Append one experiment row and mirror it into the shared SQLite store."""
     resolved_path = path or default_log_path()
     resolved_path.parent.mkdir(parents=True, exist_ok=True)
+
+    store_path = _shared_store_path(resolved_path)
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    store = ExperimentStore(db_path=str(store_path))
+    store.save_record(_entry_to_record(entry))
+
     should_write_header = not resolved_path.exists() or resolved_path.stat().st_size == 0
     with resolved_path.open("a", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=EXPERIMENT_LOG_HEADER, delimiter="\t")
@@ -116,8 +194,19 @@ def append_entry(entry: ExperimentLogEntry, path: Path | None = None) -> None:
 
 
 def read_entries(path: Path | None = None) -> list[ExperimentLogEntry]:
-    """Read the TSV source of truth into typed entries for display logic."""
+    """Read the shared store first, falling back to the TSV export for compatibility."""
     resolved_path = path or default_log_path()
+    store_path = _shared_store_path(resolved_path)
+
+    if store_path.exists():
+        store = ExperimentStore(db_path=str(store_path))
+        cards = list(reversed(store.get_all()))
+        if cards:
+            return [
+                _record_to_entry(experiment_card_to_record(card), cycle=index + 1)
+                for index, card in enumerate(cards)
+            ]
+
     if not resolved_path.exists() or resolved_path.stat().st_size == 0:
         return []
 

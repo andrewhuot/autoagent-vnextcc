@@ -68,16 +68,24 @@ def _seed_autofix_proposal() -> AutoFixProposal:
     return proposal
 
 
-def test_root_help_shows_maturity_badges_and_hides_experimental_commands() -> None:
+def test_root_help_shows_shared_taxonomy_and_hides_experimental_commands() -> None:
     runner = _runner()
 
     default_help = runner.invoke(cli, ["--help"])
     assert default_help.exit_code == 0
-    assert "build [Stable]" in default_help.output
-    assert "eval [Stable]" in default_help.output
-    assert "deploy [Stable]" in default_help.output
-    assert "integrations [Beta]" in default_help.output
-    assert "dev [Beta]" in default_help.output
+    for group_name in [
+        "build",
+        "import",
+        "eval",
+        "optimize",
+        "review",
+        "deploy",
+        "observe",
+        "govern",
+        "integrations",
+        "settings",
+    ]:
+        assert group_name in default_help.output
     assert "rl [Experimental]" not in default_help.output
 
     all_help = runner.invoke(cli, ["--all", "--help"])
@@ -88,7 +96,18 @@ def test_root_help_shows_maturity_badges_and_hides_experimental_commands() -> No
 def test_help_exposes_task_oriented_groups() -> None:
     result = _runner().invoke(cli, ["--help"])
     assert result.exit_code == 0
-    for group_name in ["build", "import", "eval", "trace", "improve", "config", "deploy", "integrations", "dev"]:
+    for group_name in [
+        "build",
+        "import",
+        "eval",
+        "optimize",
+        "review",
+        "deploy",
+        "observe",
+        "govern",
+        "integrations",
+        "settings",
+    ]:
         assert group_name in result.output
 
 

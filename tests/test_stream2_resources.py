@@ -298,6 +298,41 @@ class TestInspectCommands:
         assert data["status"] == "ok"
         assert data["data"]["source_prompt"] == "test"
 
+    def test_build_show_reads_from_shared_store(self, tmp_path: Path, monkeypatch) -> None:
+        from shared.build_artifact_store import BuildArtifactStore
+        from shared.contracts import BuildArtifact
+
+        monkeypatch.chdir(tmp_path)
+        store = BuildArtifactStore(
+            path=tmp_path / ".autoagent" / "build_artifacts.json",
+            latest_path=tmp_path / ".autoagent" / "build_artifact_latest.json",
+        )
+        store.save_latest(
+            BuildArtifact(
+                id="build-store-001",
+                created_at="2026-03-29T12:00:00Z",
+                updated_at="2026-03-29T12:00:00Z",
+                source="prompt",
+                status="complete",
+                config_yaml="agent_name: Test",
+                prompt_used="Build a support bot",
+                selector="latest",
+                metadata={
+                    "connectors": ["Shopify"],
+                    "intents": [{"name": "order_status"}],
+                    "tools": [],
+                    "guardrails": ["no_pii"],
+                    "skills": [],
+                },
+            )
+        )
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["build-show", "latest"])
+        assert result.exit_code == 0
+        assert "Build a support bot" in result.output
+        assert "Shopify" in result.output
+
     def test_eval_show_no_results(self, tmp_path: Path, monkeypatch) -> None:
         monkeypatch.chdir(tmp_path)
         runner = CliRunner()
@@ -491,6 +526,34 @@ class TestStream2Helpers:
         assert get_latest_build_artifact() is None
 
         aa_dir = tmp_path / ".autoagent"
-        aa_dir.mkdir()
+        aa_dir.mkdir(exist_ok=True)
         _write_json(aa_dir / "build_artifact_latest.json", {"source_prompt": "hello"})
         assert get_latest_build_artifact()["source_prompt"] == "hello"
+
+    def test_get_latest_build_artifact_prefers_shared_store(self, tmp_path: Path, monkeypatch) -> None:
+        from cli.stream2_helpers import get_latest_build_artifact
+        from shared.build_artifact_store import BuildArtifactStore
+        from shared.contracts import BuildArtifact
+
+        monkeypatch.chdir(tmp_path)
+        store = BuildArtifactStore(
+            path=tmp_path / ".autoagent" / "build_artifacts.json",
+            latest_path=tmp_path / ".autoagent" / "build_artifact_latest.json",
+        )
+        store.save_latest(
+            BuildArtifact(
+                id="build-store-002",
+                created_at="2026-03-29T12:10:00Z",
+                updated_at="2026-03-29T12:10:00Z",
+                source="prompt",
+                status="complete",
+                config_yaml="agent_name: Store Preferred",
+                prompt_used="Build from store",
+                selector="latest",
+            )
+        )
+
+        artifact = get_latest_build_artifact()
+        assert artifact is not None
+        assert artifact["source_prompt"] == "Build from store"
+        assert artifact["artifact_id"] == "build-store-002"

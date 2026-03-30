@@ -1,0 +1,31 @@
+export interface ExperimentRecord {
+  experiment_id: string;
+  created_at: string;
+  updated_at: string;
+  cycle?: number;
+  hypothesis?: string;
+  description: string;
+  status: string;
+  score_before?: number | null;
+  score_after?: number | null;
+  delta?: number | null;
+  touched_surfaces: string[];
+  touched_agents: string[];
+  diff_summary: string;
+  eval_set_versions: Record<string, string>;
+  replay_set_hash: string;
+  baseline_sha: string;
+  candidate_sha: string;
+  risk_class: string;
+  deployment_policy: string;
+  rollback_handle: string;
+  total_experiment_cost: number;
+  result_summary: string;
+  operator_name: string;
+  baseline_scores: Record<string, number>;
+  candidate_scores: Record<string, number>;
+  significance_p_value: number;
+  significance_delta: number;
+  source: 'cli' | 'api' | 'ui';
+  metadata?: Record<string, unknown>;
+}

@@ -102,6 +102,20 @@ def populated_client(skill_store: SkillStore, app: FastAPI) -> TestClient:
     return TestClient(app)
 
 
+def test_skills_api_defaults_to_shared_lifecycle_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API fallback store should use the same lifecycle DB as the CLI."""
+    monkeypatch.chdir(tmp_path)
+
+    app = FastAPI()
+    app.include_router(skills_routes.router)
+
+    response = TestClient(app).get("/api/skills/")
+
+    assert response.status_code == 200
+    assert (tmp_path / ".autoagent" / "core_skills.db").exists()
+    assert not (tmp_path / ".autoagent" / "skills.db").exists()
+
+
 # ---------------------------------------------------------------------------
 # List
 # ---------------------------------------------------------------------------

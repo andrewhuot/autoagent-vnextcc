@@ -8,13 +8,15 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Query, Request, HTTPException
 
+from shared.experiment_store_adapter import experiment_card_to_record
+
 
 router = APIRouter(prefix="/api/experiments", tags=["experiments"])
 
 
-def _card_to_dict(card) -> dict:
-    """Serialize an ExperimentCard dataclass to a JSON-safe dict."""
-    return dataclasses.asdict(card)
+def _card_to_record_dict(card) -> dict:
+    """Serialize an experiment card into the shared record payload."""
+    return experiment_card_to_record(card).to_dict()
 
 
 @router.get("/stats")
@@ -42,7 +44,7 @@ async def list_experiments(
         cards = store.list_by_status(status=status, limit=limit)
     else:
         cards = store.list_recent(limit=limit)
-    return {"experiments": [_card_to_dict(c) for c in cards]}
+    return {"experiments": [_card_to_record_dict(c) for c in cards]}
 
 
 @router.get("/archive")
@@ -146,4 +148,4 @@ async def get_experiment(
     card = store.get(experiment_id)
     if card is None:
         raise HTTPException(status_code=404, detail=f"Experiment not found: {experiment_id}")
-    return _card_to_dict(card)
+    return _card_to_record_dict(card)

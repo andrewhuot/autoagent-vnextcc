@@ -6,6 +6,8 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 
+from shared.contracts import ExperimentRecord
+
 
 @dataclass
 class ExperimentCard:
@@ -32,6 +34,59 @@ class ExperimentCard:
     candidate_scores: dict[str, float] = field(default_factory=dict)
     significance_p_value: float = 1.0
     significance_delta: float = 0.0
+
+    def to_record(self) -> ExperimentRecord:
+        """Convert the internal SQLite model to the shared contract."""
+        return ExperimentRecord(
+            experiment_id=self.experiment_id,
+            created_at=self.created_at,
+            hypothesis=self.hypothesis,
+            touched_surfaces=list(self.touched_surfaces),
+            touched_agents=list(self.touched_agents),
+            diff_summary=self.diff_summary,
+            eval_set_versions=dict(self.eval_set_versions),
+            replay_set_hash=self.replay_set_hash,
+            baseline_sha=self.baseline_sha,
+            candidate_sha=self.candidate_sha,
+            risk_class=self.risk_class,
+            deployment_policy=self.deployment_policy,
+            rollback_handle=self.rollback_handle,
+            total_experiment_cost=self.total_experiment_cost,
+            status=self.status,
+            result_summary=self.result_summary,
+            operator_name=self.operator_name,
+            baseline_scores=dict(self.baseline_scores),
+            candidate_scores=dict(self.candidate_scores),
+            significance_p_value=self.significance_p_value,
+            significance_delta=self.significance_delta,
+        )
+
+    @classmethod
+    def from_record(cls, record: ExperimentRecord) -> ExperimentCard:
+        """Convert the shared contract back into the SQLite model."""
+        return cls(
+            experiment_id=record.experiment_id,
+            created_at=record.created_at,
+            hypothesis=record.hypothesis,
+            touched_surfaces=list(record.touched_surfaces),
+            touched_agents=list(record.touched_agents),
+            diff_summary=record.diff_summary,
+            eval_set_versions=dict(record.eval_set_versions),
+            replay_set_hash=record.replay_set_hash,
+            baseline_sha=record.baseline_sha,
+            candidate_sha=record.candidate_sha,
+            risk_class=record.risk_class,
+            deployment_policy=record.deployment_policy,
+            rollback_handle=record.rollback_handle,
+            total_experiment_cost=record.total_experiment_cost,
+            status=record.status,
+            result_summary=record.result_summary,
+            operator_name=record.operator_name,
+            baseline_scores=dict(record.baseline_scores),
+            candidate_scores=dict(record.candidate_scores),
+            significance_p_value=record.significance_p_value,
+            significance_delta=record.significance_delta,
+        )
 
 
 _VALID_STATUSES = {"pending", "running", "accepted", "rejected", "expired"}
@@ -116,6 +171,10 @@ class ExperimentStore:
             )
             conn.commit()
 
+    def save_record(self, record: ExperimentRecord) -> None:
+        """Insert or replace a shared experiment record."""
+        self.save(ExperimentCard.from_record(record))
+
     def get(self, experiment_id: str) -> ExperimentCard | None:
         """Retrieve a single experiment card by ID, or None if not found."""
         with sqlite3.connect(self.db_path) as conn:
@@ -136,6 +195,13 @@ class ExperimentStore:
                 return None
             return self._row_to_card(row)
 
+    def get_record(self, experiment_id: str) -> ExperimentRecord | None:
+        """Retrieve a shared experiment record by ID, or None if not found."""
+        card = self.get(experiment_id)
+        if card is None:
+            return None
+        return card.to_record()
+
     def list_recent(self, limit: int = 50) -> list[ExperimentCard]:
         """Get the most recent experiment cards ordered by created_at descending."""
         with sqlite3.connect(self.db_path) as conn:
@@ -154,6 +220,10 @@ class ExperimentStore:
                 (limit,),
             ).fetchall()
             return [self._row_to_card(row) for row in rows]
+
+    def list_recent_records(self, limit: int = 50) -> list[ExperimentRecord]:
+        """Get the most recent shared experiment records."""
+        return [card.to_record() for card in self.list_recent(limit=limit)]
 
     def list_by_status(self, status: str, limit: int = 50) -> list[ExperimentCard]:
         """Get experiment cards filtered by status, ordered by created_at descending."""
@@ -174,6 +244,10 @@ class ExperimentStore:
                 (status, limit),
             ).fetchall()
             return [self._row_to_card(row) for row in rows]
+
+    def list_by_status_records(self, status: str, limit: int = 50) -> list[ExperimentRecord]:
+        """Get shared experiment records filtered by status."""
+        return [card.to_record() for card in self.list_by_status(status=status, limit=limit)]
 
     def update_status(
         self, experiment_id: str, status: str, result_summary: str = ""
@@ -210,6 +284,10 @@ class ExperimentStore:
                 """
             ).fetchall()
             return [self._row_to_card(row) for row in rows]
+
+    def get_all_records(self) -> list[ExperimentRecord]:
+        """Get all shared experiment records ordered by created_at descending."""
+        return [card.to_record() for card in self.get_all()]
 
     @staticmethod
     def _row_to_card(row: tuple) -> ExperimentCard:

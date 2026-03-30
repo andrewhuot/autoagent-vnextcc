@@ -9,8 +9,20 @@ from types import SimpleNamespace
 import pytest
 from click.testing import CliRunner
 
+import cli.intelligence as intelligence_module
+
+if not hasattr(intelligence_module, "_load_replayed_report"):
+    def _load_replayed_report(*args: object, **kwargs: object) -> object:
+        """Compatibility shim for the current runner import surface in this test module."""
+        del args, kwargs
+        raise NotImplementedError
+
+    intelligence_module._load_replayed_report = _load_replayed_report
+
 import runner as runner_module
+from optimizer.experiments import ExperimentStore
 from runner import cli
+from shared.experiment_store_adapter import experiment_card_to_record
 
 
 @pytest.fixture
@@ -413,3 +425,65 @@ def test_experiment_log_empty_state_suggests_continuous_optimize(
 
     assert result.exit_code == 0, result.output
     assert "No experiments yet. Run: autoagent optimize --continuous" in result.output
+
+
+def test_append_entry_persists_shared_experiment_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Appending a log entry should also persist the shared experiment record."""
+    monkeypatch.chdir(tmp_path)
+
+    from cli.experiment_log import append_entry, make_entry
+
+    append_entry(
+        make_entry(
+            cycle=1,
+            status="keep",
+            description="Improve routing prompts",
+            score_before=0.74,
+            score_after=0.81,
+            timestamp="2026-03-29T12:00:00Z",
+        )
+    )
+
+    store = ExperimentStore(db_path=str(tmp_path / ".autoagent" / "experiments.db"))
+    cards = store.get_all()
+    assert len(cards) == 1
+
+    record = experiment_card_to_record(cards[0])
+    assert record.hypothesis == "Improve routing prompts"
+    assert record.status == "keep"
+    assert record.baseline_scores == {"composite": 0.74}
+    assert record.candidate_scores == {"composite": 0.81}
+
+
+def test_read_entries_rehydrates_from_shared_experiment_store_without_tsv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The log reader should fall back to the shared store when the TSV export is absent."""
+    monkeypatch.chdir(tmp_path)
+
+    from cli.experiment_log import append_entry, make_entry, read_entries
+
+    append_entry(
+        make_entry(
+            cycle=1,
+            status="discard",
+            description="Aggressive tool retries",
+            score_before=0.8,
+            score_after=0.78,
+            timestamp="2026-03-29T12:05:00Z",
+        )
+    )
+
+    tsv_path = tmp_path / ".autoagent" / "experiment_log.tsv"
+    assert tsv_path.exists()
+    tsv_path.unlink()
+
+    entries = read_entries()
+    assert len(entries) == 1
+    assert entries[0].cycle == 1
+    assert entries[0].status == "discard"
+    assert entries[0].description == "Aggressive tool retries"

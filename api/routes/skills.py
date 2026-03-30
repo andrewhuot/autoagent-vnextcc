@@ -32,6 +32,7 @@ from core.skills import (
     SkillMarketplace,
     SkillValidator,
 )
+from cli.workspace import DEFAULT_LIFECYCLE_SKILL_DB
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
@@ -45,13 +46,14 @@ def _get_skill_store(request: Request) -> SkillStore:
 
     Note: This gets the core.skills.SkillStore, NOT the registry.skill_store
     which is for executable skills. The core.skills system is the unified
-    build-time + run-time skill management layer.
+    build-time + run-time skill management layer, and it defaults to the
+    shared workspace lifecycle store path.
     """
     # app.state.core_skill_store is initialized in api.server.py lifespan.
     # Fall back to on-demand creation only in tests or standalone use.
     store = getattr(request.app.state, "core_skill_store", None)
     if store is None:
-        store = SkillStore(db_path=".autoagent/core_skills.db")
+        store = SkillStore(db_path=str(DEFAULT_LIFECYCLE_SKILL_DB))
         request.app.state.core_skill_store = store
     return store
 

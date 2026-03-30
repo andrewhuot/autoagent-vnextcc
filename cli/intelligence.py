@@ -15,9 +15,7 @@ import click
 import yaml
 
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
-
-
-INTELLIGENCE_STORE_PATH = Path(".autoagent") / "intelligence_reports.json"
+from shared.transcript_report_store import TranscriptReportStore
 
 
 def _invocation_cwd() -> Path:
@@ -34,59 +32,13 @@ def _resolve_input_path(path: Path) -> Path:
     return path if path.is_absolute() else (_invocation_cwd() / path).resolve()
 
 
-class TranscriptReportStore:
-    """Persist imported transcript reports so CLI invocations can reuse them.
+def _report_payload(entry: dict[str, Any]) -> dict[str, Any]:
+    """Return the direct report payload from either supported store shape."""
 
-    The backend service is intentionally in-memory. The CLI needs a thin durable
-    layer so `upload`, `report`, and `generate-agent` work across separate
-    processes while still delegating analysis to the existing backend service.
-    """
-
-    def __init__(self, path: Path = INTELLIGENCE_STORE_PATH) -> None:
-        self.path = path
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-
-    def list_reports(self) -> list[dict[str, Any]]:
-        """Return stored report entries sorted newest first."""
-        payload = self._load()
-        reports = list(payload.get("reports", {}).values())
-        reports.sort(key=lambda item: float(item.get("created_at", 0.0)), reverse=True)
-        return reports
-
-    def get_report(self, report_id: str) -> dict[str, Any] | None:
-        """Return a stored report entry by report ID."""
-        payload = self._load()
-        return payload.get("reports", {}).get(report_id)
-
-    def save_report(
-        self,
-        *,
-        report: dict[str, Any],
-        archive_name: str,
-        archive_base64: str,
-    ) -> None:
-        """Persist the report summary and original archive bytes."""
-        payload = self._load()
-        payload.setdefault("reports", {})
-        report_id = str(report["report_id"])
-        payload["reports"][report_id] = {
-            "report_id": report_id,
-            "archive_name": archive_name,
-            "archive_base64": archive_base64,
-            "created_at": float(report.get("created_at", 0.0)),
-            "report": report,
-        }
-        self._save(payload)
-
-    def _load(self) -> dict[str, Any]:
-        """Load the report store, returning an empty payload when absent."""
-        if not self.path.exists():
-            return {"reports": {}}
-        return json.loads(self.path.read_text(encoding="utf-8"))
-
-    def _save(self, payload: dict[str, Any]) -> None:
-        """Write the report store atomically enough for CLI usage."""
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    report = entry.get("report")
+    if isinstance(report, dict):
+        return dict(report)
+    return dict(entry)
 
 
 def _format_report_table(entries: list[dict[str, Any]]) -> str:
@@ -100,12 +52,12 @@ def _format_report_table(entries: list[dict[str, Any]]) -> str:
         f"{'─' * 12}  {'─' * 24}  {'─' * 13}  {'─' * 18}",
     ]
     for entry in entries:
-        report = entry.get("report", {})
+        report = _report_payload(entry)
         archive_name = str(entry.get("archive_name", ""))[:24]
         conversation_count = int(report.get("conversation_count", 0))
         languages = ", ".join(report.get("languages", []))
         lines.append(
-            f"{entry.get('report_id', ''):<12}  {archive_name:<24}  {conversation_count:>13}  {languages}"
+            f"{report.get('report_id', ''):<12}  {archive_name:<24}  {conversation_count:>13}  {languages}"
         )
     return "\n".join(lines)
 
@@ -169,12 +121,19 @@ def _build_generation_prompt(report: dict[str, Any]) -> str:
 def _load_replayed_report(
     report_entry: dict[str, Any],
 ) -> tuple[TranscriptIntelligenceService, str, dict[str, Any]]:
-    """Rebuild a backend report object from the stored archive payload."""
-    archive_name = str(report_entry["archive_name"])
-    archive_base64 = str(report_entry["archive_base64"])
+    """Compatibility helper for existing runner imports.
+
+    The new shared store keeps the report payload itself durable, so this helper
+    simply reloads the stored report when possible and falls back to the passed
+    payload if the report cannot be refreshed.
+    """
+
     service = TranscriptIntelligenceService()
-    report = service.import_archive(archive_name, archive_base64)
-    return service, report.report_id, report.to_dict()
+    report_id = str(report_entry["report_id"])
+    report = service.get_report(report_id)
+    if report is not None:
+        return service, report.report_id, report.to_dict()
+    return service, report_id, _report_payload(report_entry)
 
 
 @click.group("intelligence")
@@ -236,16 +195,7 @@ def list_reports(json_output: bool) -> None:
     """List stored transcript intelligence reports."""
     entries = TranscriptReportStore().list_reports()
     if json_output:
-        payload = [
-            {
-                "report_id": entry.get("report_id"),
-                "archive_name": entry.get("archive_name"),
-                "created_at": entry.get("created_at"),
-                "report": entry.get("report"),
-            }
-            for entry in entries
-        ]
-        click.echo(json.dumps(payload, indent=2))
+        click.echo(json.dumps([_report_payload(entry) for entry in entries], indent=2))
         return
     click.echo(_format_report_table(entries))
 
@@ -259,7 +209,7 @@ def show_report(report_id: str, json_output: bool) -> None:
     if entry is None:
         raise click.ClickException(f"Unknown transcript intelligence report: {report_id}")
 
-    report = dict(entry.get("report", {}))
+    report = _report_payload(entry)
     if json_output:
         click.echo(json.dumps(report, indent=2))
         return
@@ -273,13 +223,14 @@ def show_report(report_id: str, json_output: bool) -> None:
 @click.option("--json", "json_output", is_flag=True, help="Output the generated config as JSON.")
 def generate_agent(report_id: str, output_path: Path | None, json_output: bool) -> None:
     """Generate an agent config from a stored transcript intelligence report."""
-    entry = TranscriptReportStore().get_report(report_id)
-    if entry is None:
+    service = TranscriptIntelligenceService()
+    report = service.get_report(report_id)
+    if report is None:
         raise click.ClickException(f"Unknown transcript intelligence report: {report_id}")
 
-    service, replayed_report_id, replayed_report = _load_replayed_report(entry)
-    prompt = _build_generation_prompt(replayed_report)
-    generated = service.generate_agent_config(prompt, transcript_report_id=replayed_report_id)
+    report_dict = report.to_dict()
+    prompt = _build_generation_prompt(report_dict)
+    generated = service.generate_agent_config(prompt, transcript_report_id=report.report_id)
 
     if output_path is not None:
         output_path.parent.mkdir(parents=True, exist_ok=True)

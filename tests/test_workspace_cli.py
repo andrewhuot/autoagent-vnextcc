@@ -299,6 +299,7 @@ def test_init_then_build_supports_repo_free_user_flow(
 
     assert result.exit_code == 0, result.output
     assert (workspace / ".autoagent" / "build_artifact_latest.json").exists()
+    assert (workspace / ".autoagent" / "build_artifacts.json").exists()
     assert "Next step:" in result.output
 
 

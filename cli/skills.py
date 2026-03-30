@@ -35,9 +35,10 @@ from core.skills.marketplace import SkillMarketplace
 from core.skills.store import SkillStore
 from core.skills.types import SkillKind
 from core.skills.validator import SkillValidator
+from cli.workspace import DEFAULT_LIFECYCLE_SKILL_DB
 
 # Default database path
-DEFAULT_SKILLS_DB = os.environ.get("AUTOAGENT_SKILLS_DB", ".autoagent/skills.db")
+DEFAULT_SKILLS_DB = os.environ.get("AUTOAGENT_SKILLS_DB", str(DEFAULT_LIFECYCLE_SKILL_DB))
 
 
 def _get_store(db_path: str | None = None) -> SkillStore:

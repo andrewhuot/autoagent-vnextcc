@@ -92,6 +92,17 @@ def populated_db(temp_db, sample_skill):
     return temp_db
 
 
+def test_skill_commands_default_to_shared_lifecycle_store(runner, tmp_path, monkeypatch):
+    """Skill commands should create the shared lifecycle store by default."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli, ["skill", "list"])
+
+    assert result.exit_code == 0
+    assert (tmp_path / ".autoagent" / "core_skills.db").exists()
+    assert not (tmp_path / ".autoagent" / "skills.db").exists()
+
+
 class TestSkillList:
     """Tests for 'autoagent skill list' command."""
 

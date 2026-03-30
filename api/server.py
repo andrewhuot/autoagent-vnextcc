@@ -58,6 +58,7 @@ from api.routes import (
     registry as registry_routes,
     sandbox as sandbox_routes,
     scorers as scorers_routes,
+    setup as setup_routes,
     skills as skills_routes,
     traces as traces_routes,
     what_if as what_if_routes,
@@ -77,6 +78,15 @@ from api.websocket import ConnectionManager
 CONVERSATIONS_DB = os.environ.get("AUTOAGENT_DB", "conversations.db")
 CONFIGS_DIR = os.environ.get("AUTOAGENT_CONFIGS", "configs")
 OPTIMIZER_MEMORY_DB = os.environ.get("AUTOAGENT_MEMORY_DB", "optimizer_memory.db")
+EXPERIMENTS_DB = os.environ.get("AUTOAGENT_EXPERIMENTS_DB", ".autoagent/experiments.db")
+TRANSCRIPT_REPORT_STORE_PATH = os.environ.get(
+    "AUTOAGENT_TRANSCRIPT_REPORTS",
+    ".autoagent/intelligence_reports.json",
+)
+BUILD_ARTIFACT_STORE_PATH = os.environ.get(
+    "AUTOAGENT_BUILD_ARTIFACTS",
+    ".autoagent/build_artifacts.json",
+)
 WEB_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
 
 
@@ -133,6 +143,8 @@ async def lifespan(app: FastAPI):
     from optimizer.skill_engine import SkillEngine
     from optimizer.skill_autolearner import SkillAutoLearner
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
+    from shared.build_artifact_store import BuildArtifactStore
+    from shared.transcript_report_store import TranscriptReportStore
 
     runtime = load_runtime_config()
     startup_epoch = time.time()
@@ -175,7 +187,15 @@ async def lifespan(app: FastAPI):
         llm_router=router,
         mock_reason=router.mock_reason,
     )
-    transcript_intelligence_service = TranscriptIntelligenceService(llm_router=router)
+    transcript_report_store = TranscriptReportStore(path=TRANSCRIPT_REPORT_STORE_PATH)
+    build_artifact_store = BuildArtifactStore(
+        path=BUILD_ARTIFACT_STORE_PATH,
+        latest_path=Path(BUILD_ARTIFACT_STORE_PATH).parent / "build_artifact_latest.json",
+    )
+    transcript_intelligence_service = TranscriptIntelligenceService(
+        llm_router=router,
+        report_store=transcript_report_store,
+    )
 
     # Initialize skills system
     skill_store = SkillStore(db_path=".autoagent/core_skills.db")
@@ -252,7 +272,9 @@ async def lifespan(app: FastAPI):
     app.state.observer = observer
     app.state.eval_runner = eval_runner
     app.state.proposer = proposer
+    app.state.transcript_report_store = transcript_report_store
     app.state.transcript_intelligence_service = transcript_intelligence_service
+    app.state.build_artifact_store = build_artifact_store
     app.state.optimizer = optimizer
     app.state.what_if_engine = WhatIfEngine(conversation_store=conversation_store)
     app.state.deployer = deployer
@@ -282,7 +304,7 @@ async def lifespan(app: FastAPI):
 
     app.state.trace_store = trace_store
     app.state.opportunity_queue = OpportunityQueue(db_path=".autoagent/opportunities.db")
-    app.state.experiment_store = ExperimentStore(db_path=".autoagent/experiments.db")
+    app.state.experiment_store = ExperimentStore(db_path=EXPERIMENTS_DB)
     app.state.tracing_middleware = getattr(eval_runner, "tracing_middleware")
 
     # Production controls (from R2 simplicity thesis)
@@ -422,6 +444,7 @@ app.include_router(optimize_routes.router)
 app.include_router(optimize_stream_routes.router)
 app.include_router(quickfix_routes.router)
 app.include_router(config_routes.router)
+app.include_router(setup_routes.router)
 app.include_router(health_routes.router)
 app.include_router(conversations_routes.router)
 app.include_router(deploy_routes.router)

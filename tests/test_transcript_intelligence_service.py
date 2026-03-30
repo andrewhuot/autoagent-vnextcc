@@ -11,6 +11,7 @@ from pathlib import Path
 
 from optimizer.change_card import ChangeCardStore
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
+from shared.transcript_report_store import TranscriptReportStore
 
 
 @dataclass
@@ -96,10 +97,16 @@ def _archive_base64(
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def _service(tmp_path: Path, *, llm_router: object | None = None) -> TranscriptIntelligenceService:
+def _service(
+    tmp_path: Path,
+    *,
+    llm_router: object | None = None,
+    report_store_path: Path | None = None,
+) -> TranscriptIntelligenceService:
     return TranscriptIntelligenceService(
         llm_router=llm_router,
         knowledge_asset_path=str(tmp_path / "intelligence-assets.json"),
+        report_store=TranscriptReportStore(report_store_path or (tmp_path / "transcript-reports.json")),
     )
 
 
@@ -115,6 +122,27 @@ def test_import_archive_creates_knowledge_asset() -> None:
     assert stored is not None
     assert stored["asset_id"] == report.knowledge_asset["asset_id"]
     assert len(stored["entries"]) >= 3
+
+
+def test_import_archive_persists_report_for_a_fresh_service_instance(tmp_path: Path) -> None:
+    report_store_path = tmp_path / "transcript-reports.json"
+    service = _service(tmp_path, report_store_path=report_store_path)
+
+    report = service.import_archive("support.zip", _archive_base64())
+
+    fresh_service = _service(tmp_path, report_store_path=report_store_path)
+
+    reports = fresh_service.list_reports()
+    assert [item["report_id"] for item in reports] == [report.report_id]
+
+    loaded = fresh_service.get_report(report.report_id)
+    assert loaded is not None
+    assert loaded.report_id == report.report_id
+    assert loaded.archive_name == "support.zip"
+    assert len(loaded.conversations) == len(report.conversations)
+
+    generated = fresh_service.generate_agent_config("Build a support agent", transcript_report_id=report.report_id)
+    assert generated["metadata"]["created_from"] == "transcript"
 
 
 def test_import_archive_uses_llm_intent_classification_when_real_router_available(tmp_path: Path) -> None:

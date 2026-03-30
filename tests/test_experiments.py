@@ -7,6 +7,11 @@ from pathlib import Path
 
 import pytest
 
+from shared.contracts import ExperimentRecord
+from shared.experiment_store_adapter import (
+    experiment_card_to_record,
+    experiment_record_to_card,
+)
 from optimizer.experiments import ExperimentCard, ExperimentStore
 
 
@@ -106,3 +111,18 @@ def test_experiment_store_get_nonexistent(tmp_path: Path) -> None:
     """Getting a non-existent experiment should return None."""
     store = ExperimentStore(db_path=str(tmp_path / "experiments.db"))
     assert store.get("does-not-exist") is None
+
+
+def test_experiment_card_and_record_adapter_round_trip() -> None:
+    """The shared adapter should preserve experiment fields across the contract boundary."""
+    card = _make_card(experiment_id="exp-adapter", status="accepted")
+
+    record = experiment_card_to_record(card)
+    assert isinstance(record, ExperimentRecord)
+    assert record.experiment_id == card.experiment_id
+    assert record.hypothesis == card.hypothesis
+    assert record.status == card.status
+    assert record.candidate_scores == card.candidate_scores
+
+    restored = experiment_record_to_card(record)
+    assert restored == card

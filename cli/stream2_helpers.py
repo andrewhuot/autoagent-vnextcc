@@ -226,13 +226,17 @@ def is_selector(value: str) -> bool:
 
 def get_latest_build_artifact(autoagent_dir: str = ".autoagent") -> dict | None:
     """Load the latest build artifact."""
-    path = Path(autoagent_dir) / "build_artifact_latest.json"
-    if not path.exists():
-        return None
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return None
+    from shared.build_artifact_store import BuildArtifactStore
+
+    autoagent_path = Path(autoagent_dir)
+    store = BuildArtifactStore(
+        path=autoagent_path / "build_artifacts.json",
+        latest_path=autoagent_path / "build_artifact_latest.json",
+    )
+    artifact = store.get_latest_legacy()
+    if artifact is not None:
+        return artifact
+    return None
 
 
 def get_latest_eval_result() -> dict | None:

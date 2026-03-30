@@ -48,6 +48,7 @@ import shutil
 import sys
 import time
 import traceback
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -107,6 +108,9 @@ from optimizer.reliability import (
 from core.skills import SkillStore
 from optimizer.skill_engine import SkillEngine
 from optimizer.skill_autolearner import SkillAutoLearner
+from shared.build_artifact_store import BuildArtifactStore
+from shared.contracts import BuildArtifact
+from shared.taxonomy import COMMAND_GROUPS, COMMAND_TAXONOMY
 
 
 # ---------------------------------------------------------------------------
@@ -162,15 +166,8 @@ class AutoAgentGroup(click.Group):
         help_text = super().get_help(ctx)
         if ctx.parent is None:
             task_groups = [
-                "  build [Stable]",
-                "  import [Stable]",
-                "  eval [Stable]",
-                "  trace [Stable]",
-                "  improve [Stable]",
-                "  config [Stable]",
-                "  deploy [Stable]",
-                "  integrations [Beta]",
-                "  dev [Beta]",
+                f"  {group:<12} {COMMAND_TAXONOMY[group].description}"
+                for group in COMMAND_GROUPS
             ]
             if ctx.meta.get("show_all", False):
                 task_groups.append("  rl [Experimental]")
@@ -1117,13 +1114,47 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
 
     config = _artifact_to_seed_config(prompt, artifact)
     config_path = _next_built_config_path(target / "configs")
-    config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+    config_yaml = yaml.safe_dump(config, sort_keys=False)
+    config_path.write_text(config_yaml, encoding="utf-8")
 
     eval_path = target / "evals" / "cases" / "generated_build.yaml"
     _write_generated_eval_cases(eval_path, artifact)
 
     artifact_path = target / ".autoagent" / "build_artifact_latest.json"
     artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+
+    prompt_summary = " ".join(prompt.split())
+    title = prompt_summary[:72] if len(prompt_summary) <= 72 else f"{prompt_summary[:69]}..."
+    build_artifact_store = BuildArtifactStore(
+        path=target / ".autoagent" / "build_artifacts.json",
+        latest_path=artifact_path,
+    )
+    build_artifact_store.save_latest(
+        BuildArtifact(
+            id=f"build-{uuid.uuid4().hex[:12]}",
+            created_at=datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            updated_at=datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z"),
+            source="cli",
+            status="complete",
+            config_yaml=config_yaml,
+            prompt_used=prompt,
+            eval_draft=str(eval_path),
+            starter_config_path=str(config_path),
+            selector="latest",
+            metadata={
+                "title": title or "CLI Build Artifact",
+                "summary": "CLI build generated from a natural-language prompt.",
+                "connectors": artifact.get("connectors", []),
+                "intents": artifact.get("intents", []),
+                "tools": artifact.get("tools", []),
+                "guardrails": artifact.get("guardrails", []),
+                "skills": artifact.get("skills", []),
+                "integration_templates": artifact.get("integration_templates", []),
+                "legacy_payload": artifact,
+            },
+        ),
+        legacy_payload=artifact,
+    )
 
     if json_output:
         click.echo(json.dumps(artifact, indent=2))
