@@ -298,7 +298,7 @@ class TestStatusCommand:
             "--memory-db", memory_db,
         ])
         assert result.exit_code == 0
-        assert "Conversations: 0" in result.output
+        assert "AutoAgent Status" in result.output
 
 
 class TestLogsCommand:

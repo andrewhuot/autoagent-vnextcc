@@ -64,7 +64,7 @@ class TestBareAutoagentStatusHome:
 
             assert result.exit_code == 0, result.output
             assert "AutoAgent Status" in result.output
-            assert "Next action:" in result.output
+            assert "Next step:" in result.output
 
 
 class TestGrammarStandardization:
@@ -317,11 +317,11 @@ class TestStreamBQuickWins:
             tracker = CostTracker(db_path=".autoagent/cost_tracker.db")
             tracker.record_cycle("cycle-001", spent_dollars=0.42, improvement_delta=0.05)
 
-            result = runner.invoke(cli, ["status"])
+            result = runner.invoke(cli, ["status", "--verbose"])
 
             assert result.exit_code == 0, result.output
-            assert "Last eval tokens" in result.output
-            assert "Last optimize cost" in result.output
+            assert "Last eval:" in result.output
+            assert "Last optimize:" in result.output
 
     def test_edit_interactive_shows_workspace_help_and_quit_hints(self, runner: CliRunner) -> None:
         """Interactive edit should introduce workspace context and help affordances."""

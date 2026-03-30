@@ -308,16 +308,16 @@ class TestStatusCommand:
         assert "Safety:" in result.output
 
     def test_status_shows_cycles(self, runner):
-        result = runner.invoke(cli, ["status"])
+        result = runner.invoke(cli, ["status", "--verbose"])
         assert "Cycles run:" in result.output
 
     def test_status_shows_loop(self, runner):
-        result = runner.invoke(cli, ["status"])
+        result = runner.invoke(cli, ["status", "--verbose"])
         assert "Loop:" in result.output
 
     def test_status_shows_next_action(self, runner):
         result = runner.invoke(cli, ["status"])
-        assert "Next action:" in result.output
+        assert "Next step:" in result.output
 
 
 # ---------------------------------------------------------------------------

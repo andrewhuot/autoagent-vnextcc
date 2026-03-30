@@ -4103,7 +4103,8 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False) -> None:
+@click.option("--verbose", "-v", is_flag=True, help="Show extra details (conversations, cycles, token usage).")
+def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False, verbose: bool = False) -> None:
     """Show system health, config versions, and recent activity.
 
     Examples:
@@ -4230,7 +4231,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
         last_optimize_cost_label=f"${float((usage_snapshot.get('last_optimize') or {}).get('spent_dollars', 0.0)):.2f}",
         next_action=next_action,
     )
-    render_status_home(snapshot)
+    render_status_home(snapshot, verbose=verbose)
 
 
 # ---------------------------------------------------------------------------
@@ -5351,18 +5352,30 @@ def review_show(card_id: str, json_output: bool = False) -> None:
 def review_apply(card_id: str, output_format: str = "text") -> None:
     """Apply (accept) a change card.
 
+    Supports selectors: pending, latest.
+
     Examples:
       autoagent review apply abc12345
+      autoagent review apply pending
     """
     from cli.output import resolve_output_format
     from cli.permissions import PermissionManager
     from cli.progress import ProgressRenderer
+    from cli.stream2_helpers import is_selector
     from optimizer.change_card import ChangeCardStore
 
     resolved_output_format = resolve_output_format(output_format)
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
-    progress.phase_started("review-apply", message=f"Apply change card {card_id}")
     store = ChangeCardStore()
+
+    if is_selector(card_id):
+        cards = store.list_pending(limit=1)
+        if not cards:
+            click.echo(f"No {card_id} change cards found.")
+            raise SystemExit(1)
+        card_id = cards[0].card_id
+
+    progress.phase_started("review-apply", message=f"Apply change card {card_id}")
     card = store.get(card_id)
     if card is None:
         click.echo(f"Change card not found: {card_id}")
@@ -5390,12 +5403,24 @@ def review_apply(card_id: str, output_format: str = "text") -> None:
 def review_reject(card_id: str, reason: str) -> None:
     """Reject a change card with an optional reason.
 
+    Supports selectors: pending, latest.
+
     Examples:
       autoagent review reject abc12345 --reason "Too risky"
+      autoagent review reject pending
     """
+    from cli.stream2_helpers import is_selector
     from optimizer.change_card import ChangeCardStore
 
     store = ChangeCardStore()
+
+    if is_selector(card_id):
+        cards = store.list_pending(limit=1)
+        if not cards:
+            click.echo(f"No {card_id} change cards found.")
+            raise SystemExit(1)
+        card_id = cards[0].card_id
+
     card = store.get(card_id)
     if card is None:
         click.echo(f"Change card not found: {card_id}")

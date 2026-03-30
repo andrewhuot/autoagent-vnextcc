@@ -341,9 +341,8 @@ def test_status_home_screen_shows_workspace_summary_and_counts(
     assert result.exit_code == 0, result.output
     assert "Workspace:" in result.output
     assert "Mode:" in result.output
-    assert "Active config:" in result.output
-    assert "Latest eval:" in result.output
-    assert "Pending review cards:" in result.output
-    assert "Pending AutoFix proposals:" in result.output
+    assert "Config:" in result.output
+    assert "Eval score:" in result.output
+    assert "Pending:" in result.output
     assert "Deployment:" in result.output
     assert "Next step:" in result.output
