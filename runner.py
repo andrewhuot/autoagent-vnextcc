@@ -223,8 +223,15 @@ class DefaultCommandGroup(click.Group):
 
 def _load_config_dict(config_path: str) -> dict:
     """Load a raw config dictionary from disk."""
-    with Path(config_path).open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
+    from cli.errors import click_error
+
+    try:
+        with Path(config_path).open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+    except FileNotFoundError as exc:
+        raise click_error(f"Config file not found: {config_path}") from exc
+    except yaml.YAMLError as exc:
+        raise click_error(f"Could not parse config file: {config_path}") from exc
 
 
 def _enter_discovered_workspace(command_name: str | None) -> AutoAgentWorkspace | None:
@@ -239,9 +246,11 @@ def _enter_discovered_workspace(command_name: str | None) -> AutoAgentWorkspace 
 
 def _require_workspace(command_name: str | None = None) -> AutoAgentWorkspace:
     """Return the current workspace or raise a helpful CLI error."""
+    from cli.errors import click_error
+
     workspace = _enter_discovered_workspace(command_name)
     if workspace is None:
-        raise click.ClickException("No AutoAgent workspace found. Run autoagent init")
+        raise click_error("No AutoAgent workspace found. Run autoagent init to create one.")
     return workspace
 
 
@@ -982,6 +991,24 @@ def _continuous_status_line(
     )
 
 
+def _proposer_total_cost(proposer: Proposer) -> float:
+    """Return the accumulated router cost for the current proposer."""
+    if proposer.llm_router is None:
+        return 0.0
+    summary = proposer.llm_router.cost_summary()
+    return round(sum(float(item.get("total_cost", 0.0)) for item in summary.values()), 8)
+
+
+def _runtime_budget_config(runtime: object) -> tuple[str, float, float, int]:
+    """Return budget tracker settings, tolerating lightweight test doubles."""
+    budget = getattr(runtime, "budget", None)
+    tracker_db_path = str(getattr(budget, "tracker_db_path", ".autoagent/cost_tracker.db"))
+    per_cycle_dollars = float(getattr(budget, "per_cycle_dollars", 1.0))
+    daily_dollars = float(getattr(budget, "daily_dollars", 10.0))
+    stall_threshold_cycles = int(getattr(budget, "stall_threshold_cycles", 5))
+    return tracker_db_path, per_cycle_dollars, daily_dollars, stall_threshold_cycles
+
+
 def _build_runtime_components() -> tuple[
     object,
     EvalRunner,
@@ -991,7 +1018,10 @@ def _build_runtime_components() -> tuple[
     SkillAutoLearner | None,
 ]:
     """Create runtime-configured optimizer dependencies."""
+    from cli.model import apply_model_overrides
+
     runtime = load_runtime_config()
+    runtime = apply_model_overrides(runtime)
     eval_runner = _build_eval_runner(runtime)
     router = build_router_from_runtime_config(runtime.optimizer)
     proposer = Proposer(
@@ -1243,6 +1273,11 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
 cli.add_command(mode_group)
 cli.add_command(mcp_group)
 cli.add_command(intelligence_group)
+from cli.model import model_group
+from cli.usage import usage_command
+
+cli.add_command(model_group)
+cli.add_command(usage_command)
 
 
 # ---------------------------------------------------------------------------
@@ -1529,9 +1564,28 @@ def build_group() -> None:
 )
 @click.option("--output-dir", default=".", show_default=True, help="Directory for generated build artifacts.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output artifact as JSON only.")
-def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_output: bool = False) -> None:
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render human text, a final JSON envelope, or stream JSON progress events.",
+)
+def build_agent(
+    prompt: str,
+    connectors: tuple[str, ...],
+    output_dir: str,
+    json_output: bool = False,
+    output_format: str = "text",
+) -> None:
     """Build an agent artifact from natural language and scaffold eval/deploy handoff files."""
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("build", message="Generate build artifact from prompt")
 
     target = Path(output_dir).resolve()
     target.mkdir(parents=True, exist_ok=True)
@@ -1552,12 +1606,15 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
     config_path = _next_built_config_path(target / "configs")
     config_yaml = yaml.safe_dump(config, sort_keys=False)
     config_path.write_text(config_yaml, encoding="utf-8")
+    progress.artifact_written("config", path=str(config_path))
 
     eval_path = target / "evals" / "cases" / "generated_build.yaml"
     _write_generated_eval_cases(eval_path, artifact)
+    progress.artifact_written("evals", path=str(eval_path))
 
     artifact_path = target / ".autoagent" / "build_artifact_latest.json"
     artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+    progress.artifact_written("artifact", path=str(artifact_path))
 
     prompt_summary = " ".join(prompt.split())
     title = prompt_summary[:72] if len(prompt_summary) <= 72 else f"{prompt_summary[:69]}..."
@@ -1591,8 +1648,13 @@ def build_agent(prompt: str, connectors: tuple[str, ...], output_dir: str, json_
         ),
         legacy_payload=artifact,
     )
+    progress.phase_completed("build", message="Build artifact ready")
+    progress.next_action("autoagent eval run")
 
-    if json_output:
+    if resolved_output_format == "stream-json":
+        return
+
+    if resolved_output_format == "json":
         click.echo(json.dumps(artifact, indent=2))
         return
 
@@ -1725,9 +1787,16 @@ def eval_group() -> None:
     help="Force the real-agent eval path even if optimizer.use_mock is enabled.",
 )
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
              category: str | None, output: str | None, real_agent: bool = False,
-             json_output: bool = False) -> None:
+             json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
 
     Examples:
@@ -1737,9 +1806,15 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
       autoagent eval run --output results.json
     """
     from cli.stream2_helpers import json_response
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("eval", message="Run evaluation suite")
 
     runtime = load_runtime_config()
-    if not json_output:
+    if resolved_output_format == "text":
         click.echo(click.style(f"✦ {_soul_line('eval')}", fg="cyan"))
         _print_cli_plan(
             "Eval plan",
@@ -1753,7 +1828,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     config = None
     if config_path:
         config = _load_config_dict(config_path)
-        if not json_output:
+        if resolved_output_format == "text":
             click.echo(f"Evaluating config: {config_path}")
     else:
         workspace = discover_workspace()
@@ -1762,9 +1837,9 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             if resolved is not None:
                 config = resolved.config
                 config_path = str(resolved.path)
-                if not json_output:
+                if resolved_output_format == "text":
                     click.echo(f"Evaluating active config: {resolved.path}")
-        if config is None and not json_output:
+        if config is None and resolved_output_format == "text":
             click.echo("Evaluating with default config")
 
     runner = _build_eval_runner(
@@ -1773,22 +1848,30 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         use_real_agent=real_agent,
         default_agent_config=config,
     )
-    _warn_mock_modes(eval_runner=runner, json_output=json_output)
+    _warn_mock_modes(eval_runner=runner, json_output=(resolved_output_format == "json"))
 
     if category:
         score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
-        if json_output:
+        progress.phase_completed("eval", message=f"Category '{category}' complete")
+        progress.next_action("autoagent improve")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", _score_to_dict(score), next_cmd="autoagent improve"))
             return
         _print_score(score, f"Category: {category}")
     else:
         score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
-        if json_output:
+        progress.phase_completed("eval", message="Full eval suite complete")
+        progress.next_action("autoagent improve")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", _score_to_dict(score), next_cmd="autoagent improve"))
             return
         _print_score(score, "Full eval suite")
 
-    if not json_output:
+    if resolved_output_format == "text":
         click.echo(click.style(f"\n  Mood: {_score_mood(score.composite)}", fg="magenta"))
         _print_next_actions(
             [
@@ -1823,6 +1906,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             ],
         }
         Path(output).write_text(json.dumps(result, indent=2), encoding="utf-8")
+        progress.artifact_written("eval_results", path=output)
         click.echo(f"\nResults written to {output}")
 
 
@@ -2264,6 +2348,14 @@ def _run_optimize_cycle(
               help="Danger mode: auto-promote accepted configs without manual review.")
 @click.option("--dry-run", is_flag=True, help="Preview the optimization run without mutating state.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def optimize(
     cycles: int,
     continuous: bool,
@@ -2275,6 +2367,8 @@ def optimize(
     full_auto: bool,
     dry_run: bool,
     json_output: bool = False,
+    max_budget_usd: float | None = None,
+    output_format: str = "text",
 ) -> None:
     """Run optimization cycles to improve agent config.
 
@@ -2284,8 +2378,17 @@ def optimize(
       autoagent optimize --continuous
       autoagent optimize --mode advanced --cycles 3
     """
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+    from cli.usage import enforce_workspace_budget
+    from optimizer.cost_tracker import CostTracker
     from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
-    if not json_output:
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("optimize", message="Run optimization cycle(s)")
+
+    if resolved_output_format == "text":
         click.echo(click.style(f"\n✦ {_soul_line('optimize')}", fg="cyan"))
         if full_auto:
             click.echo(click.style("⚠ FULL AUTO ENABLED: skipping manual promotion gates.", fg="yellow"))
@@ -2311,8 +2414,9 @@ def optimize(
         mode_enum = OptimizationMode(mode)
         mode_config = ModeConfig(mode=mode_enum)
         resolved = ModeRouter().resolve(mode_config)
-        click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
-                   f"candidates={resolved.max_candidates})")
+        if resolved_output_format == "text":
+            click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
+                       f"candidates={resolved.max_candidates})")
 
     if dry_run:
         from cli.stream2_helpers import json_response
@@ -2325,8 +2429,9 @@ def optimize(
             "db": db,
             "configs_dir": configs_dir,
             "memory_db": memory_db,
+            "max_budget_usd": max_budget_usd,
         }
-        if json_output:
+        if resolved_output_format == "json":
             click.echo(json_response("ok", preview, next_cmd="autoagent optimize"))
         else:
             click.echo("Dry run: optimization would execute with the following plan:")
@@ -2337,6 +2442,17 @@ def optimize(
             click.echo(f"  configs_dir: {configs_dir}")
         return
 
+    budget_ok, budget_message, budget_snapshot = enforce_workspace_budget(max_budget_usd)
+    if not budget_ok:
+        progress.warning(message=budget_message or "Budget reached")
+        if resolved_output_format == "json":
+            from cli.stream2_helpers import json_response
+
+            click.echo(json_response("ok", {"message": budget_message, "usage": budget_snapshot}, next_cmd="autoagent usage"))
+            return
+        click.echo(budget_message)
+        return
+
     (
         runtime,
         eval_runner,
@@ -2345,11 +2461,18 @@ def optimize(
         adversarial_simulator,
         skill_autolearner,
     ) = _build_runtime_components()
-    _warn_mock_modes(proposer=proposer, json_output=json_output)
+    _warn_mock_modes(proposer=proposer, json_output=(resolved_output_format == "json"))
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
+    tracker_db_path, per_cycle_dollars, daily_dollars, stall_threshold_cycles = _runtime_budget_config(runtime)
+    cost_tracker = CostTracker(
+        db_path=tracker_db_path,
+        per_cycle_budget_dollars=per_cycle_dollars,
+        daily_budget_dollars=daily_dollars,
+        stall_threshold_cycles=stall_threshold_cycles,
+    )
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -2379,17 +2502,18 @@ def optimize(
     skipped_count = 0
     display_cycle = 1
 
-    if continuous and not json_output:
+    if continuous and resolved_output_format == "text":
         click.echo("Starting continuous optimization. Press Ctrl+C to stop.")
 
     try:
         while True:
+            cost_before = _proposer_total_cost(proposer)
             cycle_result, all_time_best = _run_optimize_cycle(
                 cycle_number=next_cycle_number,
                 display_cycle=display_cycle,
                 display_total=None if continuous else cycles,
                 continuous=continuous,
-                json_output=json_output,
+                json_output=(resolved_output_format == "json"),
                 full_auto=full_auto,
                 store=store,
                 observer=observer,
@@ -2401,6 +2525,21 @@ def optimize(
                 all_time_best=all_time_best,
                 log_path=log_path,
             )
+            cost_after = _proposer_total_cost(proposer)
+            cycle_cost = max(0.0, round(cost_after - cost_before, 8))
+            cycle_delta = float(cycle_result.get("delta") or 0.0)
+            cost_tracker.record_cycle(
+                cycle_id=f"optimize-{cycle_result['experiment_cycle']}",
+                spent_dollars=cycle_cost,
+                improvement_delta=cycle_delta,
+            )
+            progress.phase_completed(
+                "optimize-cycle",
+                message=(
+                    f"Cycle {cycle_result['experiment_cycle']} "
+                    f"{cycle_result['status']} ({cycle_delta:+.2f})"
+                ),
+            )
 
             experiments_run += 1
             if cycle_result["status"] == "keep":
@@ -2411,10 +2550,12 @@ def optimize(
                 skipped_count += 1
 
             if continuous:
-                if json_output:
+                if resolved_output_format == "json":
                     from cli.stream2_helpers import json_response
 
                     click.echo(json_response("ok", cycle_result))
+                elif resolved_output_format == "stream-json":
+                    progress.next_action("autoagent status")
                 else:
                     click.echo(
                         _continuous_status_line(
@@ -2433,7 +2574,7 @@ def optimize(
             display_cycle += 1
     except KeyboardInterrupt:
         if continuous:
-            if not json_output:
+            if resolved_output_format == "text":
                 best_entry = best_experiment_log_entry(read_experiment_log_entries(log_path))
                 best_score = best_entry.score_after if best_entry is not None and best_entry.score_after is not None else all_time_best
                 click.echo(
@@ -2445,7 +2586,13 @@ def optimize(
             return
         raise
 
-    if json_output:
+    progress.phase_completed("optimize", message="Optimization run complete")
+    progress.next_action("autoagent status")
+
+    if resolved_output_format == "stream-json":
+        return
+
+    if resolved_output_format == "json":
         from cli.stream2_helpers import json_response
 
         click.echo(json_response("ok", json_cycle_results, next_cmd="autoagent status"))
@@ -3185,6 +3332,13 @@ def config_migrate(input_file: str, output: str | None) -> None:
 @click.option("--dry-run", is_flag=True, help="Preview the deployment plan without mutating state.")
 @click.option("--yes", "acknowledge", is_flag=True, default=False, help="Skip interactive deployment confirmation.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text, a final JSON envelope, or stream JSON progress events.",
+)
 def deploy(
     workflow: str | None,
     config_version: int | None,
@@ -3202,6 +3356,7 @@ def deploy(
     dry_run: bool,
     acknowledge: bool,
     json_output: bool = False,
+    output_format: str = "text",
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
 
@@ -3212,6 +3367,14 @@ def deploy(
       autoagent deploy canary --yes
       autoagent deploy --target cx-studio
     """
+    from cli.output import resolve_output_format
+    from cli.permissions import PermissionManager
+    from cli.progress import ProgressRenderer
+
+    resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("deploy", message="Prepare deployment")
+
     if workflow is not None:
         if workflow == "release":
             strategy = "immediate"
@@ -3239,7 +3402,9 @@ def deploy(
             "config": config,
         }
         output_path.write_text(json.dumps(package, indent=2), encoding="utf-8")
-        click.echo(f"CX export package written: {output_path}")
+        progress.artifact_written("cx-export", path=str(output_path))
+        if resolved_output_format == "text":
+            click.echo(f"CX export package written: {output_path}")
 
         if snapshot:
             try:
@@ -3258,9 +3423,15 @@ def deploy(
                 changes = exporter.preview_changes(config, snapshot)
                 click.echo(f"Preview: {len(changes)} change(s) ready for CX export")
             except Exception as exc:
-                click.echo(click.style(f"Warning: CX preview unavailable ({exc})", fg="yellow"))
+                progress.warning(message=f"CX preview unavailable ({exc})", phase="deploy")
+                if resolved_output_format == "text":
+                    click.echo(click.style(f"Warning: CX preview unavailable ({exc})", fg="yellow"))
 
         if not push:
+            progress.phase_completed("deploy", message="CX package ready")
+            progress.next_action("autoagent cx export --project <project> --location <location> --agent <agent-id> --config <config> --snapshot <snapshot>")
+            if resolved_output_format == "stream-json":
+                return
             click.echo("No remote CX push performed (`--no-push`).")
             click.echo("Next step:")
             click.echo(
@@ -3281,6 +3452,10 @@ def deploy(
         exporter = CxExporter(client)
         ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
         result = exporter.export_agent(config, ref, snapshot_path=snapshot, dry_run=False)
+        progress.phase_completed("deploy", message="CX export pushed")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
         click.echo(f"CX export pushed: {result.resources_updated} resource(s) updated")
         return
 
@@ -3347,7 +3522,11 @@ def deploy(
 
     if dry_run:
         payload = {"version": config_version, "strategy": strategy, "target": target}
-        if json_output:
+        progress.phase_completed("deploy", message="Dry-run deployment preview ready")
+        progress.next_action("autoagent deploy")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", payload, next_cmd="autoagent deploy"))
         else:
             click.echo("Dry run: deployment preview")
@@ -3356,22 +3535,31 @@ def deploy(
             click.echo(f"  Target:   {target}")
         return
 
-    if not json_output and not acknowledge:
-        click.confirm(
-            f"Deploy v{config_version:03d} using the {strategy} strategy?",
-            abort=True,
+    if not acknowledge:
+        PermissionManager().require(
+            f"deploy.{strategy}",
+            prompt=f"Deploy v{config_version:03d} using the {strategy} strategy?",
+            default=False,
         )
 
     if strategy == "immediate":
         deployer.version_manager.promote(config_version)
-        if json_output:
+        progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} immediately")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", {"version": config_version, "strategy": "immediate", "status": "active"}, next_cmd="autoagent status"))
         else:
             click.echo(click.style(f"Applied: deployed v{config_version:03d} immediately (promoted to active).", fg="green"))
     else:
         deployer.version_manager.mark_canary(config_version)
         result = f"Deployed v{config_version:03d} as canary (10% traffic)"
-        if json_output:
+        progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} as canary")
+        progress.next_action("autoagent status")
+        if resolved_output_format == "stream-json":
+            return
+        if resolved_output_format == "json":
             click.echo(json_response("ok", {"version": config_version, "strategy": "canary", "result": str(result)}, next_cmd="autoagent status"))
         else:
             click.echo(click.style(f"Applied: deployed v{config_version:03d} as canary.", fg="green"))
@@ -3415,9 +3603,18 @@ def loop_group() -> None:
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
+@click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text or stream JSON progress events.",
+)
 def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
              interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
-             resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str) -> None:
+             resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str,
+             max_budget_usd: float | None = None, output_format: str = "text") -> None:
     """Run the continuous autoresearch loop.
 
     Observes agent health, proposes improvements, evaluates them, and deploys
@@ -3427,6 +3624,20 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
       autoagent loop
       autoagent loop --max-cycles 100 --stop-on-plateau
     """
+    from cli.output import resolve_output_format
+    from cli.progress import ProgressRenderer
+    from cli.usage import enforce_workspace_budget
+
+    resolved_output_format = resolve_output_format(output_format)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("loop", message="Start optimization loop")
+
+    budget_ok, budget_message, _ = enforce_workspace_budget(max_budget_usd)
+    if not budget_ok:
+        progress.warning(message=budget_message or "Budget reached")
+        click.echo(budget_message)
+        return
+
     (
         runtime,
         eval_runner,
@@ -3489,19 +3700,20 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             plateau_count = max(0, checkpoint.plateau_count)
             completed_cycles = max(0, checkpoint.completed_cycles)
 
-    click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
-    click.echo(f"  Schedule: {effective_schedule}")
-    if effective_schedule == "interval":
-        click.echo(f"  Interval: {effective_interval:.2f} minutes")
-    if effective_schedule == "cron":
-        click.echo(f"  Cron (UTC): {effective_cron}")
-    click.echo(f"  Checkpoint: {effective_checkpoint}")
-    if full_auto:
-        click.echo(click.style("  ⚠ FULL AUTO ENABLED (danger mode)", fg="yellow"))
-    if start_cycle > 1:
-        click.echo(f"  Resuming from cycle {start_cycle}")
-    if stop_on_plateau:
-        click.echo(f"  Will stop after {plateau_threshold} cycles with no improvement")
+    if resolved_output_format == "text":
+        click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
+        click.echo(f"  Schedule: {effective_schedule}")
+        if effective_schedule == "interval":
+            click.echo(f"  Interval: {effective_interval:.2f} minutes")
+        if effective_schedule == "cron":
+            click.echo(f"  Cron (UTC): {effective_cron}")
+        click.echo(f"  Checkpoint: {effective_checkpoint}")
+        if full_auto:
+            click.echo(click.style("  ⚠ FULL AUTO ENABLED (danger mode)", fg="yellow"))
+        if start_cycle > 1:
+            click.echo(f"  Resuming from cycle {start_cycle}")
+        if stop_on_plateau:
+            click.echo(f"  Will stop after {plateau_threshold} cycles with no improvement")
 
     with shutdown.install():
         for cycle in range(start_cycle, max_cycles + 1):
@@ -3517,17 +3729,20 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 )
             )
 
-            click.echo(f"\n{'═' * 50}")
-            click.echo(f" Cycle {cycle}/{max_cycles}")
-            click.echo(f"{'═' * 50}")
+            progress.phase_started("loop-cycle", message=f"Cycle {cycle}/{max_cycles}")
+            if resolved_output_format == "text":
+                click.echo(f"\n{'═' * 50}")
+                click.echo(f" Cycle {cycle}/{max_cycles}")
+                click.echo(f"{'═' * 50}")
 
             improved = False
             try:
                 report = observer.observe()
-                click.echo(
-                    f"  Health: success={report.metrics.success_rate:.2%}, "
-                    f"errors={report.metrics.error_rate:.2%}"
-                )
+                if resolved_output_format == "text":
+                    click.echo(
+                        f"  Health: success={report.metrics.success_rate:.2%}, "
+                        f"errors={report.metrics.error_rate:.2%}"
+                    )
 
                 if report.needs_optimization:
                     current_config = _ensure_active_config(deployer)
@@ -3537,25 +3752,30 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                         current_config,
                         failure_samples=failure_samples,
                     )
-                    click.echo(f"  Optimizer: {status}")
+                    if resolved_output_format == "text":
+                        click.echo(f"  Optimizer: {status}")
                     if new_config is not None:
                         improved = True
                         score = eval_runner.run(config=new_config)
                         deploy_result = deployer.deploy(new_config, _score_to_dict(score))
-                        click.echo(f"  Deploy: {deploy_result}")
+                        if resolved_output_format == "text":
+                            click.echo(f"  Deploy: {deploy_result}")
                         if full_auto:
                             promoted = _promote_latest_version(deployer)
-                            if promoted is not None:
+                            if promoted is not None and resolved_output_format == "text":
                                 click.echo(click.style(
                                     f"  FULL AUTO: promoted v{promoted:03d} to active",
                                     fg="yellow",
                                 ))
-                        click.echo(f"  Score: {score.composite:.4f}")
+                        if resolved_output_format == "text":
+                            click.echo(f"  Score: {score.composite:.4f}")
                 else:
-                    click.echo("  Healthy; skipping optimization.")
+                    if resolved_output_format == "text":
+                        click.echo("  Healthy; skipping optimization.")
 
                 canary_result = deployer.check_and_act()
-                click.echo(f"  Canary: {canary_result}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Canary: {canary_result}")
             except Exception as exc:
                 tb = traceback.format_exc()
                 dead_letter_queue.push(
@@ -3564,11 +3784,13 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     error=str(exc),
                     traceback_text=tb,
                 )
-                click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
                 log.error(
                     "loop_cycle_failed",
                     extra={"event": "loop_cycle_failed", "cycle": cycle, "status": "failed"},
                 )
+                progress.error(message=str(exc), phase="loop-cycle")
 
             completed_cycles = cycle
             cycle_finished = time.time()
@@ -3579,7 +3801,8 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 else:
                     plateau_count += 1
                     if plateau_count >= plateau_threshold:
-                        click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
+                        if resolved_output_format == "text":
+                            click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
                         checkpoint_store.save(
                             LoopCheckpoint(
                                 next_cycle=cycle + 1,
@@ -3595,18 +3818,22 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             snapshot = resource_monitor.sample()
             if snapshot.memory_mb > runtime.loop.resource_warn_memory_mb:
                 warning = f"Memory usage high: {snapshot.memory_mb:.2f}MB"
-                click.echo(f"  Warning: {warning}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_memory",
                     extra={"event": "resource_warning", "memory_mb": snapshot.memory_mb, "cycle": cycle},
                 )
+                progress.warning(message=warning, phase="loop-cycle")
             if snapshot.cpu_percent > runtime.loop.resource_warn_cpu_percent:
                 warning = f"CPU usage high: {snapshot.cpu_percent:.2f}%"
-                click.echo(f"  Warning: {warning}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_cpu",
                     extra={"event": "resource_warning", "cpu_percent": snapshot.cpu_percent, "cycle": cycle},
                 )
+                progress.warning(message=warning, phase="loop-cycle")
 
             if watchdog.is_stalled(now=cycle_finished):
                 stall_error = (
@@ -3618,9 +3845,12 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     payload={"cycle": cycle},
                     error=stall_error,
                 )
-                click.echo(f"  Watchdog: {stall_error}")
+                if resolved_output_format == "text":
+                    click.echo(f"  Watchdog: {stall_error}")
                 log.warning("watchdog_stall", extra={"event": "watchdog_stall", "cycle": cycle})
+                progress.warning(message=stall_error, phase="loop-cycle")
             watchdog.beat()
+            progress.phase_completed("loop-cycle", message=f"Cycle {cycle} complete")
 
             checkpoint_store.save(
                 LoopCheckpoint(
@@ -3634,7 +3864,8 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             )
 
             if shutdown.stop_requested:
-                click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
+                if resolved_output_format == "text":
+                    click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
                 break
 
             if cycle < max_cycles:
@@ -3645,7 +3876,8 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 )
                 _sleep_interruptibly(wait_seconds, shutdown)
                 if shutdown.stop_requested:
-                    click.echo("\nGraceful shutdown requested during wait. Exiting.")
+                    if resolved_output_format == "text":
+                        click.echo("\nGraceful shutdown requested during wait. Exiting.")
                     break
 
     final_status = "completed" if completed_cycles >= max_cycles and not shutdown.stop_requested else "stopped"
@@ -3658,7 +3890,10 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             last_cycle_finished_at=time.time(),
         )
     )
-    click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
+    progress.phase_completed("loop", message=f"{completed_cycles} cycle(s) executed ({final_status})")
+    progress.next_action("autoagent status")
+    if resolved_output_format == "text":
+        click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
 
 
 # ---------------------------------------------------------------------------
@@ -3677,6 +3912,11 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
       autoagent status
     """
     workspace = _require_workspace("status")
+    from cli.mcp_runtime import mcp_status_snapshot
+    from cli.model import effective_model_surface
+    from cli.usage import build_usage_snapshot
+    from core.project_memory import load_layered_project_context
+
     store = ConversationStore(db_path=db)
     deployer = Deployer(configs_dir=configs_dir, store=store)
     memory = OptimizationMemory(db_path=memory_db)
@@ -3694,6 +3934,10 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
     buckets = report.failure_buckets
 
     mode_summary = summarize_mode_state(str(workspace.runtime_config_path))
+    usage_snapshot = build_usage_snapshot(workspace.root)
+    memory_snapshot = load_layered_project_context(workspace.root).summary()
+    mcp_snapshot = mcp_status_snapshot(workspace.root)
+    model_snapshot = effective_model_surface(workspace.root)
     pending_review_cards = 0
     pending_autofix_proposals = 0
 
@@ -3745,6 +3989,14 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
             "pending_autofix_proposals": pending_autofix_proposals,
             "deployment": deployment_label,
             "loop_status": "idle",
+            "memory": memory_snapshot,
+            "mcp": mcp_snapshot,
+            "models": model_snapshot,
+            "last_eval_tokens": (usage_snapshot.get("last_eval") or {}).get("total_tokens"),
+            "last_eval_cost_usd": (usage_snapshot.get("last_eval") or {}).get("estimated_cost_usd"),
+            "last_optimize_cost_usd": (usage_snapshot.get("last_optimize") or {}).get("spent_dollars"),
+            "workspace_spend_usd": usage_snapshot.get("workspace_spend_usd"),
+            "budget_remaining_usd": usage_snapshot.get("budget_remaining_usd"),
             "next_action": next_action,
         }
         click.echo(json_response("ok", data, next_cmd="autoagent explain --json"))
@@ -3765,6 +4017,19 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False)
         pending_autofix_proposals=pending_autofix_proposals,
         deployment_label=deployment_label,
         loop_label="idle",
+        memory_label=(
+            f"{memory_snapshot['active_count']} active source(s)"
+            if memory_snapshot["active_count"]
+            else "no layered context"
+        ),
+        mcp_label=f"{mcp_snapshot['server_count']} server(s)",
+        model_label=(
+            f"{(model_snapshot.get('proposer') or {}).get('key', 'n/a')} | "
+            f"{(model_snapshot.get('evaluator') or {}).get('key', 'n/a')}"
+        ),
+        last_eval_tokens_label=str((usage_snapshot.get("last_eval") or {}).get("total_tokens", "n/a")),
+        last_eval_cost_label=f"${float((usage_snapshot.get('last_eval') or {}).get('estimated_cost_usd', 0.0)):.2f}",
+        last_optimize_cost_label=f"${float((usage_snapshot.get('last_optimize') or {}).get('spent_dollars', 0.0)):.2f}",
         next_action=next_action,
     )
     render_status_home(snapshot)
@@ -3816,7 +4081,8 @@ def logs(limit: int, outcome: str | None, db: str) -> None:
 @click.option("--config", "config_path", default="autoagent.yaml", show_default=True,
               help="Path to runtime config YAML.")
 @click.option("--fix", is_flag=True, help="Automatically repair fixable workspace issues.")
-def doctor(config_path: str, fix: bool) -> None:
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     """Check system health and configuration.
 
     Reports on API keys, mock mode, data stores, eval cases, and config versions.
@@ -3826,15 +4092,46 @@ def doctor(config_path: str, fix: bool) -> None:
     """
     import sqlite3
 
+    from cli.mcp_runtime import mcp_status_snapshot
+    from cli.stream2_helpers import json_response
+    from core.project_memory import load_layered_project_context
+
     issues: list[str] = []
     fixes_applied: list[str] = []
     workspace = discover_workspace()
 
-    click.echo("\nAutoAgent Doctor")
-    click.echo("================")
-
     if fix and workspace is not None:
         fixes_applied = _doctor_fix_workspace(workspace)
+
+    if json_output:
+        runtime = load_runtime_config(config_path)
+        mode_summary = summarize_mode_state(config_path)
+        memory_snapshot = (
+            load_layered_project_context(workspace.root).summary()
+            if workspace is not None
+            else {"active_count": 0, "paths": []}
+        )
+        mcp_snapshot = mcp_status_snapshot(workspace.root if workspace is not None else Path("."))
+        if workspace is None:
+            issues.append("No AutoAgent workspace found")
+        if runtime.optimizer.use_mock:
+            issues.append("Mock mode is enabled")
+        for env_var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
+            if not os.environ.get(env_var):
+                issues.append(f"{env_var} is not set")
+        data = {
+            "workspace": str(workspace.root) if workspace is not None else None,
+            "issues": issues,
+            "fixes_applied": fixes_applied,
+            "mode": mode_summary["effective_mode"],
+            "memory": memory_snapshot,
+            "mcp": mcp_snapshot,
+        }
+        click.echo(json_response("ok", data, next_cmd="autoagent status"))
+        return
+
+    click.echo("\nAutoAgent Doctor")
+    click.echo("================")
 
     # ------------------------------------------------------------------
     # Workspace
@@ -3863,6 +4160,16 @@ def doctor(config_path: str, fix: bool) -> None:
         click.echo(
             "  Template:           "
             + click.style(workspace.metadata.template or "unknown", fg="green")
+        )
+        memory_snapshot = load_layered_project_context(workspace.root).summary()
+        click.echo(
+            "  Memory sources:     "
+            + click.style(f"\u2713 {memory_snapshot['active_count']} active", fg="green")
+        )
+        mcp_snapshot = mcp_status_snapshot(workspace.root)
+        click.echo(
+            "  MCP runtime:        "
+            + click.style(f"\u2713 {mcp_snapshot['server_count']} server(s)", fg="green")
         )
 
     # ------------------------------------------------------------------
@@ -4836,14 +5143,27 @@ def review_show(card_id: str, json_output: bool = False) -> None:
 
 @review_group.command("apply")
 @click.argument("card_id")
-def review_apply(card_id: str) -> None:
+@click.option(
+    "--output-format",
+    type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
+    default="text",
+    show_default=True,
+    help="Render text or stream JSON progress events.",
+)
+def review_apply(card_id: str, output_format: str = "text") -> None:
     """Apply (accept) a change card.
 
     Examples:
       autoagent review apply abc12345
     """
+    from cli.output import resolve_output_format
+    from cli.permissions import PermissionManager
+    from cli.progress import ProgressRenderer
     from optimizer.change_card import ChangeCardStore
 
+    resolved_output_format = resolve_output_format(output_format)
+    progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
+    progress.phase_started("review-apply", message=f"Apply change card {card_id}")
     store = ChangeCardStore()
     card = store.get(card_id)
     if card is None:
@@ -4853,7 +5173,16 @@ def review_apply(card_id: str) -> None:
         click.echo(f"Card is not pending (status={card.status})")
         raise SystemExit(1)
 
+    PermissionManager().require(
+        "review.apply",
+        prompt=f"Apply change card {card_id}?",
+        default=False,
+    )
     store.update_status(card_id, "applied")
+    progress.phase_completed("review-apply", message=f"Applied change card {card_id}")
+    progress.next_action("autoagent status")
+    if resolved_output_format == "stream-json":
+        return
     click.echo(f"Applied change card {card_id}: {card.title}")
 
 
@@ -5199,6 +5528,70 @@ def memory_show() -> None:
     click.echo(mem.raw_content)
 
 
+@memory_group.command("list")
+def memory_list() -> None:
+    """List layered memory sources for the current workspace."""
+    from core.project_memory import list_memory_sources
+
+    sources = list_memory_sources()
+    click.echo("Memory sources")
+    for source in sources:
+        status = "active" if source.exists else "missing"
+        click.echo(f"  {source.kind:<10} {status:<8} {source.path}")
+
+
+@memory_group.command("where")
+def memory_where() -> None:
+    """Show where layered memory files live on disk."""
+    from core.project_memory import load_layered_project_context
+
+    snapshot = load_layered_project_context()
+    click.echo("Layered memory paths")
+    click.echo(f"  Shared:  {snapshot.shared_path}")
+    click.echo(f"  Local:   {snapshot.local_path}")
+    click.echo(f"  Rules:   {snapshot.rules_dir}")
+    click.echo(f"  Memory:  {snapshot.memory_dir}")
+    for source in snapshot.active_sources:
+        click.echo(f"  Active:  {source.path}")
+
+
+@memory_group.command("edit")
+@click.argument("target", default="shared")
+@click.option("--append", "append_text", default=None, help="Append markdown content instead of opening an editor.")
+def memory_edit(target: str, append_text: str | None) -> None:
+    """Edit a layered memory target by appending markdown or printing the path."""
+    from cli.permissions import PermissionManager
+    from core.project_memory import append_memory_text, resolve_memory_target
+
+    PermissionManager().require(
+        "memory.write",
+        prompt=f"Update memory target '{target}'?",
+        default=True,
+    )
+    if append_text:
+        path = append_memory_text(".", target, append_text)
+        click.echo(f"Updated memory target: {path}")
+        return
+    click.echo(f"Edit this file: {resolve_memory_target('.', target)}")
+
+
+@memory_group.command("summarize-session")
+@click.argument("summary")
+@click.option("--title", default="Session Summary", show_default=True, help="Title for the generated summary file.")
+def memory_summarize_session(summary: str, title: str) -> None:
+    """Write a generated session summary into `.autoagent/memory/`."""
+    from cli.permissions import PermissionManager
+    from core.project_memory import write_session_summary
+
+    PermissionManager().require(
+        "memory.write",
+        prompt="Write a generated session summary to project memory?",
+        default=True,
+    )
+    path = write_session_summary(".", title=title, summary=summary)
+    click.echo(f"Session summary written: {path}")
+
+
 @memory_group.command("add")
 @click.argument("note")
 @click.option("--section", required=True,
@@ -5212,7 +5605,13 @@ def memory_add(note: str, section: str) -> None:
       autoagent memory add "Never use gpt-3.5 for safety checks" --section bad
     """
     from core.project_memory import ProjectMemory
+    from cli.permissions import PermissionManager
 
+    PermissionManager().require(
+        "memory.write",
+        prompt=f"Add a note to memory section '{section}'?",
+        default=True,
+    )
     mem = ProjectMemory.load()
     if mem is None:
         click.echo("No AUTOAGENT.md found. Creating one first...")
@@ -6500,7 +6899,9 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
     Similar intent to 'dangerously skip permissions': auto-promotes accepted
     configs and skips manual promotion/review gates.
     """
-    if not acknowledge:
+    from cli.permissions import PermissionManager
+
+    if not acknowledge and PermissionManager().decision_for("full_auto.run") != "allow":
         click.echo(click.style(
             "Refusing to run full-auto without explicit acknowledgement.\n"
             "Re-run with: autoagent full-auto --yes",
@@ -6531,6 +6932,8 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         full_auto=True,
         dry_run=False,
         json_output=False,
+        max_budget_usd=None,
+        output_format="text",
     )
     ctx.invoke(
         loop_run,
@@ -6546,6 +6949,8 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         db=DB_PATH,
         configs_dir=CONFIGS_DIR,
         memory_db=MEMORY_DB,
+        max_budget_usd=None,
+        output_format="text",
     )
 
 
@@ -7353,12 +7758,18 @@ def edit(description: str | None, interactive: bool, dry_run: bool, json_output:
     editor = NLEditor()
 
     if interactive:
-        click.echo("AutoAgent Edit (type 'quit' to exit)")
+        workspace = discover_workspace()
+        click.echo("AutoAgent Edit")
+        click.echo(f"Workspace: {workspace.root if workspace is not None else Path.cwd()}")
+        click.echo("Type 'help' for examples, or 'quit' to exit.")
         while True:
             try:
                 user_input = click.prompt(">", prompt_suffix=" ")
             except (EOFError, KeyboardInterrupt):
                 break
+            if user_input.strip().lower() == "help":
+                click.echo("Example: 'Make the billing agent more empathetic'. Type 'quit' to exit.")
+                continue
             if user_input.strip().lower() in ("quit", "exit", "q"):
                 break
             result = editor.apply_and_eval(user_input, current_config)
@@ -7602,8 +8013,10 @@ def explain(verbose: bool, db: str, configs_dir: str, memory_db: str, json_outpu
 @click.option("--memory-db", default=MEMORY_DB, show_default=True)
 def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, memory_db: str) -> None:
     """Run failure diagnosis and optionally fix issues interactively."""
+    from cli.stream2_helpers import json_response
     from optimizer.diagnose_session import DiagnoseSession
 
+    workspace = discover_workspace()
     store = ConversationStore(db_path=db)
     observer = Observer(store)
     deployer = Deployer(configs_dir=configs_dir, store=store)
@@ -7616,7 +8029,7 @@ def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, me
     summary = session.start()
 
     if json_output:
-        click.echo(json.dumps(session.to_dict(), indent=2))
+        click.echo(json_response("ok", session.to_dict(), next_cmd="autoagent explain"))
         return
 
     click.echo(summary)
@@ -7625,13 +8038,18 @@ def diagnose(interactive: bool, json_output: bool, db: str, configs_dir: str, me
         return
 
     # Interactive REPL
-    click.echo("\nAutoAgent Diagnosis (type 'quit' to exit)")
+    click.echo("\nAutoAgent Diagnosis")
+    click.echo(f"Workspace: {workspace.root if workspace is not None else Path.cwd()}")
+    click.echo("Type 'help' for guidance, or 'quit' to exit.")
     while True:
         try:
             user_input = click.prompt(">", prompt_suffix=" ")
         except (EOFError, KeyboardInterrupt):
             break
         if not user_input.strip():
+            continue
+        if user_input.strip().lower() == "help":
+            click.echo("Ask for a summary, top failure clusters, or remediation ideas. Type 'quit' to exit.")
             continue
         response = session.handle_input(user_input)
         click.echo(response)

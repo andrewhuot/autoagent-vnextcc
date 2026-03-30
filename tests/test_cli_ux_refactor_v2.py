@@ -9,6 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from optimizer.cost_tracker import CostTracker
 from runner import cli
 
 
@@ -283,6 +284,72 @@ class TestOnboardingAndTemplates:
         )
         assert test_result.exit_code == 0, test_result.output
         assert "Provider check passed" in test_result.output
+
+
+class TestStreamBQuickWins:
+    """Tests for Stream B home-screen and interactive prompt improvements."""
+
+    def test_status_home_screen_surfaces_usage_rollups(self, runner: CliRunner) -> None:
+        """Status should show last eval tokens and last optimize spend."""
+        with runner.isolated_filesystem():
+            init_result = runner.invoke(cli, ["init", "--dir", "."])
+            assert init_result.exit_code == 0, init_result.output
+
+            Path(".autoagent/eval_results_latest.json").write_text(
+                json.dumps(
+                    {
+                        "api_version": "1",
+                        "status": "ok",
+                        "data": {
+                            "quality": 0.8,
+                            "safety": 1.0,
+                            "latency": 0.9,
+                            "cost": 0.7,
+                            "composite": 0.85,
+                            "total_tokens": 250,
+                            "estimated_cost_usd": 0.11,
+                        },
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            tracker = CostTracker(db_path=".autoagent/cost_tracker.db")
+            tracker.record_cycle("cycle-001", spent_dollars=0.42, improvement_delta=0.05)
+
+            result = runner.invoke(cli, ["status"])
+
+            assert result.exit_code == 0, result.output
+            assert "Last eval tokens" in result.output
+            assert "Last optimize cost" in result.output
+
+    def test_edit_interactive_shows_workspace_help_and_quit_hints(self, runner: CliRunner) -> None:
+        """Interactive edit should introduce workspace context and help affordances."""
+        with runner.isolated_filesystem():
+            init_result = runner.invoke(cli, ["init", "--dir", "."])
+            assert init_result.exit_code == 0, init_result.output
+
+            result = runner.invoke(cli, ["edit", "--interactive"], input="quit\n")
+
+            assert result.exit_code == 0, result.output
+            assert "AutoAgent Edit" in result.output
+            assert "Workspace:" in result.output
+            assert "help" in result.output.lower()
+            assert "quit" in result.output.lower()
+
+    def test_diagnose_interactive_shows_workspace_help_and_quit_hints(self, runner: CliRunner) -> None:
+        """Interactive diagnose should surface help and quit hints up front."""
+        with runner.isolated_filesystem():
+            init_result = runner.invoke(cli, ["init", "--dir", "."])
+            assert init_result.exit_code == 0, init_result.output
+
+            result = runner.invoke(cli, ["diagnose", "--interactive"], input="quit\n")
+
+            assert result.exit_code == 0, result.output
+            assert "AutoAgent Diagnosis" in result.output
+            assert "Workspace:" in result.output
+            assert "help" in result.output.lower()
+            assert "quit" in result.output.lower()
 
 
 class TestWorkflowCommands:

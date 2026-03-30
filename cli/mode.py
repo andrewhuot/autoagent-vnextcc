@@ -11,6 +11,7 @@ from typing import Any
 import click
 
 from agent.config.runtime import RuntimeConfig, load_runtime_config
+from cli.errors import with_doctor_hint
 from optimizer.providers import has_real_provider_credentials
 
 
@@ -122,8 +123,10 @@ def ensure_live_mode_ready(config_path: str = "autoagent.yaml") -> dict[str, Any
     summary = summarize_mode_state(config_path)
     if not summary["real_provider_configured"]:
         raise click.ClickException(
-            "Cannot enable live mode because no configured provider API keys are available. "
-            "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY first."
+            with_doctor_hint(
+                "Cannot enable live mode because no configured provider API keys are available. "
+                "Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY first."
+            )
         )
     return summary
 

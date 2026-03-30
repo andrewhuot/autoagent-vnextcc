@@ -135,6 +135,19 @@ class TestJsonFlags:
         assert "quality" in data
         assert "composite" in data
 
+    def test_diagnose_json(self, runner):
+        result = runner.invoke(cli, ["diagnose", "--json"])
+        assert result.exit_code == 0, result.output
+        data = _envelope_data(result.output)
+        assert "summary" in data or "history" in data or "state" in data
+
+    def test_doctor_json(self, runner):
+        result = runner.invoke(cli, ["doctor", "--json"])
+        assert result.exit_code == 0, result.output
+        data = _envelope_data(result.output)
+        assert "issues" in data
+        assert "workspace" in data
+
     def test_optimize_json(self, runner):
         result = runner.invoke(cli, ["optimize", "--cycles", "1", "--json"])
         assert result.exit_code == 0, result.output

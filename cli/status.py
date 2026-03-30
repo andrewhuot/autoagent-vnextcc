@@ -25,6 +25,12 @@ class StatusSnapshot:
     pending_autofix_proposals: int
     deployment_label: str
     loop_label: str
+    memory_label: str
+    mcp_label: str
+    model_label: str
+    last_eval_tokens_label: str
+    last_eval_cost_label: str
+    last_optimize_cost_label: str
     next_action: str
 
 
@@ -47,6 +53,12 @@ def render_status(snapshot: StatusSnapshot, *, verbose: bool = False) -> None:
     click.echo(f"  Pending AutoFix proposals: {snapshot.pending_autofix_proposals}")
     click.echo(f"  Deployment: {snapshot.deployment_label}")
     click.echo(f"  Loop: {snapshot.loop_label}")
+    click.echo(f"  Memory: {snapshot.memory_label}")
+    click.echo(f"  MCP: {snapshot.mcp_label}")
+    click.echo(f"  Models: {snapshot.model_label}")
+    click.echo(f"  Last eval tokens: {snapshot.last_eval_tokens_label}")
+    click.echo(f"  Last eval cost: {snapshot.last_eval_cost_label}")
+    click.echo(f"  Last optimize cost: {snapshot.last_optimize_cost_label}")
 
     if verbose:
         click.echo(click.style("\n  Home screen summary:", fg="cyan"))

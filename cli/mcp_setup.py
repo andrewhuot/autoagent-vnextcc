@@ -16,6 +16,8 @@ from typing import Any, Callable
 
 import click
 
+from cli.mcp_runtime import register_runtime_commands, render_workspace_mcp_status
+
 try:
     import tomllib
 except ModuleNotFoundError:  # pragma: no cover - Python <3.11 fallback
@@ -302,12 +304,17 @@ def init_client(client_name: str | None) -> None:
 
 @mcp_group.command("status")
 def mcp_status() -> None:
-    """Show which supported clients currently expose AutoAgent MCP config.
+    """Show workspace MCP runtime plus supported client installation status.
 
     Examples:
       autoagent mcp status
     """
-    click.echo("MCP client status")
+    render_workspace_mcp_status()
+    click.echo("")
+    click.echo("Installed client status")
     for name, spec in _client_specs().items():
         status = "configured" if _has_autoagent_entry(spec) else "not configured"
         click.echo(f"  {name:<12} {status:<14} {spec.path_factory()}")
+
+
+register_runtime_commands(mcp_group)
