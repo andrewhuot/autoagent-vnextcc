@@ -8,6 +8,7 @@ Full command set:
   autoagent eval run [OPTIONS]
   autoagent eval results [--run-id ID]
   autoagent eval list
+  autoagent experiment log [OPTIONS]
   autoagent optimize [--cycles N] [--mode standard|advanced|research]
   autoagent config list
   autoagent config diff V1 V2
@@ -3902,6 +3903,51 @@ def changes_export(card_id: str) -> None:
         click.echo(f"Change card not found: {card_id}")
         raise SystemExit(1)
     click.echo(card.to_markdown())
+
+
+# ---------------------------------------------------------------------------
+# autoagent experiment
+# ---------------------------------------------------------------------------
+
+@cli.group("experiment")
+def experiment_group() -> None:
+    """Inspect optimization experiment history.
+
+    Examples:
+      autoagent experiment log
+      autoagent experiment log --tail 10
+      autoagent experiment log --summary
+    """
+
+
+@experiment_group.command("log")
+@click.option("--tail", default=None, type=int, help="Show only the last N entries.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+@click.option("--summary", is_flag=True, default=False, help="Print a one-line history summary.")
+def experiment_log(tail: int | None, json_output: bool, summary: bool) -> None:
+    """View optimize experiment history from the append-only TSV log.
+
+    Examples:
+      autoagent experiment log
+      autoagent experiment log --tail 5
+      autoagent experiment log --json
+      autoagent experiment log --summary
+    """
+    entries = read_experiment_log_entries()
+    if not entries:
+        click.echo("No experiments yet. Run: autoagent optimize --continuous")
+        return
+
+    if summary:
+        click.echo(summarize_experiment_log_entries(entries))
+        return
+
+    selected_entries = tail_experiment_log_entries(entries, tail)
+    if json_output:
+        click.echo(json.dumps([entry.to_dict() for entry in selected_entries], indent=2))
+        return
+
+    click.echo(format_experiment_log_table(selected_entries))
 
 
 # ---------------------------------------------------------------------------

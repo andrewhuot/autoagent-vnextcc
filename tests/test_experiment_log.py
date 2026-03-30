@@ -322,3 +322,94 @@ def test_optimize_continuous_catches_keyboard_interrupt_and_prints_summary(
     rows = _read_tsv_rows(tmp_path / ".autoagent" / "experiment_log.tsv")
     assert len(rows) == 2
     assert rows[1][5] == "keep"
+
+
+def test_experiment_log_pretty_prints_entries_with_statuses(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The log command should render a readable aligned table with colored statuses."""
+    monkeypatch.chdir(tmp_path)
+    _seed_experiment_log(tmp_path / ".autoagent" / "experiment_log.tsv")
+
+    result = runner.invoke(cli, ["experiment", "log"], color=True)
+
+    assert result.exit_code == 0, result.output
+    assert "cycle" in result.output
+    assert "Improve routing prompts" in result.output
+    assert "Aggressive tool retries" in result.output
+    assert "\x1b[" in result.output
+    assert "keep" in result.output
+    assert "discard" in result.output
+    assert "skip" in result.output
+    assert "crash" in result.output
+
+
+def test_experiment_log_tail_shows_only_last_entries(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The tail option should limit output to the most recent rows."""
+    monkeypatch.chdir(tmp_path)
+    _seed_experiment_log(tmp_path / ".autoagent" / "experiment_log.tsv")
+
+    result = runner.invoke(cli, ["experiment", "log", "--tail", "2"])
+
+    assert result.exit_code == 0, result.output
+    assert "Improve routing prompts" not in result.output
+    assert "Aggressive tool retries" not in result.output
+    assert "System healthy" in result.output
+    assert "Optimizer timed out" in result.output
+
+
+def test_experiment_log_outputs_json_array(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The JSON flag should return the experiment history as a JSON array."""
+    monkeypatch.chdir(tmp_path)
+    _seed_experiment_log(tmp_path / ".autoagent" / "experiment_log.tsv")
+
+    result = runner.invoke(cli, ["experiment", "log", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert isinstance(payload, list)
+    assert [entry["cycle"] for entry in payload] == [1, 2, 3, 4]
+    assert payload[0]["status"] == "keep"
+    assert payload[-1]["status"] == "crash"
+
+
+def test_experiment_log_summary_reports_best_and_latest_scores(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The summary view should compress the experiment history into a single line."""
+    monkeypatch.chdir(tmp_path)
+    _seed_experiment_log(tmp_path / ".autoagent" / "experiment_log.tsv")
+
+    result = runner.invoke(cli, ["experiment", "log", "--summary"])
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "4 experiments: 1 kept, 1 discarded, 1 skipped, 1 crashed. "
+        "Best: 0.80 (cycle 1, +0.10 from first). Latest: 0.78 (cycle 2)"
+    ) in result.output
+
+
+def test_experiment_log_empty_state_suggests_continuous_optimize(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If no log exists yet, the command should explain how to create one."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli, ["experiment", "log"])
+
+    assert result.exit_code == 0, result.output
+    assert "No experiments yet. Run: autoagent optimize --continuous" in result.output
