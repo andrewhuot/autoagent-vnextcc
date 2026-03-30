@@ -1,4 +1,5 @@
 export const COMMAND_GROUPS = [
+  'home',
   'build',
   'import',
   'eval',
@@ -22,6 +23,11 @@ export interface CommandTaxonomyEntry {
 export type CommandTaxonomy = Record<CommandGroup, CommandTaxonomyEntry>;
 
 export const COMMAND_TAXONOMY: CommandTaxonomy = {
+  home: {
+    label: 'Home',
+    description: 'Workspace status and setup',
+    subcommands: ['dashboard', 'setup'],
+  },
   build: {
     label: 'Build',
     description: 'Create and refine agent configurations',

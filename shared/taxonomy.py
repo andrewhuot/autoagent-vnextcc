@@ -22,6 +22,7 @@ class CommandGroupSpec:
 
 
 COMMAND_GROUPS: tuple[CommandGroup, ...] = (
+    "home",
     "build",
     "import",
     "eval",
@@ -35,6 +36,11 @@ COMMAND_GROUPS: tuple[CommandGroup, ...] = (
 )
 
 COMMAND_TAXONOMY: dict[CommandGroup, CommandGroupSpec] = {
+    "home": CommandGroupSpec(
+        label="Home",
+        description="Workspace status and setup",
+        subcommands=("dashboard", "setup"),
+    ),
     "build": CommandGroupSpec(
         label="Build",
         description="Create and refine agent configurations",

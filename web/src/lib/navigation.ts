@@ -25,6 +25,15 @@ export interface RouteMetadata {
 
 const NAVIGATION_SECTIONS: NavigationSection[] = [
   {
+    group: 'home',
+    label: COMMAND_TAXONOMY.home.label,
+    description: COMMAND_TAXONOMY.home.description,
+    items: [
+      { label: 'Dashboard', path: '/dashboard' },
+      { label: 'Setup', path: '/setup' },
+    ],
+  },
+  {
     group: 'build',
     label: COMMAND_TAXONOMY.build.label,
     description: COMMAND_TAXONOMY.build.description,
@@ -53,7 +62,6 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
       { label: 'Optimize', path: '/optimize' },
       { label: 'Live Optimize', path: '/live-optimize' },
       { label: 'Experiments', path: '/experiments' },
-      { label: 'Review', path: '/changes' },
       { label: 'Opportunities', path: '/opportunities' },
     ],
   },
@@ -77,7 +85,6 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     label: COMMAND_TAXONOMY.observe.label,
     description: COMMAND_TAXONOMY.observe.description,
     items: [
-      { label: 'Dashboard', path: '/dashboard' },
       { label: 'Conversations', path: '/conversations' },
       { label: 'Traces', path: '/traces' },
       { label: 'Event Log', path: '/events' },
@@ -122,10 +129,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     group: 'settings',
     label: COMMAND_TAXONOMY.settings.label,
     description: COMMAND_TAXONOMY.settings.description,
-    items: [
-      { label: 'Setup', path: '/setup' },
-      { label: 'Settings', path: '/settings' },
-    ],
+    items: [{ label: 'Settings', path: '/settings' }],
   },
 ];
 
@@ -145,7 +149,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
     redirectTo: '/build?tab=builder-chat',
   },
   '/assistant': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=builder-chat' },
-  '/dashboard': { title: 'Dashboard', breadcrumbs: ['Observe'] },
+  '/dashboard': { title: 'Dashboard', breadcrumbs: ['Home'] },
   '/demo': { title: 'Demo', breadcrumbs: ['Observe'] },
   '/evals': { title: 'Eval Runs', breadcrumbs: ['Eval'] },
   '/optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
@@ -159,7 +163,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/blame': { title: 'Blame Map', breadcrumbs: ['Observe'] },
   '/context': { title: 'Context Workbench', breadcrumbs: ['Observe'] },
   '/loop': { title: 'Loop Monitor', breadcrumbs: ['Observe'] },
-  '/setup': { title: 'Setup', breadcrumbs: ['Settings'] },
+  '/setup': { title: 'Setup', breadcrumbs: ['Home'] },
   '/configs': { title: 'Configs', breadcrumbs: ['Govern'] },
   '/judge-ops': { title: 'Judge Ops', breadcrumbs: ['Govern'] },
   '/runbooks': { title: 'Runbooks', breadcrumbs: ['Govern'] },

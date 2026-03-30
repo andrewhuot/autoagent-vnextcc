@@ -7,6 +7,7 @@ from shared.taxonomy import COMMAND_GROUPS, COMMAND_TAXONOMY
 
 def test_command_groups_are_in_cli_alignment_order() -> None:
     assert COMMAND_GROUPS == (
+        "home",
         "build",
         "import",
         "eval",

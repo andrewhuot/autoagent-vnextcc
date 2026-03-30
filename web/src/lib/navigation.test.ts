@@ -10,8 +10,9 @@ import {
 } from './navigation';
 
 describe('shared taxonomy', () => {
-  it('exposes the 10 top-level command groups in CLI order', () => {
+  it('exposes the 11 top-level command groups in CLI order', () => {
     expect(COMMAND_GROUPS).toEqual([
+      'home',
       'build',
       'import',
       'eval',
@@ -60,6 +61,7 @@ describe('navigation schema', () => {
   it('returns breadcrumbs from the shared taxonomy', () => {
     expect(getBreadcrumbForPath('/build')).toEqual(['Build']);
     expect(getBreadcrumbForPath('/changes')).toEqual(['Optimize', 'Review']);
+    expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
     expect(getBreadcrumbForPath('/settings')).toEqual(['Settings']);
   });
 });
