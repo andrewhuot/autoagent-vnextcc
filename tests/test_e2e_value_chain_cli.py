@@ -114,6 +114,7 @@ def test_full_loop_creates_reviewable_candidate_and_improves_after_apply(
     assert status_result.exit_code == 0, status_result.output
     assert "Pending:    0 review card(s)" in status_result.output
     assert "Config:     v002" in status_result.output
+    assert "Safety:     1.000 eval" in status_result.output
 
     deploy_result = runner.invoke(cli, ["deploy", "canary", "--yes"])
     assert deploy_result.exit_code == 0, deploy_result.output

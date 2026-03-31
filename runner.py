@@ -4761,13 +4761,16 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
     mcp_snapshot = mcp_status_snapshot(workspace.root)
     model_snapshot = effective_model_surface(workspace.root)
     latest_eval_score: float | None = None
+    latest_eval_safety: float | None = None
     latest_eval_timestamp: float | str | None = None
     latest_eval_file, latest_eval_payload = _latest_eval_payload_for_active_config(
         resolved.path if resolved is not None else None
     )
     if latest_eval_payload is not None:
         latest_eval_data = _unwrap_eval_payload(latest_eval_payload)
-        latest_eval_score = _extract_eval_scores(latest_eval_data).get("composite")
+        latest_eval_scores = _extract_eval_scores(latest_eval_data)
+        latest_eval_score = latest_eval_scores.get("composite")
+        latest_eval_safety = latest_eval_scores.get("safety")
         latest_eval_timestamp = latest_eval_data.get("timestamp") or latest_eval_payload.get("timestamp")
     pending_review_cards = 0
     pending_autofix_proposals = 0
@@ -4812,6 +4815,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
             "active_config_summary": workspace.summarize_config(resolved.config if resolved is not None else None),
             "conversations": total_conversations,
             "eval_score": latest_eval_score,
+            "eval_safety_score": latest_eval_safety,
             "eval_timestamp": latest_eval_timestamp,
             "safety_violation_rate": metrics.safety_violation_rate,
             "cycles_run": len(all_attempts),
@@ -4842,7 +4846,11 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
         eval_score_label=f"{latest_eval_score:.4f}" if latest_eval_score is not None else "n/a",
         eval_timestamp_label=_format_eval_timestamp(latest_eval_timestamp),
         conversations_label=str(total_conversations),
-        safety_label=f"{metrics.safety_violation_rate:.3f}",
+        safety_label=(
+            f"{latest_eval_safety:.3f} eval | obs fail {metrics.safety_violation_rate:.3f}"
+            if latest_eval_safety is not None
+            else f"{metrics.safety_violation_rate:.3f} observed fail rate"
+        ),
         cycles_run_label=str(len(all_attempts)),
         pending_review_cards=pending_review_cards,
         pending_autofix_proposals=pending_autofix_proposals,
