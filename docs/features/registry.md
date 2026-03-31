@@ -2,14 +2,19 @@
 
 Version-controlled storage for skills, policies, tool contracts, and handoff schemas. The registry is the single source of truth for reusable agent components.
 
+Important naming note:
+
+- the CLI uses the shorter user-facing type names `skills`, `policies`, `tools`, and `handoffs`
+- the REST API and YAML bulk-import format still use the internal names `tool_contracts` and `handoff_schemas`
+
 ## Registry types
 
-| Type | Description | Example |
-|------|-------------|---------|
-| `skills` | Agent capabilities and behaviors | "order_lookup", "product_recommendation" |
-| `policies` | Decision-making rules and guardrails | "refund_policy", "escalation_rules" |
-| `tool_contracts` | Tool input/output schemas and descriptions | "search_api", "payment_gateway" |
-| `handoff_schemas` | Inter-agent handoff protocols | "support_to_orders", "orders_to_billing" |
+| User-facing CLI type | API/import type | Description | Example |
+|------|------|-------------|---------|
+| `skills` | `skills` | Agent capabilities and behaviors | "order_lookup", "product_recommendation" |
+| `policies` | `policies` | Decision-making rules and guardrails | "refund_policy", "escalation_rules" |
+| `tools` | `tool_contracts` | Tool input/output schemas and descriptions | "search_api", "payment_gateway" |
+| `handoffs` | `handoff_schemas` | Inter-agent handoff protocols | "support_to_orders", "orders_to_billing" |
 
 ## Versioning
 
@@ -31,6 +36,12 @@ autoagent registry add skills order_lookup --file skills/order_lookup.yaml
 
 # Add a policy
 autoagent registry add policies refund_policy --file policies/refund.yaml
+
+# Add a tool contract
+autoagent registry add tools order_lookup --file tools/order_lookup.yaml
+
+# Add a handoff schema
+autoagent registry add handoffs support_to_billing --file handoffs/support_to_billing.yaml
 ```
 
 ### Read
@@ -42,8 +53,8 @@ autoagent registry list --type skills
 # Show a specific item (latest version)
 autoagent registry show skills order_lookup
 
-# Show a specific version
-autoagent registry show skills order_lookup --version 2
+# Show a specific tool version
+autoagent registry show tools order_lookup --version 2
 ```
 
 ### Diff
@@ -61,24 +72,31 @@ Bulk import from a YAML or JSON file:
 autoagent registry import registry_export.yaml
 ```
 
-The import file should contain items organized by type:
+The import file should use the internal YAML section names:
 
 ```yaml
 skills:
-  order_lookup:
-    description: "Look up order details by order ID"
-    parameters:
-      order_id: { type: string, required: true }
-  product_search:
-    description: "Search product catalog"
-    parameters:
-      query: { type: string, required: true }
+  - name: order_lookup
+    instructions: Look up order details by order ID.
 
 policies:
-  refund_policy:
-    conditions: ["order_age < 30d", "item_condition == unused"]
-    action: "approve_refund"
+  - name: refund_policy
+    rules:
+      - Verify eligibility before approving a refund.
+
+tool_contracts:
+  - tool_name: order_lookup
+    description: Search the order system by ID.
+
+handoff_schemas:
+  - name: support_to_billing
+    from_agent: support
+    to_agent: billing
+    required_fields:
+      - customer_id
 ```
+
+See [sample_registry_import.yaml](../samples/sample_registry_import.yaml) for a complete example.
 
 ## Validation
 
@@ -114,6 +132,13 @@ autoagent registry diff <type> <name> <v1> <v2> [--db PATH]
 autoagent registry import <path> [--db PATH]
 ```
 
+CLI type values:
+
+- `skills`
+- `policies`
+- `tools`
+- `handoffs`
+
 ## API endpoints
 
 | Method | Path | Description |
@@ -124,6 +149,18 @@ autoagent registry import <path> [--db PATH]
 | `GET` | `/api/registry/{type}/{name}/diff` | Diff versions |
 | `GET` | `/api/registry/{type}/{name}` | Get a specific item |
 | `POST` | `/api/registry/{type}` | Create a new item |
+
+REST API type values:
+
+- `skills`
+- `policies`
+- `tool_contracts`
+- `handoff_schemas`
+
+Examples:
+
+- `GET /api/registry/tool_contracts`
+- `GET /api/registry/handoff_schemas`
 
 ## Integration with optimization
 

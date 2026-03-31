@@ -402,20 +402,21 @@ For team use:
 
 ## Current Limitations
 
-- The broader web app build currently has unrelated pre-existing TypeScript issues outside the CX pages, so targeted frontend tests are the reliable verification signal for this integration at the moment.
 - The deploy and widget paths remain compatibility-oriented and were not the primary focus of this import/export implementation.
 - The mapper preserves fidelity through metadata, so not every CX concept is expressed directly in the small normalized AutoAgent config surface.
 
 ## Verification Performed
 
-Backend verification:
+CLI and route verification:
 
-- `pytest -q tests/test_cx_roundtrip.py tests/test_cx_studio.py tests/test_cx_studio_api.py tests/test_cx_studio_integration.py`
+- Verified the current `autoagent cx` command group and subcommand helps for `auth`, `list`, `import`, `diff`, `export`, `sync`, `status`, and `widget`
+- Verified the backend exposes the current CX routes: `/api/cx/auth`, `/api/cx/agents`, `/api/cx/import`, `/api/cx/diff`, `/api/cx/export`, `/api/cx/sync`, `/api/cx/deploy`, `/api/cx/widget`, `/api/cx/status`, and `/api/cx/preview`
+- Verified the current web route is `/cx/studio`
 
 Frontend verification:
 
-- `npm test -- CXStudio.test.tsx CxImport.test.tsx`
+- `cd web && npm run build`
 
-Frontend build note:
+Credential-dependent note:
 
-- `npm run build` currently fails because of unrelated existing TypeScript issues in other result-comparison pages and shared types, not because of the new CX Studio page itself.
+- Import, diff, export, sync, deploy, and widget generation require valid Google Cloud credentials and a real project/agent. The command shapes and route surface were verified directly; the end-to-end remote operations still depend on your environment.

@@ -1,770 +1,404 @@
 # API Reference
 
-Comprehensive reference for the FastAPI surface under `/api/`. The server runs on `http://localhost:8000` by default.
+This document summarizes the current FastAPI surface under `/api/*`.
 
-Start the server:
+Base URL:
+
+- `http://localhost:8000`
+
+Recommended startup:
+
+```bash
+./start.sh
+```
+
+Backend-only alternative:
 
 ```bash
 autoagent server
 ```
 
-Interactive docs: `http://localhost:8000/docs` (Swagger) or `http://localhost:8000/redoc` (ReDoc).
+Live generated schema:
 
-**Route modules (registered in `api/server.py`):** `adk`, `agent_skills`, `assistant`, `autofix`, `changes`, `cicd`, `collaboration`, `config`, `context`, `control`, `conversations`, `cx_studio`, `deploy`, `diagnose`, `edit`, `eval`, `events`, `experiments`, `health`, `impact`, `intelligence`, `judges`, `knowledge`, `loop`, `memory`, `notifications`, `opportunities`, `optimize`, `optimize_stream`, `quickfix`, `registry`, `runbooks`, `sandbox`, `scorers`, `skills`, `traces`, `what_if`.
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
 
----
+The generated OpenAPI docs are the canonical source for full request and response schemas. This page focuses on the route families operators are most likely to use.
 
-## Eval
+## Current Route Families
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/eval/run` | Start an eval run as a background task |
-| `GET` | `/api/eval/runs` | List all eval runs |
-| `GET` | `/api/eval/runs/{id}` | Get a specific eval run by ID |
-| `GET` | `/api/eval/runs/{id}/cases` | Get individual case results for a run |
-| `GET` | `/api/eval/history` | List eval history entries |
-| `GET` | `/api/eval/history/{id}` | Get a specific history entry |
+The backend currently registers route families for:
 
-### POST `/api/eval/run`
+- setup and health
+- build and builder workflows
+- connect, CX, and ADK integrations
+- eval runs, generated evals, structured results, and pairwise compare
+- optimize, control, deploy, and loop operations
+- conversations, traces, events, blame/context, and diagnostics
+- runbooks, skills, registry, scorers, judges, memory, and notifications
+- datasets, outcomes, preferences, rewards, sandbox, what-if, and RL workflows
 
-```json
-// Request
-{
-  "config_path": "configs/v002.yaml",
-  "category": "happy_path",
-  "dataset_path": "data/eval_set.jsonl",
-  "split": "test"
-}
+## Setup and Health
 
-// Response (202 Accepted)
-{
-  "task_id": "task_abc123",
-  "status": "running"
-}
-```
-
-### GET `/api/eval/runs/{id}`
-
-```json
-// Response
-{
-  "run_id": "run_abc123",
-  "quality": 0.89,
-  "safety": 1.0,
-  "latency": 0.92,
-  "cost": 0.95,
-  "composite": 0.91,
-  "safety_failures": 0,
-  "total_cases": 50,
-  "passed_cases": 45,
-  "completed_at": "2026-03-24T10:30:00Z"
-}
-```
-
----
-
-## Optimize
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/optimize/run` | Start an optimization cycle |
-| `GET` | `/api/optimize/history` | List optimization history |
-| `GET` | `/api/optimize/history/{id}` | Get a specific optimization result |
-| `GET` | `/api/optimize/pareto` | Get the Pareto frontier of optimization results |
-
-### POST `/api/optimize/run`
-
-```json
-// Request
-{
-  "cycles": 3
-}
-
-// Response (202 Accepted)
-{
-  "task_id": "task_opt_456",
-  "status": "running"
-}
-```
-
----
-
-## Loop
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/loop/start` | Start the optimization loop |
-| `POST` | `/api/loop/stop` | Stop the optimization loop |
-| `GET` | `/api/loop/status` | Get current loop status |
-
-### GET `/api/loop/status`
-
-```json
-// Response
-{
-  "running": true,
-  "cycle": 12,
-  "max_cycles": 100,
-  "schedule": "continuous",
-  "last_heartbeat": 1711276800.0
-}
-```
-
----
-
-## Control
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/control/state` | Get current human control state |
-| `POST` | `/api/control/pause` | Pause the optimization loop |
-| `POST` | `/api/control/resume` | Resume the optimization loop |
-| `POST` | `/api/control/pin/{surface}` | Pin a configuration surface |
-| `POST` | `/api/control/unpin/{surface}` | Unpin a configuration surface |
-| `POST` | `/api/control/reject/{id}` | Reject an experiment |
-| `POST` | `/api/control/inject` | Inject a manual configuration change |
-
-### GET `/api/control/state`
-
-```json
-// Response
-{
-  "paused": false,
-  "pinned_surfaces": ["safety_instructions"],
-  "immutable_surfaces": ["safety_instructions"]
-}
-```
-
----
-
-## Deploy
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/deploy/deploy` | Deploy a config version |
-| `GET` | `/api/deploy/status` | Get current deployment status |
-| `POST` | `/api/deploy/rollback` | Roll back to previous version |
-
-### POST `/api/deploy/deploy`
-
-```json
-// Request
-{
-  "config_version": 3,
-  "strategy": "canary"
-}
-```
-
----
-
-## Health
-
-| Method | Path | Description |
-|--------|------|-------------|
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/setup/overview` | Workspace readiness, doctor summary, MCP client status, and recommended commands |
+| `GET` | `/api/health` | Current top-level metrics and optimization posture |
 | `GET` | `/api/health/ready` | Lightweight readiness probe |
-| `GET` | `/api/health` | Full health report with metrics and anomalies |
-| `GET` | `/api/health/system` | Operational health (loop, watchdog, dead letters) |
-| `GET` | `/api/health/cost` | Spend trend and budget posture |
-| `GET` | `/api/health/eval-set` | Eval set health diagnostics |
-| `GET` | `/api/health/scorecard` | 2-gate + 4-metric scorecard |
+| `GET` | `/api/health/system` | Operational health details |
+| `GET` | `/api/health/cost` | Spend and cost trend view |
+| `GET` | `/api/health/eval-set` | Eval-set health diagnostics |
+| `GET` | `/api/health/scorecard` | Scorecard-oriented summary for the dashboard |
 
-### GET `/api/health/scorecard`
+### Example: `GET /api/setup/overview`
+
+Returns:
+
+- `workspace`
+- `doctor`
+- `mcp_clients`
+- `recommended_commands`
+
+Representative shape:
 
 ```json
-// Response
 {
-  "gates": {
-    "safety": { "passed": true, "safety_violation_rate": 0.0 },
-    "regression": { "passed": true, "latest_attempt_status": "promoted" }
+  "workspace": {
+    "found": true,
+    "path": "/path/to/workspace",
+    "runtime_config_path": "/path/to/autoagent.yaml",
+    "active_config_version": 1
   },
-  "metrics": {
-    "task_success_rate": 0.92,
-    "response_quality": 0.92,
-    "latency_p95_ms": 1250.0,
-    "cost_per_conversation": 0.032
+  "doctor": {
+    "effective_mode": "mock",
+    "preferred_mode": "mock",
+    "issues": [
+      "CLI is currently running in mock mode."
+    ]
   },
-  "diagnostics": {
-    "tool_correctness": 0.97,
-    "routing_accuracy": 0.95,
-    "handoff_fidelity": 0.98,
-    "failure_buckets": { "tool_failure": 2, "routing_error": 1 }
-  }
-}
-```
-
----
-
-## Events
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/events` | Server-Sent Events stream for real-time updates |
-
-Connect via EventSource for live loop progress, eval results, and deploy notifications.
-
----
-
-## Config
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/config/list` | List all config versions |
-| `GET` | `/api/config/show/{version}` | Get a specific config version |
-| `GET` | `/api/config/diff` | Diff two config versions |
-| `GET` | `/api/config/active` | Get the currently active config |
-
-### GET `/api/config/diff`
-
-```
-GET /api/config/diff?v1=2&v2=3
-```
-
-```json
-// Response
-{
-  "v1": 2,
-  "v2": 3,
-  "changes": [
-    { "path": "instruction", "old": "...", "new": "..." }
-  ]
-}
-```
-
----
-
-## Conversations
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/conversations/stats` | Conversation statistics |
-| `GET` | `/api/conversations/list` | List recent conversations |
-| `GET` | `/api/conversations/{id}` | Get a specific conversation |
-
----
-
-## Traces
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/traces/recent` | Recent trace events |
-| `GET` | `/api/traces/search` | Search traces by type, agent path, or time |
-| `GET` | `/api/traces/errors` | Recent error events |
-| `GET` | `/api/traces/sessions/{id}` | All events for a session |
-| `GET` | `/api/traces/blame` | Blame map of failure clusters |
-| `GET` | `/api/traces/{id}/grades` | Span-level grades for a trace |
-| `GET` | `/api/traces/{id}/graph` | Trace dependency graph |
-| `GET` | `/api/traces/{id}` | Get a specific trace |
-
-### GET `/api/traces/search`
-
-```
-GET /api/traces/search?event_type=tool_call&agent_path=support&since=1711276800&limit=50
-```
-
-### GET `/api/traces/blame`
-
-```
-GET /api/traces/blame?window=86400
-```
-
-```json
-// Response
-{
-  "clusters": [
+  "mcp_clients": [
     {
-      "grader": "tool_selection",
-      "agent_path": "support",
-      "reason": "wrong tool selected for order lookup",
-      "count": 12,
-      "impact_score": 0.85,
-      "trend": "increasing"
+      "name": "codex",
+      "configured": true,
+      "path": "/Users/you/.codex/config.toml"
     }
   ],
-  "window_seconds": 86400
-}
-```
-
----
-
-## Experiments
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/experiments/stats` | Experiment statistics |
-| `GET` | `/api/experiments/list` | List experiments |
-| `GET` | `/api/experiments/archive` | Archived experiments |
-| `GET` | `/api/experiments/judge-calibration` | Judge calibration data |
-| `GET` | `/api/experiments/{id}` | Get a specific experiment |
-
----
-
-## Opportunities
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/opportunities/count` | Count of open optimization opportunities |
-| `GET` | `/api/opportunities/list` | List optimization opportunities |
-| `GET` | `/api/opportunities/{id}` | Get a specific opportunity |
-| `PATCH` | `/api/opportunities/{id}/status` | Update opportunity status |
-
----
-
-## AutoFix
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/autofix/suggest` | Generate fix proposals from failure analysis |
-| `GET` | `/api/autofix/proposals` | List pending proposals |
-| `POST` | `/api/autofix/apply/{id}` | Apply a specific proposal |
-| `GET` | `/api/autofix/history` | History of applied fixes |
-
-### POST `/api/autofix/suggest`
-
-```json
-// Response
-{
-  "proposals": [
-    {
-      "id": "fix_001",
-      "surface": "instruction",
-      "description": "Add explicit order lookup instructions",
-      "confidence": 0.82,
-      "estimated_impact": "+3% task success rate"
-    }
+  "recommended_commands": [
+    "autoagent init",
+    "autoagent doctor",
+    "autoagent mode show",
+    "autoagent mcp status"
   ]
 }
 ```
 
----
+## Build, Config, and Authoring
 
-## Judges
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/builder/artifacts` | Builder artifact listing |
+| `GET` | `/api/builder/artifacts/{artifact_id}` | One build artifact |
+| `POST` | `/api/builder/chat` | Builder chat messages |
+| `POST` | `/api/builder/export` | Export builder output |
+| `GET` | `/api/builder/projects` | Builder projects |
+| `GET` | `/api/builder/sessions` | Builder chat sessions |
+| `GET` | `/api/config/list` | List config versions |
+| `GET` | `/api/config/show/{version}` | Show one config version |
+| `GET` | `/api/config/diff` | Diff two config versions |
+| `GET` | `/api/config/active` | Get active config metadata |
+| `POST` | `/api/config/activate` | Activate a config version |
+| `POST` | `/api/config/import` | Import a config into the workspace |
+| `POST` | `/api/config/migrate` | Migrate config format |
+| `GET` | `/api/memory` | Read project memory |
+| `PUT` | `/api/memory` | Replace project memory |
+| `POST` | `/api/memory/note` | Append a memory note |
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/judges/list` | List judges and versions |
-| `POST` | `/api/judges/feedback` | Submit human feedback on a judge score |
-| `GET` | `/api/judges/calibration` | Judge calibration report |
-| `GET` | `/api/judges/drift` | Judge drift analysis |
+## Connect and Import Surfaces
 
----
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/connect` | List supported Connect adapters |
+| `POST` | `/api/connect/import` | Create a workspace from an imported runtime |
+| `POST` | `/api/intelligence/archive` | Upload transcript archive for analysis |
+| `GET` | `/api/intelligence/reports` | List transcript reports |
+| `GET` | `/api/intelligence/reports/{report_id}` | One transcript report |
+| `POST` | `/api/intelligence/reports/{report_id}/ask` | Ask questions over a report |
+| `POST` | `/api/intelligence/reports/{report_id}/apply` | Apply a transcript-derived insight |
+| `POST` | `/api/intelligence/generate-agent` | Generate an agent from transcript analysis |
 
-## Context
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/context/analysis/{id}` | Context analysis for a trace |
-| `POST` | `/api/context/simulate` | Simulate compaction strategies |
-| `GET` | `/api/context/report` | Context health report |
-
-### POST `/api/context/simulate`
-
-```json
-// Request
-{
-  "strategy": "balanced"
-}
-
-// Response
-{
-  "strategy": "balanced",
-  "estimated_token_savings": 1200,
-  "estimated_quality_impact": -0.01,
-  "recommendation": "Safe to apply"
-}
-```
-
----
-
-## Registry
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/registry/search` | Search registry items |
-| `POST` | `/api/registry/import` | Bulk import from file |
-| `GET` | `/api/registry/{type}` | List items of a type |
-| `GET` | `/api/registry/{type}/{name}/diff` | Diff versions of an item |
-| `GET` | `/api/registry/{type}/{name}` | Get a specific item |
-| `POST` | `/api/registry/{type}` | Create a new item |
-
-Types: `skills`, `policies`, `tool_contracts`, `handoff_schemas`.
-
-### GET `/api/registry/search`
-
-```
-GET /api/registry/search?q=order&type=skills
-```
-
----
-
-## Scorers
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/scorers/create` | Create a scorer from natural language |
-| `GET` | `/api/scorers` | List all scorers |
-| `GET` | `/api/scorers/{name}` | Get a scorer spec |
-| `POST` | `/api/scorers/{name}/refine` | Refine a scorer with additional criteria |
-| `POST` | `/api/scorers/{name}/test` | Test a scorer against eval data |
-
-### POST `/api/scorers/create`
+### Example: `GET /api/connect`
 
 ```json
-// Request
 {
-  "description": "Score on empathy, accuracy, and conciseness",
-  "name": "support_quality"
-}
-
-// Response
-{
-  "scorer": {
-    "name": "support_quality",
-    "dimensions": [
-      { "name": "empathy", "weight": 0.33, "description": "..." },
-      { "name": "accuracy", "weight": 0.34, "description": "..." },
-      { "name": "conciseness", "weight": 0.33, "description": "..." }
-    ]
-  }
+  "adapters": [
+    { "id": "openai-agents", "label": "OpenAI Agents", "source_field": "path" },
+    { "id": "anthropic", "label": "Anthropic", "source_field": "path" },
+    { "id": "http", "label": "HTTP", "source_field": "url" },
+    { "id": "transcript", "label": "Transcript", "source_field": "file" }
+  ],
+  "count": 4
 }
 ```
 
----
+## Eval Runs, Results, and Compare
 
-## Change Review
+AutoAgent now exposes three related but separate eval route families.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/changes` | List all change cards |
-| `GET` | `/api/changes/{card_id}` | Get a specific change card |
+### Eval runs
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `POST` | `/api/eval/run` | Start an eval run |
+| `GET` | `/api/eval/runs` | List eval tasks/runs |
+| `GET` | `/api/eval/runs/{run_id}` | Get one eval run result |
+| `GET` | `/api/eval/runs/{run_id}/cases` | Get per-case results for one run |
+| `GET` | `/api/eval/history` | Historical eval entries |
+| `GET` | `/api/eval/history/{run_id}` | One historical eval entry |
+
+### Generated evals
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `POST` | `/api/eval/generate` | Generate evals via the singular route family |
+| `GET` | `/api/eval/generated/{suite_id}` | Fetch one generated suite |
+| `POST` | `/api/eval/generated/{suite_id}/accept` | Accept a generated suite |
+| `POST` | `/api/evals/generate` | Generate evals via the plural route family used by newer UI flows |
+| `GET` | `/api/evals/generated` | List generated suites |
+| `GET` | `/api/evals/generated/{suite_id}` | Fetch one generated suite |
+| `POST` | `/api/evals/generated/{suite_id}/accept` | Accept a generated suite |
+
+### Structured results
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/evals/results` | List recent structured result runs |
+| `GET` | `/api/evals/results/{run_id}` | Full structured run payload |
+| `GET` | `/api/evals/results/{run_id}/summary` | Aggregate summary for one run |
+| `GET` | `/api/evals/results/{run_id}/examples` | Paginated example results |
+| `GET` | `/api/evals/results/{run_id}/examples/{example_id}` | One result example |
+| `POST` | `/api/evals/results/{run_id}/examples/{example_id}/annotate` | Add a human annotation |
+| `GET` | `/api/evals/results/{run_id}/diff` | Diff two structured result runs |
+| `GET` | `/api/evals/results/{run_id}/export` | Export a run as JSON, CSV, or Markdown |
+
+### Pairwise compare
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/evals/compare` | List recent pairwise comparisons |
+| `POST` | `/api/evals/compare` | Run and persist a pairwise comparison |
+| `GET` | `/api/evals/compare/{comparison_id}` | Fetch one comparison |
+
+### Example: `GET /api/evals/results`
+
+Returns a list of structured result runs:
+
+```json
+{
+  "runs": [
+    {
+      "run_id": "44c3dc5b-321",
+      "mode": "mock",
+      "summary": {
+        "total": 1,
+        "passed": 1,
+        "failed": 0
+      }
+    }
+  ],
+  "count": 1
+}
+```
+
+## Optimize, Control, Loop, and Deploy
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `POST` | `/api/optimize/run` | Start an optimization cycle |
+| `GET` | `/api/optimize/history` | Optimization attempt history |
+| `GET` | `/api/optimize/history/{attempt_id}` | One optimize attempt |
+| `GET` | `/api/optimize/pareto` | Pareto/frontier view |
+| `GET` | `/api/optimize/stream` | Stream optimize updates |
+| `GET` | `/api/control/state` | Human control state |
+| `POST` | `/api/control/pause` | Pause loop activity |
+| `POST` | `/api/control/resume` | Resume loop activity |
+| `POST` | `/api/control/pin/{surface}` | Pin a config surface |
+| `POST` | `/api/control/unpin/{surface}` | Unpin a config surface |
+| `POST` | `/api/control/reject/{experiment_id}` | Reject an experiment |
+| `POST` | `/api/control/inject` | Inject a manual change |
+| `POST` | `/api/deploy` | Deploy a config version or config payload |
+| `GET` | `/api/deploy/status` | Current deployment status |
+| `POST` | `/api/deploy/rollback` | Roll back an active canary |
+| `POST` | `/api/loop/start` | Start the loop |
+| `GET` | `/api/loop/status` | Loop status |
+| `POST` | `/api/loop/stop` | Stop the loop |
+
+Important note:
+
+- the current deploy endpoint is `POST /api/deploy`
+- the old `/api/deploy/deploy` path is not current
+
+## Conversations, Traces, Events, and Diagnostics
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/conversations` | List conversations |
+| `GET` | `/api/conversations/stats` | Conversation statistics |
+| `GET` | `/api/conversations/{conversation_id}` | One conversation |
+| `GET` | `/api/traces/recent` | Recent traces |
+| `GET` | `/api/traces/search` | Search traces |
+| `GET` | `/api/traces/errors` | Error-focused trace view |
+| `GET` | `/api/traces/blame` | Failure clustering / blame map |
+| `GET` | `/api/traces/{trace_id}` | One trace |
+| `GET` | `/api/traces/{trace_id}/grades` | Trace grading detail |
+| `GET` | `/api/traces/{trace_id}/graph` | Trace dependency graph |
+| `POST` | `/api/traces/{trace_id}/promote` | Promote trace-derived learning |
+| `GET` | `/api/events` | Event stream endpoint |
+| `POST` | `/api/diagnose` | Diagnose a problem |
+| `POST` | `/api/diagnose/chat` | Diagnosis chat workflow |
+| `GET` | `/api/context/report` | Context report |
+| `GET` | `/api/context/analysis/{trace_id}` | Context analysis for one trace |
+| `POST` | `/api/context/simulate` | Simulate context strategies |
+
+Important note:
+
+- the current conversations list endpoint is `GET /api/conversations`
+- the old `/api/conversations/list` path is not current
+
+## Improvements, Review, and Experiment Management
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/opportunities` | List opportunities |
+| `GET` | `/api/opportunities/count` | Opportunity count |
+| `GET` | `/api/opportunities/{opportunity_id}` | One opportunity |
+| `POST` | `/api/opportunities/{opportunity_id}/status` | Update opportunity status |
+| `GET` | `/api/experiments` | List experiments |
+| `GET` | `/api/experiments/archive` | Archived experiments |
+| `GET` | `/api/experiments/stats` | Experiment statistics |
+| `GET` | `/api/experiments/pareto` | Experiment frontier view |
+| `GET` | `/api/experiments/judge-calibration` | Judge-calibration-oriented experiment view |
+| `GET` | `/api/experiments/{experiment_id}` | One experiment |
+| `GET` | `/api/changes` | List change cards |
+| `GET` | `/api/changes/{card_id}` | One change card |
 | `POST` | `/api/changes/{card_id}/apply` | Apply a change card |
 | `POST` | `/api/changes/{card_id}/reject` | Reject a change card |
-| `PATCH` | `/api/changes/{card_id}/hunks` | Update hunks in a change card |
+| `PATCH` | `/api/changes/{card_id}/hunks` | Update selected hunks |
+| `GET` | `/api/reviews/pending` | Pending review requests |
+| `POST` | `/api/reviews/request` | Create a review request |
+| `GET` | `/api/reviews/{request_id}` | One review request |
+| `POST` | `/api/reviews/{request_id}/submit` | Submit a review |
 
----
+Important note:
 
-## Runbooks
+- the current experiment list route is `GET /api/experiments`
+- the current opportunity list route is `GET /api/opportunities`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/runbooks` | List available runbooks |
-| `GET` | `/api/runbooks/{name}` | Get a specific runbook |
+## Judges, Skills, Runbooks, Scorers, and Registry
+
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/judges` | List judges with version and agreement data |
+| `POST` | `/api/judges/feedback` | Record human feedback on judge output |
+| `GET` | `/api/judges/calibration` | Judge calibration view |
+| `GET` | `/api/judges/drift` | Judge drift view |
+| `GET` | `/api/skills` | List skills |
+| `POST` | `/api/skills` | Create a skill |
+| `GET` | `/api/skills/{skill_id}` | One skill |
+| `PUT` | `/api/skills/{skill_id}` | Update a skill |
+| `DELETE` | `/api/skills/{skill_id}` | Delete a skill |
+| `POST` | `/api/skills/{skill_id}/apply` | Apply a skill |
+| `POST` | `/api/skills/install` | Install a skill |
+| `GET` | `/api/skills/marketplace` | Skill marketplace |
+| `GET` | `/api/runbooks` | List runbooks |
+| `GET` | `/api/runbooks/{name}` | One runbook |
 | `POST` | `/api/runbooks/{name}/apply` | Apply a runbook |
-| `POST` | `/api/runbooks` | Create a new runbook |
+| `GET` | `/api/scorers` | List scorers |
+| `POST` | `/api/scorers/create` | Create a scorer |
+| `GET` | `/api/scorers/{name}` | One scorer |
+| `POST` | `/api/scorers/{name}/refine` | Refine a scorer |
+| `POST` | `/api/scorers/{name}/test` | Test a scorer |
+| `GET` | `/api/registry/search` | Search registry items |
+| `POST` | `/api/registry/import` | Bulk import registry items |
+| `GET` | `/api/registry/{item_type}` | List items of one type |
+| `GET` | `/api/registry/{item_type}/{name}` | Get one registry item |
+| `GET` | `/api/registry/{item_type}/{name}/diff` | Diff registry versions |
+| `POST` | `/api/registry/{item_type}` | Create a registry item |
 
----
+Important notes:
 
-## Memory
+- the current judge list endpoint is `GET /api/judges`
+- the REST registry API currently uses `skills`, `policies`, `tool_contracts`, and `handoff_schemas` as `item_type` values
+- the CLI uses `skills`, `policies`, `tools`, and `handoffs`
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/memory` | Get project memory (AUTOAGENT.md) |
-| `POST` | `/api/memory` | Add to project memory |
-| `PUT` | `/api/memory` | Update project memory |
+## CX, ADK, MCP, and Other Integrations
 
----
-
-## Skills
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/skills` | List executable skills |
-| `GET` | `/api/skills/{name}` | Get a specific skill |
-| `POST` | `/api/skills/{name}/apply` | Apply a skill |
-| `POST` | `/api/skills/recommend` | Get skill recommendations |
-| `POST` | `/api/skills/install` | Install a skill from file |
-| `POST` | `/api/skills/{name}/export` | Export a skill |
-| `GET` | `/api/skills/stats` | Get skill usage statistics |
-| `POST` | `/api/skills/learn` | Learn skills from patterns |
-
----
-
-## CX Integration
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/cx/agents` | List CX agents in a project |
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `POST` | `/api/cx/auth` | Validate CX credentials |
+| `GET` | `/api/cx/agents` | List CX agents |
 | `POST` | `/api/cx/import` | Import a CX agent |
-| `POST` | `/api/cx/export` | Export config to CX |
-| `POST` | `/api/cx/deploy` | Deploy to CX environment |
-| `POST` | `/api/cx/widget` | Generate chat widget |
-| `GET` | `/api/cx/status` | Get CX agent status |
-
-### POST `/api/cx/import`
-
-```json
-// Request
-{
-  "project": "my-project",
-  "location": "us-central1",
-  "agent_id": "abc123",
-  "output_dir": "./output",
-  "include_test_cases": true
-}
-
-// Response (201 Created)
-{
-  "config_path": "./output/agent_config.yaml",
-  "eval_path": "./output/agent_eval_cases.json",
-  "snapshot_path": "./output/agent_snapshot.json",
-  "agent_name": "Customer Support Bot",
-  "surfaces_mapped": ["prompts", "tools", "routing"],
-  "test_cases_imported": 42
-}
-```
-
----
-
-## ADK Integration
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/adk/import` | Import an ADK agent |
-| `POST` | `/api/adk/export` | Export to ADK format |
-| `POST` | `/api/adk/deploy` | Deploy an ADK agent |
-| `GET` | `/api/adk/status` | Get ADK agent status |
-| `GET` | `/api/adk/diff` | Diff ADK agent against snapshot |
-
-### POST `/api/adk/import`
-
-```json
-// Request
-{
-  "path": "./agent",
-  "output": "./output/agent_config.yaml"
-}
-
-// Response (201 Created)
-{
-  "config_path": "./output/agent_config.yaml",
-  "agent_name": "ADK Agent",
-  "surfaces_imported": ["prompts", "tools"]
-}
-```
-
----
-
-## Agent Skills
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/agent-skills/gaps` | Analyze skill gaps |
-| `POST` | `/api/agent-skills/analyze` | Analyze agent capabilities |
+| `POST` | `/api/cx/diff` | Diff local state against CX |
+| `POST` | `/api/cx/export` | Export local state back to CX |
+| `POST` | `/api/cx/sync` | Sync local and remote CX state |
+| `POST` | `/api/cx/deploy` | CX deploy workflow |
+| `POST` | `/api/cx/widget` | Generate CX widget assets |
+| `GET` | `/api/cx/status` | CX status |
+| `GET` | `/api/cx/preview` | CX preview data |
+| `POST` | `/api/adk/import` | Import ADK project |
+| `POST` | `/api/adk/export` | Export ADK project |
+| `POST` | `/api/adk/deploy` | ADK deploy workflow |
+| `GET` | `/api/adk/status` | ADK status |
+| `GET` | `/api/adk/diff` | ADK diff |
+| `GET` | `/api/agent-skills/` | Agent-skills listing |
+| `POST` | `/api/agent-skills/analyze` | Analyze skill gaps |
 | `POST` | `/api/agent-skills/generate` | Generate new skills |
-| `GET` | `/api/agent-skills` | List agent skills |
-| `GET` | `/api/agent-skills/{skill_id}` | Get a specific agent skill |
+| `POST` | `/api/sandbox/test` | Sandbox test run |
+| `POST` | `/api/what-if/replay` | What-if replay |
 
-### GET `/api/agent-skills/gaps`
+## Datasets, Outcomes, Rewards, and Preferences
 
-```json
-// Response
-{
-  "gaps": [
-    {
-      "category": "order_management",
-      "missing_skills": ["order_cancellation", "order_modification"],
-      "impact": "high",
-      "recommendation": "Add cancellation flow"
-    }
-  ]
-}
-```
+| Method | Path | What it is for |
+|--------|------|----------------|
+| `GET` | `/api/datasets` | List datasets |
+| `POST` | `/api/datasets` | Create a dataset |
+| `GET` | `/api/datasets/{dataset_id}` | One dataset |
+| `GET` | `/api/datasets/{dataset_id}/rows` | Dataset rows |
+| `GET` | `/api/datasets/{dataset_id}/stats` | Dataset stats |
+| `GET` | `/api/outcomes` | List outcomes |
+| `POST` | `/api/outcomes` | Record an outcome |
+| `GET` | `/api/outcomes/stats` | Outcome stats |
+| `GET` | `/api/preferences/pairs` | Preference pairs |
+| `POST` | `/api/preferences/pairs` | Record preference pairs |
+| `GET` | `/api/preferences/stats` | Preference stats |
+| `GET` | `/api/rewards` | List rewards |
+| `POST` | `/api/rewards` | Create a reward |
+| `POST` | `/api/rewards/{name}/test` | Test a reward |
+| `POST` | `/api/rewards/{name}/audit` | Audit a reward |
 
----
+## Realtime Endpoints
 
-## Natural Language & Intelligence
+In addition to `/api/*`, the backend also exposes realtime channels:
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/api/edit` | Apply natural language edits to config |
-| `POST` | `/api/diagnose` | Run failure diagnosis |
-| `POST` | `/api/diagnose/chat` | Chat-based diagnosis session |
-| `POST` | `/api/intelligence/archive` | Import transcript archive (ZIP) |
-| `GET` | `/api/intelligence/reports` | List intelligence reports |
-| `GET` | `/api/intelligence/reports/{id}` | Get intelligence report details |
-| `POST` | `/api/intelligence/reports/{id}/ask` | Ask questions about transcript data |
-| `POST` | `/api/intelligence/reports/{id}/apply` | Apply insight to create change card |
+- `GET /api/events`
+- `GET /api/optimize/stream`
+- `GET /api/demo/stream`
+- WebSocket: `/ws`
 
-### POST `/api/edit`
+These are used by the web console for live updates such as eval completion, optimize completion, and loop activity.
 
-```json
-// Request
-{
-  "description": "Make the agent more empathetic in billing conversations",
-  "dry_run": false
-}
+## Practical Guidance
 
-// Response
-{
-  "changes": [
-    {
-      "path": "instruction",
-      "old": "Handle billing queries efficiently",
-      "new": "Handle billing queries with empathy and patience. Acknowledge customer concerns."
-    }
-  ],
-  "applied": true,
-  "config_version": 42
-}
-```
+Use the API surface this way:
 
-### POST `/api/intelligence/archive`
+- `setup` and `health` to confirm the environment is ready
+- `builder`, `connect`, and `config` to create or import versions
+- `eval`, `results`, and `compare` to measure and diagnose behavior
+- `changes`, `reviews`, and `deploy` to approve and ship changes safely
+- `cx`, `adk`, and `mcp` adjacent docs when you are working with external systems
 
-Import a transcript archive (ZIP file with JSON/CSV/TXT conversations) for analytics.
+## Related Docs
 
-```json
-// Request
-{
-  "archive_name": "march_2026_support_transcripts.zip",
-  "archive_base64": "UEsDBBQACAAIAA..."
-}
-
-// Response (201 Created)
-{
-  "report_id": "rpt_abc123",
-  "archive_name": "march_2026_support_transcripts.zip",
-  "transcript_count": 1247,
-  "language_distribution": {
-    "en": 892,
-    "es": 245,
-    "fr": 110
-  },
-  "intent_distribution": {
-    "order_tracking": 423,
-    "refund_request": 287,
-    "cancellation": 198,
-    "address_change": 156,
-    "product_inquiry": 183
-  },
-  "transfer_reasons": {
-    "missing_order_number": 67,
-    "requires_human_verification": 42,
-    "policy_gap": 38,
-    "escalation_requested": 29
-  },
-  "procedures_extracted": 12,
-  "faqs_extracted": 18,
-  "missing_intents": ["exchange_request", "warranty_claim"],
-  "insights": [
-    {
-      "insight_id": "ins_001",
-      "category": "routing",
-      "severity": "high",
-      "description": "42% of refund requests routed to wrong agent",
-      "evidence_count": 120,
-      "recommended_action": "Add 'refund' keywords to billing_agent routing rules"
-    }
-  ]
-}
-```
-
-### POST `/api/intelligence/reports/{id}/ask`
-
-Ask questions about transcript data with natural language Q&A.
-
-```json
-// Request
-{
-  "question": "Why are people transferring to live support?"
-}
-
-// Response
-{
-  "answer": "The top 3 reasons are: (1) Missing order numbers (67 cases) — users don't have tracking info; (2) Policy gaps (38 cases) — agent can't handle return exceptions; (3) Escalation requests (29 cases) — users ask for managers.",
-  "evidence": [
-    {
-      "conversation_id": "conv_456",
-      "excerpt": "I don't have my order number, can you look it up by email?",
-      "reason": "missing_order_number"
-    }
-  ],
-  "confidence": 0.89
-}
-```
-
-### POST `/api/intelligence/reports/{id}/apply`
-
-Apply an insight to create a change card with drafted config edits.
-
-```json
-// Request
-{
-  "insight_id": "ins_001"
-}
-
-// Response (201 Created)
-{
-  "status": "pending_review",
-  "drafted_change_prompt": "Add keywords 'refund', 'reimbursement', 'money back' to billing_agent routing rules",
-  "change_card": {
-    "card_id": "cc_789",
-    "surface": "routing.rules",
-    "hypothesis": "Adding refund keywords will reduce misroutes by 42%",
-    "hunks": [
-      {
-        "path": "routing.rules[billing_agent].keywords",
-        "old": "[\"billing\", \"invoice\", \"charge\"]",
-        "new": "[\"billing\", \"invoice\", \"charge\", \"refund\", \"reimbursement\", \"money back\"]"
-      }
-    ],
-    "estimated_impact": "+42% routing accuracy"
-  }
-}
-```
-
----
-
-## Tasks
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/tasks/{task_id}` | Get task status |
-
-Used to poll status of long-running operations like eval runs and optimization cycles.
-
-```json
-// Response
-{
-  "task_id": "task_abc123",
-  "status": "running",
-  "progress": 0.65,
-  "result": null
-}
-```
-
----
-
-## WebSocket
-
-| Path | Description |
-|------|-------------|
-| `WS` `/ws` | WebSocket connection for real-time updates |
-
-Message types:
-- `eval_complete` - Eval run finished
-- `optimize_complete` - Optimization cycle finished
-- `loop_cycle` - Loop cycle update
-- `deploy_complete` - Deployment finished
-
----
-
-## Summary
-
-Total API surface: **131 endpoints** across 30 route modules + WebSocket + SSE.
-
-Primary categories:
-- **Eval & optimization** (10 endpoints) — eval runs, optimize cycles, optimize stream (SSE)
-- **Config & deploy** (7 endpoints) — config versions, diffs, canary deployments
-- **Observability** (18 endpoints) — traces, health scorecard, events, blame map
-- **Control & gates** (7 endpoints) — pause/resume, pin/unpin, reject, inject
-- **Advanced features** (15 endpoints) — judges, context workbench, autofix proposals
-- **Registry & skills** (12 endpoints) — skills, runbooks, policies, tool contracts
-- **Change management** (6 endpoints) — change cards, review, apply/reject
-- **Integrations** (17 endpoints) — CX Agent Studio (7), ADK (5), Agent Skills (5)
-- **Natural language & intelligence** (9 endpoints) — edit, diagnose, transcript intelligence
-- **Core infrastructure** (30 endpoints) — conversations, experiments, opportunities, scorers, memory
-
-**Real-time communication:**
-- WebSocket (`WS /ws`) — Real-time updates for eval_complete, optimize_complete, loop_cycle, deploy_complete
-- Server-Sent Events (`GET /api/events`, `GET /api/optimize/stream`) — Event streams for live optimization progress
-
-All endpoints return JSON. Error responses follow standard HTTP status codes with structured error bodies.
+- [CLI Reference](cli-reference.md)
+- [Platform Overview](platform-overview.md)
+- [UI Quick Start Guide](UI_QUICKSTART_GUIDE.md)
+- [CX Studio Integration](cx-studio-integration.md)

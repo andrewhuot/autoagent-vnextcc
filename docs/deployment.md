@@ -17,6 +17,22 @@ This guide covers local, Docker, and Google Cloud deployment for AutoAgent VNext
 
 ## 1) Local Runtime
 
+For day-to-day local development, `./start.sh` is the easiest path because it starts:
+
+- the backend on port `8000`
+- the Vite frontend on port `5173`
+
+```bash
+./start.sh
+```
+
+Open:
+
+- UI: `http://localhost:5173/dashboard`
+- API docs: `http://localhost:8000/docs`
+
+Use `autoagent server` when you want the backend to serve the built web console directly from port `8000`.
+
 ## Install
 
 ```bash

@@ -27,14 +27,20 @@ When drift exceeds the threshold, the system:
 
 ## Human feedback
 
-`HumanFeedbackStore` collects human labels on judge scores. When a human reviews a judge's output and marks it as correct or incorrect, that feedback is stored and used for calibration.
+`HumanFeedbackStore` collects human corrections on judge scores. When a human reviews a judge's output, that feedback is stored and used for calibration.
 
 Submit feedback via the API:
 
 ```bash
 curl -X POST http://localhost:8000/api/judges/feedback \
   -H "Content-Type: application/json" \
-  -d '{"judge_id": "binary_rubric", "case_id": "case_42", "human_label": "correct"}'
+  -d '{
+    "judge_id": "demo_quality_judge",
+    "case_id": "case_42",
+    "judge_score": 0.4,
+    "human_score": 1.0,
+    "human_notes": "This response should have passed."
+  }'
 ```
 
 ## Calibration analysis
@@ -67,7 +73,7 @@ autoagent judges drift         # Check for scoring drift
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/judges/list` | List judges and their versions |
+| `GET` | `/api/judges` | List judges and their versions |
 | `POST` | `/api/judges/feedback` | Submit human feedback on a score |
 | `GET` | `/api/judges/calibration` | Calibration report |
 | `GET` | `/api/judges/drift` | Drift analysis |

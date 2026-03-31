@@ -265,9 +265,12 @@ Frontend:
 
 ```bash
 cd web
-npm run lint
 npm run build
 ```
+
+`npm run build` is the current reliable frontend verification step.
+
+`npm run lint` is still useful to run locally, but the repo currently has unrelated pre-existing lint failures in some frontend files, so treat it as a signal to inspect rather than a guaranteed green check.
 
 ## Tests fail only in my environment
 
@@ -286,7 +289,5 @@ pip install -e ".[dev]"
 cd web
 rm -rf node_modules package-lock.json
 npm install
-npm run lint
 npm run build
 ```
-
