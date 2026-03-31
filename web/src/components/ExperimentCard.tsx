@@ -104,7 +104,7 @@ function primaryActionForStatus(status: ExperimentCardType['status']) {
     return { label: 'Monitor deploy', href: '/deploy' };
   }
 
-  return { label: 'Approve or reject', href: '/changes' };
+  return { label: 'Approve or reject', href: '/improvements?tab=review' };
 }
 
 // ---------------------------------------------------------------------------

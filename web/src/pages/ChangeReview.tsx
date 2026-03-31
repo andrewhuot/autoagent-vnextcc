@@ -281,7 +281,11 @@ function SelectedCardDetail({ selectedCard }: { selectedCard: ChangeCard }) {
   );
 }
 
-export function ChangeReview() {
+interface ChangeReviewProps {
+  embedded?: boolean;
+}
+
+export function ChangeReview({ embedded = false }: ChangeReviewProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const { data: changes = [], isLoading, isError } = useChanges();
@@ -292,10 +296,12 @@ export function ChangeReview() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Change Review"
-        description="Review proposed changes with diffs, metrics, and confidence scores before applying"
-      />
+      {!embedded && (
+        <PageHeader
+          title="Change Review"
+          description="Review proposed changes with diffs, metrics, and confidence scores before applying"
+        />
+      )}
 
       {auditSummary && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">

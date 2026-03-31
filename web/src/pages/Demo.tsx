@@ -152,7 +152,7 @@ export function Demo() {
         actions={
           <>
             <button
-              onClick={() => navigate('/experiments')}
+              onClick={() => navigate('/improvements?tab=experiments')}
               className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
             >
               View Experiments
@@ -383,7 +383,7 @@ export function Demo() {
                   </div>
                   <div className="mt-4 flex gap-3">
                     <button
-                      onClick={() => navigate('/experiments')}
+                      onClick={() => navigate('/improvements?tab=experiments')}
                       className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                     >
                       View Experiment Cards

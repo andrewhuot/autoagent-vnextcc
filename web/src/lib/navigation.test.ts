@@ -49,21 +49,25 @@ describe('navigation schema', () => {
     expect(getRouteTitle('/intelligence')).toBe('Build');
     expect(getRouteTitle('/optimize')).toBe('Optimize');
     expect(getRouteTitle('/live-optimize')).toBe('Optimize');
+    expect(getRouteTitle('/improvements')).toBe('Improvements');
   });
 
-  it('returns route redirects for legacy build pages', () => {
+  it('returns route redirects for legacy build and improvement pages', () => {
     expect(getRouteRedirect('/intelligence')).toBe('/build?tab=transcript');
     expect(getRouteRedirect('/builder')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/builder/demo')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/agent-studio')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/assistant')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/eval')).toBe('/evals');
-    expect(getRouteRedirect('/review')).toBe('/reviews');
+    expect(getRouteRedirect('/review')).toBe('/improvements?tab=review');
+    expect(getRouteRedirect('/changes')).toBe('/improvements?tab=review');
+    expect(getRouteRedirect('/experiments')).toBe('/improvements?tab=experiments');
+    expect(getRouteRedirect('/opportunities')).toBe('/improvements?tab=opportunities');
   });
 
   it('returns breadcrumbs from the shared taxonomy', () => {
     expect(getBreadcrumbForPath('/build')).toEqual(['Build']);
-    expect(getBreadcrumbForPath('/changes')).toEqual(['Optimize', 'Review']);
+    expect(getBreadcrumbForPath('/improvements')).toEqual(['Review']);
     expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
     expect(getBreadcrumbForPath('/settings')).toEqual(['Settings']);
   });
@@ -78,7 +82,7 @@ describe('navigation schema', () => {
       '/build',
       '/evals',
       '/optimize',
-      '/reviews',
+      '/improvements',
       '/deploy',
     ]);
   });

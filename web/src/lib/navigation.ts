@@ -61,18 +61,13 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     items: [
       { label: 'Optimize', path: '/optimize' },
       { label: 'Live Optimize', path: '/live-optimize' },
-      { label: 'Experiments', path: '/experiments' },
-      { label: 'Opportunities', path: '/opportunities' },
     ],
   },
   {
     group: 'review',
     label: COMMAND_TAXONOMY.review.label,
     description: COMMAND_TAXONOMY.review.description,
-    items: [
-      { label: 'Change Review', path: '/changes' },
-      { label: 'Reviews', path: '/reviews' },
-    ],
+    items: [{ label: 'Improvements', path: '/improvements' }],
   },
   {
     group: 'deploy',
@@ -155,9 +150,22 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/evals': { title: 'Eval Runs', breadcrumbs: ['Eval'] },
   '/optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
   '/live-optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
-  '/experiments': { title: 'Experiments', breadcrumbs: ['Optimize'] },
-  '/changes': { title: 'Change Review', breadcrumbs: ['Optimize', 'Review'] },
-  '/opportunities': { title: 'Opportunities', breadcrumbs: ['Optimize'] },
+  '/improvements': { title: 'Improvements', breadcrumbs: ['Review'] },
+  '/experiments': {
+    title: 'Improvements',
+    breadcrumbs: ['Review'],
+    redirectTo: '/improvements?tab=experiments',
+  },
+  '/changes': {
+    title: 'Improvements',
+    breadcrumbs: ['Review'],
+    redirectTo: '/improvements?tab=review',
+  },
+  '/opportunities': {
+    title: 'Improvements',
+    breadcrumbs: ['Review'],
+    redirectTo: '/improvements?tab=opportunities',
+  },
   '/deploy': { title: 'Deploy', breadcrumbs: ['Deploy'] },
   '/traces': { title: 'Traces', breadcrumbs: ['Observe'] },
   '/events': { title: 'Event Log', breadcrumbs: ['Observe'] },
@@ -185,8 +193,13 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/sandbox': { title: 'Sandbox', breadcrumbs: ['Integrations'] },
   '/what-if': { title: 'What-If Replay', breadcrumbs: ['Integrations'] },
   '/knowledge': { title: 'Knowledge', breadcrumbs: ['Integrations'] },
-  '/review': { title: 'Reviews', breadcrumbs: ['Review'], redirectTo: '/reviews' },
-  '/reviews': { title: 'Reviews', breadcrumbs: ['Review'] },
+  '/review': { title: 'Improvements', breadcrumbs: ['Review'], redirectTo: '/improvements?tab=review' },
+  '/reviews': { title: 'Improvements', breadcrumbs: ['Review'], redirectTo: '/improvements?tab=review' },
+  '/autofix': {
+    title: 'Improvements',
+    breadcrumbs: ['Review'],
+    redirectTo: '/improvements?tab=experiments',
+  },
   '/settings': { title: 'Settings', breadcrumbs: ['Settings'] },
 };
 
@@ -213,7 +226,7 @@ const SIMPLE_MODE_PATHS = new Set([
   '/build',
   '/evals',
   '/optimize',
-  '/reviews',
+  '/improvements',
   '/deploy',
 ]);
 

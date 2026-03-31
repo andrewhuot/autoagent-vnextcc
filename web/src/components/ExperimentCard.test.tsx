@@ -34,7 +34,7 @@ describe('ExperimentCardComponent', () => {
     renderCard(buildExperiment('pending'));
 
     const reviewLink = screen.getByRole('link', { name: 'Approve or reject' });
-    expect(reviewLink).toHaveAttribute('href', '/changes');
+    expect(reviewLink).toHaveAttribute('href', '/improvements?tab=review');
   });
 
   it('guides accepted experiments into deploy monitoring', () => {

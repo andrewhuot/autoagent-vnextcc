@@ -1,13 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Play, Sparkles, Zap, Plus, Trash2 } from 'lucide-react';
-import { ChangeReview } from './ChangeReview';
 import { EmptyState } from '../components/EmptyState';
-import { Experiments } from './Experiments';
 import { DiffViewer } from '../components/DiffViewer';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { LiveOptimize } from './LiveOptimize';
-import { Opportunities } from './Opportunities';
 import { PageHeader } from '../components/PageHeader';
 import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
@@ -19,7 +16,7 @@ import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
 import type { DiffLine } from '../lib/types';
 
 type OptimizeMode = 'standard' | 'advanced' | 'research';
-type OptimizeTab = 'run' | 'live' | 'experiments' | 'review' | 'opportunities';
+type OptimizeTab = 'run' | 'live';
 
 const modeDescriptions: Record<OptimizeMode, string> = {
   standard: 'Default optimization with safety gates and regression checks.',
@@ -37,9 +34,6 @@ const researchAlgorithms = [
 const optimizeTabs: Array<{ key: OptimizeTab; label: string }> = [
   { key: 'run', label: 'Run' },
   { key: 'live', label: 'Live' },
-  { key: 'experiments', label: 'Experiments' },
-  { key: 'review', label: 'Review' },
-  { key: 'opportunities', label: 'Opportunities' },
 ];
 
 function parseDiffLines(diff: string): DiffLine[] {
@@ -117,8 +111,16 @@ export function Optimize() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Optimize Hub"
-        description="Tabbed access to optimization runs, live cycles, experiments, review, and opportunities."
+        title="Optimize"
+        description="Run optimization cycles and live monitoring. Review outputs in Improvements."
+        actions={
+          <Link
+            to="/improvements"
+            className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+          >
+            Open Improvements
+          </Link>
+        }
       />
 
       <section className="rounded-lg border border-gray-200 bg-white p-2">
@@ -142,21 +144,6 @@ export function Optimize() {
       {visitedTabs.has('live') && (
         <section hidden={activeTab !== 'live'}>
           <LiveOptimize />
-        </section>
-      )}
-      {visitedTabs.has('experiments') && (
-        <section hidden={activeTab !== 'experiments'}>
-          <Experiments />
-        </section>
-      )}
-      {visitedTabs.has('review') && (
-        <section hidden={activeTab !== 'review'}>
-          <ChangeReview />
-        </section>
-      )}
-      {visitedTabs.has('opportunities') && (
-        <section hidden={activeTab !== 'opportunities'}>
-          <Opportunities />
         </section>
       )}
     </div>

@@ -2,7 +2,11 @@ import { PageHeader } from '../components/PageHeader';
 import { OpportunityItem } from '../components/OpportunityItem';
 import { useOpportunities } from '../lib/api';
 
-export function Opportunities() {
+interface OpportunitiesProps {
+  embedded?: boolean;
+}
+
+export function Opportunities({ embedded = false }: OpportunitiesProps) {
   const { data: opportunities = [], isLoading, isError } = useOpportunities('open');
 
   const sorted = [...opportunities].sort((a, b) => b.priority_score - a.priority_score);
@@ -15,10 +19,12 @@ export function Opportunities() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Opportunity Queue"
-        description="Ranked optimization opportunities from failure analysis"
-      />
+      {!embedded && (
+        <PageHeader
+          title="Opportunity Queue"
+          description="Ranked optimization opportunities from failure analysis"
+        />
+      )}
 
       {/* Summary bar */}
       <div className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white px-5 py-3">

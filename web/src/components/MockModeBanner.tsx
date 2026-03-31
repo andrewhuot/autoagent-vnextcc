@@ -4,7 +4,7 @@ import { AlertTriangle, X } from 'lucide-react';
 
 const BANNER_COPY = 'Running in mock mode — add API keys for live optimization';
 const DISMISS_KEY = 'autoagent.mock_mode_banner.dismissed';
-const OPTIMIZATION_ROUTE_PREFIXES = ['/dashboard', '/evals', '/optimize', '/live-optimize', '/experiments'];
+const OPTIMIZATION_ROUTE_PREFIXES = ['/dashboard', '/evals', '/optimize', '/live-optimize', '/improvements'];
 
 interface MockModeHealthPayload {
   mock_mode?: boolean;

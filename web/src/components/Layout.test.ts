@@ -30,6 +30,17 @@ vi.mock('../lib/api', () => ({
   useImportTranscriptArchive: () => ({ mutate: vi.fn(), isPending: false }),
   useGenerateAgent: () => ({ mutate: vi.fn(), isPending: false }),
   useChatRefine: () => ({ mutate: vi.fn(), isPending: false }),
+  useOpportunities: () => ({ data: [], isLoading: false, isError: false }),
+  useExperiments: () => ({ data: [], isLoading: false, isError: false }),
+  useParetoFrontier: () => ({ data: { candidates: [], frontier_size: 0, infeasible_count: 0 } }),
+  useArchiveEntries: () => ({ data: [] }),
+  useJudgeCalibration: () => ({ data: null }),
+  useChanges: () => ({ data: [], isLoading: false, isError: false }),
+  useApplyChange: () => ({ mutate: vi.fn(), isPending: false }),
+  useRejectChange: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdateHunkStatus: () => ({ mutate: vi.fn(), isPending: false }),
+  useChangeAuditSummary: () => ({ data: null }),
+  useChangeAudit: () => ({ data: null }),
 }));
 
 function installLocalStorageMock(initial: Record<string, string> = {}) {
@@ -66,12 +77,9 @@ describe('getRouteContext', () => {
       breadcrumbs: [{ label: 'Build' }],
     });
 
-    expect(getRouteContext('/changes')).toEqual({
-      title: 'Change Review',
-      breadcrumbs: [
-        { label: 'Optimize' },
-        { label: 'Review' },
-      ],
+    expect(getRouteContext('/improvements')).toEqual({
+      title: 'Improvements',
+      breadcrumbs: [{ label: 'Review' }],
     });
   });
 
@@ -181,7 +189,8 @@ describe('App', () => {
 
     render(createElement(App));
 
-    expect(window.location.pathname).toBe('/reviews');
-    expect(await screen.findByRole('heading', { name: 'Collaborative Review', level: 2 })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/improvements');
+    expect(window.location.search).toBe('?tab=review');
+    expect(await screen.findByRole('heading', { name: 'Improvements', level: 2 })).toBeInTheDocument();
   });
 });

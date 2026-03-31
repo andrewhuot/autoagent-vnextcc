@@ -37,17 +37,6 @@ import {
 import { getNavigationSections, getSimpleNavigationSections } from '../lib/navigation';
 import { classNames } from '../lib/utils';
 
-interface NavItem {
-  to: string;
-  label: string;
-  icon: LucideIcon;
-}
-
-interface NavSection {
-  title: string;
-  items: NavItem[];
-}
-
 const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/build': Hammer,
   '/intelligence': BrainCircuit,
@@ -56,6 +45,7 @@ const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/evals': FlaskConical,
   '/optimize': Zap,
   '/live-optimize': Sparkles,
+  '/improvements': Sparkles,
   '/experiments': TestTubes,
   '/changes': GitPullRequest,
   '/reviews': GitPullRequest,

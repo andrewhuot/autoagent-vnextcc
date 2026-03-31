@@ -34,8 +34,8 @@ const SMART_SEARCH_MAP: Array<{
   {
     keywords: ['what', 'changed', 'changes', 'diff'],
     label: 'What changed?',
-    description: 'View recent config changes',
-    href: '/changes',
+    description: 'Open the unified review workflow',
+    href: '/improvements?tab=review',
   },
   {
     keywords: ['show', 'failures', 'conversations', 'fail'],

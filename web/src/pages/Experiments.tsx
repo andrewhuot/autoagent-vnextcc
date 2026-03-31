@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { FlaskConical } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
@@ -18,8 +18,22 @@ const tabs: { key: FilterTab; label: string }[] = [
   { key: 'rejected', label: 'Rejected' },
 ];
 
-export function Experiments() {
-  const [activeTab, setActiveTab] = useState<FilterTab>('all');
+interface ExperimentsProps {
+  embedded?: boolean;
+  defaultTab?: FilterTab;
+  showAnalysisPanels?: boolean;
+}
+
+export function Experiments({
+  embedded = false,
+  defaultTab = 'all',
+  showAnalysisPanels = true,
+}: ExperimentsProps) {
+  const [activeTab, setActiveTab] = useState<FilterTab>(defaultTab);
+
+  useEffect(() => {
+    setActiveTab(defaultTab);
+  }, [defaultTab]);
 
   const statusParam = activeTab === 'all' ? undefined : activeTab;
   const { data: experiments = [], isLoading, isError } = useExperiments(statusParam);
@@ -29,13 +43,14 @@ export function Experiments() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title="Experiments"
-        description="Reviewable experiment cards with hypothesis, diff, and results"
-      />
+      {!embedded && (
+        <PageHeader
+          title="Experiments"
+          description="Reviewable experiment cards with hypothesis, diff, and results"
+        />
+      )}
 
-      {/* Archive section */}
-      {archiveEntries.length > 0 && (
+      {showAnalysisPanels && archiveEntries.length > 0 && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">
           <details>
             <summary className="cursor-pointer text-sm font-semibold text-gray-900">
@@ -48,7 +63,7 @@ export function Experiments() {
         </section>
       )}
 
-      {frontier && frontier.candidates.length > 0 && (
+      {showAnalysisPanels && frontier && frontier.candidates.length > 0 && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">
           <details>
             <summary className="cursor-pointer text-sm font-semibold text-gray-900">
@@ -61,17 +76,18 @@ export function Experiments() {
         </section>
       )}
 
-      {/* Judge calibration section */}
-      <section className="rounded-lg border border-gray-200 bg-white p-5">
-        <details>
-          <summary className="cursor-pointer text-sm font-semibold text-gray-900">
-            Judge Calibration
-          </summary>
-          <div className="mt-4">
-            <JudgeCalibrationView calibration={calibration} />
-          </div>
-        </details>
-      </section>
+      {showAnalysisPanels && (
+        <section className="rounded-lg border border-gray-200 bg-white p-5">
+          <details>
+            <summary className="cursor-pointer text-sm font-semibold text-gray-900">
+              Judge Calibration
+            </summary>
+            <div className="mt-4">
+              <JudgeCalibrationView calibration={calibration} />
+            </div>
+          </details>
+        </section>
+      )}
 
       {/* Filter tabs */}
       <div className="flex gap-1 rounded-lg border border-gray-200 bg-gray-50 p-1">
