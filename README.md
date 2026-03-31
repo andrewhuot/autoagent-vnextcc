@@ -1,15 +1,13 @@
 # AutoAgent
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776AB)
-![Tests](https://img.shields.io/badge/tests-1131%2B%20passing-22C55E)
+![Tests](https://img.shields.io/badge/tests-2986%2B%20passing-22C55E)
 ![License](https://img.shields.io/badge/license-Apache%202.0-111827)
 
-AutoAgent is a continuous optimization platform for AI agents. It traces agent behavior, diagnoses failures, generates improvements, evaluates them with statistical rigor, and deploys winners — in an automated loop.
-
-Point it at a broken agent. Get a better one back.
+AutoAgent automatically makes your AI agents better. Give it an agent, tell it what "good" looks like, and it will find failures, generate fixes, test them, and deploy the winners — all in a loop you can watch or walk away from.
 
 ```
-TRACE → DIAGNOSE → SEARCH → EVAL → GATE → DEPLOY → LEARN → REPEAT
+BUILD → EVAL → OPTIMIZE → DEPLOY → REPEAT
 ```
 
 > **[Quick Start](docs/QUICKSTART_GUIDE.md)** — Get a working agent in 2 minutes
@@ -63,10 +61,10 @@ cd my-agent
 autoagent build "customer support agent for order tracking, refunds, and cancellations"
 autoagent eval run
 autoagent optimize --cycles 3
-autoagent deploy canary --yes
+autoagent deploy --auto-review
 ```
 
-That's the full golden path: create → build → evaluate → optimize → deploy.
+That's the full loop: create → build → evaluate → optimize → deploy.
 
 ---
 
@@ -105,35 +103,32 @@ All commands support `--help`. Major commands support `--json` for structured ou
 
 ## How it works
 
-Each optimization cycle follows eight steps:
+Each optimization cycle:
 
-| Step | What happens |
-|------|-------------|
-| **Trace** | Collect structured telemetry from agent invocations |
-| **Diagnose** | Cluster failures, score opportunities, identify root causes |
-| **Search** | Generate typed mutations ranked by expected lift, risk, and novelty |
-| **Eval** | Replay mutations against test suites with side-effect isolation |
-| **Gate** | Hard safety constraints first, then optimize objectives |
-| **Deploy** | Promote winners via canary rollout with experiment card tracking |
-| **Learn** | Record what worked and what didn't for future searches |
-| **Repeat** | Loop autonomously until plateau or human intervention |
+1. **Trace** — Collects telemetry from agent runs
+2. **Diagnose** — Clusters failures, finds root causes
+3. **Search** — Generates fix candidates ranked by expected impact
+4. **Eval** — Tests fixes against your eval suite with side-effect isolation
+5. **Gate** — Enforces hard safety constraints (never traded off for performance)
+6. **Deploy** — Promotes winners via canary rollout
+7. **Learn** — Records what worked for smarter future searches
 
-Every cycle produces a reviewable **experiment card** with a hypothesis, config diff, statistical significance, and rollback instructions. Hard safety gates are never traded off against performance.
+Every cycle produces a reviewable **experiment card** — hypothesis, config diff, statistical significance, and rollback instructions. Run `autoagent optimize --continuous` to loop until progress plateaus.
 
 ---
 
 ## Key features
 
-- **Evaluation engine** — 7 eval modes with bootstrap CI, sequential testing, anti-Goodhart guards
-- **Trace analysis** — Span-level grading with 7 graders, blame maps, opportunity queue
-- **Judge stack** — Tiered scoring: deterministic → similarity → LLM → audit judge
-- **AutoFix copilot** — AI-driven fix proposals with review-before-apply
-- **NL scorer** — Describe "good" in English, get a typed eval scorer
-- **Context workbench** — Context window diagnostics and compaction simulation
-- **Registry** — Versioned skills, policies, tool contracts, handoff schemas
-- **Intelligence studio** — Upload transcripts, get analytics, generate agents
-- **Human controls** — Pause, resume, pin surfaces, reject experiments, budget caps
-- **Multi-model** — Google Gemini, OpenAI GPT-4o, Anthropic Claude, OpenAI-compatible
+- **Eval engine** — 7 eval modes, bootstrap CI, sequential testing, anti-Goodhart guards
+- **Trace analysis** — Span-level grading, blame maps, opportunity queue
+- **Judge stack** — Deterministic → similarity → LLM → audit judge (tiered for cost/accuracy)
+- **AutoFix** — AI-generated fix proposals you review before applying
+- **NL scorer** — Describe "good" in plain English, get a typed scorer
+- **Context workbench** — Diagnose context window issues, simulate compaction
+- **Registry** — Version-controlled skills, policies, tools, handoff schemas
+- **Intelligence studio** — Upload transcripts → analytics → auto-generate agents
+- **Human controls** — Pause, resume, pin, reject, budget caps — you stay in charge
+- **Multi-model** — Gemini, GPT-4o, Claude, any OpenAI-compatible provider
 
 ---
 
@@ -148,13 +143,16 @@ Every cycle produces a reviewable **experiment card** with a hypothesis, config 
 
 ## Web console
 
-Start with `autoagent server` and open `http://localhost:5173`. The sidebar toggles between Simple and Pro views.
+Start the web UI with `autoagent status --server` and open `http://localhost:5173`. The sidebar toggles between **Simple** (6 essential pages) and **Pro** (full platform) views.
 
-**Observe** — Dashboard, traces, blame map, conversations, event log
-**Optimize** — Trigger cycles, AutoFix proposals, opportunity queue, experiments
-**Evaluate** — Eval runs, per-case results, judge ops, scorer studio
-**Build** — Agent Studio, Intelligence Studio, assistant, simulation
-**Manage** — Configs, registry, deploy, loop monitor, skills, runbooks, settings
+- **Dashboard** — Health, recent activity, next recommended action
+- **Build** — Agent Studio, Intelligence Studio, assistant
+- **Eval Runs** — Per-case results, judge ops, scorer studio
+- **Optimize** — Trigger cycles, AutoFix proposals, experiments
+- **Review** — Approve or reject optimizer change cards
+- **Deploy** — Canary rollout, release, rollback
+
+See [UI Quick Start](docs/UI_QUICKSTART_GUIDE.md) for a full walkthrough.
 
 ---
 
