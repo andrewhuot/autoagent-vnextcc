@@ -18,6 +18,7 @@ class StatusSnapshot:
     active_config_summary: str
     eval_score_label: str
     eval_timestamp_label: str
+    last_eval_mode_label: str
     conversations_label: str
     safety_label: str
     cycles_run_label: str
@@ -43,6 +44,7 @@ def render_status(snapshot: StatusSnapshot, *, verbose: bool = False) -> None:
     click.echo(f"  Mode:       {snapshot.mode_label}")
     click.echo(f"  Config:     {snapshot.active_config_label} — {snapshot.active_config_summary}")
     click.echo(f"  Eval score: {snapshot.eval_score_label} ({snapshot.eval_timestamp_label})")
+    click.echo(f"  Eval mode:  {snapshot.last_eval_mode_label}")
     click.echo(f"  Safety:     {snapshot.safety_label}")
     click.echo(f"  Pending:    {snapshot.pending_review_cards} review card(s), {snapshot.pending_autofix_proposals} autofix proposal(s)")
     click.echo(f"  Deployment: {snapshot.deployment_label}")

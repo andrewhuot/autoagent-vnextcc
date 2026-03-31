@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
     from agent.tracing import instrument_eval_runner
     from deployer.canary import Deployer
     from deployer.versioning import ConfigVersionManager
+    from evals.execution_mode import requested_live_mode
     from evals.runner import EvalRunner
     from evals.what_if import WhatIfEngine
     from logger.structured import configure_structured_logging
@@ -179,6 +180,8 @@ async def lifespan(app: FastAPI):
         random_seed=runtime.eval.random_seed,
         token_cost_per_1k=runtime.eval.token_cost_per_1k,
     )
+    eval_runner.eval_agent = eval_agent
+    eval_runner.requested_live = requested_live_mode(runtime)
     instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="api")
     eval_runner.mock_mode_messages = list(eval_agent.mock_mode_messages)
     router = build_router_from_runtime_config(runtime.optimizer)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from evals.auto_generator import AutoEvalGenerator
+from evals.execution_mode import requested_live_mode, resolve_eval_execution_mode
 from evals.runner import TestCase
 from evals.scorer import composite_breakdown
 from api.models import (
@@ -29,6 +31,7 @@ from api.models import (
 from api.tasks import Task
 
 router = APIRouter(prefix="/api/eval", tags=["eval"])
+LOG = logging.getLogger(__name__)
 
 
 def _score_to_response(run_id: str, score: Any, completed_at: datetime | None = None) -> dict:
@@ -47,6 +50,7 @@ def _score_to_response(run_id: str, score: Any, completed_at: datetime | None = 
         })
     return {
         "run_id": run_id,
+        "mode": "mock",
         "quality": score.quality,
         "safety": score.safety,
         "latency": score.latency,
@@ -71,6 +75,8 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
     eval_runner = request.app.state.eval_runner
+    runtime = request.app.state.runtime_config
+    requested_live = requested_live_mode(runtime)
 
     config: dict | None = None
     if body.config_path:
@@ -142,6 +148,15 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
 
         result = _score_to_response(task.task_id, score, datetime.now(timezone.utc))
         result["run_id"] = score.run_id or task.task_id
+        result["mode"] = resolve_eval_execution_mode(
+            requested_live=requested_live,
+            eval_agent=getattr(eval_runner, "eval_agent", None),
+        )
+        if result["mode"] == "mixed":
+            for warning in list(getattr(eval_runner, "mock_mode_messages", []) or []):
+                if warning not in result["warnings"]:
+                    result["warnings"].append(warning)
+                LOG.warning("api.eval_run.live_fallback_to_mock: %s", warning)
         result["provenance"] = score.provenance
         result["dataset_path"] = dataset_path
         result["split"] = split

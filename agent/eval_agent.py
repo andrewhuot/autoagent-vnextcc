@@ -23,6 +23,11 @@ LEGACY_EVAL_MOCK_MESSAGE = (
     "Eval harness is using mock_agent_response, so eval scores remain simulated until a real agent_fn is wired in."
 )
 LIVE_FALLBACK_MESSAGE_PREFIX = "Eval agent provider failed; falling back to deterministic mock responses."
+LIVE_REQUIRED_MESSAGE_PREFIX = "Live eval required; refusing to fall back to mock mode."
+
+
+class LiveEvalRequiredError(RuntimeError):
+    """Raised when a caller explicitly requires live eval execution."""
 
 
 def _load_default_config() -> dict[str, Any]:
@@ -45,11 +50,13 @@ class ConfiguredEvalAgent:
         *,
         llm_router: LLMRouter,
         default_config: dict[str, Any] | None = None,
+        allow_mock_fallback: bool = True,
     ) -> None:
         self.llm_router = llm_router
         self.default_config = copy.deepcopy(default_config or _load_default_config())
         self.mock_mode = bool(getattr(llm_router, "mock_mode", False))
         self.mock_reason = str(getattr(llm_router, "mock_reason", "")).strip()
+        self.allow_mock_fallback = bool(allow_mock_fallback)
 
     @property
     def mock_mode_messages(self) -> list[str]:
@@ -79,6 +86,9 @@ class ConfiguredEvalAgent:
         """
         resolved_config = self._resolve_config(config)
         if self.mock_mode:
+            if not self.allow_mock_fallback:
+                reason = self.mock_reason or "no live provider was available"
+                raise LiveEvalRequiredError(f"{LIVE_REQUIRED_MESSAGE_PREFIX} {reason}")
             return mock_agent_response(user_message, resolved_config)
 
         validated = validate_config(resolved_config)
@@ -99,6 +109,10 @@ class ConfiguredEvalAgent:
             )
         except Exception as exc:
             # Keep eval loops alive when a live provider is rate-limited or unavailable.
+            if not self.allow_mock_fallback:
+                raise LiveEvalRequiredError(
+                    f"{LIVE_REQUIRED_MESSAGE_PREFIX} {type(exc).__name__}: {exc}"
+                ) from exc
             self.mock_mode = True
             if not self.mock_reason:
                 self.mock_reason = (
@@ -194,6 +208,7 @@ def create_eval_agent(
     *,
     force_real_agent: bool = False,
     default_config: dict[str, Any] | None = None,
+    allow_mock_fallback: bool = True,
 ) -> ConfiguredEvalAgent:
     """Build the eval-compatible agent using runtime provider settings.
 
@@ -210,4 +225,5 @@ def create_eval_agent(
     return ConfiguredEvalAgent(
         llm_router=llm_router,
         default_config=default_config,
+        allow_mock_fallback=allow_mock_fallback,
     )

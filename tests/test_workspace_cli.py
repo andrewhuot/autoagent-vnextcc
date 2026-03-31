@@ -472,6 +472,32 @@ def test_eval_run_persists_latest_results_for_eval_show(
     assert "3/3 passed" in show_result.output
 
 
+def test_eval_run_persists_mock_mode_and_labels_results(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mock-backed eval run should persist `mode=mock` and label both run/show output clearly."""
+    workspace = tmp_path / "eval-mode"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+
+    run_result = runner.invoke(cli, ["eval", "run"])
+    show_result = runner.invoke(cli, ["eval", "show", "latest"])
+    latest = json.loads((workspace / ".autoagent" / "eval_results_latest.json").read_text(encoding="utf-8"))
+
+    assert run_result.exit_code == 0, run_result.output
+    assert latest["mode"] == "mock"
+    assert "mock mode" in run_result.output.lower()
+    assert show_result.exit_code == 0, show_result.output
+    assert "mock mode" in show_result.output.lower()
+
+
 def test_status_uses_latest_eval_result_when_no_optimize_history(
     runner: CliRunner,
     tmp_path: Path,
@@ -487,6 +513,7 @@ def test_status_uses_latest_eval_result_when_no_optimize_history(
         json.dumps(
             {
                 "timestamp": "2026-03-30T16:00:00+00:00",
+                "mode": "mixed",
                 "scores": {"composite": 0.87},
             },
             indent=2,
@@ -498,6 +525,8 @@ def test_status_uses_latest_eval_result_when_no_optimize_history(
 
     assert result.exit_code == 0, result.output
     assert "0.8700" in result.output
+    assert "Eval mode:" in result.output
+    assert "MIXED" in result.output
 
 
 def test_eval_generate_handles_workspace_style_config_and_writes_suite(

@@ -343,7 +343,10 @@ export function EvalRuns() {
               <div key={run.run_id} className="rounded-lg border border-gray-200 p-4">
                 <div className="flex items-center justify-between">
                   <p className="font-mono text-xs text-gray-600">{run.run_id.slice(0, 12)}</p>
-                  <StatusBadge variant={statusVariant(run.status)} label={run.status} />
+                  <div className="flex items-center gap-3">
+                    {run.mode && <StatusBadge variant={statusVariant(run.mode)} label={run.mode} />}
+                    <StatusBadge variant={statusVariant(run.status)} label={run.status} />
+                  </div>
                 </div>
                 <div className="mt-2">
                   <ScoreDisplay score={run.composite_score} size="lg" />
@@ -388,6 +391,7 @@ export function EvalRuns() {
                     <td className="px-3 py-2">
                       <div className="space-y-1">
                         <StatusBadge variant={statusVariant(run.status)} label={run.status} />
+                        {run.mode && <StatusBadge variant={statusVariant(run.mode)} label={run.mode} />}
                         {run.status === 'running' && (
                           <p className="text-xs text-gray-500">Progress: {run.progress}%</p>
                         )}

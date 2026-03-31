@@ -68,9 +68,11 @@ def test_eval_run_real_agent_survives_provider_errors(
     result = runner.invoke(cli, ["eval", "run", "--real-agent"])
 
     assert result.exit_code == 0, result.output
+    assert "mixed mode" in result.output.lower()
     assert "Warning:" in result.output
     assert "falling back to deterministic mock responses" in result.output.lower()
     latest = _read_json(workspace / ".autoagent" / "eval_results_latest.json")
+    assert latest["mode"] == "mixed"
     assert latest["total"] == 3
     assert latest["passed"] == 2
     assert any(
@@ -78,3 +80,31 @@ def test_eval_run_real_agent_survives_provider_errors(
         for warning in latest["scores"]["warnings"]
     )
     assert failing_agent.mock_mode is True
+
+
+def test_eval_run_require_live_fails_when_provider_falls_back(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """`autoagent eval run --require-live` should fail instead of silently persisting mock results."""
+    runner = CliRunner()
+    workspace = tmp_path / "require-live-agent"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    failing_agent = ConfiguredEvalAgent(
+        llm_router=FailingRouter(),
+        default_config=_load_default_config(),
+    )
+    monkeypatch.setattr(
+        agent,
+        "create_eval_agent",
+        lambda runtime, force_real_agent=False, default_config=None: failing_agent,
+    )
+
+    result = runner.invoke(cli, ["eval", "run", "--require-live"])
+
+    assert result.exit_code != 0
+    assert "require live" in result.output.lower() or "live eval required" in result.output.lower()
+    assert not (workspace / ".autoagent" / "eval_results_latest.json").exists()

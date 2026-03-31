@@ -43,6 +43,7 @@ import type {
   DiagnoseChatResponse,
   DiffLine,
   DeepResearchReport,
+  EvalMode,
   EvalResult,
   EvalRun,
   ExperimentCard,
@@ -455,6 +456,7 @@ function mapChangeCard(raw: RawChangeCard): ChangeCard {
 
 interface EvalResultRaw {
   run_id: string;
+  mode?: string | null;
   quality: number;
   safety: number;
   latency: number;
@@ -463,6 +465,7 @@ interface EvalResultRaw {
   safety_failures: number;
   total_cases: number;
   passed_cases: number;
+  warnings?: string[];
   cases: Array<{
     case_id: string;
     category: string;
@@ -487,6 +490,23 @@ interface TaskStatusRaw {
   updated_at: string;
 }
 
+function normalizeEvalMode(value: unknown, warnings: unknown = []): EvalMode | undefined {
+  if (value === 'mock' || value === 'live' || value === 'mixed') {
+    return value;
+  }
+
+  const warningText = Array.isArray(warnings)
+    ? warnings.filter((item): item is string => typeof item === 'string').join(' ').toLowerCase()
+    : '';
+  if (warningText.includes('falling back') || warningText.includes('fallback to mock')) {
+    return 'mixed';
+  }
+  if (warningText.includes('mock mode') || warningText.includes('simulated') || warningText.includes('mock_agent_response')) {
+    return 'mock';
+  }
+  return undefined;
+}
+
 function mapTask(task: TaskStatusRaw): TaskStatus {
   return {
     task_id: task.task_id,
@@ -507,6 +527,7 @@ function mapEvalTask(task: TaskStatusRaw): EvalRun {
     timestamp: task.created_at,
     status: task.status,
     progress: task.progress,
+    mode: normalizeEvalMode(result.mode, result.warnings),
     composite_score: percent(result.composite),
     total_cases: result.total_cases || 0,
     passed_cases: result.passed_cases || 0,
@@ -519,6 +540,7 @@ function mapEvalResult(raw: EvalResultRaw, status: TaskStatusRaw['status'] = 'co
     status,
     progress,
     timestamp: raw.completed_at || new Date().toISOString(),
+    mode: normalizeEvalMode(raw.mode, raw.warnings),
     composite_score: {
       overall: percent(raw.composite),
       quality: percent(raw.quality),

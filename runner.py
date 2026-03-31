@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import logging
 import os
 import shutil
 import sys
@@ -112,6 +113,14 @@ from cli.templates import (
 from cli.workspace import AutoAgentWorkspace, discover_workspace
 from deployer import Deployer
 from evals import EvalRunner
+from evals.execution_mode import (
+    EvalExecutionMode,
+    eval_mode_banner_label,
+    eval_mode_status_label,
+    infer_eval_execution_mode,
+    requested_live_mode,
+    resolve_eval_execution_mode,
+)
 from logger import ConversationStore
 from logger.structured import configure_structured_logging
 from observer import Observer
@@ -135,6 +144,9 @@ from optimizer.skill_autolearner import SkillAutoLearner
 from shared.build_artifact_store import BuildArtifactStore
 from shared.contracts import BuildArtifact
 from shared.taxonomy import COMMAND_GROUPS, COMMAND_TAXONOMY
+
+
+LOG = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -515,9 +527,65 @@ def _score_to_dict(score) -> dict:
     }
 
 
+def _merge_unique_warnings(existing: list[str] | None, additions: list[str]) -> list[str]:
+    """Return warnings with stable ordering and no duplicates."""
+    merged = list(existing or [])
+    seen = {warning for warning in merged if warning}
+    for warning in additions:
+        if not warning or warning in seen:
+            continue
+        seen.add(warning)
+        merged.append(warning)
+    return merged
+
+
+def _eval_mode_for_runner(eval_runner: EvalRunner, *, runtime=None) -> EvalExecutionMode:
+    """Return the effective eval mode for the current runner state."""
+    requested_live = getattr(eval_runner, "requested_live", None)
+    if requested_live is None and runtime is not None:
+        requested_live = requested_live_mode(runtime)
+    return resolve_eval_execution_mode(
+        requested_live=bool(requested_live),
+        eval_agent=getattr(eval_runner, "eval_agent", None),
+    )
+
+
+def _ensure_live_eval_runner(eval_runner: EvalRunner) -> None:
+    """Fail fast when the caller requires live evals but the runner is already mock-backed."""
+    if not bool(getattr(eval_runner, "require_live", False)):
+        return
+
+    mode = _eval_mode_for_runner(eval_runner)
+    if mode == "live":
+        return
+
+    messages = list(getattr(eval_runner, "mock_mode_messages", []) or [])
+    detail = messages[0] if messages else "no live provider was available"
+    raise click.ClickException(f"Live eval required; {detail}")
+
+
+def _eval_results_heading(mode: EvalExecutionMode | None) -> str:
+    """Return the text-mode heading for one eval result surface."""
+    if mode is None:
+        return "Eval Results"
+    return f"📊 Eval Results ({eval_mode_banner_label(mode)})"
+
+
+def _render_eval_results_header(data: dict) -> None:
+    """Render the shared text header used by `eval run`, `eval show`, and `eval results`."""
+    payload = _unwrap_eval_payload(data)
+    mode = _extract_eval_mode(data)
+    click.echo(f"\n{_eval_results_heading(mode)}")
+    click.echo(f"  Timestamp: {payload.get('timestamp', data.get('timestamp', 'unknown'))}")
+    click.echo(f"  Config:    {payload.get('config_path', data.get('config_path', 'default'))}")
+    if mode is not None:
+        click.echo(f"  Mode:      {eval_mode_status_label(mode)}")
+
+
 def _build_eval_result_payload(
     *,
     score,
+    mode: EvalExecutionMode,
     config_path: str | None,
     category: str | None,
     dataset: str | None,
@@ -526,6 +594,7 @@ def _build_eval_result_payload(
     """Serialize an eval result into the shared on-disk payload shape."""
     return {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
+        "mode": mode,
         "config_path": config_path,
         "category": category,
         "dataset": dataset,
@@ -582,6 +651,12 @@ def _extract_eval_scores(data: dict) -> dict[str, float]:
         except (TypeError, ValueError):
             scores[metric] = 0.0
     return scores
+
+
+def _extract_eval_mode(data: dict) -> EvalExecutionMode | None:
+    """Read the canonical eval mode from a serialized payload when available."""
+    payload = _unwrap_eval_payload(data)
+    return infer_eval_execution_mode(payload)
 
 
 def _eval_result_search_roots() -> list[Path]:
@@ -1185,6 +1260,7 @@ def _build_eval_runner(
     cases_dir: str | None = None,
     trace_db_path: str | None = None,
     use_real_agent: bool = False,
+    require_live: bool = False,
     default_agent_config: dict | None = None,
 ) -> EvalRunner:
     """Build an EvalRunner from runtime config with harness defaults wired in."""
@@ -1193,12 +1269,18 @@ def _build_eval_runner(
     from agent.tracing import instrument_eval_runner
     from observer.traces import TraceStore
 
-    requested_real_agent = bool(use_real_agent or not bool(runtime.optimizer.use_mock))
+    requested_real_agent = requested_live_mode(
+        runtime,
+        force_live=use_real_agent,
+        require_live=require_live,
+    )
     eval_agent = create_eval_agent(
         runtime,
-        force_real_agent=use_real_agent,
+        force_real_agent=bool(use_real_agent or require_live),
         default_config=default_agent_config,
     ) if requested_real_agent else None
+    if eval_agent is not None and require_live and hasattr(eval_agent, "allow_mock_fallback"):
+        eval_agent.allow_mock_fallback = False
 
     eval_runner = EvalRunner(
         cases_dir=cases_dir,
@@ -1211,6 +1293,8 @@ def _build_eval_runner(
         token_cost_per_1k=runtime.eval.token_cost_per_1k,
     )
     eval_runner.eval_agent = eval_agent
+    eval_runner.requested_live = bool(requested_real_agent)
+    eval_runner.require_live = bool(require_live)
     trace_store = TraceStore(db_path=trace_db_path or os.environ.get("AUTOAGENT_TRACE_DB", TRACE_DB))
     instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="cli")
     eval_runner.mock_mode_messages = (
@@ -2321,6 +2405,12 @@ def eval_group() -> None:
     default=False,
     help="Force the real-agent eval path even if optimizer.use_mock is enabled.",
 )
+@click.option(
+    "--require-live",
+    is_flag=True,
+    default=False,
+    help="Require live providers for this eval and fail instead of falling back to mock mode.",
+)
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 @click.option(
     "--output-format",
@@ -2331,6 +2421,7 @@ def eval_group() -> None:
 )
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
              category: str | None, output: str | None, real_agent: bool = False,
+             require_live: bool = False,
              json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
 
@@ -2340,6 +2431,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
       autoagent eval run --config configs/v003.yaml --category safety
       autoagent eval run --output results.json
     """
+    from agent.eval_agent import LiveEvalRequiredError
     from cli.stream2_helpers import json_response
     from cli.output import resolve_output_format
     from cli.progress import ProgressRenderer
@@ -2387,20 +2479,25 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         cases_dir=resolved_suite,
         use_real_agent=real_agent,
         default_agent_config=config,
+        **({"require_live": True} if require_live else {}),
     )
+    _ensure_live_eval_runner(runner)
     initial_mock_messages = list(getattr(runner, "mock_mode_messages", []) or [])
     _warn_mock_modes(eval_runner=runner, json_output=(resolved_output_format == "json"))
 
-    if category:
-        score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
-        progress.phase_completed("eval", message=f"Category '{category}' complete")
-        progress.next_action("autoagent improve")
-        score_heading = f"Category: {category}"
-    else:
-        score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
-        progress.phase_completed("eval", message="Full eval suite complete")
-        progress.next_action("autoagent improve")
-        score_heading = "Full eval suite"
+    try:
+        if category:
+            score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
+            progress.phase_completed("eval", message=f"Category '{category}' complete")
+            progress.next_action("autoagent improve")
+            score_heading = f"Category: {category}"
+        else:
+            score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
+            progress.phase_completed("eval", message="Full eval suite complete")
+            progress.next_action("autoagent improve")
+            score_heading = "Full eval suite"
+    except LiveEvalRequiredError as exc:
+        raise click.ClickException(str(exc)) from exc
 
     live_eval_agent = getattr(runner, "eval_agent", None)
     if live_eval_agent is not None:
@@ -2410,13 +2507,25 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             message for message in refreshed_mock_messages if message not in initial_mock_messages
         ]
         if late_mock_messages:
-            score.warnings = list(dict.fromkeys(list(getattr(score, "warnings", []) or []) + late_mock_messages))
+            score.warnings = _merge_unique_warnings(getattr(score, "warnings", []) or [], late_mock_messages)
+
+    eval_mode = _eval_mode_for_runner(runner, runtime=runtime)
+    if eval_mode in {"mock", "mixed"}:
+        score.warnings = _merge_unique_warnings(
+            getattr(score, "warnings", []) or [],
+            list(getattr(runner, "mock_mode_messages", []) or []),
+        )
+    if eval_mode == "mixed":
+        for warning in list(getattr(runner, "mock_mode_messages", []) or []):
+            LOG.warning("eval_run.live_fallback_to_mock: %s", warning)
 
     if resolved_output_format == "text":
+        click.echo(f"\n{_eval_results_heading(eval_mode)}")
         _print_score(score, score_heading)
 
     result = _build_eval_result_payload(
         score=score,
+        mode=eval_mode,
         config_path=config_path,
         category=category,
         dataset=dataset,
@@ -2436,7 +2545,10 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         return
 
     if resolved_output_format == "json":
-        click.echo(json_response("ok", _score_to_dict(score), next_cmd="autoagent improve"))
+        payload = _score_to_dict(score)
+        payload["mode"] = eval_mode
+        payload["run_id"] = score.run_id
+        click.echo(json_response("ok", payload, next_cmd="autoagent improve"))
         return
 
     click.echo(click.style(f"\n  Status: {_score_status_label(score.composite)}", fg="magenta"))
@@ -2459,10 +2571,10 @@ def eval_results(run_id: str | None, results_file: str | None) -> None:
     """
     if results_file:
         data = json.loads(Path(results_file).read_text(encoding="utf-8"))
-        click.echo(f"\nEval Results — {data.get('timestamp', 'unknown')}")
-        click.echo(f"  Config:  {data.get('config_path', 'default')}")
-        scores = data.get("scores", {})
-        click.echo(f"  Cases:   {data.get('passed', '?')}/{data.get('total', '?')} passed")
+        payload = _unwrap_eval_payload(data)
+        _render_eval_results_header(data)
+        scores = payload.get("scores", {})
+        click.echo(f"  Cases:   {payload.get('passed', '?')}/{payload.get('total', '?')} passed")
         click.echo(f"  Quality:   {scores.get('quality', 0):.4f}")
         click.echo(f"  Safety:    {scores.get('safety', 0):.4f}")
         click.echo(f"  Latency:   {scores.get('latency', 0):.4f}")
@@ -2470,7 +2582,7 @@ def eval_results(run_id: str | None, results_file: str | None) -> None:
         click.echo(f"  Composite: {scores.get('composite', 0):.4f}")
 
         # Show failed cases
-        results = data.get("results", [])
+        results = payload.get("results", [])
         failed = [r for r in results if not r.get("passed")]
         if failed:
             click.echo(f"\nFailed cases ({len(failed)}):")
@@ -2513,17 +2625,17 @@ def eval_show(selector: str, results_file: str | None, json_output: bool = False
         click.echo(json_response("ok", data, next_cmd="autoagent optimize"))
         return
 
-    click.echo(f"\nEval Results — {data.get('timestamp', 'unknown')}")
-    click.echo(f"  Config:  {data.get('config_path', 'default')}")
-    scores = data.get("scores", {})
-    click.echo(f"  Cases:   {data.get('passed', '?')}/{data.get('total', '?')} passed")
+    payload = _unwrap_eval_payload(data)
+    _render_eval_results_header(data)
+    scores = payload.get("scores", {})
+    click.echo(f"  Cases:   {payload.get('passed', '?')}/{payload.get('total', '?')} passed")
     click.echo(f"  Quality:   {scores.get('quality', 0):.4f}")
     click.echo(f"  Safety:    {scores.get('safety', 0):.4f}")
     click.echo(f"  Latency:   {scores.get('latency', 0):.4f}")
     click.echo(f"  Cost:      {scores.get('cost', 0):.4f}")
     click.echo(f"  Composite: {scores.get('composite', 0):.4f}")
 
-    results = data.get("results", [])
+    results = payload.get("results", [])
     failed = [r for r in results if not r.get("passed")]
     if failed:
         click.echo(f"\nFailed cases ({len(failed)}):")
@@ -2552,7 +2664,9 @@ def eval_list() -> None:
             composite = data.get("scores", {}).get("composite", 0)
             passed = data.get("passed", "?")
             total = data.get("total", "?")
-            click.echo(f"  {f.name}  {ts}  composite={composite:.4f}  {passed}/{total} passed")
+            mode = _extract_eval_mode(data)
+            mode_label = f"  mode={eval_mode_status_label(mode)}" if mode is not None else ""
+            click.echo(f"  {f.name}  {ts}  composite={composite:.4f}  {passed}/{total} passed{mode_label}")
         except (json.JSONDecodeError, KeyError):
             click.echo(f"  {f.name}  (invalid format)")
 
@@ -4794,6 +4908,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
     latest_eval_score: float | None = None
     latest_eval_safety: float | None = None
     latest_eval_timestamp: float | str | None = None
+    latest_eval_mode: EvalExecutionMode | None = None
     latest_eval_file, latest_eval_payload = _latest_eval_payload_for_active_config(
         resolved.path if resolved is not None else None
     )
@@ -4803,6 +4918,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
         latest_eval_score = latest_eval_scores.get("composite")
         latest_eval_safety = latest_eval_scores.get("safety")
         latest_eval_timestamp = latest_eval_data.get("timestamp") or latest_eval_payload.get("timestamp")
+        latest_eval_mode = _extract_eval_mode(latest_eval_payload)
     pending_review_cards = 0
     pending_autofix_proposals = 0
 
@@ -4848,6 +4964,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
             "eval_score": latest_eval_score,
             "eval_safety_score": latest_eval_safety,
             "eval_timestamp": latest_eval_timestamp,
+            "eval_mode": latest_eval_mode,
             "safety_violation_rate": metrics.safety_violation_rate,
             "cycles_run": len(all_attempts),
             "failure_buckets": buckets,
@@ -4876,6 +4993,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
         active_config_summary=workspace.summarize_config(resolved.config if resolved is not None else None),
         eval_score_label=f"{latest_eval_score:.4f}" if latest_eval_score is not None else "n/a",
         eval_timestamp_label=_format_eval_timestamp(latest_eval_timestamp),
+        last_eval_mode_label=eval_mode_status_label(latest_eval_mode),
         conversations_label=str(total_conversations),
         safety_label=(
             f"{latest_eval_safety:.3f} eval | obs fail {metrics.safety_violation_rate:.3f}"

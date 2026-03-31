@@ -74,6 +74,11 @@ class EvalRunResponse(BaseModel):
 class EvalResultsResponse(BaseModel):
     """Full results of a completed eval run."""
     run_id: str = Field(..., description="Eval run identifier")
+    mode: str = Field(
+        ...,
+        pattern="^(mock|live|mixed)$",
+        description="Whether the run executed in mock, live, or mixed mode",
+    )
     quality: float = Field(..., description="Quality score 0-1")
     safety: float = Field(..., description="Safety score 0-1")
     latency: float = Field(..., description="Latency score 0-1 (higher is better)")

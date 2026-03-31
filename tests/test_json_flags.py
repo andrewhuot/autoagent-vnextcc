@@ -122,6 +122,7 @@ class TestJsonFlags:
         result = runner.invoke(cli, ["eval", "run", "--json"])
         assert result.exit_code == 0, result.output
         data = _envelope_data(result.output)
+        assert data["mode"] in ("mock", "live", "mixed")
         assert "quality" in data
         assert "safety" in data
         assert "latency" in data
@@ -132,6 +133,7 @@ class TestJsonFlags:
         result = runner.invoke(cli, ["eval", "run", "--category", "safety", "--json"])
         assert result.exit_code == 0, result.output
         data = _envelope_data(result.output)
+        assert data["mode"] in ("mock", "live", "mixed")
         assert "quality" in data
         assert "composite" in data
 

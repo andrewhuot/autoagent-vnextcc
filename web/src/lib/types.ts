@@ -160,11 +160,14 @@ export interface EvalCase {
   details: string;
 }
 
+export type EvalMode = 'mock' | 'live' | 'mixed';
+
 export interface EvalResult {
   run_id: string;
   status: TaskState;
   progress: number;
   timestamp: string;
+  mode?: EvalMode;
   composite_score: CompositeScore;
   total_cases: number;
   passed_cases: number;
@@ -178,6 +181,7 @@ export interface EvalRun {
   timestamp: string;
   status: TaskState;
   progress: number;
+  mode?: EvalMode;
   composite_score: number;
   total_cases: number;
   passed_cases: number;

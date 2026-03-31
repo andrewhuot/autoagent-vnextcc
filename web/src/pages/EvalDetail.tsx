@@ -85,6 +85,7 @@ export function EvalDetail() {
             <div className="flex items-center gap-2">
               <h2 className="font-mono text-sm text-gray-700">Run {result.run_id.slice(0, 12)}</h2>
               <StatusBadge variant={statusVariant(result.status)} label={result.status} />
+              {result.mode && <StatusBadge variant={statusVariant(result.mode)} label={result.mode} />}
             </div>
             <p className="mt-2 text-sm text-gray-600">
               Completed {formatTimestamp(result.timestamp)} · {result.passed_cases}/{result.total_cases} passed

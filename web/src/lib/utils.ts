@@ -63,6 +63,7 @@ export function statusVariant(status: string): 'success' | 'error' | 'warning' |
     case 'active':
     case 'promote':
     case 'promoted':
+    case 'live':
       return 'success';
     case 'failed':
     case 'fail':
@@ -80,6 +81,8 @@ export function statusVariant(status: string): 'success' | 'error' | 'warning' |
     case 'rejected_noop':
     case 'warning':
     case 'degraded':
+    case 'mock':
+    case 'mixed':
       return 'warning';
     case 'running':
       return 'running';

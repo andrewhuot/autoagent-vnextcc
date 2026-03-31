@@ -27,6 +27,7 @@ from agent.skill_runtime import SkillRuntime
 from core.skills import SkillStore
 from deployer import Deployer
 from evals import EvalRunner
+from evals.execution_mode import requested_live_mode
 from logger.middleware import log_conversation
 from logger.store import ConversationStore
 from optimizer.memory import OptimizationMemory
@@ -108,11 +109,14 @@ async def startup() -> None:
     _store = ConversationStore(db_path=db_path)
     _memory = OptimizationMemory(db_path=memory_db_path)
     _deployer = Deployer(configs_dir=configs_dir, store=_store)
+    runtime = load_runtime_config()
     eval_agent = create_eval_agent(
-        load_runtime_config(),
+        runtime,
         default_config=_loaded_config,
     )
     _eval_runner = EvalRunner(agent_fn=eval_agent.run)
+    _eval_runner.eval_agent = eval_agent
+    _eval_runner.requested_live = requested_live_mode(runtime)
     _eval_runner.mock_mode_messages = list(eval_agent.mock_mode_messages)
 
     # Bootstrap active config history when no config has been promoted yet.
