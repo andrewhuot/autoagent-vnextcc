@@ -1,140 +1,242 @@
 # Core Concepts
 
-The mental models behind AutoAgent VNextCC. Read this before diving into features.
+This guide explains the product concepts that show up across the AutoAgent CLI, API, and web console today.
 
-## The Eval Loop
+If you are new to the project, start with these ideas:
 
-AutoAgent runs a closed-loop optimization cycle:
+1. A workspace holds versioned agent configs, evals, and local runtime state.
+2. Most work follows the same loop: build, eval, compare, optimize, review, deploy.
+3. The UI and CLI operate on the same files and local databases, so they should agree.
 
-```
-trace → diagnose → search → eval → gate → deploy → learn → repeat
-```
+## The Core Loop
 
-1. **Trace** -- Collect conversation traces and span-level telemetry
-2. **Diagnose** -- Classify failures, build blame maps, identify optimization opportunities
-3. **Search** -- Generate candidate mutations targeting diagnosed weaknesses
-4. **Eval** -- Run candidates against the eval suite with statistical significance testing
-5. **Gate** -- Check safety gates, regression gates, and holdout validation
-6. **Deploy** -- Promote winning configs via canary or immediate deployment
-7. **Learn** -- Record outcomes in optimization memory for future search
-8. **Repeat** -- Loop until plateau, budget exhaustion, or human stop
+The current product is organized around this operator loop:
 
-Each cycle is autonomous but human-interruptible at every stage.
-
-## 4-Layer Metric Hierarchy
-
-Metrics are organized into four layers, evaluated top-down. A failure at a higher layer blocks promotion regardless of lower-layer scores.
-
-| Layer | Purpose | Examples |
-|-------|---------|----------|
-| **Hard Gates** | Binary pass/fail, non-negotiable | Safety violation rate = 0%, no regressions on pinned surfaces |
-| **North-Star Outcomes** | Primary optimization targets | Task success rate, response quality, composite score |
-| **Operating SLOs** | Operational guardrails | Latency p95 < 2s, cost per conversation < $0.05 |
-| **Diagnostics** | Debugging signals, not gated | Tool correctness, routing accuracy, handoff fidelity, failure buckets |
-
-The optimizer maximizes north-star outcomes subject to hard gates and SLO constraints.
-
-## Typed Mutations
-
-The mutation registry defines 9 operator classes, each targeting a specific configuration surface:
-
-| Operator | Surface | Risk Class |
-|----------|---------|------------|
-| Rewrite instruction | `instruction` | medium |
-| Add/remove few-shot examples | `few_shot` | low |
-| Modify tool descriptions | `tool_description` | medium |
-| Swap model | `model` | high |
-| Tune generation settings | `generation_settings` | low |
-| Adjust callbacks | `callback` | medium |
-| Context caching policy | `context_caching` | low |
-| Memory policy | `memory_policy` | medium |
-| Routing changes | `routing` | high |
-
-Every operator declares preconditions, a validator function, rollback strategy, estimated eval cost, and whether it supports auto-deploy. The risk class determines gate strictness: `critical` mutations always require human approval.
-
-## Experiment Cards
-
-Every optimization attempt is tracked as an experiment card:
-
-```python
-ExperimentCard(
-    experiment_id="exp_a1b2c3",
-    hypothesis="Rewriting the support instruction to be more concise will reduce latency",
-    config_sha="abc123",
-    baseline_scores={"composite": 0.82},
-    candidate_scores={"composite": 0.86},
-    significance=0.03,       # p-value from bootstrap test
-    status="promoted",       # pending → evaluated → promoted | rejected | archived
-)
+```text
+BUILD -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 ```
 
-Cards form an audit trail. You can inspect any past experiment to understand what was tried, what worked, and why.
+What each step means in practice:
 
-## Judge Stack
+- **Build** creates or updates a config from a prompt, transcript archive, builder chat session, or imported runtime.
+- **Eval** runs that config against eval cases and records a scored run.
+- **Compare** helps you judge deltas between runs or configs instead of looking at one score in isolation.
+- **Optimize** generates and tests candidate improvements.
+- **Review** is where humans approve or reject proposed changes.
+- **Deploy** controls active and canary rollout state.
 
-Eval scoring uses a layered judge stack, applied in order:
+This loop matters because AutoAgent is not just a prompt editor. It is a local system for iterating on agent behavior with evidence.
 
-1. **Deterministic** -- Pattern matching, keyword checks, schema validation. Fast, zero-cost.
-2. **Similarity** -- Embedding-based comparison against reference answers. Low cost.
-3. **Binary Rubric** -- LLM judge with structured rubric. Scores quality on defined criteria.
-4. **Audit Judge** -- Secondary LLM review of borderline cases. Catches judge errors.
-5. **Calibration** -- Periodic human-vs-judge agreement analysis. Tracks judge drift over time.
+## Workspace
 
-Higher layers only fire when lower layers are inconclusive. This keeps eval costs low while maintaining accuracy.
+A workspace is the local directory where AutoAgent stores the things it needs to work on an agent over time.
 
-## Search Strategies
+Typical workspace contents include:
 
-Four search strategies, increasing in sophistication:
+- `autoagent.yaml` for workspace-level settings
+- `configs/` for versioned configs such as `v001.yaml`
+- `evals/` for eval cases and generated suites
+- `.autoagent/` for operational state such as traces, deployment metadata, CX metadata, and local stores
+- `AUTOAGENT.md` for project memory
 
-| Strategy | Description | Best For |
-|----------|-------------|----------|
-| `simple` | Deterministic proposer, single candidate per cycle | Getting started, low budget |
-| `adaptive` | Multi-hypothesis search with bandit-based family selection | Most production use |
-| `full` | Adaptive + curriculum learning + Pareto archive | Complex multi-objective optimization |
-| `pro` | Research-grade prompt optimization (MIPROv2, BootstrapFewShot, GEPA, SIMBA) | Maximum quality, higher budget |
+When the docs mention "the active workspace", they mean the directory AutoAgent discovered from your current working directory.
 
-Set the strategy in `autoagent.yaml`:
+## Config Versions
 
-```yaml
-optimizer:
-  search_strategy: adaptive
+AutoAgent treats configs as versioned artifacts, not an untracked blob.
+
+Important terms:
+
+- **Config version**: a numbered config file such as `configs/v003.yaml`
+- **Active config**: the version the workspace currently treats as the main local candidate
+- **Canary version**: a version currently being observed in rollout
+- **Imported version**: a version produced by an external import flow such as Connect or CX
+
+Common CLI surfaces:
+
+```bash
+autoagent config list
+autoagent config show
+autoagent config set-active 3
+autoagent build show latest
 ```
 
-## Anti-Goodhart Guards
+The web console exposes the same idea through Build, Configs, Compare, and Deploy.
 
-Three mechanisms prevent metric gaming (Goodhart's Law):
+## Modes: Mock, Live, and Auto
 
-**Holdout rotation.** A rotating holdout set is excluded from optimization and used for validation. The holdout rotates every N cycles (default: 5) so the optimizer never fully adapts to any fixed subset.
+AutoAgent supports three execution modes:
 
-**Drift detection.** The drift monitor tracks judge agreement rates over time. If a judge's scoring pattern shifts beyond the threshold (default: 0.12), the system flags it and optionally pauses optimization.
+- **mock**: safe local/demo behavior, useful when provider credentials are missing
+- **live**: run against live providers and real integrations
+- **auto**: let AutoAgent choose based on what is configured
 
-**Judge variance.** If variance across judge calls exceeds the threshold (default: 0.03), the experiment is flagged for human review rather than auto-promoted.
+This is why Setup shows both provider readiness and effective mode. A workspace can be healthy in mock mode even before real API keys are configured.
 
-## Cost Controls
+Common CLI surfaces:
 
-Three budget mechanisms prevent runaway spend:
-
-```yaml
-budget:
-  per_cycle_dollars: 1.0         # Max spend per optimization cycle
-  daily_dollars: 10.0            # Max daily aggregate spend
-  stall_threshold_cycles: 5      # Pause after N cycles with no improvement
+```bash
+autoagent mode show
+autoagent mode set mock
+autoagent mode set live
+autoagent doctor
 ```
 
-The cost tracker records actual spend per cycle (LLM calls, eval runs). When the daily budget is exhausted or stall is detected, the loop pauses automatically and emits a notification.
+## Instructions
 
-## Human Escape Hatches
+New starter workspaces now default to XML root instructions.
 
-Humans retain full control at all times:
+The root instruction usually lives in:
 
-| Command | Effect |
-|---------|--------|
-| `autoagent pause` | Immediately pause the optimization loop |
-| `autoagent resume` | Resume a paused loop |
-| `autoagent pin <surface>` | Lock a config surface (e.g., `safety_instructions`) -- optimizer cannot modify it |
-| `autoagent unpin <surface>` | Unlock a previously pinned surface |
-| `autoagent reject <experiment_id>` | Reject and roll back a specific experiment |
+- `prompts.root` in the active config
 
-These escape-hatch commands are part of the advanced CLI surface, so run `autoagent advanced` if you do not see them in the default `--help` output.
+Why that matters:
 
-Pinned surfaces and the pause state persist across restarts via `.autoagent/human_control.json`. The `immutable_surfaces` list in config defines surfaces that can never be modified, even by explicit unpin.
+- the CLI can validate and regenerate the instruction structure
+- the Build page includes an XML Instruction Studio
+- eval runs can apply temporary instruction overrides without rewriting the baseline config
+
+Common CLI surfaces:
+
+```bash
+autoagent instruction show
+autoagent instruction validate
+autoagent instruction generate --brief "customer support agent for refunds"
+autoagent instruction migrate
+```
+
+Plain-text prompts still load, but XML is now the default authoring format.
+
+## Build Sources
+
+There is no single "one true" way to create an agent in AutoAgent.
+
+The current build surface supports four main entry points:
+
+- **Prompt**: generate from a plain-language brief
+- **Transcript**: import archived conversations and generate from the observed patterns
+- **Builder Chat**: iteratively refine behavior in a conversational workflow
+- **Saved Artifacts**: inspect previous build outputs
+
+The related import surface is **Connect**, which is for bringing in an existing runtime instead of starting from scratch.
+
+## Eval Runs vs Results Explorer vs Compare
+
+These are related, but they are not the same thing.
+
+### Eval Runs
+
+Use Eval Runs to answer:
+
+- Did the run finish?
+- How many cases passed?
+- Which config did I test?
+- What is the high-level score?
+
+### Results Explorer
+
+Use Results Explorer to answer:
+
+- Which examples failed?
+- What patterns are showing up?
+- Which examples need annotations?
+- What should I export for review?
+
+### Compare
+
+Use Compare to answer:
+
+- Which config or run performed better head-to-head?
+- Is the difference meaningful?
+- Where are the biggest deltas?
+
+This split is one of the biggest changes in the current product. The docs should not collapse all eval behavior into one generic "results page."
+
+## Improvements
+
+The current review workflow is called **Improvements**.
+
+It brings together four related objects:
+
+- **Opportunities**: ranked failure clusters or problem areas worth addressing
+- **Experiments**: evaluated candidate changes and their evidence
+- **Review**: change cards and approval decisions
+- **History**: accepted and rejected decisions over time
+
+Older names such as `Change Review`, `Experiments`, or `Opportunities` still exist as legacy routes in some cases, but the current primary page is `Improvements`.
+
+## Deployment State
+
+Deploy is about rollout state, not edit history.
+
+The important concepts are:
+
+- **Active version**: the version currently considered primary
+- **Canary version**: the version being observed before wider promotion
+- **Deployment history**: what was pushed, when, and with what status
+- **Rollback**: return traffic to the prior stable state
+
+Common CLI surfaces:
+
+```bash
+autoagent deploy --strategy canary --yes
+autoagent deploy status
+autoagent deploy rollback --yes
+```
+
+The review step and deploy step are intentionally separate. Accepting a change does not automatically mean it is fully promoted.
+
+## Human Control
+
+AutoAgent can automate a lot, but it still exposes explicit human control points.
+
+The most important ones today are:
+
+- review and apply pending changes
+- deploy with confirmation or `--yes`
+- pause and resume loop activity
+- pin and unpin config surfaces
+- reject a specific experiment or review card
+
+Examples:
+
+```bash
+autoagent review list
+autoagent review apply pending
+autoagent pause
+autoagent resume
+autoagent pin prompts.root
+autoagent unpin prompts.root
+```
+
+These commands live in the advanced surface, so use `autoagent advanced` if you do not see them in the default help.
+
+## Integrations
+
+AutoAgent now has multiple import and deployment surfaces:
+
+- **Connect** for OpenAI Agents, Anthropic projects, HTTP runtimes, and transcript imports
+- **CX Studio** for Google CX auth, import, diff, export, and sync workflows
+- **ADK** for Google Agent Development Kit import and deploy flows
+- **MCP server** for coding-agent integrations like Codex, Claude Code, Cursor, and Windsurf
+
+These are part of the current product, not side experiments.
+
+## Recommended Mental Model
+
+If you only remember one model, use this:
+
+1. Start with a workspace that is healthy in Setup.
+2. Build or import a versioned config.
+3. Run evals and inspect the results.
+4. Compare versions when you need a decision, not just a score.
+5. Review proposed improvements before you ship them.
+6. Deploy with canary-friendly rollout when the evidence is strong enough.
+
+## Next Steps
+
+- [Platform Overview](platform-overview.md)
+- [UI Quick Start Guide](UI_QUICKSTART_GUIDE.md)
+- [App Guide](app-guide.md)
+- [CLI Reference](cli-reference.md)
+- [XML Instructions](xml-instructions.md)

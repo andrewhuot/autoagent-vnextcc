@@ -1,444 +1,287 @@
 # Web App Guide
 
-This guide walks through all 31 pages in the AutoAgent VNextCC web console and explains what each page is for, what data it uses, and how operators typically use it in practice.
+This guide maps the current AutoAgent web console: what routes exist, what each area is for, and how the pages fit together.
 
-The app is served by the FastAPI server at `http://localhost:8000` when you run:
+It is based on the current React route map in `web/src/App.tsx` and navigation metadata in `web/src/lib/navigation.ts`.
+
+## How to Run the App
+
+The easiest local workflow is:
 
 ```bash
+./start.sh
+```
+
+Manual alternative:
+
+```bash
+# backend
 autoagent server
+
+# frontend
+cd web
+npm run dev
 ```
 
-**New in this release:**
-- **AgentStudio** — Interactive chat interface for natural language agent editing
-- **IntelligenceStudio** — Transcript archive analytics and Q&A with auto-generated insights
-
-## Route Map
-
-All 31 pages in the web console:
-
-| Page | Route | Primary job |
-|---|---|---|
-| **Dashboard** | `/` | System health snapshot with pulse indicator, journey timeline, recommendations |
-| **AgentStudio** | `/agent-studio` | Interactive chat for describing agent changes in natural language |
-| **IntelligenceStudio** | `/intelligence-studio` | Transcript archive ingestion, analytics, Q&A, agent generation |
-| **Eval Runs** | `/evals` | Start eval runs and compare run-level outcomes |
-| **Eval Detail** | `/evals/:id` | Investigate one run at per-case granularity |
-| **Optimize** | `/optimize` | Trigger optimization cycles and inspect gate outcomes |
-| **Live Optimize** | `/live-optimize` | Real-time optimization with Server-Sent Events streaming |
-| **Configs** | `/configs` | Browse versioned configs, inspect YAML, diff versions |
-| **Conversations** | `/conversations` | Explore user conversations, filters, and tool traces |
-| **Deploy** | `/deploy` | Manage active/canary versions, rollback, and history |
-| **Loop Monitor** | `/loop` | Run/stop continuous loop and watch cycle-by-cycle progress |
-| **Opportunities** | `/opportunities` | Optimization opportunities from failure analysis |
-| **Experiments** | `/experiments` | Experiment tracking and A/B test results |
-| **Traces** | `/traces` | Structured trace events and span analysis |
-| **Event Log** | `/events` | Real-time event stream from optimization loop |
-| **AutoFix** | `/autofix` | Reviewable fix proposals from failure patterns |
-| **JudgeOps** | `/judge-ops` | Judge versioning, calibration, and drift monitoring |
-| **Context Workbench** | `/context` | Context window analysis and compaction strategies |
-| **Change Review** | `/changes` | Review and approve proposed config changes |
-| **Runbooks** | `/runbooks` | Curated bundles of skills, policies, and tools |
-| **Skills** | `/skills` | Executable optimization strategies for the proposer |
-| **Project Memory** | `/memory` | Persistent project context (AUTOAGENT.md) with auto-update |
-| **Registry** | `/registry` | Modular registry of skills, policies, tools, handoffs |
-| **Blame Map** | `/blame` | Failure clustering and root cause attribution |
-| **Scorer Studio** | `/scorer-studio` | Create and refine eval scorers from natural language |
-| **CX Import** | `/cx/import` | Import Google CX Agent Studio agents |
-| **CX Deploy** | `/cx/deploy` | Deploy to CX environments with widget generation |
-| **ADK Import** | `/adk/import` | Import Google Agent Development Kit agents |
-| **ADK Deploy** | `/adk/deploy` | Deploy ADK agents to Cloud Run or Vertex AI |
-| **Agent Skills** | `/agent-skills` | Agent capability gap analysis and skill generation |
-| **Settings** | `/settings` | Operator shortcuts and runtime path reference |
-
-## Global UX
-
-### Layout and Navigation
-
-- Left sidebar toggles between **Simple** and **Pro** views. Simple shows core pages; Pro shows all pages.
-- Sidebar collapses into a mobile drawer on smaller screens.
-- Header includes page title plus breadcrumbs:
-  - Example: `Eval Runs / Run <id>` on `/evals/:id`.
-
-### Command Palette
-
-Open the global command palette with `Cmd+K` (or `Ctrl+K` on Windows/Linux).
-
-It includes:
-- Static actions (new eval, optimize, deploy, dashboard, conversations)
-- Recent eval runs
-- Recent config versions
-- Recent conversations
-
-### Keyboard Shortcuts
-
-Global shortcuts (ignored while typing in form fields):
-- `n` -> open new eval flow (`/evals?new=1`)
-- `o` -> open optimize flow (`/optimize?new=1`)
-- `d` -> open deploy flow (`/deploy?new=1`)
-
-### Toast Notifications
-
-Asynchronous operations show toast feedback for start/success/failure:
-- Eval started/completed
-- Optimization started/completed/failed
-- Deploy and rollback results
-- Loop start/stop results
-
-### Real-Time WebSocket Updates
-
-The app maintains a persistent WebSocket connection to:
-
-```text
-ws://<host>/ws
-```
-
-Message types used by the UI:
-- `eval_complete`
-- `optimize_complete`
-- `loop_cycle`
-
-## Page Walkthrough
-
-## Dashboard (`/`)
-
-Purpose: quickly answer “is the system healthy right now?”
-
-### What you see
-
-- **Health Pulse** — Living SVG health indicator with color-coded pulse speed (green 3s, amber 1.5s, red 0.8s)
-- **Metric cards:**
-  - Success rate
-  - Average latency
-  - Error rate
-  - Safety violation rate
-  - Average cost
-  - Total conversations
-- **Journey Timeline** — Horizontal scrollable optimization history with animated SVG line drawing
-- **Score trajectory chart** from optimization history
-- **Recent optimization timeline** entries with accept/reject status
-- **Recommended next actions** with exact CLI commands
-
-### Data sources
-
-- `GET /api/health`
-- `GET /api/health/scorecard`
-- `GET /api/optimize/history`
-
-### Typical actions
-
-- Run a fresh eval (`New Eval`)
-- Jump to optimization history/details
-- Refresh health data
-- Click timeline nodes to view config diffs
-- Follow recommended next actions
-
----
-
-## AgentStudio (`/agent-studio`)
-
-Purpose: describe agent changes in plain language without writing config YAML.
-
-### What you see
-
-- **Chat interface** — Intercom-style conversational UI
-- **Sample prompts** — Quick-start examples:
-  - “Make BillingAgent verify invoices before answering”
-  - “Route shipping delays straight to RefundAgent”
-  - “Tighten orchestrator handoffs so specialists inherit context”
-  - “Add safety guardrails to prevent unauthorized PII disclosure”
-- **Live draft mutations** — Real-time change preview on each user input
-- **Change set cards** — Visual breakdown of proposed mutations:
-  - Surface (prompts, routing, tools, policies)
-  - Impact score (high/medium/low)
-  - Change description in plain English
-- **Metric impact visualization** — Before/after score estimates
-- **Focus area detection** — Automatically identifies which config area needs attention
-
-### Data sources
-
-- Client-side draft building (no API calls until apply)
-- `POST /api/edit` — When user confirms changes
-
-### Typical actions
-
-- Type natural language change request
-- Review proposed mutations in change set
-- Refine request in follow-up messages
-- Apply changes with one click
-- View diff in Configs page after apply
-
-**Example workflow:**
-1. Type: “Make the agent more empathetic in billing conversations”
-2. Review change card: “prompts.root - Add empathy instructions”
-3. Refine: “Also mention patience and acknowledgment”
-4. Apply → Config v13 created with new instructions
-
----
-
-## IntelligenceStudio (`/intelligence-studio`)
-
-Purpose: upload conversation archives, get automatic analytics, and generate agent improvements from transcript data.
-
-### What you see
-
-- **Archive upload** — Drag-and-drop ZIP file ingestion
-- **Processing status** — Real-time progress (parsing, analyzing, extracting)
-- **Summary cards:**
-  - Total transcripts
-  - Language distribution (en, es, fr, etc.)
-  - Intent distribution (order tracking, refunds, cancellations, etc.)
-  - Transfer reasons (missing order number, policy gaps, escalations)
-- **Insights panel** — Automatically extracted opportunities:
-  - Severity (high/medium/low)
-  - Category (routing, safety, latency, etc.)
-  - Description with evidence count
-  - Recommended action
-- **Q&A interface** — Ask questions about transcript data:
-  - “Why are people transferring to live support?”
-  - “What should I change to improve this metric?”
-- **Procedures & FAQs** — Auto-extracted from successful conversations
-- **Missing intents** — Capabilities the agent lacks
-- **Workflow recommendations** — Suggested process improvements
-- **Test case generation** — Edge cases for eval suite
-- **One-click apply** — Create change card from insight
-
-### Data sources
-
-- `POST /api/intelligence/archive` — ZIP upload and processing
-- `GET /api/intelligence/reports` — List all reports
-- `GET /api/intelligence/reports/{id}` — Report details
-- `POST /api/intelligence/reports/{id}/ask` — Q&A over transcript data
-- `POST /api/intelligence/reports/{id}/apply` — Create change card from insight
-
-### Typical actions
+Open:
+
+- frontend: `http://localhost:5173/dashboard`
+- app root: `http://localhost:5173`
+- API docs: `http://localhost:8000/docs`
+
+Important behavior:
+
+- the frontend app root `/` redirects to `/build`
+- `./start.sh` prints the dashboard URL for convenience
 
-- Upload transcript archive (ZIP with JSON/CSV/TXT files)
-- Review summary metrics and intent distribution
-- Explore insights with high severity
-- Ask questions: “Why are refund requests failing?”
-- Apply top insight to create change card
-- Review drafted change in Change Review page
-- Approve and deploy fix
+## Current Route Model
 
-**Example workflow:**
-1. Upload `march_2026_support.zip` (1,247 conversations)
-2. Review summary: 42% of refund requests routed to wrong agent
-3. Click insight: “Add 'refund' keywords to billing_agent routing rules”
-4. Ask: “What exact phrases are customers using?”
-5. Review evidence: “money back”, “reimbursement”, “refund my order”
-6. Apply insight → Change card created with keyword additions
-7. Approve in Change Review → Deploy with canary
+The console is grouped into simple-mode core routes plus broader operator and integration routes.
+
+### Home
+
+| Page | Route | Purpose |
+|------|-------|---------|
+| Dashboard | `/dashboard` | Health, scorecard, recent system state, and next actions |
+| Setup | `/setup` | Workspace readiness, mode, doctor findings, data stores, MCP client status |
+
+### Build
 
-## Eval Runs (`/evals`)
+| Page | Route | Purpose |
+|------|-------|---------|
+| Build | `/build` | Prompt-led generation, transcript-led generation, builder chat, saved artifacts, and XML instruction editing |
 
-Purpose: create and track eval runs, then compare run outcomes.
+### Import
 
-### What you see
+| Page | Route | Purpose |
+|------|-------|---------|
+| Connect | `/connect` | Import an OpenAI Agents, Anthropic, HTTP, or transcript-based runtime |
+| CX Studio | `/cx/studio` | Authenticate, browse, import, diff, preview, sync, and export CX agents |
+| CX Import | `/cx/import` | CX-focused import workflow |
+| ADK Import | `/adk/import` | Import a Google Agent Development Kit project |
 
-- “Start New Evaluation” form:
-  - optional config version
-  - optional category filter
-- Runs table with status/progress/score/case counts
-- Comparison mode for any two runs side-by-side
+### Eval
 
-### Data sources
+| Page | Route | Purpose |
+|------|-------|---------|
+| Eval Runs | `/evals` | Launch evals, monitor status, and review run summaries |
+| Eval Detail | `/evals/:id` | Inspect one eval run at the per-run detail level |
+| Results Explorer | `/results` | Jump into the most recent results view |
+| Results Explorer | `/results/:runId` | Inspect examples, filters, annotations, exports, and run diffs |
+| Compare | `/compare` | Run and inspect head-to-head comparisons between versions |
 
-- `GET /api/eval/runs`
-- `GET /api/config/list`
-- `POST /api/eval/run`
-- WebSocket `eval_complete`
+### Optimize and Review
 
-### Typical actions
+| Page | Route | Purpose |
+|------|-------|---------|
+| Optimize | `/optimize` | Launch optimization cycles and inspect run history |
+| Live Optimize | `/live-optimize` | Monitor active optimization work live |
+| Improvements | `/improvements` | Unified review workflow for opportunities, experiments, review decisions, and history |
 
-- Launch a run against active config
-- Launch a category-specific run (`safety`, etc.)
-- Compare two completed runs before choosing a deploy candidate
+### Deploy
 
-## Eval Detail (`/evals/:id`)
+| Page | Route | Purpose |
+|------|-------|---------|
+| Deploy | `/deploy` | Manage active and canary versions, rollout decisions, and rollback |
 
-Purpose: inspect one eval run deeply.
+### Observe
 
-### What you see
+| Page | Route | Purpose |
+|------|-------|---------|
+| Conversations | `/conversations` | Browse recorded conversations and outcomes |
+| Traces | `/traces` | Inspect trace events and trace-level detail |
+| Event Log | `/events` | Review recent system events |
+| Blame Map | `/blame` | Inspect failure clustering and likely root causes |
+| Context | `/context` | Review context usage and analysis tools |
+| Loop Monitor | `/loop` | Watch or control longer-running loop activity |
 
-- Run header with status, timestamp, pass count, and safety failure callout
-- Composite score block
-- Score bars for quality/safety/latency/cost
-- Per-case table with:
-  - category filter
-  - pass/fail filter
-  - sorting (quality, latency, case id)
-- Expandable case row for deeper details
+### Govern
 
-### Data sources
+| Page | Route | Purpose |
+|------|-------|---------|
+| Configs | `/configs` | Browse, diff, and activate config versions |
+| Judge Ops | `/judge-ops` | Judge listing, calibration, and drift views |
+| Runbooks | `/runbooks` | Explore and apply operational runbooks |
+| Skills | `/skills` | Inspect and manage skills |
+| Memory | `/memory` | View and edit project memory |
+| Registry | `/registry` | Explore reusable registry items |
+| Scorer Studio | `/scorer-studio` | Create and refine scorers from natural language |
+| Notifications | `/notifications` | Notification history and subscriptions |
+| Reward Studio | `/reward-studio` | Reward-related workflows |
+| Preference Inbox | `/preference-inbox` | Preference data workflows |
+| Policy Candidates | `/policy-candidates` | Policy candidate review |
+| Reward Audit | `/reward-audit` | Reward auditing workflows |
 
-- `GET /api/eval/runs/{run_id}`
-- If run is still active (`409`), UI falls back to task data from `GET /api/eval/runs`
+### Integrations
 
-### Typical actions
+| Page | Route | Purpose |
+|------|-------|---------|
+| CX Deploy | `/cx/deploy` | Push or manage CX deployment flows |
+| ADK Deploy | `/adk/deploy` | Push ADK deployment workflows |
+| Agent Skills | `/agent-skills` | Generate and manage skill suggestions from runtime gaps |
+| Sandbox | `/sandbox` | Run controlled test or replay workflows |
+| What-If | `/what-if` | Replay and comparison-style what-if analysis |
+| Knowledge | `/knowledge` | Mine and review reusable knowledge patterns |
 
-- Diagnose failing cases
-- Identify regression signatures before optimizing/deploying
+### Settings
 
-## Optimize (`/optimize`)
+| Page | Route | Purpose |
+|------|-------|---------|
+| Settings | `/settings` | Shortcut reference, path reference, and documentation links |
 
-Purpose: run one optimize cycle and inspect gate decisions.
+## Core First-Run Flow
 
-### What you see
+If you are opening the UI for the first time, this is the cleanest order:
 
-- Optimization controls:
-  - observation window
-  - `force` toggle
-- Active task progress (polling `/api/tasks/{id}`)
-- Score trajectory chart across historical attempts
-- Timeline of attempts with status badges
-- Diff/details panel for selected attempt
+1. **Setup** to confirm the workspace and provider mode
+2. **Build** or **Connect** to create the next version
+3. **Eval Runs** to run an evaluation
+4. **Results Explorer** to inspect failures
+5. **Compare** when deciding between versions
+6. **Optimize** to generate candidate improvements
+7. **Improvements** to approve or reject proposed changes
+8. **Deploy** to canary or promote a version
 
-### Data sources
+## What Each Main Surface Answers
 
-- `GET /api/optimize/history`
-- `POST /api/optimize/run`
-- `GET /api/tasks/{task_id}`
-- WebSocket `optimize_complete`
+### Dashboard
 
-### Typical actions
+Use Dashboard to answer:
 
-- Trigger a cycle from current traffic state
-- Confirm whether rejection reason is safety/no-improvement/regression/invalid/noop
-- Review config diffs before deployment decisions
+- Is the system healthy right now?
+- Are the core metrics moving in the right direction?
+- Are there obvious next actions to take?
 
-## Configs (`/configs`)
+Current UI facts:
 
-Purpose: understand exactly what changed between config versions.
+- the page header is **System Scorecard**
+- the left nav label is **Dashboard**
 
-### What you see
+### Setup
 
-- Version list with status/hash/composite/timestamp
-- YAML viewer for selected version
-- Compare mode with side-by-side diff for two versions
+Use Setup to answer:
 
-### Data sources
+- Did AutoAgent detect a workspace?
+- Which mode is effective right now?
+- Are providers and data stores configured?
+- Are local MCP client configs in place?
 
-- `GET /api/config/list`
-- `GET /api/config/show/{version}`
-- `GET /api/config/diff?a={a}&b={b}`
+### Build
 
-### Typical actions
+Use Build to answer:
 
-- Validate accepted optimizer changes
-- Confirm active/canary lineage before deploy
+- How do I create or refine the next version?
+- What did the builder produce?
+- How do I edit XML instructions without dropping into raw config files?
 
-## Conversations (`/conversations`)
+### Connect
 
-Purpose: inspect real conversations and tool traces.
+Use Connect to answer:
 
-### What you see
+- How do I bring an existing runtime into AutoAgent?
+- What source should I import from?
+- Should the resulting workspace start in mock, live, or auto mode?
 
-- Overview stats (visible total, success rate, avg latency, avg tokens)
-- Filters: outcome, limit, search
-- Conversation table with expandable detail panel
-- Detailed conversation view with:
-  - user and agent turns
-  - tool call summaries
-  - safety flags and error messages
+### Eval Runs
 
-### Data sources
+Use Eval Runs to answer:
 
-- `GET /api/conversations`
+- What evals have run recently?
+- How many cases passed?
+- Which config did I test?
+- Should I generate more eval cases?
 
-### Typical actions
+### Results Explorer
 
-- Find failure examples to guide optimization
-- Confirm specialist routing and tool behavior
+Use Results Explorer to answer:
 
-## Deploy (`/deploy`)
+- Which examples failed?
+- Which failure reasons are most common?
+- Which examples need annotations?
+- What should I export for review?
 
-Purpose: promote stable configs safely.
+### Compare
 
-### What you see
+Use Compare to answer:
 
-- Active version card
-- Canary version card + canary verdict block
-- Deploy form:
-  - version selection
-  - strategy (`canary` or `immediate`)
-- Deployment history table
-- Rollback action for active canary
+- Which config won head-to-head?
+- Where are the biggest differences?
+- Do I have enough evidence to prefer one version?
 
-### Data sources
+### Optimize
 
-- `GET /api/deploy/status`
-- `POST /api/deploy`
-- `POST /api/deploy/rollback`
-- `GET /api/config/list`
+Use Optimize to answer:
 
-### Typical actions
+- Can AutoAgent propose or test an improvement cycle here?
+- What happened in recent optimize attempts?
+- Do I need the run view or the live monitoring view?
 
-- Deploy a candidate as canary
-- Monitor verdict and rates
-- Roll back immediately when canary underperforms
+### Improvements
 
-## Loop Monitor (`/loop`)
+Use Improvements to answer:
 
-Purpose: run continuous observe -> optimize -> deploy cycles.
+- What opportunities are worth addressing?
+- Which experiments have evidence behind them?
+- Which change cards are waiting on human review?
+- What did we accept or reject recently?
 
-### What you see
+### Deploy
 
-- Loop control form (cycles, delay, window)
-- Running/idle status and progress counters
-- Success-rate trajectory chart
-- Per-cycle cards with optimization/deploy/canary outcomes
+Use Deploy to answer:
 
-### Data sources
+- What version is active?
+- Is there a canary running?
+- Should I promote, canary, or roll back?
 
-- `GET /api/loop/status`
-- `POST /api/loop/start`
-- `POST /api/loop/stop`
-- WebSocket `loop_cycle`
+## Legacy Route Compatibility
 
-### Typical actions
+Several older routes still work as redirects so existing bookmarks do not break.
 
-- Launch overnight iterative runs
-- Stop loop when degradation appears
-- Review cycle-level acceptance/rejection cadence
+Current legacy redirects include:
 
-## Settings (`/settings`)
+- `/agent-studio`
+- `/builder`
+- `/assistant`
+- `/eval`
+- `/review`
+- `/reviews`
+- `/changes`
+- `/experiments`
+- `/opportunities`
+- `/autofix`
+- `/intelligence`
 
-Purpose: operational quick-reference.
+These routes now redirect into the current Build, Eval, or Improvements surfaces instead of representing separate primary pages.
 
-### What you see
+## Keyboard Shortcuts and Command Palette
 
-- Key project file paths (config, evals, storage)
-- Keyboard shortcut reference
-- Links to API docs (`/docs`, `/redoc`)
+The current layout supports:
 
-This page is informational and does not mutate system state.
+- `Cmd+K` for the command palette
+- `N` for the new eval flow
+- `O` for Optimize
+- `D` for Deploy
 
-## Practical Operator Flows
+The command palette includes navigation shortcuts and recent items instead of acting as a separate product surface.
 
-## Flow A: Baseline a new config
+## API Relationship
 
-1. Open **Eval Runs** and launch a run for the target version.
-2. Open **Eval Detail** and inspect failed cases + score distribution.
-3. Open **Configs** and diff against active version.
+The web app is backed by the same FastAPI server the CLI uses.
 
-## Flow B: Improve reliability
+Examples:
 
-1. Open **Conversations** and filter to `fail`/`error`.
-2. Open **Optimize** and run a cycle with appropriate window.
-3. Review attempt status and diff.
-4. Open **Deploy** and canary deploy accepted versions.
+- Build pages call `/api/builder/*` and related generation routes
+- Setup calls `/api/setup/overview`
+- Eval pages call `/api/eval/*`, `/api/evals/results*`, and `/api/evals/compare*`
+- Deploy uses `/api/deploy` and `/api/deploy/status`
+- Connect uses `/api/connect` and `/api/connect/import`
+- CX Studio uses `/api/cx/*`
 
-## Flow C: Continuous overnight iteration
+For the live endpoint list, use [api-reference.md](api-reference.md) or open `http://localhost:8000/docs`.
 
-1. Open **Loop Monitor**.
-2. Start loop with target cycles and delay.
-3. Monitor cycle cards and trajectory.
-4. Stop loop if severe degradation appears.
+## Next Steps
 
-## Troubleshooting UI Data
-
-- Dashboard empty: confirm conversation data exists (`autoagent status` / eval runs).
-- Eval detail stuck in running: check task state via `GET /api/tasks/{task_id}`.
-- Deploy history empty: ensure at least one deployment has occurred.
-- No real-time updates: verify WebSocket connectivity to `/ws`.
-
+- [UI Quick Start Guide](UI_QUICKSTART_GUIDE.md)
+- [Platform Overview](platform-overview.md)
+- [CLI Reference](cli-reference.md)
+- [API Reference](api-reference.md)

@@ -1,14 +1,19 @@
 # AutoAgent UI Quick Start Guide
 
-Get from zero to a working AutoAgent session in the browser.
+This guide gets you from zero to a working AutoAgent session in the browser using the current web console.
 
-This guide matches the current web app as shipped:
+It is based on the routes and page labels that ship in this repo today.
 
-- The app root currently opens **Build** by default
-- For first-time setup, start in **Setup**
-- AutoAgent auto-detects your environment (uses live providers if API keys are present, mock otherwise)
+## Before You Start
 
-## 0. Start the App
+Make sure you already ran the project setup steps from [README.md](../README.md).
+
+You need:
+
+- Python dependencies installed in `.venv`
+- frontend dependencies installed in `web/node_modules`
+
+## 1. Start the App
 
 The easiest way to start both backend and frontend is:
 
@@ -27,361 +32,362 @@ cd web
 npm run dev
 ```
 
-Then open:
+Open:
 
-- UI: `http://localhost:5173`
+- UI: `http://localhost:5173/dashboard`
+- App root: `http://localhost:5173` and it redirects to `/build`
 - API docs: `http://localhost:8000/docs`
 
-## 1. Check Setup
+## 2. Learn the Main Navigation
 
-Click **Setup** in the sidebar under **Home**.
+In simple mode, the main sidebar shows the current day-one workflow:
 
-You should see six cards:
+- `Dashboard`
+- `Setup`
+- `Build`
+- `Connect`
+- `Eval Runs`
+- `Results Explorer`
+- `Compare`
+- `Optimize`
+- `Improvements`
+- `Deploy`
 
-| Card | What it shows | Related CLI surface |
-|------|---------------|---------------------|
-| **Workspace** | Detected workspace path, runtime config path, active config | `autoagent status` |
-| **Mode** | Effective mode, preferred mode, provider readiness | `autoagent mode show` |
-| **Doctor Findings** | Readiness issues and API-key status | `autoagent doctor` |
-| **Data Stores** | Local persistence paths and row counts | `autoagent doctor` |
-| **MCP Clients** | Installed MCP-aware client configs | `autoagent mcp status` |
-| **CLI Shortcuts** | Recommended next terminal commands | `autoagent status` / `autoagent doctor` |
+That list is the fastest way to understand how the product is currently organized.
+
+## 3. Check Setup First
+
+Open **Setup** before you build, eval, or optimize anything.
+
+The current page includes these cards:
+
+- **Workspace**
+- **Mode**
+- **Doctor Findings**
+- **Data Stores**
+- **MCP Clients**
+- **CLI Shortcuts**
 
 What to look for:
 
-- The page header says **Setup**
-- The pill in the header says either **Workspace Detected** or **Initialization Required**
-- Status pills use labels like **Configured** / **Missing**
-- Without API keys, AutoAgent auto-detects and uses mock providers — missing credentials are fine
+- the page header says **Setup**
+- the status pill says **Workspace Detected** or **Initialization Required**
+- provider rows show whether credentials are configured
+- missing API keys are acceptable if you are intentionally working in mock mode
 
-## 2. Check the Dashboard
+Closest CLI surfaces:
 
-Click **Dashboard** in the sidebar under **Home**.
+```bash
+autoagent status
+autoagent doctor
+autoagent mode show
+autoagent mcp status
+```
 
-The sidebar label is **Dashboard**, but the page header currently reads **Karpathy Loop Scorecard**.
+## 4. Use Build to Create or Refine a Config
 
-This page combines:
+Open **Build** for the main authoring workflow.
 
-- **Agent Health** pulse
-- **Hard Gates** for safety and regression
-- **Primary metrics** for task success, error rate, latency, and cost
-- **Optimization Journey** when history exists
-- **Score Trajectory** when history exists
+The current Build page has four tabs:
 
-The page actions are:
+- **Prompt**
+- **Transcript**
+- **Builder Chat**
+- **Saved Artifacts**
 
-- **Builder**
-- **Run Eval**
-- **Refresh**
+It also includes the **XML Instruction Studio** inside the build workflow.
 
-Some workspaces also show a demo banner with **Explore Demo**.
+### Fastest first run
 
-Related CLI surfaces:
-
-- `autoagent status`
-- `autoagent usage`
-- `autoagent eval show latest`
-
-## 3. Build Your First Agent
-
-Click **Build** in the sidebar.
-
-The Build page is a single tabbed workspace with four tabs:
-
-| Tab | Purpose | Related CLI surface |
-|-----|---------|---------------------|
-| **Prompt** | Build from a natural-language description | `autoagent build "..."` |
-| **Transcript** | Build from uploaded conversation archives | `autoagent intelligence import` + `autoagent intelligence generate-agent` |
-| **Builder Chat** | Conversational refinement | `autoagent shell` |
-| **Saved Artifacts** | Previously generated build outputs | `autoagent build show latest` |
-
-### Quick path: Prompt tab
-
-1. Stay on the **Prompt** tab
-2. Paste a prompt like:
+1. Stay on **Prompt**
+2. Enter a brief such as:
 
 ```text
 Build a customer support agent for order tracking, refunds, and cancellations.
 ```
 
 3. Click **Generate Agent**
-4. Review the **Live YAML Config** panel
-5. Use one of the next actions in that panel:
-   - **Generate Evals**
-   - **Export**
-   - **Run Eval**
+4. Review the generated config
+5. Use one of the next actions such as **Generate Evals** or **Run Eval**
 
-What gets created:
+Closest CLI surfaces:
 
-- A versioned config
-- A build artifact
-- An eval draft you can run immediately
+```bash
+autoagent build "customer support agent for order tracking, refunds, and cancellations"
+autoagent build show latest
+autoagent instruction show
+autoagent instruction validate
+```
 
-### Transcript tab
+## 5. Use Connect When You Already Have a Runtime
 
-The **Transcript** tab accepts ZIP, JSON, JSONL, CSV, TXT, and Markdown transcript inputs. After upload, it surfaces extracted intents, pattern signals, and FAQs before you click **Generate Agent**.
+Open **Connect** if you are importing an existing runtime instead of starting from scratch.
 
-## 4. Run Evals
+The current adapters are:
 
-Click **Eval Runs** in the sidebar under **Eval**.
+- **OpenAI Agents**
+- **Anthropic**
+- **HTTP**
+- **Transcript**
 
-There are two prominent actions at the top:
+The page is titled **Connect Existing Runtime** and creates a fresh AutoAgent workspace from the selected source.
+
+Closest CLI surfaces:
+
+```bash
+autoagent connect openai-agents --path /path/to/project
+autoagent connect anthropic --path /path/to/project
+autoagent connect http --url https://agent.example.com
+autoagent connect transcript --file conversations.jsonl
+```
+
+## 6. Run an Eval
+
+Open **Eval Runs** to launch and monitor evaluation runs.
+
+The current page has two primary actions:
 
 - **Generate Evals**
 - **New Eval Run**
 
-You can also press `N` to open the new-eval flow.
+The page lets you:
 
-### Quick path
+- choose a config version
+- optionally filter by category
+- start an eval
+- monitor status and scores
 
-1. Click **New Eval Run**
-2. Pick a config version, or leave it on the latest active config
-3. Optionally filter by category
-4. Click **Start Eval**
-
-When a run completes, you can inspect:
-
-- Composite score
-- Passed / total cases
-- Status
-- Timestamp
-
-Select two runs to enter **Comparison Mode**.
-
-Click a run row to open **Eval Detail**.
-
-Related CLI surfaces:
-
-- `autoagent eval run`
-- `autoagent eval show latest`
-- `autoagent eval list`
-
-## 5. Optimize the Agent
-
-Click **Optimize** in the sidebar.
-
-The Optimize page is a tabbed hub with five tabs:
-
-| Tab | Purpose | Related CLI surface |
-|-----|---------|---------------------|
-| **Run** | Launch optimization cycles | `autoagent optimize --cycles 5` |
-| **Live** | Watch live optimization state | `autoagent optimize` / `autoagent optimize --continuous` |
-| **Experiments** | Explore experiment outputs | `autoagent compare candidates` |
-| **Review** | Embedded change-review surface | `autoagent review show pending` |
-| **Opportunities** | Ranked failure clusters and opportunities | `autoagent optimize` |
-
-### Quick path: Run tab
-
-1. Stay on **Run**
-2. Choose a mode:
-   - **Standard**
-   - **Advanced**
-   - **Research**
-3. Set the cycle count
-4. Click **Start Optimization**
-5. Switch to **Live** if you want to watch the run update in place
-
-Important note: the **Experiments** tab can be sparse. The CLI `compare candidates` command only shows versions already marked as `candidate`, `canary`, `imported`, or `evaluated`, so it is not guaranteed to populate after every optimize run.
-
-## 6. Review Changes
-
-Click **Change Review** in the sidebar under **Review**.
-
-This page shows:
-
-- Pending change cards
-- Diff previews
-- Before/after metrics
-- Confidence and risk labels
-- Accept / Reject controls
-- Per-hunk review controls
-
-This is the closest UI match to:
+Closest CLI surfaces:
 
 ```bash
+autoagent eval run
+autoagent eval list
+autoagent eval show latest
+autoagent eval generate
+```
+
+## 7. Use Results Explorer for Case-Level Debugging
+
+Open **Results Explorer** after you have at least one eval run.
+
+This is the place for:
+
+- filtering pass and fail cases
+- searching examples
+- inspecting failure reasons
+- adding annotations
+- exporting a run as JSON, CSV, or Markdown
+- diffing one run against another
+
+This is different from Eval Runs:
+
+- **Eval Runs** answers "what happened overall?"
+- **Results Explorer** answers "where exactly did it fail?"
+
+Closest CLI surfaces:
+
+```bash
+autoagent eval results
+autoagent eval results export RUN_ID --format markdown
+```
+
+## 8. Use Compare for Head-to-Head Decisions
+
+Open **Compare** when you want to compare two versions directly.
+
+The current page lets you:
+
+- choose config A and config B
+- optionally provide a dataset path
+- choose a judge strategy
+- run a pairwise comparison
+- inspect recent comparisons
+
+This is the decision surface for "which version is better?" rather than the diagnosis surface for "why did this fail?"
+
+Closest CLI surfaces:
+
+```bash
+autoagent compare candidates
+autoagent eval compare --config-a configs/v001.yaml --config-b configs/v002.yaml
+```
+
+## 9. Optimize, Then Review in Improvements
+
+Open **Optimize** to launch optimization cycles.
+
+The current page exposes two tabs:
+
+- **Run**
+- **Live**
+
+Current visible optimization modes:
+
+- `standard`
+- `advanced`
+- `research`
+
+When an optimization cycle produces something reviewable, move to **Improvements**.
+
+The **Improvements** page is the current review workflow and has four tabs:
+
+- **Opportunities**
+- **Experiments**
+- **Review**
+- **History**
+
+This replaces the older "Change Review" framing in the main UI.
+
+Closest CLI surfaces:
+
+```bash
+autoagent optimize --cycles 1
+autoagent review list
 autoagent review show pending
 autoagent review apply pending
 ```
 
-## 7. Deploy
+## 10. Deploy Safely
 
-Click **Deploy** in the sidebar or press `D`.
+Open **Deploy** when you are ready to ship a version.
 
-The top-right action is **Deploy Version**.
-
-### Quick path
-
-1. Click **Deploy Version**
-2. Pick a version
-3. Choose a strategy:
-   - **Canary (safe default)**
-   - **Immediate promotion**
-4. Click **Deploy**
-
-The page also shows:
+The current page shows:
 
 - **Active Version**
 - **Canary Version**
 - **Version Count**
-- **Canary Verdict** when a canary is active
-- **Recent Deployment History**
-- **Rollback** when a canary is live
+- deployment history
+- a **Deploy Version** action
+- rollback controls when a canary is active
 
-Related CLI surfaces:
+Closest CLI surfaces:
 
-- `autoagent deploy canary --yes`
-- `autoagent deploy status`
-- `autoagent deploy --auto-review`
+```bash
+autoagent deploy --strategy canary --yes
+autoagent deploy status
+autoagent deploy rollback --yes
+```
 
-## 8. Observe the System
+If you want review and deploy in one CLI step, this also works:
 
-The **Observe** section gives you six monitoring views:
+```bash
+autoagent deploy --auto-review --yes
+```
 
-| Page | What it helps you answer | Closest CLI surface |
-|------|---------------------------|---------------------|
-| **Conversations** | What is happening in production conversations? | `autoagent logs` |
-| **Traces** | What happened inside a specific trace? | `autoagent trace show latest` / `autoagent trace blame` |
-| **Event Log** | What system events have happened recently? | No exact 1:1 command; use `autoagent status`, `autoagent doctor`, and `autoagent logs` for adjacent views |
-| **Blame Map** | Which failure families matter most right now? | `autoagent trace blame` |
-| **Context** | How is context being used and where is it stressed? | `autoagent context report` / `autoagent context analyze` |
-| **Loop Monitor** | What is the continuous loop doing? | `autoagent optimize --continuous`, `autoagent pause`, `autoagent resume` |
+## 11. Explore the Pro and Integration Surfaces
 
-## 9. Manage Configs and Governance
+When you switch into the broader navigation, you will see additional routes for observation, governance, and integrations.
 
-The **Govern** section contains the operational control plane:
+Examples:
 
-| Page | Purpose | CLI surface |
-|------|---------|-------------|
-| **Configs** | Version history, compare, activate | `autoagent config list`, `autoagent config show`, `autoagent config set-active` |
-| **Judge Ops** | Judge monitoring and calibration | `autoagent judges` |
-| **Runbooks** | Guided operational playbooks | `autoagent runbook` |
-| **Skills** | Skill discovery and management | `autoagent skill list` |
-| **Memory** | Project memory in `AUTOAGENT.md` | `autoagent memory show` |
-| **Registry** | Registry items and versions | `autoagent registry list` |
-| **Scorer Studio** | Natural-language scorer creation and testing | `autoagent scorer` |
+- **Conversations**
+- **Traces**
+- **Event Log**
+- **Blame Map**
+- **Context**
+- **Loop Monitor**
+- **Configs**
+- **Judge Ops**
+- **Runbooks**
+- **Skills**
+- **Memory**
+- **Registry**
+- **Scorer Studio**
+- **CX Studio**
+- **CX Import / CX Deploy**
+- **ADK Import / ADK Deploy**
 
-Several additional governance pages exist in the nav, but the table above covers the core first-run surfaces with the clearest CLI counterparts.
+These pages are real routes in the current app, but they are not required for a first successful build and eval cycle.
 
-## 10. Keyboard Shortcuts
+## 12. Keyboard Shortcuts
 
-Global shortcuts:
+The current app supports these global shortcuts:
 
 | Key | Action |
 |-----|--------|
 | `Cmd+K` | Open command palette |
-| `N` | Open the new evaluation flow |
+| `N` | Open the new eval flow |
 | `O` | Open Optimize |
 | `D` | Open Deploy |
 
-The command palette searches navigation items plus recent evals, configs, and conversations.
+The command palette also exposes navigation shortcuts and recent items.
 
-## 11. Recommended Daily Flow
+## 13. Recommended Daily Loop
 
-Once the workspace is healthy, the normal UI loop is:
+Once the workspace is healthy, the usual operating rhythm is:
 
-1. **Setup** if anything looks misconfigured
-2. **Dashboard** for current health and gates
-3. **Build** for the next refinement
-4. **Eval Runs** to score the current version
-5. **Optimize** to propose and evaluate improvements
-6. **Change Review** to accept or reject proposals
-7. **Deploy** to mark the chosen version canary or promote it
-8. **Conversations** and **Traces** to monitor behavior
+1. **Setup** to confirm readiness
+2. **Build** or **Connect** to create the next version
+3. **Eval Runs** to score it
+4. **Results Explorer** to inspect failures
+5. **Compare** if you need a head-to-head decision
+6. **Optimize** to generate candidates
+7. **Improvements** to approve or reject changes
+8. **Deploy** to canary or promote the winning version
 
 Closest CLI loop:
 
 ```bash
 autoagent status
-autoagent build "Describe the next refinement"
+autoagent build "describe the next refinement"
 autoagent eval run
-autoagent optimize --cycles 3
-autoagent review show pending
-autoagent review apply pending
-autoagent deploy canary --yes
+autoagent eval show latest
+autoagent compare candidates
+autoagent optimize --cycles 1
+autoagent review list
+autoagent deploy --auto-review --yes
 autoagent deploy status
 ```
 
-## 12. Settings
-
-Click **Settings** in the sidebar for a compact reference page that includes:
-
-- Agent configuration paths
-- Evaluation-suite paths
-- Storage paths
-- Keyboard shortcuts
-- Links to API docs, ReDoc, and the repository
-
 ## Troubleshooting
 
-**The UI opens on Build, not Setup**
+### The UI opens on Dashboard or Build depending on how I started it
 
-That is expected right now. Use the sidebar and start with **Setup** for first-run validation.
+That is expected.
 
-**Setup shows missing provider credentials**
+- `./start.sh` prints the dashboard URL
+- the frontend app root `/` redirects to `/build`
 
-That is fine — AutoAgent auto-detects and uses mock providers when no keys are set. To switch to live providers:
+### Setup shows missing credentials
+
+That is fine if you are using mock mode.
+
+To inspect or change the current mode:
 
 ```bash
-autoagent provider configure
-autoagent provider test
+autoagent mode show
 autoagent mode set live
+autoagent provider list
+autoagent provider test
 ```
 
-**Dashboard looks sparse**
+### Results Explorer is empty
 
-Run at least one eval and one optimize cycle. Several charts and timelines only become useful after there is history.
+Run an eval first:
 
-**Build generated a config but I do not know what to do next**
+```bash
+autoagent eval run
+```
 
-Use the action buttons in the **Live YAML Config** panel:
+### Compare has nothing to compare
 
-- **Generate Evals**
-- **Export**
-- **Run Eval**
+You need at least two distinct config versions or comparison-ready runs.
 
-**Evals look empty**
+### Optimize did not create a candidate
 
-Build or import a config first, then click **New Eval Run**.
+That can be normal. On a healthy workspace, the CLI may report:
 
-**Optimize has no obvious experiment candidates**
+```text
+Latest eval passed; no optimization needed.
+```
 
-That is normal. Use **Run** first, then **Review**. The **Experiments** tab is not the primary first-run path.
+### Deploy feels local
 
-**Deploy feels local, not production**
+That is expected for the default AutoAgent deployment target. External deployment targets such as CX use separate integration flows.
 
-That is also expected. The current Deploy page is centered on AutoAgent's local rollout/version state. External targets are separate flows.
+## Next Steps
 
-**The page shows empty data everywhere**
-
-Confirm both services are running:
-
-- UI on `http://localhost:5173`
-- API on `http://localhost:8000/docs`
-
-## CLI ↔ UI Cross-Reference
-
-Use this as a closest-match map, not a strict one-to-one contract:
-
-| UI Surface | Closest CLI Surface |
-|------------|---------------------|
-| Setup | `autoagent status`, `autoagent mode show`, `autoagent doctor`, `autoagent mcp status` |
-| Dashboard | `autoagent status`, `autoagent usage`, `autoagent eval show latest` |
-| Build → Prompt | `autoagent build "..."` |
-| Build → Transcript | `autoagent intelligence import`, `autoagent intelligence generate-agent` |
-| Build → Builder Chat | `autoagent shell` |
-| Build → Saved Artifacts | `autoagent build show latest` |
-| Eval Runs | `autoagent eval run`, `autoagent eval list`, `autoagent eval show latest` |
-| Optimize → Run | `autoagent optimize --cycles N` |
-| Optimize → Review | `autoagent review show pending`, `autoagent review apply pending` |
-| Change Review | `autoagent review show pending`, `autoagent review apply pending` |
-| Deploy | `autoagent deploy canary`, `autoagent deploy status`, `autoagent deploy --auto-review` |
-| Conversations | `autoagent logs` |
-| Traces / Blame Map | `autoagent trace show latest`, `autoagent trace blame` |
-| Context | `autoagent context report`, `autoagent context analyze` |
-| Loop Monitor | `autoagent optimize --continuous`, `autoagent pause`, `autoagent resume` |
-| Configs | `autoagent config list`, `autoagent config show`, `autoagent config set-active` |
-| Judge Ops | `autoagent judges` |
-| Skills | `autoagent skill list` |
-| Memory | `autoagent memory show` |
-| Registry | `autoagent registry list` |
-| Scorer Studio | `autoagent scorer` |
+- [Detailed Guide](DETAILED_GUIDE.md)
+- [Platform Overview](platform-overview.md)
+- [App Guide](app-guide.md)
+- [CX Studio Integration](cx-studio-integration.md)
