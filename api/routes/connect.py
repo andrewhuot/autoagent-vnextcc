@@ -1,0 +1,80 @@
+"""Connect routes for importing external runtimes into AutoAgent workspaces."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from adapters import (
+    AnthropicClaudeAdapter,
+    HttpWebhookAdapter,
+    OpenAIAgentsAdapter,
+    TranscriptAdapter,
+    create_connected_workspace,
+)
+
+router = APIRouter(prefix="/api/connect", tags=["connect"])
+
+
+class ConnectImportRequest(BaseModel):
+    """Request payload for guided runtime connection."""
+
+    adapter: str = Field(..., pattern="^(openai-agents|anthropic|http|transcript)$")
+    path: str | None = None
+    url: str | None = None
+    file: str | None = None
+    output_dir: str = "."
+    workspace_name: str | None = None
+    runtime_mode: str = Field("mock", pattern="^(mock|live|auto)$")
+
+
+class ConnectImportResponse(BaseModel):
+    """Response payload after creating a connected workspace."""
+
+    adapter: str
+    agent_name: str
+    workspace_path: str
+    config_path: str
+    eval_path: str
+    adapter_config_path: str
+    spec_path: str
+    traces_path: str | None = None
+    tool_count: int
+    guardrail_count: int
+    trace_count: int
+    eval_case_count: int
+
+
+@router.post("/import", response_model=ConnectImportResponse, status_code=201)
+async def connect_import(body: ConnectImportRequest) -> ConnectImportResponse:
+    """Create a workspace from an imported runtime or transcript export."""
+
+    try:
+        if body.adapter == "openai-agents":
+            if not body.path:
+                raise HTTPException(status_code=400, detail="path is required for openai-agents")
+            spec = OpenAIAgentsAdapter(body.path).discover()
+        elif body.adapter == "anthropic":
+            if not body.path:
+                raise HTTPException(status_code=400, detail="path is required for anthropic")
+            spec = AnthropicClaudeAdapter(body.path).discover()
+        elif body.adapter == "http":
+            if not body.url:
+                raise HTTPException(status_code=400, detail="url is required for http")
+            spec = HttpWebhookAdapter(body.url).discover()
+        else:
+            if not body.file:
+                raise HTTPException(status_code=400, detail="file is required for transcript")
+            spec = TranscriptAdapter(body.file).discover()
+
+        result = create_connected_workspace(
+            spec,
+            output_dir=body.output_dir,
+            workspace_name=body.workspace_name,
+            runtime_mode=body.runtime_mode,
+        )
+        return ConnectImportResponse(**result.to_dict())
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc

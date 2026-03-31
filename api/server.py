@@ -29,6 +29,7 @@ from api.routes import (
     changes as changes_routes,
     cicd as cicd_routes,
     collaboration as collaboration_routes,
+    connect as connect_routes,
     config as config_routes,
     context as context_routes,
     control as control_routes,
@@ -482,6 +483,7 @@ app.include_router(knowledge_routes.router)
 app.include_router(what_if_routes.router)
 app.include_router(impact_routes.router)
 app.include_router(collaboration_routes.router)
+app.include_router(connect_routes.router)
 app.include_router(datasets_routes.router)
 app.include_router(outcomes_routes.router)
 app.include_router(a2a_routes.router)

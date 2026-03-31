@@ -1214,6 +1214,35 @@ export interface CxAgentSummary {
   description: string;
 }
 
+export type ConnectAdapter = 'openai-agents' | 'anthropic' | 'http' | 'transcript';
+
+export type ConnectRuntimeMode = 'mock' | 'live' | 'auto';
+
+export interface ConnectImportRequest {
+  adapter: ConnectAdapter;
+  path?: string;
+  url?: string;
+  file?: string;
+  output_dir?: string;
+  workspace_name?: string;
+  runtime_mode: ConnectRuntimeMode;
+}
+
+export interface ConnectImportResult {
+  adapter: ConnectAdapter;
+  agent_name: string;
+  workspace_path: string;
+  config_path: string;
+  eval_path: string;
+  adapter_config_path: string;
+  spec_path: string;
+  traces_path?: string | null;
+  tool_count: number;
+  guardrail_count: number;
+  trace_count: number;
+  eval_case_count: number;
+}
+
 export interface CxImportResult {
   config_path: string;
   eval_path: string | null;

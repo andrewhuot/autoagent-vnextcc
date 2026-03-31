@@ -44,6 +44,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     label: COMMAND_TAXONOMY.import.label,
     description: COMMAND_TAXONOMY.import.description,
     items: [
+      { label: 'Connect', path: '/connect' },
       { label: 'CX Import', path: '/cx/import' },
       { label: 'ADK Import', path: '/adk/import' },
     ],
@@ -185,6 +186,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/preference-inbox': { title: 'Preference Inbox', breadcrumbs: ['Govern'] },
   '/policy-candidates': { title: 'Policy Candidates', breadcrumbs: ['Govern'] },
   '/reward-audit': { title: 'Reward Audit', breadcrumbs: ['Govern'] },
+  '/connect': { title: 'Connect', breadcrumbs: ['Import'] },
   '/cx/import': { title: 'CX Import', breadcrumbs: ['Import'] },
   '/cx/deploy': { title: 'CX Deploy', breadcrumbs: ['Integrations'] },
   '/adk/import': { title: 'ADK Import', breadcrumbs: ['Import'] },

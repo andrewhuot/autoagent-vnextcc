@@ -5,6 +5,10 @@ Full command set:
   autoagent demo quickstart [--dir PATH]
   autoagent demo vp [--agent-name NAME] [--company NAME] [--no-pause] [--web]
   autoagent init [--template NAME] [--agent-name NAME] [--with-synthetic-data]
+  autoagent connect openai-agents --path ./project
+  autoagent connect anthropic --path ./project
+  autoagent connect http --url https://agent.example.com
+  autoagent connect transcript --file conversations.jsonl
   autoagent eval run [OPTIONS]
   autoagent eval results [--run-id ID]
   autoagent eval list
@@ -165,7 +169,7 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 # Command visibility tiers for simplified help output
 PRIMARY_COMMANDS = {"new", "build", "eval", "optimize", "deploy", "status", "doctor", "shell"}
-SECONDARY_COMMANDS = {"review", "config", "model", "provider", "mode", "memory", "template"}
+SECONDARY_COMMANDS = {"review", "config", "model", "provider", "mode", "memory", "template", "connect"}
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
     "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
@@ -2044,6 +2048,89 @@ def template_apply(name: str) -> None:
     click.echo(f"  Scorers:   {summary['scorer_count']}")
     if summary["suggested_skills"]:
         click.echo(f"  Skills:    {', '.join(summary['suggested_skills'])}")
+
+
+@cli.group("connect")
+def connect_group() -> None:
+    """Connect existing agent runtimes and transcript exports into AutoAgent."""
+
+
+def _print_connect_result(result) -> None:
+    """Render a consistent summary for `autoagent connect` commands."""
+
+    click.echo(click.style(f"\n  ✓ Connected: {result.agent_name}", fg="green"))
+    click.echo(f"    Adapter:   {result.adapter}")
+    click.echo(f"    Workspace: {result.workspace_path}")
+    click.echo(f"    Config:    {result.config_path}")
+    click.echo(f"    Evals:     {result.eval_path}")
+    click.echo(f"    Spec:      {result.spec_path}")
+    click.echo(f"    Adapter:   {result.adapter_config_path}")
+    if result.traces_path:
+        click.echo(f"    Traces:    {result.traces_path}")
+    click.echo(f"    Tools:     {result.tool_count}")
+    click.echo(f"    Guardrails:{result.guardrail_count}")
+    click.echo(f"    Eval cases:{result.eval_case_count}")
+    click.echo("")
+    click.echo("  Next steps:")
+    click.echo(f"    cd {result.workspace_path}")
+    click.echo("    autoagent eval run")
+    click.echo("    autoagent optimize --cycles 1")
+
+
+@connect_group.command("openai-agents")
+@click.option("--path", "source_path", required=True, help="Path to the OpenAI Agents project.")
+@click.option("--output-dir", default=".", show_default=True, help="Directory to create the workspace in.")
+@click.option("--name", default=None, help="Optional workspace folder name.")
+def connect_openai_agents(source_path: str, output_dir: str, name: str | None) -> None:
+    """Create an AutoAgent workspace from an OpenAI Agents project."""
+
+    from adapters import OpenAIAgentsAdapter, create_connected_workspace
+
+    spec = OpenAIAgentsAdapter(source_path).discover()
+    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    _print_connect_result(result)
+
+
+@connect_group.command("anthropic")
+@click.option("--path", "source_path", required=True, help="Path to the Anthropic/Claude project.")
+@click.option("--output-dir", default=".", show_default=True, help="Directory to create the workspace in.")
+@click.option("--name", default=None, help="Optional workspace folder name.")
+def connect_anthropic(source_path: str, output_dir: str, name: str | None) -> None:
+    """Create an AutoAgent workspace from an Anthropic SDK project."""
+
+    from adapters import AnthropicClaudeAdapter, create_connected_workspace
+
+    spec = AnthropicClaudeAdapter(source_path).discover()
+    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    _print_connect_result(result)
+
+
+@connect_group.command("http")
+@click.option("--url", required=True, help="Base URL for the agent webhook.")
+@click.option("--output-dir", default=".", show_default=True, help="Directory to create the workspace in.")
+@click.option("--name", default=None, help="Optional workspace folder name.")
+def connect_http(url: str, output_dir: str, name: str | None) -> None:
+    """Create an AutoAgent workspace that proxies an HTTP agent endpoint."""
+
+    from adapters import HttpWebhookAdapter, create_connected_workspace
+
+    spec = HttpWebhookAdapter(url).discover()
+    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    _print_connect_result(result)
+
+
+@connect_group.command("transcript")
+@click.option("--file", "source_file", required=True, help="Path to a JSONL transcript export.")
+@click.option("--output-dir", default=".", show_default=True, help="Directory to create the workspace in.")
+@click.option("--name", default=None, help="Optional workspace folder name.")
+def connect_transcript(source_file: str, output_dir: str, name: str | None) -> None:
+    """Create an AutoAgent workspace from imported conversation transcripts."""
+
+    from adapters import TranscriptAdapter, create_connected_workspace
+
+    spec = TranscriptAdapter(source_file).discover()
+    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    _print_connect_result(result)
 
 
 @cli.group("provider", invoke_without_command=True)

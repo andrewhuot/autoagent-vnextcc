@@ -36,7 +36,7 @@ export const COMMAND_TAXONOMY: CommandTaxonomy = {
   import: {
     label: 'Import',
     description: 'Import external agents and artifacts',
-    subcommands: ['cx', 'adk', 'config', 'transcript'],
+    subcommands: ['connect', 'cx', 'adk', 'config', 'transcript'],
   },
   eval: {
     label: 'Eval',

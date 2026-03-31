@@ -49,7 +49,7 @@ COMMAND_TAXONOMY: dict[CommandGroup, CommandGroupSpec] = {
     "import": CommandGroupSpec(
         label="Import",
         description="Import external agents and artifacts",
-        subcommands=("cx", "adk", "config", "transcript"),
+        subcommands=("connect", "cx", "adk", "config", "transcript"),
     ),
     "eval": CommandGroupSpec(
         label="Eval",

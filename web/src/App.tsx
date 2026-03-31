@@ -38,6 +38,7 @@ import { PolicyCandidates } from './pages/PolicyCandidates';
 import { RewardAudit } from './pages/RewardAudit';
 import { Build } from './pages/Build';
 import { Improvements } from './pages/Improvements';
+import { Connect } from './pages/Connect';
 import { getRouteRedirect } from './lib/navigation';
 
 const queryClient = new QueryClient({
@@ -100,6 +101,7 @@ export default function App() {
             <Route path="/registry" element={<Registry />} />
             <Route path="/blame" element={<BlameMap />} />
             <Route path="/scorer-studio" element={<ScorerStudio />} />
+            <Route path="/connect" element={<Connect />} />
             <Route path="/cx/import" element={<CxImport />} />
             <Route path="/cx/deploy" element={<CxDeploy />} />
             <Route path="/adk/import" element={<AdkImport />} />

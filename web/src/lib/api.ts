@@ -27,6 +27,8 @@ import type {
   ConfigMigrateResult,
   ConfigShow,
   ConfigVersion,
+  ConnectImportRequest,
+  ConnectImportResult,
   ConversationRecord,
   ConversationTurn,
   CxAgentSummary,
@@ -2320,6 +2322,14 @@ export function useChatRefine() {
 // ---------------------------------------------------------------------------
 // CX Agent Studio
 // ---------------------------------------------------------------------------
+
+export function useConnectImport() {
+  const qc = useQueryClient();
+  return useMutation<ConnectImportResult, ApiRequestError, ConnectImportRequest>({
+    mutationFn: (body) => fetchApi('/connect/import', { method: 'POST', body: JSON.stringify(body) }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['configs'] }),
+  });
+}
 
 export function useCxAgents(project: string, location: string) {
   return useQuery<CxAgentSummary[]>({

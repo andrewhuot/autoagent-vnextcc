@@ -69,7 +69,19 @@ describe('navigation schema', () => {
     expect(getBreadcrumbForPath('/build')).toEqual(['Build']);
     expect(getBreadcrumbForPath('/improvements')).toEqual(['Review']);
     expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
+    expect(getBreadcrumbForPath('/connect')).toEqual(['Import']);
     expect(getBreadcrumbForPath('/settings')).toEqual(['Settings']);
+  });
+
+  it('includes the guided connect flow in the import section', () => {
+    const importSection = sections.find((section) => section.group === 'import');
+
+    expect(importSection?.items.map((item) => item.path)).toEqual([
+      '/connect',
+      '/cx/import',
+      '/adk/import',
+    ]);
+    expect(getRouteTitle('/connect')).toBe('Connect');
   });
 
   it('returns a smaller simple-mode navigation surface for the sidebar toggle', () => {
