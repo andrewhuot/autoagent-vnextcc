@@ -92,7 +92,9 @@ def test_setup_script_falls_back_to_python3_when_it_is_the_only_supported_option
 def test_setup_script_reports_homebrew_install_instructions_when_no_supported_python_exists() -> None:
     with tempfile.TemporaryDirectory() as tmpdir:
         bindir = Path(tmpdir)
-        _write_fake_python(bindir, "python3", "3.9")
+        # Shadow ALL candidate names so real system pythons don't leak through PATH
+        for name in ("python3.12", "python3.13", "python3.14", "python3.11", "python3"):
+            _write_fake_python(bindir, name, "3.9")
 
         result = _run_setup_command("select_compatible_python_or_die", bindir)
 

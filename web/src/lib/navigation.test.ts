@@ -78,6 +78,7 @@ describe('navigation schema', () => {
 
     expect(importSection?.items.map((item) => item.path)).toEqual([
       '/connect',
+      '/cx/studio',
       '/cx/import',
       '/adk/import',
     ]);

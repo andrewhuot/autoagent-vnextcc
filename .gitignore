@@ -37,6 +37,10 @@ progress.md
 .DS_Store
 Thumbs.db
 
+# Runtime artifacts
+autoagent.lock
+test-agent/
+
 # Environment
 .env
 .env.local

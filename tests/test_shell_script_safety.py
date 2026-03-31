@@ -11,9 +11,12 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 AUTOAGENT_DIR = REPO_ROOT / ".autoagent"
+_VENV_ACTIVATE = REPO_ROOT / ".venv" / "bin" / "activate"
 
 
 def _wait_for_port(port: int, timeout_seconds: float = 5.0) -> None:
@@ -148,6 +151,10 @@ def test_stop_script_does_not_kill_unrelated_processes() -> None:
                 occupant.wait(timeout=5)
 
 
+@pytest.mark.skipif(
+    not _VENV_ACTIVATE.exists(),
+    reason="start.sh requires .venv from setup.sh; skipping in bare environments",
+)
 def test_start_script_refuses_occupied_ports_without_killing_other_processes() -> None:
     with _preserved_pid_files():
         occupant = subprocess.Popen(
@@ -178,6 +185,10 @@ def test_start_script_refuses_occupied_ports_without_killing_other_processes() -
                 occupant.wait(timeout=5)
 
 
+@pytest.mark.skipif(
+    not _VENV_ACTIVATE.exists(),
+    reason="start.sh requires .venv from setup.sh; skipping in bare environments",
+)
 def test_start_script_refuses_frontend_port_conflicts_without_lsof() -> None:
     """start.sh should still block occupied frontend ports when lsof is unavailable."""
 
