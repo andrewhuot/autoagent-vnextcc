@@ -1250,12 +1250,14 @@ export interface CxImportResult {
   agent_name: string;
   surfaces_mapped: string[];
   test_cases_imported: number;
+  workspace_path?: string | null;
 }
 
 export interface CxExportResult {
   changes: CxChange[];
   pushed: boolean;
   resources_updated: number;
+  conflicts: CxConflict[];
 }
 
 export interface CxChange {
@@ -1263,6 +1265,24 @@ export interface CxChange {
   action: string;
   field?: string;
   name?: string;
+  before?: unknown;
+  after?: unknown;
+}
+
+export interface CxConflict {
+  resource: string;
+  field: string;
+  name: string;
+  base?: unknown;
+  local?: unknown;
+  remote?: unknown;
+}
+
+export interface CxAuthResult {
+  project_id: string | null;
+  auth_type: string;
+  principal: string | null;
+  credentials_path: string | null;
 }
 
 export interface CxDeployResult {

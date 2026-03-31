@@ -31,6 +31,7 @@ import type {
   ConnectImportResult,
   ConversationRecord,
   ConversationTurn,
+  CxAuthResult,
   CxAgentSummary,
   CxImportResult,
   CxExportResult,
@@ -2331,11 +2332,28 @@ export function useConnectImport() {
   });
 }
 
-export function useCxAgents(project: string, location: string) {
+export function useCxAgents(project: string, location: string, credentialsPath?: string) {
   return useQuery<CxAgentSummary[]>({
-    queryKey: ['cx-agents', project, location],
-    queryFn: () => fetchApi(`/cx/agents?project=${encodeURIComponent(project)}&location=${encodeURIComponent(location)}`),
+    queryKey: ['cx-agents', project, location, credentialsPath],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        project,
+        location,
+      });
+      if (credentialsPath) {
+        params.set('credentials_path', credentialsPath);
+      }
+      return fetchApi(`/cx/agents?${params.toString()}`);
+    },
     enabled: !!project,
+  });
+}
+
+export function useCxAuth() {
+  return useMutation<CxAuthResult, ApiRequestError, {
+    credentials_path?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/auth', { method: 'POST', body: JSON.stringify(body) }),
   });
 }
 
@@ -2347,6 +2365,7 @@ export function useCxImport() {
     agent_id: string;
     output_dir?: string;
     include_test_cases?: boolean;
+    credentials_path?: string;
   }>({
     mutationFn: (body) => fetchApi('/cx/import', { method: 'POST', body: JSON.stringify(body) }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['configs'] }),
@@ -2361,8 +2380,36 @@ export function useCxExport() {
     config: Record<string, unknown>;
     snapshot_path: string;
     dry_run?: boolean;
+    credentials_path?: string;
   }>({
     mutationFn: (body) => fetchApi('/cx/export', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxDiff() {
+  return useMutation<CxExportResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    config: Record<string, unknown>;
+    snapshot_path: string;
+    credentials_path?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/diff', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxSync() {
+  return useMutation<CxExportResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    config: Record<string, unknown>;
+    snapshot_path: string;
+    conflict_strategy?: string;
+    credentials_path?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/sync', { method: 'POST', body: JSON.stringify(body) }),
   });
 }
 
@@ -2372,6 +2419,7 @@ export function useCxDeploy() {
     location: string;
     agent_id: string;
     environment?: string;
+    credentials_path?: string;
   }>({
     mutationFn: (body) => fetchApi('/cx/deploy', { method: 'POST', body: JSON.stringify(body) }),
   });

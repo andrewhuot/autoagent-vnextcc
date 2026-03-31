@@ -102,6 +102,31 @@ class CxExporter:
         except Exception as exc:  # pragma: no cover - exercised by higher-level tests
             raise CxExportError(f"Sync failed: {exc}") from exc
 
+    def diff_agent(
+        self,
+        config: dict[str, Any],
+        ref: CxAgentRef,
+        snapshot_path: str,
+    ) -> ExportResult:
+        """Compare the local workspace against the latest remote CX snapshot without pushing."""
+
+        try:
+            base_snapshot = self._load_snapshot(snapshot_path)
+            local_snapshot = self._mapper.to_cx(config, base_snapshot)
+            remote_snapshot = self._client.fetch_snapshot(ref.name)
+            conflicts = self._detect_conflicts(base_snapshot, local_snapshot, remote_snapshot)
+            merged_snapshot = self._merge_local_changes(base_snapshot, local_snapshot, remote_snapshot, conflicts)
+            return ExportResult(
+                changes=self._compute_changes(remote_snapshot, merged_snapshot),
+                pushed=False,
+                resources_updated=0,
+                conflicts=conflicts,
+            )
+        except CxExportError:
+            raise
+        except Exception as exc:  # pragma: no cover - exercised by higher-level tests
+            raise CxExportError(f"Diff failed: {exc}") from exc
+
     def preview_changes(self, config: dict[str, Any], snapshot_path: str) -> list[dict[str, Any]]:
         """Return the local diff without pushing anything."""
 

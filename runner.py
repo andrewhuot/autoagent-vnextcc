@@ -9302,9 +9302,92 @@ def replay(limit: int, memory_db: str, json_output: bool = False) -> None:
 # autoagent cx (CX Agent Studio)
 # ---------------------------------------------------------------------------
 
+def _load_cx_manifest(workspace: AutoAgentWorkspace | None) -> dict[str, object]:
+    """Load the CX manifest for the current workspace when present."""
+
+    if workspace is None:
+        return {}
+    manifest_path = workspace.autoagent_dir / "cx" / "manifest.json"
+    if not manifest_path.exists():
+        return {}
+    try:
+        return json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+
+
+def _resolve_cx_agent_coordinates(
+    *,
+    project: str | None,
+    location: str | None,
+    agent_id: str | None,
+) -> tuple[str, str, str]:
+    """Resolve project, location, and agent ID from flags or the current workspace."""
+
+    from cli.errors import click_error
+
+    workspace = discover_workspace()
+    manifest = _load_cx_manifest(workspace)
+    agent_ref = manifest.get("agent_ref", {}) if isinstance(manifest.get("agent_ref"), dict) else {}
+
+    resolved_project = project or str(agent_ref.get("project") or "")
+    resolved_location = location or str(agent_ref.get("location") or "global")
+    resolved_agent_id = agent_id or str(agent_ref.get("agent_id") or "")
+
+    if not resolved_project:
+        raise click_error("Project is required. Pass --project or run inside a CX-imported workspace.")
+    if not resolved_agent_id:
+        raise click_error("Agent ID is required. Pass AGENT_ID/--agent or run inside a CX-imported workspace.")
+
+    return resolved_project, resolved_location, resolved_agent_id
+
+
+def _resolve_cx_config_and_snapshot(
+    *,
+    config_path: str | None,
+    snapshot_path: str | None,
+) -> tuple[str, str]:
+    """Resolve the active config and imported snapshot path."""
+
+    from cli.errors import click_error
+
+    workspace = discover_workspace()
+    manifest = _load_cx_manifest(workspace)
+
+    resolved_config_path = config_path
+    if resolved_config_path is None and workspace is not None:
+        resolved = workspace.resolve_active_config()
+        if resolved is not None:
+            resolved_config_path = str(resolved.path)
+
+    resolved_snapshot_path = snapshot_path or str(manifest.get("snapshot_path") or "")
+
+    if not resolved_config_path:
+        raise click_error("Config path is required. Pass --config or run inside an AutoAgent workspace.")
+    if not resolved_snapshot_path:
+        raise click_error("Snapshot path is required. Pass --snapshot or run inside a CX-imported workspace.")
+
+    return resolved_config_path, resolved_snapshot_path
+
 @cli.group("cx")
 def cx_group() -> None:
-    """Google Cloud CX Agent Studio — import, export, deploy."""
+    """Google Cloud CX Agent Studio and Dialogflow CX integration."""
+
+
+@cx_group.command("auth")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+def cx_auth_cmd(credentials: str | None) -> None:
+    """Validate Google Cloud credentials for CX access."""
+
+    from cx_studio import CxAuth
+
+    auth = CxAuth(credentials_path=credentials)
+    details = auth.describe()
+    click.echo("CX authentication")
+    click.echo(f"  Auth type:   {details.get('auth_type') or 'unknown'}")
+    click.echo(f"  Project:     {details.get('project_id') or 'unknown'}")
+    click.echo(f"  Principal:   {details.get('principal') or 'unknown'}")
+    click.echo(f"  Credentials: {details.get('credentials_path') or 'ADC'}")
 
 @cx_group.command("compat")
 def cx_compat() -> None:
@@ -9330,29 +9413,43 @@ def cx_list(project: str, location: str, credentials: str | None) -> None:
     click.echo(f"\n  {'Name':<40} {'Language':<10} {'Description'}")
     click.echo(f"  {'─' * 40} {'─' * 10} {'─' * 30}")
     for agent in agents:
-        agent_id = agent.name.split("/")[-1]
         click.echo(f"  {agent.display_name:<40} {agent.default_language_code:<10} {agent.description[:30]}")
 
 @cx_group.command("import")
+@click.argument("agent_id", required=False)
 @click.option("--project", required=True, help="GCP project ID.")
 @click.option("--location", default="global", show_default=True)
-@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
+@click.option("--agent", "agent_option", default=None, help="CX agent ID.")
 @click.option("--output-dir", default=".", show_default=True, help="Output directory.")
 @click.option("--credentials", default=None, help="Path to service account JSON.")
 @click.option("--include-test-cases/--no-test-cases", default=True, show_default=True)
-def cx_import_cmd(project: str, location: str, agent_id: str, output_dir: str, credentials: str | None, include_test_cases: bool) -> None:
+def cx_import_cmd(
+    agent_id: str | None,
+    project: str,
+    location: str,
+    agent_option: str | None,
+    output_dir: str,
+    credentials: str | None,
+    include_test_cases: bool,
+) -> None:
     """Import a CX agent into AutoAgent format."""
     from cx_studio import CxAuth, CxClient, CxImporter
     from cx_studio.types import CxAgentRef
 
-    click.echo(f"  Importing agent {agent_id} from {project}/{location}...")
+    resolved_agent_id = agent_id or agent_option
+    if not resolved_agent_id:
+        raise click.ClickException("Agent ID is required.")
+
+    click.echo(f"  Importing agent {resolved_agent_id} from {project}/{location}...")
     auth = CxAuth(credentials_path=credentials)
     client = CxClient(auth)
     importer = CxImporter(client)
-    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+    ref = CxAgentRef(project=project, location=location, agent_id=resolved_agent_id)
     result = importer.import_agent(ref, output_dir=output_dir, include_test_cases=include_test_cases)
 
     click.echo(click.style(f"\n  ✓ Imported: {result.agent_name}", fg="green"))
+    if result.workspace_path:
+        click.echo(f"    Workspace: {result.workspace_path}")
     click.echo(f"    Config:   {result.config_path}")
     if result.eval_path:
         click.echo(f"    Evals:    {result.eval_path}")
@@ -9361,21 +9458,41 @@ def cx_import_cmd(project: str, location: str, agent_id: str, output_dir: str, c
     click.echo(f"    Test cases: {result.test_cases_imported}")
 
 @cx_group.command("export")
-@click.option("--project", required=True, help="GCP project ID.")
-@click.option("--location", default="global", show_default=True)
-@click.option("--agent", "agent_id", required=True, help="CX agent ID.")
-@click.option("--config", "config_path", required=True, help="AutoAgent config YAML path.")
-@click.option("--snapshot", "snapshot_path", required=True, help="CX snapshot JSON from import.")
+@click.argument("agent_id", required=False)
+@click.option("--project", default=None, help="GCP project ID.")
+@click.option("--location", default=None, help="Agent location.")
+@click.option("--agent", "agent_option", default=None, help="CX agent ID.")
+@click.option("--config", "config_path", default=None, help="AutoAgent config YAML path.")
+@click.option("--snapshot", "snapshot_path", default=None, help="CX snapshot JSON from import.")
 @click.option("--credentials", default=None, help="Path to service account JSON.")
 @click.option("--dry-run", is_flag=True, help="Preview changes without pushing.")
-def cx_export_cmd(project: str, location: str, agent_id: str, config_path: str, snapshot_path: str, credentials: str | None, dry_run: bool) -> None:
+def cx_export_cmd(
+    agent_id: str | None,
+    project: str | None,
+    location: str | None,
+    agent_option: str | None,
+    config_path: str | None,
+    snapshot_path: str | None,
+    credentials: str | None,
+    dry_run: bool,
+) -> None:
     """Export optimized config back to CX Agent Studio."""
     from cx_studio import CxAuth, CxClient, CxExporter
     from cx_studio.types import CxAgentRef
     import yaml as _yaml
 
-    ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
-    with open(config_path, "r", encoding="utf-8") as f:
+    resolved_project, resolved_location, resolved_agent_id = _resolve_cx_agent_coordinates(
+        project=project,
+        location=location,
+        agent_id=agent_id or agent_option,
+    )
+    resolved_config_path, resolved_snapshot_path = _resolve_cx_config_and_snapshot(
+        config_path=config_path,
+        snapshot_path=snapshot_path,
+    )
+
+    ref = CxAgentRef(project=resolved_project, location=resolved_location, agent_id=resolved_agent_id)
+    with open(resolved_config_path, "r", encoding="utf-8") as f:
         config = _yaml.safe_load(f)
 
     auth = CxAuth(credentials_path=credentials)
@@ -9384,7 +9501,7 @@ def cx_export_cmd(project: str, location: str, agent_id: str, config_path: str, 
 
     if dry_run:
         click.echo("  Dry run — previewing changes...")
-    result = exporter.export_agent(config, ref, snapshot_path, dry_run=dry_run)
+    result = exporter.export_agent(config, ref, resolved_snapshot_path, dry_run=dry_run)
 
     if not result.changes:
         click.echo("  No changes detected.")
@@ -9401,6 +9518,127 @@ def cx_export_cmd(project: str, location: str, agent_id: str, config_path: str, 
         click.echo(click.style(f"\n  ✓ Pushed {result.resources_updated} resource(s) to CX Agent Studio", fg="green"))
     else:
         click.echo("\n  No changes pushed (dry run or no diff).")
+
+
+@cx_group.command("diff")
+@click.argument("agent_id", required=False)
+@click.option("--project", default=None, help="GCP project ID.")
+@click.option("--location", default=None, help="Agent location.")
+@click.option("--agent", "agent_option", default=None, help="CX agent ID.")
+@click.option("--config", "config_path", default=None, help="AutoAgent config YAML path.")
+@click.option("--snapshot", "snapshot_path", default=None, help="CX snapshot JSON from import.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+def cx_diff_cmd(
+    agent_id: str | None,
+    project: str | None,
+    location: str | None,
+    agent_option: str | None,
+    config_path: str | None,
+    snapshot_path: str | None,
+    credentials: str | None,
+) -> None:
+    """Diff the local workspace against the live CX agent."""
+
+    from cx_studio import CxAuth, CxClient, CxExporter
+    from cx_studio.types import CxAgentRef
+    import yaml as _yaml
+
+    resolved_project, resolved_location, resolved_agent_id = _resolve_cx_agent_coordinates(
+        project=project,
+        location=location,
+        agent_id=agent_id or agent_option,
+    )
+    resolved_config_path, resolved_snapshot_path = _resolve_cx_config_and_snapshot(
+        config_path=config_path,
+        snapshot_path=snapshot_path,
+    )
+
+    with open(resolved_config_path, "r", encoding="utf-8") as handle:
+        config = _yaml.safe_load(handle)
+
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    exporter = CxExporter(client)
+    result = exporter.diff_agent(
+        config,
+        CxAgentRef(project=resolved_project, location=resolved_location, agent_id=resolved_agent_id),
+        resolved_snapshot_path,
+    )
+
+    click.echo(f"  Planned changes: {len(result.changes)}")
+    for change in result.changes:
+        click.echo(f"    {change['action'].upper():<8} {change['resource']}/{change.get('name') or change.get('field')}")
+    if result.conflicts:
+        click.echo(f"\n  Conflicts: {len(result.conflicts)}")
+        for conflict in result.conflicts:
+            click.echo(f"    CONFLICT {conflict['resource']}/{conflict['name']} field={conflict['field']}")
+
+
+@cx_group.command("sync")
+@click.argument("agent_id", required=False)
+@click.option("--project", default=None, help="GCP project ID.")
+@click.option("--location", default=None, help="Agent location.")
+@click.option("--agent", "agent_option", default=None, help="CX agent ID.")
+@click.option("--config", "config_path", default=None, help="AutoAgent config YAML path.")
+@click.option("--snapshot", "snapshot_path", default=None, help="CX snapshot JSON from import.")
+@click.option("--credentials", default=None, help="Path to service account JSON.")
+@click.option(
+    "--conflict-strategy",
+    type=click.Choice(["detect", "force"], case_sensitive=False),
+    default="detect",
+    show_default=True,
+    help="How to handle remote changes that overlap with local edits.",
+)
+def cx_sync_cmd(
+    agent_id: str | None,
+    project: str | None,
+    location: str | None,
+    agent_option: str | None,
+    config_path: str | None,
+    snapshot_path: str | None,
+    credentials: str | None,
+    conflict_strategy: str,
+) -> None:
+    """Synchronize the local workspace with the live CX agent."""
+
+    from cx_studio import CxAuth, CxClient, CxExporter
+    from cx_studio.types import CxAgentRef
+    import yaml as _yaml
+
+    resolved_project, resolved_location, resolved_agent_id = _resolve_cx_agent_coordinates(
+        project=project,
+        location=location,
+        agent_id=agent_id or agent_option,
+    )
+    resolved_config_path, resolved_snapshot_path = _resolve_cx_config_and_snapshot(
+        config_path=config_path,
+        snapshot_path=snapshot_path,
+    )
+
+    with open(resolved_config_path, "r", encoding="utf-8") as handle:
+        config = _yaml.safe_load(handle)
+
+    auth = CxAuth(credentials_path=credentials)
+    client = CxClient(auth)
+    exporter = CxExporter(client)
+    result = exporter.sync_agent(
+        config,
+        CxAgentRef(project=resolved_project, location=resolved_location, agent_id=resolved_agent_id),
+        resolved_snapshot_path,
+        conflict_strategy=conflict_strategy,
+    )
+
+    if result.conflicts and not result.pushed:
+        click.echo(f"  Sync blocked by {len(result.conflicts)} conflict(s).")
+        for conflict in result.conflicts:
+            click.echo(f"    CONFLICT {conflict['resource']}/{conflict['name']} field={conflict['field']}")
+        return
+
+    if not result.changes:
+        click.echo("  No changes detected.")
+        return
+
+    click.echo(click.style(f"  ✓ Synced {result.resources_updated} resource(s)", fg="green"))
 
 @cx_group.command("deploy")
 @click.option("--project", required=True, help="GCP project ID.")

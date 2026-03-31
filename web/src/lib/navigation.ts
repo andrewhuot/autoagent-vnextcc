@@ -45,6 +45,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     description: COMMAND_TAXONOMY.import.description,
     items: [
       { label: 'Connect', path: '/connect' },
+      { label: 'CX Studio', path: '/cx/studio' },
       { label: 'CX Import', path: '/cx/import' },
       { label: 'ADK Import', path: '/adk/import' },
     ],
@@ -193,6 +194,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/policy-candidates': { title: 'Policy Candidates', breadcrumbs: ['Govern'] },
   '/reward-audit': { title: 'Reward Audit', breadcrumbs: ['Govern'] },
   '/connect': { title: 'Connect', breadcrumbs: ['Import'] },
+  '/cx/studio': { title: 'CX Studio', breadcrumbs: ['Import'] },
   '/cx/import': { title: 'CX Import', breadcrumbs: ['Import'] },
   '/cx/deploy': { title: 'CX Deploy', breadcrumbs: ['Integrations'] },
   '/adk/import': { title: 'ADK Import', breadcrumbs: ['Import'] },

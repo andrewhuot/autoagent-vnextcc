@@ -49,6 +49,7 @@ class CxImportResponse(BaseModel):
     agent_name: str
     surfaces_mapped: list[str]
     test_cases_imported: int
+    workspace_path: str | None = None
 
 class CxExportRequest(CxAgentRefPayload):
     config: dict
@@ -59,6 +60,27 @@ class CxExportResponse(BaseModel):
     changes: list[dict]
     pushed: bool
     resources_updated: int
+    conflicts: list[dict] = Field(default_factory=list)
+
+
+class CxAuthRequest(BaseModel):
+    credentials_path: str | None = None
+
+
+class CxAuthResponse(BaseModel):
+    project_id: str | None = None
+    auth_type: str
+    principal: str | None = None
+    credentials_path: str | None = None
+
+
+class CxDiffRequest(CxAgentRefPayload):
+    config: dict
+    snapshot_path: str
+
+
+class CxSyncRequest(CxDiffRequest):
+    conflict_strategy: str = "detect"
 
 class CxDeployRequest(CxAgentRefPayload):
     environment: str = "production"
@@ -92,6 +114,19 @@ class CxPreviewResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
+
+@router.post("/auth", response_model=CxAuthResponse)
+async def authenticate_cx(body: CxAuthRequest) -> CxAuthResponse:
+    """Validate credentials and return basic auth metadata."""
+
+    from cx_studio import CxAuth
+
+    try:
+        auth = CxAuth(credentials_path=body.credentials_path)
+        details = auth.describe()
+        return CxAuthResponse(**details)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 @router.get("/agents", response_model=list[CxAgentSummary])
 async def list_cx_agents(
@@ -140,6 +175,7 @@ async def import_cx_agent(body: CxImportRequest) -> CxImportResponse:
             agent_name=result.agent_name,
             surfaces_mapped=result.surfaces_mapped,
             test_cases_imported=result.test_cases_imported,
+            workspace_path=result.workspace_path,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -162,6 +198,58 @@ async def export_cx_agent(body: CxExportRequest) -> CxExportResponse:
             changes=result.changes,
             pushed=result.pushed,
             resources_updated=result.resources_updated,
+            conflicts=result.conflicts,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/diff", response_model=CxExportResponse)
+async def diff_cx_agent(body: CxDiffRequest) -> CxExportResponse:
+    """Diff local config changes against the live CX agent."""
+
+    from cx_studio import CxAuth, CxClient, CxExporter
+    from cx_studio.types import CxAgentRef
+
+    try:
+        auth = CxAuth(credentials_path=body.credentials_path)
+        client = CxClient(auth)
+        exporter = CxExporter(client)
+        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        result = exporter.diff_agent(body.config, ref, body.snapshot_path)
+        return CxExportResponse(
+            changes=result.changes,
+            pushed=result.pushed,
+            resources_updated=result.resources_updated,
+            conflicts=result.conflicts,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/sync", response_model=CxExportResponse)
+async def sync_cx_agent(body: CxSyncRequest) -> CxExportResponse:
+    """Synchronize local config changes with the live CX agent."""
+
+    from cx_studio import CxAuth, CxClient, CxExporter
+    from cx_studio.types import CxAgentRef
+
+    try:
+        auth = CxAuth(credentials_path=body.credentials_path)
+        client = CxClient(auth)
+        exporter = CxExporter(client)
+        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        result = exporter.sync_agent(
+            body.config,
+            ref,
+            body.snapshot_path,
+            conflict_strategy=body.conflict_strategy,
+        )
+        return CxExportResponse(
+            changes=result.changes,
+            pushed=result.pushed,
+            resources_updated=result.resources_updated,
+            conflicts=result.conflicts,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
