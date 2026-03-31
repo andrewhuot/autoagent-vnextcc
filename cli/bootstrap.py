@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 import time
@@ -502,6 +503,37 @@ def _seed_demo_judges(workspace: AutoAgentWorkspace) -> None:
 def _seed_demo_change_cards(workspace: AutoAgentWorkspace) -> str:
     """Seed one pending change card for the review flows."""
     store = ChangeCardStore(db_path=str(workspace.change_cards_db))
+    resolved = workspace.resolve_active_config()
+    if resolved is None:
+        raise ValueError("Demo review cards require an active config in the workspace.")
+
+    base_config = deepcopy(resolved.config)
+    prompts = dict(base_config.get("prompts") or {})
+    old_root = str(prompts.get("root") or "").strip()
+    new_root = (
+        f"{old_root} "
+        "If a customer requests a refund without the order number, attempt fallback "
+        "verification using email and ZIP before escalating."
+    ).strip()
+    prompts["root"] = new_root
+    base_config["prompts"] = prompts
+
+    deployer = Deployer(
+        configs_dir=str(workspace.configs_dir),
+        store=ConversationStore(db_path=str(workspace.conversation_db)),
+    )
+    candidate = deployer.version_manager.save_version(
+        base_config,
+        scores={
+            "quality": 0.84,
+            "safety": 1.0,
+            "latency": 0.85,
+            "composite": 0.84,
+        },
+        status="candidate",
+    )
+    candidate_path = workspace.configs_dir / candidate.filename
+
     card = ProposedChangeCard(
         card_id="demochg1",
         title="Tighten refund verification before escalation",
@@ -513,8 +545,8 @@ def _seed_demo_change_cards(workspace: AutoAgentWorkspace) -> str:
             DiffHunk(
                 hunk_id="demo-hunk-1",
                 surface="prompts.root",
-                old_value="Escalate refund issues when information is incomplete.",
-                new_value="Attempt fallback verification by email plus zip before escalating refund issues.",
+                old_value=old_root,
+                new_value=new_root,
             )
         ],
         metrics_before={"quality": 0.78, "safety": 1.0, "latency": 0.87},
@@ -529,6 +561,8 @@ def _seed_demo_change_cards(workspace: AutoAgentWorkspace) -> str:
         rollout_plan="2h canary then promote if refund resolution improves.",
         rollback_condition="Rollback if latency worsens by more than 5 percent.",
         memory_context="Customers often know their email and zip even when they lack the order number.",
+        candidate_config_version=candidate.version,
+        candidate_config_path=str(candidate_path),
         status="pending",
     )
     store.save(card)

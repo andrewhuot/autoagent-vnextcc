@@ -412,11 +412,13 @@ def _create_workspace(
         agent_name=agent_name,
         platform=platform,
         with_synthetic_data=with_synthetic_data,
-        demo=demo,
+        demo=False,
         runtime_mode=runtime_mode,
     )
     if template in STARTER_TEMPLATE_NAMES:
         summary["template_summary"] = apply_template_to_workspace(workspace, template)
+    if demo:
+        summary["demo_summary"] = seed_demo_workspace(workspace)
     return workspace, summary
 
 
@@ -2653,8 +2655,11 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
 def eval_results(run_id: str | None, results_file: str | None) -> None:
     """View eval results from a previous run.
 
+    This is the CLI companion to the Results Explorer page in the web app.
+
     Examples:
       autoagent eval results --file results.json
+      autoagent eval results --run-id eval-123
     """
     if results_file:
         data = json.loads(Path(results_file).read_text(encoding="utf-8"))
@@ -2863,7 +2868,11 @@ def eval_generate(
 @click.argument("right_run")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def eval_compare(left_run: str, right_run: str, json_output: bool = False) -> None:
-    """Show a side-by-side comparison of two eval runs."""
+    """Show a side-by-side comparison of two eval runs.
+
+    Prints metric deltas plus a pairwise-style winner summary so you can see
+    which run came out ahead overall.
+    """
     from cli.stream2_helpers import json_response
 
     payload = _build_eval_comparison(left_run, right_run)

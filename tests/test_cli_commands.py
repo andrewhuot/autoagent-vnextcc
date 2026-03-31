@@ -263,6 +263,21 @@ class TestEvalCommands:
         assert result.exit_code == 0
         assert "Composite:" in result.output
 
+    def test_eval_compare_help_mentions_pairwise_summary(self, runner):
+        """`eval compare --help` should call out the pairwise winner summary it renders."""
+        result = runner.invoke(cli, ["eval", "compare", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "pairwise" in result.output.lower()
+        assert "winner" in result.output.lower()
+
+    def test_eval_results_help_mentions_results_explorer(self, runner):
+        """`eval results --help` should connect the CLI view to the Results Explorer surface."""
+        result = runner.invoke(cli, ["eval", "results", "--help"])
+
+        assert result.exit_code == 0, result.output
+        assert "Results Explorer" in result.output
+
     def test_eval_list_empty(self, runner, tmp_dir):
         result = runner.invoke(cli, ["eval", "list"])
         # May or may not find files depending on cwd

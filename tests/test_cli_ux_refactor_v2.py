@@ -200,6 +200,36 @@ class TestOnboardingAndTemplates:
             assert "cd my-project" in result.output
             assert "autoagent status" in result.output
 
+    def test_demo_workspace_review_card_can_be_applied_and_deployed(
+        self,
+        runner: CliRunner,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+    ) -> None:
+        """Demo workspaces should seed a deployable review candidate, not just a decorative card."""
+        monkeypatch.chdir(tmp_path)
+        result = runner.invoke(
+            cli,
+            ["new", "demo-workspace", "--template", "customer-support", "--demo"],
+        )
+
+        workspace = tmp_path / "demo-workspace"
+        assert result.exit_code == 0, result.output
+
+        monkeypatch.chdir(workspace)
+        monkeypatch.setattr("cli.permissions.PermissionManager.require", lambda *args, **kwargs: None)
+
+        apply_result = runner.invoke(cli, ["review", "apply", "pending"])
+        assert apply_result.exit_code == 0, apply_result.output
+        assert "Active config: v002" in apply_result.output
+
+        deploy_result = runner.invoke(cli, ["deploy", "canary", "--yes"])
+        assert deploy_result.exit_code == 0, deploy_result.output
+
+        manifest = json.loads((workspace / "configs" / "manifest.json").read_text(encoding="utf-8"))
+        assert manifest["active_version"] == 1
+        assert manifest["canary_version"] == 2
+
     def test_template_apply_overwrites_workspace_with_selected_template(
         self,
         runner: CliRunner,
