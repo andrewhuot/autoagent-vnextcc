@@ -381,12 +381,12 @@ def test_eval_run_uses_active_config_by_default(
     assert captured["config"]["model"] == "demo-model-v2"
 
 
-def test_build_inside_workspace_registers_and_activates_generated_config(
+def test_build_inside_workspace_registers_generated_config_without_promoting_it(
     runner: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`build` should promote its generated config into the workspace version flow."""
+    """`build` should stage its generated config for the workspace without auto-deploying it."""
     workspace = tmp_path / "build-workspace"
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
     assert init_result.exit_code == 0, init_result.output
@@ -401,8 +401,85 @@ def test_build_inside_workspace_registers_and_activates_generated_config(
     metadata = _workspace_metadata(workspace)
     manifest = json.loads((workspace / "configs" / "manifest.json").read_text(encoding="utf-8"))
     assert metadata["active_config_version"] == 2
-    assert manifest["active_version"] == 2
+    assert manifest["active_version"] == 1
+    version_two = next(entry for entry in manifest["versions"] if entry["version"] == 2)
+    assert version_two["status"] == "candidate"
     assert (workspace / "configs" / "v002.yaml").exists()
+
+
+def test_build_staged_config_can_be_canaried_after_rejected_optimize(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A built workspace config should remain deployable even if the first optimize cycle rejects changes."""
+    workspace = tmp_path / "build-deploy-workspace"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    build_result = runner.invoke(
+        cli,
+        ["build", "Build a support agent for order tracking and refunds"],
+    )
+    assert build_result.exit_code == 0, build_result.output
+
+    eval_result = runner.invoke(cli, ["eval", "run"])
+    assert eval_result.exit_code == 0, eval_result.output
+
+    optimize_result = runner.invoke(cli, ["optimize", "--cycles", "1"])
+    assert optimize_result.exit_code == 0, optimize_result.output
+    assert "Rejected" in optimize_result.output
+
+    deploy_result = runner.invoke(cli, ["deploy", "canary", "--yes"])
+    assert deploy_result.exit_code == 0, deploy_result.output
+    assert "Deployed v002 as canary" in deploy_result.output
+
+    manifest = json.loads((workspace / "configs" / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["active_version"] == 1
+    assert manifest["canary_version"] == 2
+
+
+def test_status_distinguishes_selected_config_from_deployed_version_after_build(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`status` should show the local working config separately from the deployed active version."""
+    workspace = tmp_path / "status-after-build"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    build_result = runner.invoke(
+        cli,
+        ["build", "Build a support agent for order tracking and refunds"],
+    )
+    assert build_result.exit_code == 0, build_result.output
+
+    status_result = runner.invoke(cli, ["status"])
+    assert status_result.exit_code == 0, status_result.output
+    assert "Config:     v002" in status_result.output
+    assert "Deployment: active v001" in status_result.output
+
+
+def test_doctor_treats_mock_mode_workspace_as_ready(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`doctor` should treat a normal mock-mode workspace as healthy, not broken."""
+    workspace = tmp_path / "doctor-workspace"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    result = runner.invoke(cli, ["doctor"])
+
+    assert result.exit_code == 0, result.output
+    assert "Mock mode:" in result.output
+    assert "Status: All checks passed" in result.output
 
 
 def test_status_recommends_eval_before_any_optimization_attempts(

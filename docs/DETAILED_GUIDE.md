@@ -153,7 +153,7 @@ Artifact coverage
 
 Generated handoff files
   Config:   /path/to/my-project/configs/v003.yaml
-  Active:   v003
+  Workspace: v003 (selected locally, not deployed)
   Evals:    /path/to/my-project/evals/cases/generated_build.yaml
   Artifact: /path/to/my-project/.autoagent/build_artifact_latest.json
 
@@ -313,7 +313,7 @@ autoagent review apply pending
 
 `review apply pending` asks for confirmation in interactive use unless your current permission mode auto-accepts it.
 
-Because this guide uses `--demo`, the workspace already contains a pending review card and deployable candidate version. That makes the review/deploy steps below reproducible on a fresh install even if the first optimize run rejects every new mutation.
+Because this guide uses `--demo`, the workspace already contains a pending review card and autofix proposal. The built config is also staged as a deployable candidate, so the review/deploy steps below are reproducible on a fresh install.
 
 Mark the latest version as canary and inspect rollout state:
 

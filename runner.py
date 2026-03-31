@@ -2371,7 +2371,7 @@ def build_agent(
         saved_version = deployer.version_manager.save_version(
             config,
             scores={"composite": 0.0},
-            status="active",
+            status="candidate",
         )
         built_version = saved_version.version
         config_path = workspace.configs_dir / saved_version.filename
@@ -2445,7 +2445,7 @@ def build_agent(
     click.echo(click.style("Generated handoff files", bold=True))
     click.echo(f"  Config:   {config_path}")
     if built_version is not None:
-        click.echo(f"  Active:   v{built_version:03d}")
+        click.echo(f"  Workspace: v{built_version:03d} (selected locally, not deployed)")
     click.echo(f"  Evals:    {eval_path}")
     click.echo(f"  Artifact: {artifact_path}")
     click.echo("")
@@ -2455,8 +2455,8 @@ def build_agent(
     else:
         click.echo(f"  autoagent eval run --config {config_path}")
     click.echo("  autoagent optimize --cycles 3")
+    click.echo("  autoagent deploy canary --yes")
     click.echo("  autoagent review show pending")
-    click.echo("  autoagent deploy --target cx-studio")
 
 
 # ---------------------------------------------------------------------------
@@ -5229,7 +5229,8 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
     memory = OptimizationMemory(db_path=memory_db)
     deploy_status = deployer.status()
     resolved = workspace.resolve_active_config()
-    active_version = resolved.version if resolved is not None else deploy_status["active_version"]
+    workspace_config_version = resolved.version if resolved is not None else deploy_status["active_version"]
+    deployed_active_version = deploy_status.get("active_version")
 
     total_conversations = store.count()
     recent_attempts = memory.recent(limit=1)
@@ -5286,8 +5287,8 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
             f"active v{deploy_status.get('active_version', 0):03d} "
             f"| canary v{deploy_status['canary_version']:03d}"
         )
-    elif active_version is not None:
-        deployment_label = f"active v{active_version:03d}"
+    elif deployed_active_version is not None:
+        deployment_label = f"active v{deployed_active_version:03d}"
 
     next_action = _status_next_action(report, len(all_attempts), len(accepted_attempts))
 
@@ -5298,7 +5299,7 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
             "workspace_name": workspace.workspace_label,
             "workspace_path": str(workspace.root),
             "mode": mode_summary["effective_mode"],
-            "config_version": active_version,
+            "config_version": workspace_config_version,
             "active_config_summary": workspace.summarize_config(resolved.config if resolved is not None else None),
             "conversations": total_conversations,
             "eval_score": latest_eval_score,
@@ -5329,7 +5330,9 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
         workspace_name=workspace.workspace_label,
         workspace_path=str(workspace.root),
         mode_label=mode_summary["effective_mode"].upper(),
-        active_config_label=f"v{active_version:03d}" if active_version is not None else "none",
+        active_config_label=(
+            f"v{workspace_config_version:03d}" if workspace_config_version is not None else "none"
+        ),
         active_config_summary=workspace.summarize_config(resolved.config if resolved is not None else None),
         eval_score_label=f"{latest_eval_score:.4f}" if latest_eval_score is not None else "n/a",
         eval_timestamp_label=_format_eval_timestamp(latest_eval_timestamp),
@@ -5442,11 +5445,6 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
         mcp_snapshot = mcp_status_snapshot(workspace.root if workspace is not None else Path("."))
         if workspace is None:
             issues.append("No AutoAgent workspace found")
-        if runtime.optimizer.use_mock:
-            issues.append("Mock mode is enabled")
-        for env_var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
-            if not os.environ.get(env_var):
-                issues.append(f"{env_var} is not set")
         data = {
             "workspace": str(workspace.root) if workspace is not None else None,
             "issues": issues,
@@ -5509,7 +5507,6 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     click.echo(f"  CLI mode:           {mode_summary['message']}")
     click.echo(f"  Mode source:        {mode_summary['mode_source']}")
     if runtime.optimizer.use_mock:
-        issues.append("Mock mode is enabled")
         click.echo(
             "  Mock mode:          "
             + click.style(
@@ -5537,9 +5534,9 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                 f"  {label + ':':<22}" + click.style("\u2713 Set", fg="green")
             )
         else:
-            issues.append(f"{label} is not set")
             click.echo(
-                f"  {label + ':':<22}" + click.style("\u2717 Not set", fg="red")
+                f"  {label + ':':<22}"
+                + click.style("\u26a0 Not set (optional unless you use this provider)", fg="yellow")
             )
 
     # ------------------------------------------------------------------
@@ -5563,14 +5560,11 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                     + click.style(f"\u2717 {check['model']} missing {check['api_key_env']}", fg="red")
                 )
     else:
-        message = "No provider profiles configured"
-        if not runtime.optimizer.use_mock:
-            issues.append(message)
         click.echo(
             "  Registry:           "
             + click.style(
-                "\u2717 Not configured (run autoagent provider configure)",
-                fg="red" if not runtime.optimizer.use_mock else "yellow",
+                "\u26a0 Not configured (run autoagent provider configure when you are ready for live providers)",
+                fg="yellow",
             )
         )
 
@@ -5604,11 +5598,10 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                     + click.style(f"\u2713 {row_count} rows", fg="green")
                 )
             else:
-                issues.append("Traces DB is empty")
                 click.echo(
                     "  Traces:             "
                     + click.style(
-                        "\u2717 Empty (run your agent with tracing enabled)", fg="red"
+                        "\u26a0 Empty (will populate after traced runs)", fg="yellow"
                     )
                 )
         except sqlite3.DatabaseError:
@@ -5618,11 +5611,10 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                 + click.style("\u2717 Unreadable (DB may be corrupt)", fg="red")
             )
     else:
-        issues.append("Traces DB does not exist")
         click.echo(
             "  Traces:             "
             + click.style(
-                "\u2717 Empty (run your agent with tracing enabled)", fg="red"
+                "\u26a0 Not collected yet (run your agent with tracing enabled)", fg="yellow"
             )
         )
 

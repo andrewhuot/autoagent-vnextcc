@@ -66,7 +66,7 @@ autoagent deploy --auto-review --yes
 
 That's the fastest reliable first-run loop: create → build → evaluate → optimize → deploy.
 
-`--demo` seeds a review card and deployable candidate so the final deploy step works on a brand-new workspace even if the first optimize cycle rejects every fresh mutation.
+`--demo` seeds extra review data so the first-run walkthrough includes review and autofix surfaces on a brand-new workspace.
 
 ---
 
