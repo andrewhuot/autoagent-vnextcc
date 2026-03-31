@@ -19,6 +19,9 @@ Options:
   --template [customer-support|it-helpdesk|sales-qualification|healthcare-intake]
                                   Starter template.  [default: customer-support]
   --demo / --no-demo              Seed a reviewable demo workspace.  [default: no-demo]
+  --mode [mock|live|auto]         Runtime mode for the generated workspace.
+                                  Explicit `auto` uses API-key detection.
+                                  [default: auto]
 ```
 
 **Example:**
@@ -85,12 +88,17 @@ Options:
   --cycles INTEGER                Number of optimization cycles.  [default: 1]
   --continuous                    Loop indefinitely until Ctrl+C.
   --mode [standard|advanced|research]
-                                  Optimization mode.
-  --full-auto                     Auto-promote without manual review.
+                                  Optimization mode (replaces --strategy).
+  --db TEXT                       Conversation store DB.  [default: conversations.db]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --memory-db TEXT                Optimizer memory DB.  [default: optimizer_memory.db]
+  --full-auto                     Danger mode: auto-promote accepted configs
+                                  without manual review.
   --dry-run                       Preview without mutating state.
   --max-budget-usd FLOAT          Stop when spend reaches this amount.
   --output-format [text|json|stream-json]
-                                  Output format.  [default: text]
+                                  Render text, a final JSON envelope, or
+                                  stream JSON progress events.  [default: text]
   -j, --json                      Output as JSON.
 ```
 
@@ -114,13 +122,25 @@ Usage: autoagent deploy [OPTIONS] [[canary|immediate|release|rollback|status]]
 Options:
   --config-version INTEGER        Config version to deploy.
   --strategy [canary|immediate]   Deployment strategy.  [default: canary]
-  --auto-review                   Apply pending review cards before deploying.
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --db TEXT                       Conversation store DB.  [default: conversations.db]
   --target [autoagent|cx-studio]  Deployment target.  [default: autoagent]
+  --project TEXT                  GCP project ID (required for CX push).
+  --location TEXT                 CX agent location.  [default: global]
+  --agent-id TEXT                 CX agent ID (required for CX push).
+  --snapshot TEXT                 CX snapshot JSON path from `autoagent cx import`.
+  --credentials TEXT              Path to service account JSON for CX calls.
+  --output TEXT                   Output path for CX export package JSON.
+  --push / --no-push              Push to CX now (otherwise package only).
+                                  [default: no-push]
   --dry-run                       Preview without mutating state.
   --yes                           Skip interactive confirmation.
   -j, --json                      Output as JSON.
   --output-format [text|json|stream-json]
-                                  Output format.  [default: text]
+                                  Render text, a final JSON envelope, or
+                                  stream JSON progress events.  [default: text]
+  --auto-review                   Apply pending review cards and create a
+                                  release before deploying (replaces ship).
 ```
 
 **Examples:**
@@ -142,8 +162,11 @@ Show system health, config versions, and recent activity.
 Usage: autoagent status [OPTIONS]
 
 Options:
-  -j, --json     Output as JSON.
-  -v, --verbose  Show extra details.
+  --db TEXT           Conversation store DB.  [default: conversations.db]
+  --configs-dir TEXT  Configs directory.  [default: configs]
+  --memory-db TEXT    Optimizer memory DB.  [default: optimizer_memory.db]
+  -j, --json          Output as JSON.
+  -v, --verbose       Show extra details (conversations, cycles, token usage).
 ```
 
 ---
@@ -216,7 +239,7 @@ Show or set CLI execution mode.
 ```
 Commands:
   show  Show current mode and configured providers.
-  set   Persist mode preference (mock or live).
+  set   Persist mode preference (auto, mock, or live).
 ```
 
 AutoAgent auto-detects mode based on available API keys. Use `mode set` to override.
@@ -286,6 +309,7 @@ Run `autoagent advanced` to see these. They are fully functional but hidden from
 | `autofix` | AutoFix Copilot — reviewable improvement proposals |
 | `benchmark` | Run standard benchmarks |
 | `build-inspect` | Inspect build artifacts |
+| `build-show` | Deprecated alias for `autoagent build show` |
 | `changes` | Aliases for reviewable optimizer change cards |
 | `compare` | Compare configs, eval runs, and candidate versions |
 | `context` | Context Engineering Workbench — diagnose and tune context |
@@ -314,7 +338,7 @@ Run `autoagent advanced` to see these. They are fully functional but hidden from
 | `pin` | Lock a config surface from mutation |
 | `policy` | Policy management — inspect trained policy artifacts |
 | `pref` | Preference collection and export |
-| `quickstart` | Run the full golden path (init → eval → optimize → deploy) |
+| `quickstart` | Run the full golden path (init → seed → eval → optimize → summary) |
 | `registry` | Modular registry — skills, policies, tools, handoffs |
 | `reject` | Reject and rollback an experiment |
 | `release` | Manage signed release objects |

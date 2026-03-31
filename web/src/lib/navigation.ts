@@ -209,6 +209,7 @@ export function getNavigationSections(): NavigationSection[] {
 /** Essential pages shown in Simple mode. */
 const SIMPLE_MODE_PATHS = new Set([
   '/dashboard',
+  '/setup',
   '/build',
   '/evals',
   '/optimize',

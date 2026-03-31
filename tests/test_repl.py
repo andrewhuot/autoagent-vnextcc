@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import pytest
+
 from cli.repl import (
     SLASH_COMMANDS,
     _build_status_bar,
@@ -105,6 +107,27 @@ def test_slash_config_with_workspace() -> None:
         session_store=store,
     )
     assert result is False
+
+
+def test_slash_mcp_routes_to_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: list[str] = []
+
+    def _fake_run_click_command(command_path: str) -> None:
+        called.append(command_path)
+
+    monkeypatch.setattr("cli.repl._run_click_command", _fake_run_click_command)
+    session = Session(session_id="x", title="t")
+    store = MagicMock()
+
+    result = _handle_slash_command(
+        "/mcp",
+        workspace=None,
+        session=session,
+        session_store=store,
+    )
+
+    assert result is False
+    assert called == ["mcp status"]
 
 
 def test_compact_session_writes_file(tmp_path: Path) -> None:

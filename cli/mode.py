@@ -16,7 +16,7 @@ from optimizer.providers import has_real_provider_credentials
 
 
 WORKSPACE_STATE_PATH = Path(".autoagent") / "workspace.json"
-VALID_MODES = {"mock", "live"}
+VALID_MODES = {"auto", "mock", "live"}
 
 
 def _read_workspace_state(path: Path = WORKSPACE_STATE_PATH) -> dict[str, Any]:
@@ -82,13 +82,27 @@ def summarize_mode_state(config_path: str = "autoagent.yaml") -> dict[str, Any]:
     config_mode = "mock" if runtime.optimizer.use_mock else "live"
     preferred_mode = workspace_mode or config_mode
     real_provider_configured = has_real_provider_credentials(runtime.optimizer)
-    effective_mode = "mock" if preferred_mode == "mock" else ("live" if real_provider_configured else "mock")
+    if preferred_mode == "mock":
+        effective_mode = "mock"
+    else:
+        effective_mode = "live" if real_provider_configured else "mock"
 
     if preferred_mode == "mock":
         message = (
             "Running in MOCK mode — results use deterministic responses. "
             "Run autoagent mode set live to use real providers."
         )
+    elif preferred_mode == "auto":
+        if effective_mode == "live":
+            message = (
+                "Running in AUTO mode — configured provider credentials are available, "
+                "so the CLI will use LIVE providers."
+            )
+        else:
+            message = (
+                "Running in AUTO mode — no configured provider credentials are available, "
+                "so the CLI is falling back to MOCK execution."
+            )
     elif effective_mode == "live":
         message = "Running in LIVE mode — CLI will use configured real providers."
     else:
@@ -114,7 +128,7 @@ def load_runtime_with_mode_preference(config_path: str = "autoagent.yaml") -> Ru
     """Load runtime config and apply the CLI workspace mode preference."""
     summary = summarize_mode_state(config_path)
     runtime = summary["runtime"].model_copy(deep=True)
-    runtime.optimizer.use_mock = summary["preferred_mode"] == "mock"
+    runtime.optimizer.use_mock = summary["effective_mode"] == "mock"
     return runtime
 
 
@@ -151,6 +165,7 @@ def mode_group(ctx: click.Context) -> None:
 
     Examples:
       autoagent mode show
+      autoagent mode set auto
       autoagent mode set mock
       autoagent mode set live
     """

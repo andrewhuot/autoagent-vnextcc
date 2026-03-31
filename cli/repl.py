@@ -111,7 +111,7 @@ def _handle_slash_command(
         return False
 
     if command_name == "/mcp":
-        _run_click_command("mcp")
+        _run_click_command("mcp status")
         return False
 
     if command_name == "/compact":

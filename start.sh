@@ -42,8 +42,8 @@ BACKEND_PID_FILE="$SCRIPT_DIR/.autoagent/backend.pid"
 FRONTEND_PID_FILE="$SCRIPT_DIR/.autoagent/frontend.pid"
 BACKEND_LOG="$SCRIPT_DIR/.autoagent/backend.log"
 FRONTEND_LOG="$SCRIPT_DIR/.autoagent/frontend.log"
-BACKEND_PORT=8000
-FRONTEND_PORT=5173
+BACKEND_PORT="${BACKEND_PORT:-8000}"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 BACKEND_URL="http://localhost:$BACKEND_PORT"
 FRONTEND_BASE_URL="http://localhost:$FRONTEND_PORT"
 FRONTEND_URL="${FRONTEND_BASE_URL}/dashboard"
@@ -131,18 +131,54 @@ fi
 mkdir -p .autoagent
 
 # Refuse to touch ports owned by unrelated processes.
+port_is_available() {
+  local port="${1-}"
+  local python_bin
+  if [[ -z "$port" ]]; then
+    die "Internal error: port_is_available requires PORT"
+  fi
+
+  python_bin="$(command -v python3 || command -v python || true)"
+  if [[ -z "$python_bin" ]]; then
+    die "Python is required to check local port availability before startup."
+  fi
+
+  PORT_TO_CHECK="$port" "$python_bin" - <<'PY'
+import os
+import socket
+import sys
+
+port = int(os.environ["PORT_TO_CHECK"])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    sock.bind(("127.0.0.1", port))
+except OSError:
+    sys.exit(1)
+finally:
+    sock.close()
+sys.exit(0)
+PY
+}
+
 ensure_port_available() {
   local port="${1-}"
   local label="${2-}"
   if [[ -z "$port" || -z "$label" ]]; then
     die "Internal error: ensure_port_available requires PORT and LABEL"
   fi
-  local pid
-  pid=$(lsof -ti ":$port" 2>/dev/null || true)
-  if [[ -n "$pid" ]]; then
+
+  if ! port_is_available "$port"; then
+    local pid=""
+    local owner=""
+    if command -v lsof >/dev/null 2>&1; then
+      pid=$(lsof -ti ":$port" 2>/dev/null | sed -n '1p' || true)
+    fi
+    if [[ -n "$pid" ]]; then
     local cmd
-    cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
-    die "${label} port ${port} is already in use by pid ${pid}${cmd:+ (${cmd})}.\n\n  Stop that process manually or choose a different port before running ./start.sh"
+      cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
+      owner=" by pid ${pid}${cmd:+ (${cmd})}"
+    fi
+    die "${label} port ${port} is already in use${owner}.\n\n  Stop that process manually or choose a different port before running ./start.sh"
   fi
 }
 
@@ -183,7 +219,7 @@ info "Backend process started (pid $BACKEND_PID)"
 step "Starting frontend"
 
 cd web
-npm run dev -- --port "$FRONTEND_PORT" \
+npm run dev -- --host 127.0.0.1 --port "$FRONTEND_PORT" --strictPort \
   >"$FRONTEND_LOG" 2>&1 &
 
 FRONTEND_PID=$!

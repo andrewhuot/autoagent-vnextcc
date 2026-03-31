@@ -287,10 +287,10 @@ class TestStatusNextAction:
         action = _status_next_action(report, attempts_count=2, accepted_count=0)
         assert action.startswith("autoagent runbook apply")
 
-    def test_multiple_wins_prefers_autopilot_loop(self):
+    def test_multiple_wins_prefers_continuous_optimize(self):
         report = self._make_report({})
         action = _status_next_action(report, attempts_count=6, accepted_count=3)
-        assert action == "autoagent loop --max-cycles 20 --stop-on-plateau"
+        assert action == "autoagent optimize --continuous"
 
 
 # ---------------------------------------------------------------------------

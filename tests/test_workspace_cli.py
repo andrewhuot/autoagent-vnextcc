@@ -114,6 +114,30 @@ def test_new_mode_auto_uses_api_key_detection_when_explicitly_requested(
     assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
 
 
+def test_mode_set_auto_restores_credential_detection(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`mode set auto` should restore provider-based mode detection for the workspace."""
+    workspace = tmp_path / "mode-auto"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    set_result = runner.invoke(cli, ["mode", "set", "auto"])
+    assert set_result.exit_code == 0, set_result.output
+    assert _workspace_metadata(workspace)["mode"] == "auto"
+
+    show_result = runner.invoke(cli, ["mode", "show"])
+    assert show_result.exit_code == 0, show_result.output
+    assert "Preferred mode: AUTO" in show_result.output
+    assert "Current mode: LIVE" in show_result.output
+
+
 def test_init_mode_live_writes_live_runtime_config(
     runner: CliRunner,
     tmp_path: Path,
@@ -205,6 +229,32 @@ def test_deploy_auto_review_skips_confirmation_prompt(
     result = runner.invoke(cli, ["deploy", "--auto-review"])
 
     assert result.exit_code == 0, result.output
+
+
+def test_deploy_auto_review_creates_release_and_marks_canary(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`deploy --auto-review` should mirror ship by creating a release before deploy."""
+    workspace = tmp_path / "deploy-auto-review-release"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+    _seed_second_config(workspace)
+
+    monkeypatch.chdir(workspace)
+
+    result = runner.invoke(cli, ["deploy", "--auto-review", "--config-version", "2", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    manifest = json.loads((workspace / "configs" / "manifest.json").read_text(encoding="utf-8"))
+    releases = list((workspace / ".autoagent" / "releases").glob("rel-*.json"))
+    assert payload["status"] == "ok"
+    assert payload["data"]["version"] == 2
+    assert payload["data"]["release"]["config_version"] == 2
+    assert manifest["canary_version"] == 2
+    assert releases
 
 
 def test_deploy_short_yes_flag_skips_confirmation_prompt(

@@ -109,6 +109,7 @@ Notes:
 - Fully qualified input like `openai:gpt-4o` also works
 - `provider test` checks that the required environment variable is set
 - `mode set live` fails when no configured provider credential is available
+- `mode set auto` restores API-key detection after you have explicitly set `mock` or `live`
 
 Your workspace looks like this:
 
@@ -158,6 +159,9 @@ Generated handoff files
 
 Next step:
   autoagent eval run
+  autoagent optimize --cycles 3
+  autoagent review show pending
+  autoagent deploy --target cx-studio
 ```
 
 Inspect the latest build artifact:
@@ -301,6 +305,8 @@ autoagent review show pending
 autoagent review apply pending
 ```
 
+`review apply pending` asks for confirmation in interactive use unless your current permission mode auto-accepts it.
+
 Mark the latest version as canary and inspect rollout state:
 
 ```bash
@@ -319,12 +325,10 @@ autoagent deploy --auto-review --yes
 Typical output:
 
 ```text
-✦ Ship
-  Pending review items: 0
+Deploying latest version: v002
 Applied: created release rel-abc12345
-  Deploying: v002 from configs/v002.yaml
-  Target:    autoagent canary
-Applied: deployed v002 as canary
+Applied: deployed v002 as canary.
+  Deployed v002 as canary (10% traffic)
 ```
 
 ### Create a release object explicitly

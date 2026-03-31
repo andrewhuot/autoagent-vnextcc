@@ -895,8 +895,8 @@ def _status_next_action(report, attempts_count: int, accepted_count: int) -> str
             return recs[0].split("→")[-1].strip()
         return "autoagent runbook list"
     if accepted_count >= 3:
-        return "autoagent loop --max-cycles 20 --stop-on-plateau"
-    return "autoagent loop --max-cycles 3"
+        return "autoagent optimize --continuous"
+    return "autoagent optimize --cycles 3"
 
 
 def _stream_cycle_output(
@@ -2034,8 +2034,8 @@ def build_agent(
         click.echo("  autoagent eval run")
     else:
         click.echo(f"  autoagent eval run --config {config_path}")
-    click.echo("  autoagent diagnose --interactive")
-    click.echo("  autoagent loop --max-cycles 5")
+    click.echo("  autoagent optimize --cycles 3")
+    click.echo("  autoagent review show pending")
     click.echo("  autoagent deploy --target cx-studio")
 
 
@@ -2952,7 +2952,7 @@ def optimize(
         [
             "autoagent status",
             "autoagent runbook list",
-            "autoagent loop --max-cycles 10",
+            "autoagent optimize --continuous",
         ],
     )
 
@@ -3946,6 +3946,15 @@ def deploy(
             default=False,
         )
 
+    created_release: dict[str, Any] | None = None
+    if auto_review:
+        from cli.stream2_helpers import ReleaseStore
+
+        created_release = ReleaseStore().create(
+            f"ship-v{config_version:03d}",
+            config_version=config_version,
+        )
+
     if strategy == "immediate":
         deployer.version_manager.promote(config_version)
         progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} immediately")
@@ -3953,8 +3962,13 @@ def deploy(
         if resolved_output_format == "stream-json":
             return
         if resolved_output_format == "json":
-            click.echo(json_response("ok", {"version": config_version, "strategy": "immediate", "status": "active"}, next_cmd="autoagent status"))
+            payload = {"version": config_version, "strategy": "immediate", "status": "active"}
+            if created_release is not None:
+                payload["release"] = created_release
+            click.echo(json_response("ok", payload, next_cmd="autoagent status"))
         else:
+            if created_release is not None:
+                click.echo(click.style(f"Applied: created release {created_release['release_id']}", fg="green"))
             click.echo(click.style(f"Applied: deployed v{config_version:03d} immediately (promoted to active).", fg="green"))
     else:
         deployer.version_manager.mark_canary(config_version)
@@ -3964,8 +3978,13 @@ def deploy(
         if resolved_output_format == "stream-json":
             return
         if resolved_output_format == "json":
-            click.echo(json_response("ok", {"version": config_version, "strategy": "canary", "result": str(result)}, next_cmd="autoagent status"))
+            payload = {"version": config_version, "strategy": "canary", "result": str(result)}
+            if created_release is not None:
+                payload["release"] = created_release
+            click.echo(json_response("ok", payload, next_cmd="autoagent status"))
         else:
+            if created_release is not None:
+                click.echo(click.style(f"Applied: created release {created_release['release_id']}", fg="green"))
             click.echo(click.style(f"Applied: deployed v{config_version:03d} as canary.", fg="green"))
             click.echo(f"  {result}")
 

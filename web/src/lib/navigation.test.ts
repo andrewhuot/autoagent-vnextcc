@@ -74,6 +74,7 @@ describe('navigation schema', () => {
     expect(simpleSections.length).toBeLessThan(sections.length);
     expect(simpleSections.flatMap((section) => section.items.map((item) => item.path))).toEqual([
       '/dashboard',
+      '/setup',
       '/build',
       '/evals',
       '/optimize',

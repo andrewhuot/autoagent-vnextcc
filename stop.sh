@@ -14,8 +14,8 @@ YELLOW='\033[0;33m'
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_PID_FILE="$SCRIPT_DIR/.autoagent/backend.pid"
 FRONTEND_PID_FILE="$SCRIPT_DIR/.autoagent/frontend.pid"
-BACKEND_PORT=8000
-FRONTEND_PORT=5173
+BACKEND_PORT="${BACKEND_PORT:-8000}"
+FRONTEND_PORT="${FRONTEND_PORT:-5173}"
 
 echo ""
 echo -e "${BOLD_CYAN}  Stopping AutoAgent...${RESET}"
