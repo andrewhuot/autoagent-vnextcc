@@ -79,6 +79,7 @@ export default function App() {
             <Route path="/dashboard" element={<Dashboard />} />
 
             <Route path="/demo" element={<Demo />} />
+            <Route path="/eval" element={<LegacyRouteRedirect />} />
             <Route path="/evals" element={<EvalRuns />} />
             <Route path="/evals/:id" element={<EvalDetail />} />
             <Route path="/optimize" element={<Optimize />} />
@@ -111,6 +112,7 @@ export default function App() {
             <Route path="/sandbox" element={<Sandbox />} />
             <Route path="/knowledge" element={<Knowledge />} />
             <Route path="/what-if" element={<WhatIf />} />
+            <Route path="/review" element={<LegacyRouteRedirect />} />
             <Route path="/reviews" element={<Reviews />} />
             <Route path="/reward-studio" element={<RewardStudio />} />
             <Route path="/preference-inbox" element={<PreferenceInbox />} />

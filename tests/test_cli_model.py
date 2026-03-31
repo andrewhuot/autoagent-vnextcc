@@ -36,6 +36,44 @@ def test_model_list_and_show_surface_workspace_effective_models(runner: CliRunne
         assert show_payload["data"]["evaluator"]
 
 
+def test_mode_without_subcommand_behaves_like_show(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`autoagent mode` should behave like `autoagent mode show`."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli, ["mode"])
+
+    assert result.exit_code == 0, result.output
+    assert "Current mode:" in result.output
+
+
+def test_model_without_subcommand_behaves_like_show(runner: CliRunner) -> None:
+    """`autoagent model` should surface the effective model summary directly."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", "."])
+        assert init_result.exit_code == 0, init_result.output
+
+        result = runner.invoke(cli, ["model"])
+
+        assert result.exit_code == 0, result.output
+        assert "Effective models" in result.output
+
+
+def test_provider_without_subcommand_behaves_like_status(runner: CliRunner) -> None:
+    """`autoagent provider` should show provider status instead of erroring."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", "."])
+        assert init_result.exit_code == 0, init_result.output
+
+        result = runner.invoke(cli, ["provider"])
+
+        assert result.exit_code == 0, result.output
+        assert "No providers configured" in result.output
+
+
 def test_model_set_writes_workspace_settings_overrides(runner: CliRunner) -> None:
     """Per-workspace proposer/evaluator overrides should live in `.autoagent/settings.json`."""
     with runner.isolated_filesystem():

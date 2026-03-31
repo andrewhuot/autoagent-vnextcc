@@ -4,6 +4,7 @@ import { COMMAND_GROUPS, COMMAND_TAXONOMY } from '../../../shared/taxonomy';
 import {
   getBreadcrumbForPath,
   getNavigationSections,
+  getSimpleNavigationSections,
   getRouteRedirect,
   getRouteTitle,
   type NavigationSection,
@@ -56,6 +57,8 @@ describe('navigation schema', () => {
     expect(getRouteRedirect('/builder/demo')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/agent-studio')).toBe('/build?tab=builder-chat');
     expect(getRouteRedirect('/assistant')).toBe('/build?tab=builder-chat');
+    expect(getRouteRedirect('/eval')).toBe('/evals');
+    expect(getRouteRedirect('/review')).toBe('/reviews');
   });
 
   it('returns breadcrumbs from the shared taxonomy', () => {
@@ -63,5 +66,19 @@ describe('navigation schema', () => {
     expect(getBreadcrumbForPath('/changes')).toEqual(['Optimize', 'Review']);
     expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
     expect(getBreadcrumbForPath('/settings')).toEqual(['Settings']);
+  });
+
+  it('returns a smaller simple-mode navigation surface for the sidebar toggle', () => {
+    const simpleSections = getSimpleNavigationSections();
+
+    expect(simpleSections.length).toBeLessThan(sections.length);
+    expect(simpleSections.flatMap((section) => section.items.map((item) => item.path))).toEqual([
+      '/dashboard',
+      '/build',
+      '/evals',
+      '/optimize',
+      '/reviews',
+      '/deploy',
+    ]);
   });
 });

@@ -54,6 +54,7 @@ from pathlib import Path
 
 import click
 import yaml
+from click.core import ParameterSource
 
 from agent.config.loader import load_config
 from agent.config.runtime import load_runtime_config
@@ -83,7 +84,7 @@ from cli.intelligence import (
     intelligence_group,
 )
 from cli.mcp_setup import mcp_group
-from cli.mode import mode_group, summarize_mode_state
+from cli.mode import load_runtime_with_mode_preference, mode_group, summarize_mode_state
 from cli.permissions import permissions_group
 from cli.providers import (
     configured_providers,
@@ -360,6 +361,7 @@ def _create_workspace(
     platform: str,
     with_synthetic_data: bool,
     demo: bool,
+    runtime_mode: str = "auto",
 ) -> tuple[AutoAgentWorkspace, dict]:
     """Create or update a workspace using the shared bootstrap path."""
     base_dir = Path(target_dir).resolve()
@@ -383,10 +385,19 @@ def _create_workspace(
         platform=platform,
         with_synthetic_data=with_synthetic_data,
         demo=demo,
+        runtime_mode=runtime_mode,
     )
     if template in STARTER_TEMPLATE_NAMES:
         summary["template_summary"] = apply_template_to_workspace(workspace, template)
     return workspace, summary
+
+
+def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
+    """Default fresh workspaces to mock mode unless the user explicitly opts into live or auto."""
+    source = ctx.get_parameter_source("mode")
+    if mode == "auto" and source is ParameterSource.DEFAULT:
+        return "mock"
+    return mode
 
 
 def _doctor_fix_workspace(workspace: AutoAgentWorkspace) -> list[str]:
@@ -1125,7 +1136,7 @@ def _build_runtime_components() -> tuple[
     """Create runtime-configured optimizer dependencies."""
     from cli.model import apply_model_overrides
 
-    runtime = load_runtime_config()
+    runtime = load_runtime_with_mode_preference()
     runtime = apply_model_overrides(runtime)
     eval_runner = _build_eval_runner(runtime)
     router = build_router_from_runtime_config(runtime.optimizer)
@@ -1601,7 +1612,16 @@ def session_delete(ctx: click.Context, session_id: str) -> None:
               show_default=True, help="Seed synthetic conversations and evals.")
 @click.option("--demo/--no-demo", default=False, show_default=True,
               help="Seed a reviewable demo workspace with traces, review cards, and AutoFix proposals.")
+@click.option(
+    "--mode",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["mock", "live", "auto"], case_sensitive=False),
+    help="Runtime mode for the generated workspace. Explicit `auto` uses API-key detection.",
+)
+@click.pass_context
 def init_project(
+    ctx: click.Context,
     template: str,
     target_dir: str,
     name: str | None,
@@ -1609,8 +1629,10 @@ def init_project(
     platform: str,
     with_synthetic_data: bool,
     demo: bool,
+    mode: str,
 ) -> None:
     """Scaffold a new AutoAgent workspace with workspace metadata and starter data."""
+    runtime_mode = _resolve_workspace_bootstrap_mode(ctx, mode.lower())
     workspace, summary = _create_workspace(
         template=template,
         target_dir=target_dir,
@@ -1619,6 +1641,7 @@ def init_project(
         platform=platform,
         with_synthetic_data=with_synthetic_data,
         demo=demo,
+        runtime_mode=runtime_mode,
     )
     workspace_root = workspace.root
 
@@ -1679,8 +1702,17 @@ def init_project(
     help="Starter template to scaffold into the new workspace.",
 )
 @click.option("--demo/--no-demo", default=False, show_default=True, help="Seed a reviewable demo workspace.")
-def new_workspace(name: str, template: str, demo: bool) -> None:
+@click.option(
+    "--mode",
+    default="auto",
+    show_default=True,
+    type=click.Choice(["mock", "live", "auto"], case_sensitive=False),
+    help="Runtime mode for the generated workspace. Explicit `auto` uses API-key detection.",
+)
+@click.pass_context
+def new_workspace(ctx: click.Context, name: str, template: str, demo: bool, mode: str) -> None:
     """Create a new starter workspace and print the first three commands to run."""
+    runtime_mode = _resolve_workspace_bootstrap_mode(ctx, mode.lower())
     workspace, summary = _create_workspace(
         template=template,
         target_dir=".",
@@ -1689,6 +1721,7 @@ def new_workspace(name: str, template: str, demo: bool) -> None:
         platform="Google ADK",
         with_synthetic_data=True,
         demo=demo,
+        runtime_mode=runtime_mode,
     )
     mode_summary = summarize_mode_state(str(workspace.runtime_config_path))
     template_summary = summary.get("template_summary", {}) or {}
@@ -1752,9 +1785,12 @@ def template_apply(name: str) -> None:
         click.echo(f"  Skills:    {', '.join(summary['suggested_skills'])}")
 
 
-@cli.group("provider")
-def provider_group() -> None:
+@cli.group("provider", invoke_without_command=True)
+@click.pass_context
+def provider_group(ctx: click.Context) -> None:
     """Configure and validate workspace provider settings."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(provider_list)
 
 
 @provider_group.command("configure")
@@ -2135,7 +2171,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("eval", message="Run evaluation suite")
 
-    runtime = load_runtime_config()
+    runtime = load_runtime_with_mode_preference()
     if resolved_output_format == "text":
         click.echo(click.style(f"✦ {_soul_line('eval')}", fg="cyan"))
         _print_cli_plan(
@@ -2965,7 +3001,7 @@ def improve_run(auto: bool, json_output: bool = False) -> None:
     from optimizer.diagnose_session import DiagnoseSession
     from optimizer.mutations import create_default_registry
 
-    runtime = load_runtime_config()
+    runtime = load_runtime_with_mode_preference()
     workspace = discover_workspace()
     resolved_config = workspace.resolve_active_config() if workspace is not None else None
     config = resolved_config.config if resolved_config is not None else None
@@ -3671,7 +3707,7 @@ def _open_in_editor(file_path: Path) -> None:
 @click.option("--output", default=None, help="Output path for CX export package JSON.")
 @click.option("--push/--no-push", default=False, show_default=True, help="Push to CX now (otherwise package only).")
 @click.option("--dry-run", is_flag=True, help="Preview the deployment plan without mutating state.")
-@click.option("--yes", "acknowledge", is_flag=True, default=False, help="Skip interactive deployment confirmation.")
+@click.option("-y", "--yes", "acknowledge", is_flag=True, default=False, help="Skip interactive deployment confirmation.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 @click.option(
     "--output-format",
@@ -3903,7 +3939,7 @@ def deploy(
             click.echo(f"  Target:   {target}")
         return
 
-    if not acknowledge:
+    if not acknowledge and not auto_review:
         PermissionManager().require(
             f"deploy.{strategy}",
             prompt=f"Deploy v{config_version:03d} using the {strategy} strategy?",
@@ -6141,7 +6177,7 @@ def run_eval(config_path: str | None, category: str | None) -> None:
     config = None
     if config_path:
         config = _load_config_dict(config_path)
-    runtime = load_runtime_config()
+    runtime = load_runtime_with_mode_preference()
     runner = _build_eval_runner(runtime)
     if category:
         score = runner.run_category(category, config=config)

@@ -93,8 +93,12 @@ include = [
     "registry.*",
     "rewards",
     "rewards.*",
+    "shared",
+    "shared.*",
     "simulator",
     "simulator.*",
+    "stores",
+    "stores.*",
 ]
 
 [tool.pytest.ini_options]

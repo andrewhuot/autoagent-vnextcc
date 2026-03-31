@@ -25,6 +25,10 @@ def test_pyproject_declares_explicit_package_discovery_for_editable_installs() -
     assert "optimizer.*" in include
     assert "registry" in include
     assert "registry.*" in include
+    assert "shared" in include
+    assert "shared.*" in include
+    assert "stores" in include
+    assert "stores.*" in include
     assert "web" not in include
     assert "node_modules" not in include
 

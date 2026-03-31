@@ -11,8 +11,9 @@ from agent.config.runtime import RuntimeConfig
 from evals.fixtures.mock_data import mock_agent_response
 from logger import ConversationRecord, ConversationStore
 from observer.traces import TraceEvent, TraceStore
-from runner import cli
 from runner import _build_eval_runner
+from runner import _build_runtime_components
+from runner import cli
 
 
 def test_cli_exposes_run_group_with_expected_subcommands() -> None:
@@ -188,6 +189,41 @@ def test_build_eval_runner_surfaces_mock_fallback_when_real_agent_cannot_start(t
     )
 
     assert any("falling back to mock mode" in message.lower() for message in eval_runner.mock_mode_messages)
+
+
+def test_build_runtime_components_honor_workspace_mock_preference(tmp_path, monkeypatch) -> None:
+    """Optimizer runtime assembly should honor workspace mode preference before env-key live setup."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    (tmp_path / ".autoagent").mkdir()
+    (tmp_path / ".autoagent" / "workspace.json").write_text(
+        '{"mode": "mock", "updated_by": "test"}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "autoagent.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "optimizer": {
+                    "use_mock": False,
+                    "models": [
+                        {
+                            "provider": "openai",
+                            "model": "gpt-test",
+                            "api_key_env": "OPENAI_API_KEY",
+                        }
+                    ],
+                }
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    runtime, _eval_runner, proposer, _skill_engine, _adv, _autolearner = _build_runtime_components()
+
+    assert runtime.optimizer.use_mock is True
+    assert proposer.use_mock is True
 
 
 def test_context_analyze_command_reads_trace_events_from_store(tmp_path, monkeypatch) -> None:

@@ -196,10 +196,22 @@ DEFAULT_EVAL_CASES: dict[str, dict[str, Any]] = {
 }
 
 
-def write_runtime_config(workspace: AutoAgentWorkspace, *, use_mock: bool = True) -> None:
+def _resolve_runtime_use_mock(mode: str) -> bool:
+    """Resolve runtime mock/live mode using explicit intent or environment auto-detection."""
+    normalized = mode.strip().lower()
+    if normalized == "mock":
+        return True
+    if normalized == "live":
+        return False
+    if normalized != "auto":
+        raise ValueError(f"Unsupported runtime mode: {mode}")
+    return not _has_api_key()
+
+
+def write_runtime_config(workspace: AutoAgentWorkspace, *, mode: str = "auto") -> None:
     """Write a workspace-local runtime config that works on first run."""
     runtime = RuntimeConfig()
-    runtime.optimizer.use_mock = use_mock
+    runtime.optimizer.use_mock = _resolve_runtime_use_mock(mode)
     runtime.eval.history_db_path = workspace.eval_history_db.name
     runtime.eval.cache_db_path = f".autoagent/{workspace.eval_cache_db.name}"
     runtime.budget.tracker_db_path = ".autoagent/cost_tracker.db"
@@ -590,10 +602,11 @@ def bootstrap_workspace(
     platform: str,
     with_synthetic_data: bool,
     demo: bool,
+    runtime_mode: str = "auto",
 ) -> dict[str, Any]:
     """Create the workspace structure, starter config, sample evals, and seed data."""
     workspace.ensure_structure()
-    write_runtime_config(workspace, use_mock=not _has_api_key())
+    write_runtime_config(workspace, mode=runtime_mode)
     active_config = seed_base_config(workspace)
     eval_files = write_eval_case_files(workspace)
     autoagent_path = write_project_memory(workspace, agent_name=agent_name, platform=platform)

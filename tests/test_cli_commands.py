@@ -287,6 +287,70 @@ class TestEvalCommands:
         assert result.exit_code == 0
         assert captured["use_real_agent"] is True
 
+    def test_eval_run_prefers_workspace_mock_mode_over_live_runtime_config(
+        self,
+        runner,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Workspace mode preference should force evals into mock mode before live-provider detection."""
+        workspace = tmp_path / "workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "live"])
+        assert init_result.exit_code == 0, init_result.output
+
+        monkeypatch.chdir(workspace)
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+        mode_result = runner.invoke(cli, ["mode", "set", "mock"])
+        assert mode_result.exit_code == 0, mode_result.output
+
+        captured: dict[str, bool] = {}
+
+        fake_score = SimpleNamespace(
+            quality=0.8,
+            safety=1.0,
+            latency=0.9,
+            cost=0.95,
+            composite=0.87,
+            confidence_intervals={},
+            safety_failures=0,
+            total_cases=1,
+            passed_cases=1,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            warnings=[],
+            provenance={},
+            run_id="run-mode-preference",
+            results=[],
+        )
+
+        class _FakeEvalRunner:
+            mock_mode_messages: list[str] = []
+
+            def run(self, config=None, dataset_path=None, split="all"):
+                del config, dataset_path, split
+                return fake_score
+
+        def fake_build_eval_runner(
+            runtime,
+            *,
+            cases_dir=None,
+            trace_db_path=None,
+            use_real_agent=False,
+            default_agent_config=None,
+        ):
+            del cases_dir, trace_db_path, use_real_agent, default_agent_config
+            captured["use_mock"] = runtime.optimizer.use_mock
+            return _FakeEvalRunner()
+
+        monkeypatch.setattr(runner_module, "_build_eval_runner", fake_build_eval_runner)
+        monkeypatch.setattr(runner_module, "_warn_mock_modes", lambda **kwargs: None)
+
+        result = runner.invoke(cli, ["eval", "run"])
+
+        assert result.exit_code == 0, result.output
+        assert captured["use_mock"] is True
+
 
 class TestStatusCommand:
     def test_status_with_empty_db(self, runner, tmp_dir):

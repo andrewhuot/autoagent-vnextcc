@@ -98,9 +98,12 @@ def apply_model_overrides(runtime: RuntimeConfig, root: str | Path = ".") -> Run
     return updated
 
 
-@click.group("model")
-def model_group() -> None:
+@click.group("model", invoke_without_command=True)
+@click.pass_context
+def model_group(ctx: click.Context) -> None:
     """Inspect and override workspace model preferences."""
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(show_models)
 
 
 @model_group.command("list")

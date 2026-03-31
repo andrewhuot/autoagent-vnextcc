@@ -26,7 +26,7 @@ export function ScoreChart({ data, height = 240 }: ScoreChartProps) {
   }
 
   return (
-    <div style={{ height }}>
+    <div style={{ height, minHeight: height, minWidth: 240 }}>
       <ResponsiveContainer width="100%" height="100%">
         <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />

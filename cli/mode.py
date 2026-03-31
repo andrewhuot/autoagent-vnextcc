@@ -144,8 +144,9 @@ def _render_provider_lines(providers: list[dict[str, Any]]) -> list[str]:
     return lines or ["  - No providers configured in runtime config."]
 
 
-@click.group("mode")
-def mode_group() -> None:
+@click.group("mode", invoke_without_command=True)
+@click.pass_context
+def mode_group(ctx: click.Context) -> None:
     """Show or set explicit CLI execution mode.
 
     Examples:
@@ -153,6 +154,8 @@ def mode_group() -> None:
       autoagent mode set mock
       autoagent mode set live
     """
+    if ctx.invoked_subcommand is None:
+        ctx.invoke(show_mode)
 
 
 @mode_group.command("show")

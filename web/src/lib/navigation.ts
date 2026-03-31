@@ -151,6 +151,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/assistant': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=builder-chat' },
   '/dashboard': { title: 'Dashboard', breadcrumbs: ['Home'] },
   '/demo': { title: 'Demo', breadcrumbs: ['Observe'] },
+  '/eval': { title: 'Eval Runs', breadcrumbs: ['Eval'], redirectTo: '/evals' },
   '/evals': { title: 'Eval Runs', breadcrumbs: ['Eval'] },
   '/optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
   '/live-optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
@@ -184,6 +185,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/sandbox': { title: 'Sandbox', breadcrumbs: ['Integrations'] },
   '/what-if': { title: 'What-If Replay', breadcrumbs: ['Integrations'] },
   '/knowledge': { title: 'Knowledge', breadcrumbs: ['Integrations'] },
+  '/review': { title: 'Reviews', breadcrumbs: ['Review'], redirectTo: '/reviews' },
   '/reviews': { title: 'Reviews', breadcrumbs: ['Review'] },
   '/settings': { title: 'Settings', breadcrumbs: ['Settings'] },
 };

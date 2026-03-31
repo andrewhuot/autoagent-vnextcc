@@ -34,6 +34,11 @@ def _workspace_metadata(workspace: Path) -> dict:
     return json.loads((workspace / ".autoagent" / "workspace.json").read_text(encoding="utf-8"))
 
 
+def _workspace_runtime(workspace: Path) -> dict:
+    """Load the workspace runtime YAML for assertions."""
+    return yaml.safe_load((workspace / "autoagent.yaml").read_text(encoding="utf-8"))
+
+
 def _seed_second_config(workspace: Path) -> None:
     """Add a second saved config version for active-config command tests."""
     store = ConversationStore(db_path=str(workspace / "conversations.db"))
@@ -76,6 +81,52 @@ def test_init_demo_seeds_workspace_state(runner: CliRunner, tmp_path: Path) -> N
     assert (workspace / ".autoagent" / "autofix.db").exists()
     assert (workspace / "evals" / "cases").is_dir()
     assert "demo" in result.output.lower()
+
+
+def test_init_defaults_to_mock_mode_even_when_api_keys_exist(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fresh workspaces should stay in mock mode until live mode is explicitly requested."""
+    workspace = tmp_path / "mock-default"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+
+    assert result.exit_code == 0, result.output
+    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is True
+
+
+def test_new_mode_auto_uses_api_key_detection_when_explicitly_requested(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode auto` should opt back into API-key-based live detection."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    result = runner.invoke(cli, ["new", "auto-live", "--mode", "auto"])
+
+    workspace = tmp_path / "auto-live"
+    assert result.exit_code == 0, result.output
+    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
+
+
+def test_init_mode_live_writes_live_runtime_config(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`--mode live` should preserve live mode in the generated runtime config."""
+    workspace = tmp_path / "live-mode"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "live"])
+
+    assert result.exit_code == 0, result.output
+    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
 
 
 def test_demo_seed_command_works_after_plain_init(
@@ -132,6 +183,50 @@ def test_workspace_discovery_walks_up_from_nested_directory(
     assert result.exit_code == 0, result.output
     assert "Workspace:" in result.output
     assert str(workspace) in result.output
+
+
+def test_deploy_auto_review_skips_confirmation_prompt(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`deploy --auto-review` should bypass the interactive permission prompt."""
+    workspace = tmp_path / "deploy-auto-review"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    def _unexpected_prompt(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("deploy should not prompt when --auto-review is set")
+
+    monkeypatch.setattr("cli.permissions.PermissionManager.require", _unexpected_prompt)
+
+    result = runner.invoke(cli, ["deploy", "--auto-review"])
+
+    assert result.exit_code == 0, result.output
+
+
+def test_deploy_short_yes_flag_skips_confirmation_prompt(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`deploy -y` should be accepted as the short automation-friendly prompt bypass."""
+    workspace = tmp_path / "deploy-short-yes"
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    def _unexpected_prompt(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("deploy should not prompt when -y is set")
+
+    monkeypatch.setattr("cli.permissions.PermissionManager.require", _unexpected_prompt)
+
+    result = runner.invoke(cli, ["deploy", "-y"])
+
+    assert result.exit_code == 0, result.output
 
 
 def test_config_set_active_updates_workspace_metadata_and_default_show(
