@@ -143,7 +143,8 @@ def clustered_bootstrap(
     observed_delta = sum(diffs) / len(diffs)
 
     # Pooled std for effect size
-    pooled_std = (sum(d ** 2 for d in diffs) / len(diffs) - observed_delta ** 2) ** 0.5
+    variance = max(0.0, sum(d ** 2 for d in diffs) / len(diffs) - observed_delta ** 2)
+    pooled_std = variance ** 0.5
     effect_size = observed_delta / pooled_std if pooled_std > 0 else 0.0
 
     rng = random.Random(seed)
