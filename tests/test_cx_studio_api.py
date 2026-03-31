@@ -88,3 +88,133 @@ def test_preview_returns_400_when_snapshot_preview_fails(
 
     assert response.status_code == 400
     assert "invalid snapshot" in response.json()["detail"].lower()
+
+
+def test_auth_returns_auth_metadata(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Auth route should surface the resolved credential metadata."""
+
+    class _FakeAuth:
+        def __init__(self, credentials_path: str | None = None) -> None:
+            self.credentials_path = credentials_path
+
+        def describe(self) -> dict[str, str | None]:
+            return {
+                "project_id": "demo-project",
+                "auth_type": "service_account",
+                "principal": "bot@example.iam.gserviceaccount.com",
+                "credentials_path": self.credentials_path,
+            }
+
+    monkeypatch.setattr("cx_studio.CxAuth", _FakeAuth)
+
+    response = client.post("/api/cx/auth", json={"credentials_path": "/tmp/key.json"})
+
+    assert response.status_code == 200
+    assert response.json()["project_id"] == "demo-project"
+    assert response.json()["auth_type"] == "service_account"
+
+
+def test_diff_returns_changes_and_conflicts(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Diff route should return both planned changes and merge conflicts."""
+
+    class _FakeAuth:
+        def __init__(self, credentials_path: str | None = None) -> None:
+            self.credentials_path = credentials_path
+
+    class _FakeClient:
+        def __init__(self, auth) -> None:  # noqa: ANN001
+            self.auth = auth
+
+    class _FakeExporter:
+        def __init__(self, client) -> None:  # noqa: ANN001
+            self.client = client
+
+        def diff_agent(self, config, ref, snapshot_path):  # noqa: ANN001
+            assert config == {"prompts": {"root": "hello"}}
+            assert ref.agent_id == "support-bot"
+            assert snapshot_path == ".autoagent/cx/snapshot.json"
+
+            class _Result:
+                changes = [{"resource": "playbook", "field": "instruction", "action": "update"}]
+                pushed = False
+                resources_updated = 0
+                conflicts = [{"resource": "playbook", "field": "instruction", "name": "Escalation"}]
+
+            return _Result()
+
+    monkeypatch.setattr("cx_studio.CxAuth", _FakeAuth)
+    monkeypatch.setattr("cx_studio.CxClient", _FakeClient)
+    monkeypatch.setattr("cx_studio.CxExporter", _FakeExporter)
+
+    response = client.post(
+        "/api/cx/diff",
+        json={
+            "project": "demo-project",
+            "location": "us-central1",
+            "agent_id": "support-bot",
+            "config": {"prompts": {"root": "hello"}},
+            "snapshot_path": ".autoagent/cx/snapshot.json",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["changes"][0]["resource"] == "playbook"
+    assert payload["conflicts"][0]["name"] == "Escalation"
+
+
+def test_sync_returns_conflicts_without_pushing(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync route should return blocked conflicts when the exporter detects overlap."""
+
+    class _FakeAuth:
+        def __init__(self, credentials_path: str | None = None) -> None:
+            self.credentials_path = credentials_path
+
+    class _FakeClient:
+        def __init__(self, auth) -> None:  # noqa: ANN001
+            self.auth = auth
+
+    class _FakeExporter:
+        def __init__(self, client) -> None:  # noqa: ANN001
+            self.client = client
+
+        def sync_agent(self, config, ref, snapshot_path, conflict_strategy):  # noqa: ANN001
+            assert conflict_strategy == "detect"
+            assert ref.agent_id == "support-bot"
+
+            class _Result:
+                changes = [{"resource": "playbook", "field": "instruction", "action": "update"}]
+                pushed = False
+                resources_updated = 0
+                conflicts = [{"resource": "playbook", "field": "instruction", "name": "Escalation"}]
+
+            return _Result()
+
+    monkeypatch.setattr("cx_studio.CxAuth", _FakeAuth)
+    monkeypatch.setattr("cx_studio.CxClient", _FakeClient)
+    monkeypatch.setattr("cx_studio.CxExporter", _FakeExporter)
+
+    response = client.post(
+        "/api/cx/sync",
+        json={
+            "project": "demo-project",
+            "location": "us-central1",
+            "agent_id": "support-bot",
+            "config": {"prompts": {"root": "hello"}},
+            "snapshot_path": ".autoagent/cx/snapshot.json",
+            "conflict_strategy": "detect",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["pushed"] is False
+    assert response.json()["conflicts"][0]["field"] == "instruction"

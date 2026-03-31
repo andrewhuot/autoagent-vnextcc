@@ -1,141 +1,210 @@
-"""Pydantic models for CX Agent Studio API resources.
+"""Pydantic models for CX Studio and Dialogflow CX resources.
 
-These types represent the canonical shapes returned by and sent to the
-CX Agent Studio REST API v1 (Google Cloud Customer Engagement AI).
-They are intentionally separate from AutoAgent's internal config schema
-so that the mapper layer can evolve each side independently.
-
-API Reference: https://docs.cloud.google.com/customer-engagement-ai/conversational-agents/ps/reference/rest/v1-overview
+The current AutoAgent integration needs to work with the real Dialogflow CX
+resource hierarchy for agents, flows, intents, entity types, webhooks, pages,
+and playbooks while still tolerating a few legacy CX Agent Studio code paths.
 """
+
 from __future__ import annotations
 
 from enum import Enum
-from typing import Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
 class CxAgentRef(BaseModel):
-    """Lightweight reference identifying a CX agent by its GCP coordinates.
+    """Reference identifying a CX agent by project, location, and ID.
 
-    Note: CX Agent Studio uses a resource hierarchy with apps as a parent:
-    projects/{project}/locations/{location}/apps/{app}/agents/{agent}
+    `app_id` is optional and retained only for compatibility with older
+    CX Agent Studio code paths that used `apps/.../agents/...`.
     """
 
     project: str
-    location: str
-    app_id: str  # The app that contains the agent
-    agent_id: str = ""  # Optional - some operations work at app level
+    location: str = "global"
+    agent_id: str = ""
+    app_id: str | None = None
 
     @property
     def parent(self) -> str:
-        """Return the parent resource path for list operations."""
+        """Return the project/location parent resource path."""
+
         return f"projects/{self.project}/locations/{self.location}"
 
     @property
+    def agent_parent(self) -> str:
+        """Return the Dialogflow CX parent used for agent list/create calls."""
+
+        return self.parent
+
+    @property
     def app_name(self) -> str:
-        """Return the fully-qualified app resource name."""
-        return f"projects/{self.project}/locations/{self.location}/apps/{self.app_id}"
+        """Return the optional legacy CX Agent Studio app path."""
+
+        if self.app_id:
+            return f"{self.parent}/apps/{self.app_id}"
+        return self.parent
 
     @property
     def name(self) -> str:
-        """Return the fully-qualified agent resource name.
+        """Return the fully-qualified agent resource name."""
 
-        If agent_id is not set, returns the app name instead (for app-level operations).
-        """
+        if self.app_id:
+            if not self.agent_id:
+                return self.app_name
+            return f"{self.app_name}/agents/{self.agent_id}"
         if self.agent_id:
-            return f"projects/{self.project}/locations/{self.location}/apps/{self.app_id}/agents/{self.agent_id}"
-        return self.app_name
+            return f"{self.parent}/agents/{self.agent_id}"
+        return self.parent
 
 
 class CxAgent(BaseModel):
-    """CX Agent resource (subset of fields relevant to AutoAgent integration)."""
+    """Dialogflow CX agent resource subset."""
 
     name: str = ""
     display_name: str = ""
     default_language_code: str = "en"
     description: str = ""
-    # generativeSettings is an open dict because the schema evolves frequently
-    generative_settings: dict = Field(default_factory=dict)
+    time_zone: str = ""
+    start_flow: str = ""
+    generative_settings: dict[str, Any] = Field(default_factory=dict)
+    speech_to_text_settings: dict[str, Any] = Field(default_factory=dict)
+    text_to_speech_settings: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class CxPlaybook(BaseModel):
-    """CX Playbook resource — LLM-driven conversation logic."""
-
-    name: str = ""
-    display_name: str = ""
-    instructions: list[str] = Field(default_factory=list)
-    steps: list[dict] = Field(default_factory=list)
-    examples: list[dict] = Field(default_factory=list)
-
-
-class CxTool(BaseModel):
-    """CX Tool resource — OpenAPI, data store, function, or connector."""
+class CxPage(BaseModel):
+    """Dialogflow CX page resource subset."""
 
     name: str = ""
     display_name: str = ""
-    tool_type: str = ""
-    spec: dict = Field(default_factory=dict)
+    entry_fulfillment: dict[str, Any] = Field(default_factory=dict)
+    form: dict[str, Any] = Field(default_factory=dict)
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    event_handlers: list[dict[str, Any]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class CxFlow(BaseModel):
-    """CX Flow resource — deterministic conversation flow."""
-
-    name: str = ""
-    display_name: str = ""
-    pages: list[dict] = Field(default_factory=list)
-    transition_routes: list[dict] = Field(default_factory=list)
-    event_handlers: list[dict] = Field(default_factory=list)
-
-
-class CxIntent(BaseModel):
-    """CX Intent resource with training phrases."""
-
-    name: str = ""
-    display_name: str = ""
-    training_phrases: list[dict] = Field(default_factory=list)
-
-
-class CxTestCase(BaseModel):
-    """CX Test Case resource — maps to AutoAgent eval cases."""
-
-    name: str = ""
-    display_name: str = ""
-    tags: list[str] = Field(default_factory=list)
-    conversation_turns: list[dict] = Field(default_factory=list)
-    expected_output: dict = Field(default_factory=dict)
-
-
-class CxEnvironment(BaseModel):
-    """CX Environment resource — draft, staging, or production."""
+    """Dialogflow CX flow resource subset."""
 
     name: str = ""
     display_name: str = ""
     description: str = ""
-    version_configs: list[dict] = Field(default_factory=list)
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    event_handlers: list[dict[str, Any]] = Field(default_factory=list)
+    pages: list[CxPage] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
-class CxDataStore(BaseModel):
-    """CX Data Store resource — knowledge base, FAQ, procedure documentation."""
+class CxIntent(BaseModel):
+    """Dialogflow CX intent resource subset."""
 
     name: str = ""
     display_name: str = ""
-    data_store_type: str = "unstructured"  # unstructured, structured, website
-    content_entries: list[dict] = Field(default_factory=list)
+    description: str = ""
+    training_phrases: list[dict[str, Any]] = Field(default_factory=list)
+    parameters: list[dict[str, Any]] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxEntityType(BaseModel):
+    """Dialogflow CX entity type resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    kind: str = ""
+    auto_expansion_mode: str = ""
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    excluded_phrases: list[str] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxWebhook(BaseModel):
+    """Dialogflow CX webhook resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    generic_web_service: dict[str, Any] = Field(default_factory=dict)
+    service_directory: dict[str, Any] = Field(default_factory=dict)
+    timeout_seconds: int = 30
+    disabled: bool = False
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxPlaybook(BaseModel):
+    """Dialogflow CX playbook resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    instruction: str = ""
+    instructions: list[str] = Field(default_factory=list)
+    goal: str = ""
+    steps: list[dict[str, Any]] = Field(default_factory=list)
+    examples: list[dict[str, Any]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def instruction_text(self) -> str:
+        """Return the normalized instruction text for mapping and diffs."""
+
+        if self.instruction:
+            return self.instruction
+        return "\n".join(step for step in self.instructions if step)
+
+
+class CxTool(BaseModel):
+    """CX tool resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    tool_type: str = ""
+    spec: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxTestCase(BaseModel):
+    """Dialogflow CX test case subset."""
+
+    name: str = ""
+    display_name: str = ""
+    tags: list[str] = Field(default_factory=list)
+    conversation_turns: list[dict[str, Any]] = Field(default_factory=list)
+    expected_output: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxEnvironment(BaseModel):
+    """Dialogflow CX environment subset."""
+
+    name: str = ""
+    display_name: str = ""
+    description: str = ""
+    version_configs: list[dict[str, Any]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxDataStore(BaseModel):
+    """CX Studio datastore subset kept for compatibility."""
+
+    name: str = ""
+    display_name: str = ""
+    data_store_type: str = "unstructured"
+    content_entries: list[dict[str, Any]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class CxAgentSnapshot(BaseModel):
-    """Complete point-in-time snapshot of a CX agent's configuration.
-
-    Assembles the results of all list API calls into a single object that
-    can be persisted and used for offline import/mapping.
-    """
+    """Complete point-in-time snapshot of a CX agent configuration."""
 
     agent: CxAgent = Field(default_factory=CxAgent)
-    playbooks: list[CxPlaybook] = Field(default_factory=list)
-    tools: list[CxTool] = Field(default_factory=list)
     flows: list[CxFlow] = Field(default_factory=list)
     intents: list[CxIntent] = Field(default_factory=list)
+    entity_types: list[CxEntityType] = Field(default_factory=list)
+    webhooks: list[CxWebhook] = Field(default_factory=list)
+    playbooks: list[CxPlaybook] = Field(default_factory=list)
+    tools: list[CxTool] = Field(default_factory=list)
     test_cases: list[CxTestCase] = Field(default_factory=list)
     environments: list[CxEnvironment] = Field(default_factory=list)
     data_stores: list[CxDataStore] = Field(default_factory=list)
@@ -143,7 +212,7 @@ class CxAgentSnapshot(BaseModel):
 
 
 class CxWidgetConfig(BaseModel):
-    """Configuration required to render the chat-messenger web widget."""
+    """Configuration required to render the web chat widget."""
 
     project_id: str
     agent_id: str
@@ -155,22 +224,24 @@ class CxWidgetConfig(BaseModel):
 
 
 class ImportResult(BaseModel):
-    """Result of a successful CX-to-AutoAgent import operation."""
+    """Result of a successful CX-to-AutoAgent import."""
 
     config_path: str
-    eval_path: Optional[str] = None
+    eval_path: str | None = None
     snapshot_path: str
     agent_name: str
     surfaces_mapped: list[str] = Field(default_factory=list)
     test_cases_imported: int = 0
+    workspace_path: str | None = None
 
 
 class ExportResult(BaseModel):
-    """Result of pushing an optimized config back to CX Agent Studio."""
+    """Result of diffing or pushing AutoAgent changes back to CX."""
 
-    changes: list[dict] = Field(default_factory=list)
+    changes: list[dict[str, Any]] = Field(default_factory=list)
     pushed: bool = False
     resources_updated: int = 0
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DeployResult(BaseModel):
@@ -178,16 +249,11 @@ class DeployResult(BaseModel):
 
     environment: str
     status: str
-    version_info: dict = Field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# New types for CX Agent Studio deployment parity (R1.11-R1.23)
-# ---------------------------------------------------------------------------
+    version_info: dict[str, Any] = Field(default_factory=dict)
 
 
 class CxToolType(str, Enum):
-    """Tool types supported by CX Agent Studio."""
+    """Tool types supported by CX Studio surfaces."""
 
     OPENAPI = "OPEN_API"
     MCP = "MCP"
@@ -212,25 +278,16 @@ class CxDeploymentTarget(str, Enum):
 
 
 class CxToolResource(BaseModel):
-    """CX Tool resource with typed tool_type and configuration.
-
-    Extends the basic ``CxTool`` with a strongly-typed ``tool_type`` enum and
-    a separate ``description`` field.  Use this model for creating new CX tools
-    via the deployment pipeline.
-    """
+    """Typed CX tool definition for deployment helpers."""
 
     name: str = ""
     tool_type: CxToolType = CxToolType.OPENAPI
-    config: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
 
 
 class CxTransferRule(BaseModel):
-    """CX transfer rule — routes conversation from one agent to another.
-
-    Transfer rules are CX-only constructs that define explicit conditions
-    under which a parent agent hands off to a child agent.
-    """
+    """CX transfer rule helper model."""
 
     source_agent: str
     target_agent: str
@@ -239,12 +296,8 @@ class CxTransferRule(BaseModel):
 
 
 class CxDeployment(BaseModel):
-    """CX deployment configuration for a specific target channel.
-
-    Represents a deployment of a CX agent to a channel such as the web widget,
-    telephony, CCaaS, or the REST API.
-    """
+    """Deployment configuration for a specific target channel."""
 
     target: CxDeploymentTarget
-    config: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict)
     status: str = "draft"

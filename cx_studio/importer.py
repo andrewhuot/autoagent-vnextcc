@@ -1,26 +1,20 @@
-"""Import CX Agent Studio agents into AutoAgent format.
+"""Import Dialogflow CX agents into AutoAgent workspaces."""
 
-Note: CX Agent Studio uses apps as parent resources.
-Agent references should be: projects/{project}/locations/{location}/apps/{app}/agents/{agent}
-API Reference: https://docs.cloud.google.com/customer-engagement-ai/conversational-agents/ps/reference/rest/v1-overview
-"""
 from __future__ import annotations
 
 import json
 from pathlib import Path
 
-import yaml
-
-from .client import CxClient
+from adapters.workspace_builder import create_connected_workspace
+from .errors import CxImportError
 from .mapper import CxMapper
 from .types import CxAgentRef, ImportResult
-from .errors import CxImportError
 
 
 class CxImporter:
-    """Import a CX agent into AutoAgent config + eval suite."""
+    """Import a Dialogflow CX agent into an AutoAgent workspace."""
 
-    def __init__(self, client: CxClient, mapper: CxMapper | None = None):
+    def __init__(self, client, mapper: CxMapper | None = None):
         self._client = client
         self._mapper = mapper or CxMapper()
 
@@ -30,82 +24,90 @@ class CxImporter:
         output_dir: str = ".",
         include_test_cases: bool = True,
     ) -> ImportResult:
-        """Full import pipeline:
+        """Fetch, map, and materialize a CX agent into a workspace."""
 
-        1. Fetch snapshot from CX API.
-        2. Map to AutoAgent config dict.
-        3. Extract examples (test cases) → eval suite.
-        4. Save snapshot for offline use + round-trip export.
-        5. Write config YAML + eval JSON files.
-
-        Args:
-            ref: Reference identifying the CX agent.
-                Must include app_id: projects/{project}/locations/{location}/apps/{app}/agents/{agent}
-            output_dir: Directory where output files will be written.
-            include_test_cases: Whether to extract CX examples as eval cases.
-
-        Returns:
-            ImportResult with paths to all written files and a summary.
-
-        Raises:
-            CxImportError: On any failure during the import pipeline.
-
-        Note: In CX Agent Studio, most resources (tools, examples, etc.) are at the app level.
-        """
         try:
-            # 1. Fetch snapshot from CX API
             snapshot = self._client.fetch_snapshot(ref.name)
+            workspace_spec = self._mapper.cx_to_workspace(snapshot)
 
-            # 2. Map to AutoAgent config dict
-            config_dict = self._mapper.to_autoagent(snapshot)
+            if not include_test_cases:
+                workspace_spec.starter_evals = []
 
-            # 3. Extract test cases
-            test_cases: list[dict] = []
-            if include_test_cases:
-                test_cases = self._mapper.extract_test_cases(snapshot)
+            workspace_result = create_connected_workspace(
+                workspace_spec,
+                output_dir=output_dir,
+                workspace_name=workspace_spec.default_workspace_name(),
+                runtime_mode="mock",
+            )
 
-            # 4. Prepare output directory
-            out = Path(output_dir)
-            out.mkdir(parents=True, exist_ok=True)
+            workspace_root = Path(workspace_result.workspace_path)
+            cx_dir = workspace_root / ".autoagent" / "cx"
+            cx_dir.mkdir(parents=True, exist_ok=True)
 
-            agent_name = snapshot.agent.display_name.lower().replace(" ", "_")
+            snapshot_path = cx_dir / "snapshot.json"
+            workspace_json_path = cx_dir / "workspace.json"
+            manifest_path = cx_dir / "manifest.json"
 
-            # 5a. Write config YAML — strip _cx_metadata before writing
-            config_path = str(out / f"{agent_name}_config.yaml")
-            cx_metadata = config_dict.pop("_cx_metadata", None)
-            with open(config_path, "w", encoding="utf-8") as f:
-                yaml.safe_dump(config_dict, f, default_flow_style=False, sort_keys=False)
+            snapshot_path.write_text(
+                json.dumps(snapshot.model_dump(), indent=2),
+                encoding="utf-8",
+            )
+            workspace_json_path.write_text(
+                json.dumps(workspace_spec.config, indent=2),
+                encoding="utf-8",
+            )
+            manifest_path.write_text(
+                json.dumps(
+                    {
+                        "agent_ref": ref.model_dump(),
+                        "agent_name": snapshot.agent.name,
+                        "workspace_path": workspace_result.workspace_path,
+                        "config_path": workspace_result.config_path,
+                        "snapshot_path": str(snapshot_path),
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
 
-            # 5b. Write eval cases JSON (only when test cases exist)
-            eval_path: str | None = None
-            if test_cases:
-                eval_path = str(out / f"{agent_name}_eval_cases.json")
-                with open(eval_path, "w", encoding="utf-8") as f:
-                    json.dump(test_cases, f, indent=2)
-
-            # 5c. Write full snapshot JSON for round-trip export
-            snapshot_path = str(out / f"{agent_name}_snapshot.json")
-            with open(snapshot_path, "w", encoding="utf-8") as f:
-                json.dump(snapshot.model_dump(), f, indent=2)
-
-            # Determine which surfaces were mapped
-            surfaces: list[str] = ["prompts"]
-            if snapshot.tools:
-                surfaces.append("tools")
-            if snapshot.flows or snapshot.intents:
-                surfaces.append("routing")
-            if snapshot.agent.generative_settings:
-                surfaces.append("generation_settings")
+            eval_path = workspace_result.eval_path
+            if not include_test_cases:
+                eval_file = Path(eval_path)
+                if eval_file.exists():
+                    eval_file.unlink()
+                eval_path = None
 
             return ImportResult(
-                config_path=config_path,
+                config_path=workspace_result.config_path,
                 eval_path=eval_path,
-                snapshot_path=snapshot_path,
-                agent_name=snapshot.agent.display_name,
-                surfaces_mapped=surfaces,
-                test_cases_imported=len(test_cases),
+                snapshot_path=str(snapshot_path),
+                agent_name=snapshot.agent.display_name or snapshot.agent.name.split("/")[-1],
+                surfaces_mapped=self._surfaces(snapshot),
+                test_cases_imported=len(workspace_spec.starter_evals) if include_test_cases else 0,
+                workspace_path=workspace_result.workspace_path,
             )
         except CxImportError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - exercised by higher-level tests
             raise CxImportError(f"Import failed: {exc}") from exc
+
+    @staticmethod
+    def _surfaces(snapshot) -> list[str]:
+        """Return a concise summary of the imported CX surfaces."""
+
+        surfaces: list[str] = []
+        if snapshot.playbooks or snapshot.agent.description:
+            surfaces.append("instructions")
+            surfaces.append("prompts")
+        if snapshot.flows:
+            surfaces.append("flows")
+        if snapshot.intents:
+            surfaces.append("intents")
+        if snapshot.entity_types:
+            surfaces.append("entities")
+        if snapshot.webhooks or snapshot.tools:
+            surfaces.append("webhooks")
+            surfaces.append("tools")
+        if snapshot.test_cases:
+            surfaces.append("test_cases")
+        return list(dict.fromkeys(surfaces))

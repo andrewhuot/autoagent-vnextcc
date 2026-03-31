@@ -27,6 +27,8 @@ class CxAuth:
         self._token: str | None = None
         self._token_expiry: float = 0.0
         self._project_id: str | None = None
+        self._auth_type: str = "adc"
+        self._principal: str | None = None
         self._init_credentials()
 
     def _init_credentials(self) -> None:
@@ -45,6 +47,8 @@ class CxAuth:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
                 self._project_id = data.get("project_id")
+                self._principal = data.get("client_email")
+                self._auth_type = "service_account"
             except (json.JSONDecodeError, KeyError) as exc:
                 raise CxAuthError(f"Invalid credentials file: {exc}") from exc
         # For ADC we rely on google.auth.default() at token refresh time
@@ -86,10 +90,21 @@ class CxAuth:
                     self._credentials_path,
                     scopes=_scopes,
                 )
+                self._auth_type = "service_account"
+                self._principal = getattr(creds, "service_account_email", self._principal)
             else:
                 creds, project = google.auth.default(scopes=_scopes)
                 if not self._project_id:
                     self._project_id = project
+                self._principal = getattr(
+                    creds,
+                    "service_account_email",
+                    getattr(creds, "account", self._principal),
+                )
+                if getattr(creds, "service_account_email", None):
+                    self._auth_type = "service_account"
+                else:
+                    self._auth_type = "adc"
 
             creds.refresh(google.auth.transport.requests.Request())
             self._token = creds.token
@@ -107,3 +122,26 @@ class CxAuth:
     def project_id(self) -> str | None:
         """GCP project ID, resolved from credentials or ADC."""
         return self._project_id
+
+    @property
+    def auth_type(self) -> str:
+        """Return the current credential source."""
+
+        return self._auth_type
+
+    @property
+    def principal(self) -> str | None:
+        """Return the authenticated principal when available."""
+
+        return self._principal
+
+    def describe(self) -> dict[str, str | None]:
+        """Refresh credentials if needed and return auth metadata for UX surfaces."""
+
+        self._refresh_if_needed()
+        return {
+            "project_id": self._project_id,
+            "auth_type": self._auth_type,
+            "principal": self._principal,
+            "credentials_path": self._credentials_path,
+        }

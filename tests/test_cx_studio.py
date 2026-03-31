@@ -488,6 +488,14 @@ class TestCxCli:
         assert result.exit_code == 0
         assert "--project" in result.output
 
+    def test_cx_auth_help(self):
+        from runner import cli
+        from click.testing import CliRunner
+        runner = CliRunner()
+        result = runner.invoke(cli, ["cx", "auth", "--help"])
+        assert result.exit_code == 0
+        assert "--credentials" in result.output
+
     def test_cx_import_help(self):
         from runner import cli
         from click.testing import CliRunner
@@ -512,6 +520,22 @@ class TestCxCli:
         assert result.exit_code == 0
         assert "--config" in result.output
         assert "--snapshot" in result.output
+
+    def test_cx_diff_help(self):
+        from runner import cli
+        from click.testing import CliRunner
+        runner = CliRunner()
+        result = runner.invoke(cli, ["cx", "diff", "--help"])
+        assert result.exit_code == 0
+        assert "--snapshot" in result.output
+
+    def test_cx_sync_help(self):
+        from runner import cli
+        from click.testing import CliRunner
+        runner = CliRunner()
+        result = runner.invoke(cli, ["cx", "sync", "--help"])
+        assert result.exit_code == 0
+        assert "--conflict-strategy" in result.output
 
 
 # ---------------------------------------------------------------------------

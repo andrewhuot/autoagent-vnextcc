@@ -26,6 +26,7 @@ import { Skills } from './pages/Skills';
 import { ProjectMemory } from './pages/ProjectMemory';
 import { CxImport } from './pages/CxImport';
 import { CxDeploy } from './pages/CxDeploy';
+import { CXStudio } from './pages/CXStudio';
 import { LiveOptimize } from './pages/LiveOptimize';
 import { AdkImport } from './pages/AdkImport';
 import { AdkDeploy } from './pages/AdkDeploy';
@@ -107,6 +108,7 @@ export default function App() {
             <Route path="/blame" element={<BlameMap />} />
             <Route path="/scorer-studio" element={<ScorerStudio />} />
             <Route path="/connect" element={<Connect />} />
+            <Route path="/cx/studio" element={<CXStudio />} />
             <Route path="/cx/import" element={<CxImport />} />
             <Route path="/cx/deploy" element={<CxDeploy />} />
             <Route path="/adk/import" element={<AdkImport />} />

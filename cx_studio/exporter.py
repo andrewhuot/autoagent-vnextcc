@@ -1,185 +1,580 @@
-"""Export optimized AutoAgent config back to CX Agent Studio.
+"""Export AutoAgent workspaces back to Dialogflow CX with diff and sync support."""
 
-Note: CX Agent Studio uses apps as parent resources.
-Many resources (tools, examples, deployments) are at the app level, not agent level.
-API Reference: https://docs.cloud.google.com/customer-engagement-ai/conversational-agents/ps/reference/rest/v1-overview
-"""
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
+from typing import Any
 
-from .client import CxClient
+from .errors import CxExportError
 from .mapper import CxMapper
 from .types import CxAgentRef, CxAgentSnapshot, ExportResult
-from .errors import CxExportError
+
+_MISSING = object()
 
 
 class CxExporter:
-    """Export optimized AutoAgent config back to CX Agent Studio."""
+    """Export local AutoAgent changes to Dialogflow CX resources."""
 
-    def __init__(self, client: CxClient, mapper: CxMapper | None = None):
+    def __init__(self, client, mapper: CxMapper | None = None):
         self._client = client
         self._mapper = mapper or CxMapper()
 
     def export_agent(
         self,
-        config: dict,
+        config: dict[str, Any],
         ref: CxAgentRef,
         snapshot_path: str,
         dry_run: bool = False,
     ) -> ExportResult:
-        """Export pipeline:
+        """Preview or push local workspace changes derived from the base snapshot."""
 
-        1. Load base snapshot from disk.
-        2. Map AutoAgent config → CX format overlay.
-        3. Compute changes diff.
-        4. If not dry_run, push changes via REST API.
-
-        Args:
-            config: AutoAgent config dict to export.
-            ref: Reference identifying the target CX agent.
-                Must include app_id: projects/{project}/locations/{location}/apps/{app}/agents/{agent}
-            snapshot_path: Path to the local snapshot JSON written during import.
-            dry_run: When True, compute and return the diff without pushing anything.
-
-        Returns:
-            ExportResult with the list of changes and push status.
-
-        Raises:
-            CxExportError: On any failure during the export pipeline.
-
-        Note: Updates are sent to app-level resources (tools, examples) and agent-level (settings).
-        """
         try:
-            # 1. Load base snapshot from disk
-            snap_data = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
-            base_snapshot = CxAgentSnapshot.model_validate(snap_data)
-
-            # 2. Map AutoAgent config → CX snapshot overlay
-            updated_snapshot = self._mapper.to_cx(config, base_snapshot)
-
-            # 3. Compute changes diff
-            changes = self._compute_changes(base_snapshot, updated_snapshot)
+            base_snapshot = self._load_snapshot(snapshot_path)
+            local_snapshot = self._mapper.to_cx(config, base_snapshot)
+            changes = self._compute_changes(base_snapshot, local_snapshot)
 
             if dry_run or not changes:
                 return ExportResult(
                     changes=changes,
                     pushed=False,
                     resources_updated=0,
+                    conflicts=[],
                 )
 
-            # 4. Push changes via REST API
-            resources_updated = 0
-
-            # Update agent resource if generative settings or description changed
-            if any(c["resource"] == "agent" for c in changes):
-                agent_updates = {
-                    "displayName": updated_snapshot.agent.display_name,
-                    "description": updated_snapshot.agent.description,
-                    "generativeSettings": updated_snapshot.agent.generative_settings,
-                }
-                self._client.update_agent(updated_snapshot.agent.name, agent_updates)
-                resources_updated += 1
-
-            # Update only playbooks whose instructions changed
-            for playbook in updated_snapshot.playbooks:
-                orig = next(
-                    (p for p in base_snapshot.playbooks if p.name == playbook.name),
-                    None,
-                )
-                if orig is not None and orig.instructions != playbook.instructions:
-                    playbook_updates = {
-                        "displayName": playbook.display_name,
-                        "instruction": {"steps": playbook.instructions},
-                        "steps": playbook.steps,
-                        "examples": playbook.examples,
-                    }
-                    self._client.update_playbook(playbook.name, playbook_updates)
-                    resources_updated += 1
-
+            resources_updated = self._apply_snapshot_changes(base_snapshot, local_snapshot)
+            self._write_snapshot(snapshot_path, local_snapshot)
             return ExportResult(
                 changes=changes,
                 pushed=True,
                 resources_updated=resources_updated,
+                conflicts=[],
             )
         except CxExportError:
             raise
-        except Exception as exc:
+        except Exception as exc:  # pragma: no cover - exercised by higher-level tests
             raise CxExportError(f"Export failed: {exc}") from exc
 
-    def preview_changes(self, config: dict, snapshot_path: str) -> list[dict]:
-        """Preview what would change without pushing.
+    def sync_agent(
+        self,
+        config: dict[str, Any],
+        ref: CxAgentRef,
+        snapshot_path: str,
+        conflict_strategy: str = "detect",
+    ) -> ExportResult:
+        """Perform a three-way sync using the imported snapshot as the merge base."""
 
-        Args:
-            config: AutoAgent config dict to compare against the base snapshot.
-            snapshot_path: Path to the local snapshot JSON written during import.
-
-        Returns:
-            List of change descriptors (resource, field, action).
-
-        Raises:
-            CxExportError: If the snapshot cannot be loaded or mapping fails.
-        """
         try:
-            snap_data = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
-            base_snapshot = CxAgentSnapshot.model_validate(snap_data)
-            updated_snapshot = self._mapper.to_cx(config, base_snapshot)
-            return self._compute_changes(base_snapshot, updated_snapshot)
+            base_snapshot = self._load_snapshot(snapshot_path)
+            local_snapshot = self._mapper.to_cx(config, base_snapshot)
+            remote_snapshot = self._client.fetch_snapshot(ref.name)
+
+            conflicts = self._detect_conflicts(base_snapshot, local_snapshot, remote_snapshot)
+            if conflicts and conflict_strategy == "detect":
+                return ExportResult(
+                    changes=self._compute_changes(base_snapshot, local_snapshot),
+                    pushed=False,
+                    resources_updated=0,
+                    conflicts=conflicts,
+                )
+
+            merged_snapshot = self._merge_local_changes(base_snapshot, local_snapshot, remote_snapshot, conflicts)
+            changes = self._compute_changes(remote_snapshot, merged_snapshot)
+            if not changes:
+                return ExportResult(
+                    changes=[],
+                    pushed=False,
+                    resources_updated=0,
+                    conflicts=conflicts,
+                )
+
+            resources_updated = self._apply_snapshot_changes(remote_snapshot, merged_snapshot)
+            self._write_snapshot(snapshot_path, merged_snapshot)
+            return ExportResult(
+                changes=changes,
+                pushed=True,
+                resources_updated=resources_updated,
+                conflicts=conflicts,
+            )
         except CxExportError:
             raise
-        except Exception as exc:
-            raise CxExportError(f"Preview failed: {exc}") from exc
+        except Exception as exc:  # pragma: no cover - exercised by higher-level tests
+            raise CxExportError(f"Sync failed: {exc}") from exc
+
+    def diff_agent(
+        self,
+        config: dict[str, Any],
+        ref: CxAgentRef,
+        snapshot_path: str,
+    ) -> ExportResult:
+        """Compare the local workspace against the latest remote CX snapshot without pushing."""
+
+        try:
+            base_snapshot = self._load_snapshot(snapshot_path)
+            local_snapshot = self._mapper.to_cx(config, base_snapshot)
+            remote_snapshot = self._client.fetch_snapshot(ref.name)
+            conflicts = self._detect_conflicts(base_snapshot, local_snapshot, remote_snapshot)
+            merged_snapshot = self._merge_local_changes(base_snapshot, local_snapshot, remote_snapshot, conflicts)
+            return ExportResult(
+                changes=self._compute_changes(remote_snapshot, merged_snapshot),
+                pushed=False,
+                resources_updated=0,
+                conflicts=conflicts,
+            )
+        except CxExportError:
+            raise
+        except Exception as exc:  # pragma: no cover - exercised by higher-level tests
+            raise CxExportError(f"Diff failed: {exc}") from exc
+
+    def preview_changes(self, config: dict[str, Any], snapshot_path: str) -> list[dict[str, Any]]:
+        """Return the local diff without pushing anything."""
+
+        base_snapshot = self._load_snapshot(snapshot_path)
+        local_snapshot = self._mapper.to_cx(config, base_snapshot)
+        return self._compute_changes(base_snapshot, local_snapshot)
+
+    @staticmethod
+    def _load_snapshot(snapshot_path: str) -> CxAgentSnapshot:
+        """Load a serialized CX snapshot from disk."""
+
+        payload = json.loads(Path(snapshot_path).read_text(encoding="utf-8"))
+        return CxAgentSnapshot.model_validate(payload)
+
+    @staticmethod
+    def _write_snapshot(snapshot_path: str, snapshot: CxAgentSnapshot) -> None:
+        """Persist the latest synchronized snapshot to disk."""
+
+        Path(snapshot_path).write_text(
+            json.dumps(snapshot.model_dump(), indent=2),
+            encoding="utf-8",
+        )
 
     def _compute_changes(
         self,
-        base: CxAgentSnapshot,
-        updated: CxAgentSnapshot,
-    ) -> list[dict]:
-        """Compute the list of changes between base and updated snapshots.
+        source: CxAgentSnapshot,
+        target: CxAgentSnapshot,
+    ) -> list[dict[str, Any]]:
+        """Compute field-level changes for the CX surfaces we manage."""
 
-        Args:
-            base: Original snapshot fetched during import.
-            updated: Snapshot with AutoAgent config overlaid.
+        source_fields = self._field_entries(source)
+        target_fields = self._field_entries(target)
+        changes: list[dict[str, Any]] = []
 
-        Returns:
-            List of change descriptors, each with at minimum ``resource`` and
-            ``action`` keys.
-        """
-        changes: list[dict] = []
+        for key in sorted(set(source_fields) | set(target_fields)):
+            source_entry = source_fields.get(key)
+            target_entry = target_fields.get(key)
+            source_value = source_entry["value"] if source_entry else _MISSING
+            target_value = target_entry["value"] if target_entry else _MISSING
+            if source_value == target_value:
+                continue
 
-        # Agent-level changes
-        if base.agent.generative_settings != updated.agent.generative_settings:
-            changes.append({
-                "resource": "agent",
-                "field": "generative_settings",
-                "action": "update",
-            })
-        if base.agent.description != updated.agent.description:
-            changes.append({
-                "resource": "agent",
-                "field": "description",
-                "action": "update",
-            })
+            resource, name, field = key
+            display_name = ""
+            if target_entry:
+                display_name = str(target_entry["display_name"])
+            elif source_entry:
+                display_name = str(source_entry["display_name"])
 
-        # Playbook changes
-        for updated_pb in updated.playbooks:
-            orig = next(
-                (p for p in base.playbooks if p.name == updated_pb.name),
-                None,
-            )
-            if orig is None:
-                changes.append({
-                    "resource": "playbook",
-                    "name": updated_pb.display_name,
-                    "action": "add",
-                })
-            elif orig.instructions != updated_pb.instructions:
-                changes.append({
-                    "resource": "playbook",
-                    "name": updated_pb.display_name,
-                    "action": "update",
-                    "field": "instructions",
-                })
+            action = "update"
+            if source_value is _MISSING:
+                action = "add"
+            elif target_value is _MISSING:
+                action = "delete"
+
+            change: dict[str, Any] = {
+                "resource": resource,
+                "name": display_name or name.split("/")[-1],
+                "field": field,
+                "action": action,
+            }
+            if source_value is not _MISSING:
+                change["before"] = source_value
+            if target_value is not _MISSING:
+                change["after"] = target_value
+            changes.append(change)
 
         return changes
+
+    def _detect_conflicts(
+        self,
+        base: CxAgentSnapshot,
+        local: CxAgentSnapshot,
+        remote: CxAgentSnapshot,
+    ) -> list[dict[str, Any]]:
+        """Detect fields modified both locally and remotely relative to the base."""
+
+        base_fields = self._field_entries(base)
+        local_fields = self._field_entries(local)
+        remote_fields = self._field_entries(remote)
+        conflicts: list[dict[str, Any]] = []
+
+        for key in sorted(set(base_fields) | set(local_fields) | set(remote_fields)):
+            base_value = base_fields.get(key, {}).get("value", _MISSING)
+            local_value = local_fields.get(key, {}).get("value", _MISSING)
+            remote_value = remote_fields.get(key, {}).get("value", _MISSING)
+
+            if local_value == base_value or remote_value == base_value:
+                continue
+            if local_value == remote_value:
+                continue
+
+            resource, name, field = key
+            display_name = (
+                local_fields.get(key, {}).get("display_name")
+                or remote_fields.get(key, {}).get("display_name")
+                or name.split("/")[-1]
+            )
+            conflicts.append(
+                {
+                    "resource": resource,
+                    "name": display_name,
+                    "field": field,
+                    "base": None if base_value is _MISSING else base_value,
+                    "local": None if local_value is _MISSING else local_value,
+                    "remote": None if remote_value is _MISSING else remote_value,
+                }
+            )
+
+        return conflicts
+
+    def _merge_local_changes(
+        self,
+        base: CxAgentSnapshot,
+        local: CxAgentSnapshot,
+        remote: CxAgentSnapshot,
+        conflicts: list[dict[str, Any]],
+    ) -> CxAgentSnapshot:
+        """Overlay local-only edits onto the latest remote snapshot."""
+
+        merged = copy.deepcopy(remote)
+        conflict_keys = {
+            (conflict["resource"], conflict["name"], conflict["field"])
+            for conflict in conflicts
+        }
+
+        base_fields = self._field_entries(base)
+        local_fields = self._field_entries(local)
+        for key, local_entry in local_fields.items():
+            base_value = base_fields.get(key, {}).get("value", _MISSING)
+            local_value = local_entry["value"]
+            if local_value == base_value:
+                continue
+
+            resource, _resource_name, field = key
+            if (resource, local_entry["display_name"], field) in conflict_keys:
+                continue
+            self._set_field(merged, key, local_value)
+
+        return merged
+
+    def _apply_snapshot_changes(
+        self,
+        source: CxAgentSnapshot,
+        target: CxAgentSnapshot,
+    ) -> int:
+        """Push the target snapshot delta to the CX API."""
+
+        updated_resources = 0
+
+        if source.agent.description != target.agent.description or source.agent.generative_settings != target.agent.generative_settings:
+            update_mask: list[str] = []
+            payload: dict[str, Any] = {
+                "displayName": target.agent.display_name,
+            }
+            if source.agent.description != target.agent.description:
+                payload["description"] = target.agent.description
+                update_mask.append("description")
+            if source.agent.generative_settings != target.agent.generative_settings:
+                payload["generativeSettings"] = target.agent.generative_settings
+                update_mask.append("generative_settings")
+            self._client.update_agent(target.agent.name, payload, update_mask=update_mask or None)
+            updated_resources += 1
+
+        updated_resources += self._apply_playbook_changes(source, target)
+        updated_resources += self._apply_flow_changes(source, target)
+        updated_resources += self._apply_intent_changes(source, target)
+        updated_resources += self._apply_entity_type_changes(source, target)
+        updated_resources += self._apply_webhook_changes(source, target)
+        return updated_resources
+
+    def _apply_playbook_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push playbook adds/updates."""
+
+        updated = 0
+        source_map = {playbook.name: playbook for playbook in source.playbooks}
+        for playbook in target.playbooks:
+            original = source_map.get(playbook.name)
+            if original is None:
+                self._client.create_playbook(
+                    target.agent.name,
+                    {
+                        "displayName": playbook.display_name,
+                        "instruction": playbook.instruction_text,
+                    },
+                )
+                updated += 1
+            elif original.instruction_text != playbook.instruction_text:
+                self._client.update_playbook(
+                    playbook.name,
+                    {
+                        "displayName": playbook.display_name,
+                        "instruction": playbook.instruction_text,
+                    },
+                    update_mask=["instruction"],
+                )
+                updated += 1
+        return updated
+
+    def _apply_flow_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push flow adds/updates."""
+
+        updated = 0
+        source_map = {flow.name: flow for flow in source.flows}
+        for flow in target.flows:
+            original = source_map.get(flow.name)
+            if original is None:
+                self._client.create_flow(
+                    target.agent.name,
+                    {
+                        "displayName": flow.display_name,
+                        "description": flow.description,
+                        "transitionRoutes": flow.transition_routes,
+                        "eventHandlers": flow.event_handlers,
+                    },
+                )
+                updated += 1
+            elif original.description != flow.description or original.transition_routes != flow.transition_routes:
+                self._client.update_flow(
+                    flow.name,
+                    {
+                        "displayName": flow.display_name,
+                        "description": flow.description,
+                        "transitionRoutes": flow.transition_routes,
+                        "eventHandlers": flow.event_handlers,
+                    },
+                    update_mask=["description", "transition_routes"],
+                )
+                updated += 1
+        return updated
+
+    def _apply_intent_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push intent adds/updates."""
+
+        updated = 0
+        source_map = {intent.name: intent for intent in source.intents}
+        for intent in target.intents:
+            original = source_map.get(intent.name)
+            if original is None:
+                self._client.create_intent(
+                    target.agent.name,
+                    {
+                        "displayName": intent.display_name,
+                        "trainingPhrases": intent.training_phrases,
+                    },
+                )
+                updated += 1
+            elif original.training_phrases != intent.training_phrases:
+                self._client.update_intent(
+                    intent.name,
+                    {
+                        "displayName": intent.display_name,
+                        "trainingPhrases": intent.training_phrases,
+                    },
+                    update_mask=["training_phrases"],
+                )
+                updated += 1
+        return updated
+
+    def _apply_entity_type_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push entity type adds/updates."""
+
+        updated = 0
+        source_map = {entity_type.name: entity_type for entity_type in source.entity_types}
+        for entity_type in target.entity_types:
+            original = source_map.get(entity_type.name)
+            if original is None:
+                self._client.create_entity_type(
+                    target.agent.name,
+                    {
+                        "displayName": entity_type.display_name,
+                        "kind": entity_type.kind,
+                        "entities": entity_type.entities,
+                        "excludedPhrases": entity_type.excluded_phrases,
+                    },
+                )
+                updated += 1
+            elif (
+                original.entities != entity_type.entities
+                or original.excluded_phrases != entity_type.excluded_phrases
+                or original.kind != entity_type.kind
+            ):
+                self._client.update_entity_type(
+                    entity_type.name,
+                    {
+                        "displayName": entity_type.display_name,
+                        "kind": entity_type.kind,
+                        "entities": entity_type.entities,
+                        "excludedPhrases": entity_type.excluded_phrases,
+                    },
+                    update_mask=["kind", "entities", "excluded_phrases"],
+                )
+                updated += 1
+        return updated
+
+    def _apply_webhook_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push webhook adds/updates."""
+
+        updated = 0
+        source_map = {webhook.name: webhook for webhook in source.webhooks}
+        for webhook in target.webhooks:
+            original = source_map.get(webhook.name)
+            payload = {
+                "displayName": webhook.display_name,
+                "genericWebService": webhook.generic_web_service,
+                "timeout": f"{webhook.timeout_seconds}s",
+                "disabled": webhook.disabled,
+            }
+            if original is None:
+                self._client.create_webhook(target.agent.name, payload)
+                updated += 1
+            elif (
+                original.generic_web_service != webhook.generic_web_service
+                or original.timeout_seconds != webhook.timeout_seconds
+                or original.disabled != webhook.disabled
+            ):
+                self._client.update_webhook(
+                    webhook.name,
+                    payload,
+                    update_mask=["generic_web_service", "timeout", "disabled"],
+                )
+                updated += 1
+        return updated
+
+    @staticmethod
+    def _field_entries(snapshot: CxAgentSnapshot) -> dict[tuple[str, str, str], dict[str, Any]]:
+        """Flatten a snapshot into comparable managed fields."""
+
+        fields: dict[tuple[str, str, str], dict[str, Any]] = {
+            ("agent", snapshot.agent.name, "description"): {
+                "value": snapshot.agent.description,
+                "display_name": snapshot.agent.display_name or snapshot.agent.name.split("/")[-1],
+            },
+            ("agent", snapshot.agent.name, "generative_settings"): {
+                "value": snapshot.agent.generative_settings,
+                "display_name": snapshot.agent.display_name or snapshot.agent.name.split("/")[-1],
+            },
+        }
+
+        for playbook in snapshot.playbooks:
+            fields[("playbook", playbook.name, "instruction")] = {
+                "value": playbook.instruction_text,
+                "display_name": playbook.display_name or playbook.name.split("/")[-1],
+            }
+
+        for flow in snapshot.flows:
+            fields[("flow", flow.name, "description")] = {
+                "value": flow.description,
+                "display_name": flow.display_name or flow.name.split("/")[-1],
+            }
+            fields[("flow", flow.name, "transition_routes")] = {
+                "value": flow.transition_routes,
+                "display_name": flow.display_name or flow.name.split("/")[-1],
+            }
+
+        for intent in snapshot.intents:
+            fields[("intent", intent.name, "training_phrases")] = {
+                "value": intent.training_phrases,
+                "display_name": intent.display_name or intent.name.split("/")[-1],
+            }
+
+        for entity_type in snapshot.entity_types:
+            fields[("entity_type", entity_type.name, "kind")] = {
+                "value": entity_type.kind,
+                "display_name": entity_type.display_name or entity_type.name.split("/")[-1],
+            }
+            fields[("entity_type", entity_type.name, "entities")] = {
+                "value": entity_type.entities,
+                "display_name": entity_type.display_name or entity_type.name.split("/")[-1],
+            }
+            fields[("entity_type", entity_type.name, "excluded_phrases")] = {
+                "value": entity_type.excluded_phrases,
+                "display_name": entity_type.display_name or entity_type.name.split("/")[-1],
+            }
+
+        for webhook in snapshot.webhooks:
+            fields[("webhook", webhook.name, "generic_web_service")] = {
+                "value": webhook.generic_web_service,
+                "display_name": webhook.display_name or webhook.name.split("/")[-1],
+            }
+            fields[("webhook", webhook.name, "timeout_seconds")] = {
+                "value": webhook.timeout_seconds,
+                "display_name": webhook.display_name or webhook.name.split("/")[-1],
+            }
+            fields[("webhook", webhook.name, "disabled")] = {
+                "value": webhook.disabled,
+                "display_name": webhook.display_name or webhook.name.split("/")[-1],
+            }
+
+        return fields
+
+    @staticmethod
+    def _set_field(snapshot: CxAgentSnapshot, key: tuple[str, str, str], value: Any) -> None:
+        """Set a flattened field on a snapshot object."""
+
+        resource_type, resource_name, field = key
+        if resource_type == "agent":
+            if field == "description":
+                snapshot.agent.description = value
+            elif field == "generative_settings":
+                snapshot.agent.generative_settings = value
+            return
+
+        if resource_type == "playbook":
+            for playbook in snapshot.playbooks:
+                if playbook.name != resource_name:
+                    continue
+                if field == "instruction":
+                    playbook.instruction = value
+                    playbook.instructions = [line for line in str(value).splitlines() if line.strip()]
+                return
+
+        if resource_type == "flow":
+            for flow in snapshot.flows:
+                if flow.name != resource_name:
+                    continue
+                if field == "description":
+                    flow.description = value
+                elif field == "transition_routes":
+                    flow.transition_routes = value
+                return
+
+        if resource_type == "intent":
+            for intent in snapshot.intents:
+                if intent.name == resource_name and field == "training_phrases":
+                    intent.training_phrases = value
+                    return
+
+        if resource_type == "entity_type":
+            for entity_type in snapshot.entity_types:
+                if entity_type.name != resource_name:
+                    continue
+                if field == "kind":
+                    entity_type.kind = value
+                elif field == "entities":
+                    entity_type.entities = value
+                elif field == "excluded_phrases":
+                    entity_type.excluded_phrases = value
+                return
+
+        if resource_type == "webhook":
+            for webhook in snapshot.webhooks:
+                if webhook.name != resource_name:
+                    continue
+                if field == "generic_web_service":
+                    webhook.generic_web_service = value
+                elif field == "timeout_seconds":
+                    webhook.timeout_seconds = value
+                elif field == "disabled":
+                    webhook.disabled = value
+                return
