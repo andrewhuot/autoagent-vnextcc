@@ -25,12 +25,13 @@ async def list_change_cards(
 ) -> dict[str, Any]:
     """List pending change cards (or all if status is specified)."""
     store = _get_store(request)
-    if status == "pending":
+    normalized_status = (status or "").strip().lower()
+    if normalized_status in {"", "pending"}:
         cards = store.list_pending(limit=limit)
-    elif status is not None:
-        cards = [c for c in store.list_all(limit=limit) if c.status == status]
+    elif normalized_status == "all":
+        cards = store.list_all(limit=limit)
     else:
-        cards = store.list_pending(limit=limit)
+        cards = [c for c in store.list_all(limit=limit) if c.status == normalized_status]
     return {
         "cards": [c.to_dict() for c in cards],
         "count": len(cards),

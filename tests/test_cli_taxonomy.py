@@ -20,14 +20,21 @@ def _runner() -> CliRunner:
     return CliRunner()
 
 
-def _seed_config_version(configs_dir: str = "configs", db_path: str = "conversations.db") -> None:
+def _seed_config_version(
+    configs_dir: str = "configs",
+    db_path: str = "conversations.db",
+    *,
+    status: str = "active",
+    prompt_suffix: str = "",
+) -> int:
     store = ConversationStore(db_path=db_path)
     deployer = Deployer(configs_dir=configs_dir, store=store)
-    deployer.version_manager.save_version(
-        {"prompts": {"root": "You are a helpful assistant."}},
+    saved = deployer.version_manager.save_version(
+        {"prompts": {"root": f"You are a helpful assistant.{prompt_suffix}"}},
         scores={"composite": 0.8},
-        status="active",
+        status=status,
     )
+    return saved.version
 
 
 def _seed_change_card() -> ProposedChangeCard:
@@ -243,9 +250,10 @@ def test_deploy_canary_supports_interactive_confirmation() -> None:
     runner = _runner()
     with runner.isolated_filesystem():
         _seed_config_version()
+        candidate_version = _seed_config_version(status="candidate", prompt_suffix=" Candidate.")
 
-        result = runner.invoke(cli, ["deploy", "canary", "--config-version", "1"], input="y\n")
+        result = runner.invoke(cli, ["deploy", "canary", "--config-version", str(candidate_version)], input="y\n")
 
         assert result.exit_code == 0
         manifest = json.loads(Path("configs/manifest.json").read_text(encoding="utf-8"))
-        assert manifest["canary_version"] == 1
+        assert manifest["canary_version"] == candidate_version

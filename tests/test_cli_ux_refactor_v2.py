@@ -476,7 +476,10 @@ class TestWorkflowCommands:
                 encoding="utf-8",
             )
 
-            result = runner.invoke(cli, ["eval", "compare", str(left), str(right)])
+            result = runner.invoke(
+                cli,
+                ["eval", "compare", "--left-run", str(left), "--right-run", str(right)],
+            )
 
             assert result.exit_code == 0, result.output
             assert "Metric" in result.output

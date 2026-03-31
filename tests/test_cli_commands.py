@@ -475,18 +475,17 @@ class TestDoctorCommand:
         assert "OPENAI_API_KEY" in result.output
         assert "Not set" in result.output
 
-    def test_doctor_status_line_reports_issues(self, runner, tmp_dir):
-        """Status line reflects issue count."""
+    def test_doctor_status_line_reports_ready_workspace(self, runner, tmp_dir):
+        """Mock-mode workspaces should still report a healthy doctor summary."""
         config_file = os.path.join(tmp_dir, "autoagent.yaml")
         Path(config_file).write_text("optimizer:\n  use_mock: true\n", encoding="utf-8")
-        # Strip all API key env vars to force multiple issues
         env = {
             k: v for k, v in os.environ.items()
             if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY")
         }
         result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
         assert result.exit_code == 0
-        assert "issue" in result.output
+        assert "Status: All checks passed" in result.output
 
     def test_eval_run_prints_mock_warning(self, runner):
         """eval run warns when the harness falls back to mock mode."""

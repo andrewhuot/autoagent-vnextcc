@@ -218,6 +218,7 @@ def test_deploy_auto_review_skips_confirmation_prompt(
     workspace = tmp_path / "deploy-auto-review"
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
     assert init_result.exit_code == 0, init_result.output
+    _seed_second_config(workspace)
 
     monkeypatch.chdir(workspace)
 
@@ -266,6 +267,7 @@ def test_deploy_short_yes_flag_skips_confirmation_prompt(
     workspace = tmp_path / "deploy-short-yes"
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
     assert init_result.exit_code == 0, init_result.output
+    _seed_second_config(workspace)
 
     monkeypatch.chdir(workspace)
 

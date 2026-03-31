@@ -7,7 +7,10 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+import yaml
 
+from deployer import Deployer
+from logger import ConversationStore
 from optimizer.change_card import ProposedChangeCard, ChangeCardStore
 from runner import cli
 
@@ -46,6 +49,16 @@ def _seed_pending_change_card(root: Path) -> ProposedChangeCard:
     store = ChangeCardStore(db_path=str(root / ".autoagent" / "change_cards.db"))
     store.save(card)
     return card
+
+
+def _seed_candidate_config(root: Path) -> int:
+    """Persist one deployable non-active config version for permission tests."""
+    store = ConversationStore(db_path=str(root / "conversations.db"))
+    deployer = Deployer(configs_dir=str(root / "configs"), store=store)
+    config = yaml.safe_load((root / "configs" / "v001.yaml").read_text(encoding="utf-8"))
+    config["model"] = "permissions-candidate-v2"
+    saved = deployer.version_manager.save_version(config, scores={"composite": 0.88}, status="candidate")
+    return saved.version
 
 
 def test_permission_modes_define_expected_default_rules(tmp_path: Path) -> None:
@@ -101,6 +114,7 @@ def test_deploy_asks_before_risky_action_in_default_mode(
     with runner.isolated_filesystem():
         init_result = runner.invoke(cli, ["init", "--dir", "."])
         assert init_result.exit_code == 0, init_result.output
+        candidate_version = _seed_candidate_config(Path("."))
 
         prompts: list[str] = []
 
@@ -113,7 +127,7 @@ def test_deploy_asks_before_risky_action_in_default_mode(
 
         assert result.exit_code == 0, result.output
         assert prompts
-        assert "Deploy v001" in prompts[0]
+        assert f"Deploy v{candidate_version:03d}" in prompts[0]
 
 
 def test_deploy_skips_prompt_in_dont_ask_mode(
@@ -124,6 +138,7 @@ def test_deploy_skips_prompt_in_dont_ask_mode(
     with runner.isolated_filesystem():
         init_result = runner.invoke(cli, ["init", "--dir", "."])
         assert init_result.exit_code == 0, init_result.output
+        _seed_candidate_config(Path("."))
         _write_settings(Path("."), mode="dontAsk")
 
         def _unexpected_confirm(*args, **kwargs):  # pragma: no cover - assertion helper

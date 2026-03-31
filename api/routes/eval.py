@@ -10,6 +10,7 @@ from typing import Any
 import yaml
 from fastapi import APIRouter, HTTPException, Request
 
+from agent.config.runtime import load_runtime_config
 from evals.auto_generator import AutoEvalGenerator
 from evals.execution_mode import requested_live_mode, resolve_eval_execution_mode
 from evals.runner import TestCase
@@ -97,7 +98,7 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
     eval_runner = request.app.state.eval_runner
-    runtime = request.app.state.runtime_config
+    runtime = getattr(request.app.state, "runtime_config", load_runtime_config())
     requested_live = requested_live_mode(runtime)
 
     config: dict | None = None

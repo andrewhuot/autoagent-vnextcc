@@ -73,6 +73,7 @@ eval:
   significance_alpha: 0.05
   significance_min_effect_size: 0.005
   significance_iterations: 2000
+  significance_min_pairs: 5
 budget:
   per_cycle_dollars: 1.0
   daily_dollars: 10.0

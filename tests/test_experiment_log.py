@@ -108,6 +108,9 @@ def _patch_optimize_runtime(
                 score_before=outcome.get("score_before"),
                 score_after=outcome.get("score_after"),
                 significance_p_value=outcome.get("p_value"),
+                config_section=outcome.get("config_section", "prompts.root"),
+                config_diff=outcome.get("config_diff", "+ Improve routing prompts"),
+                significance_delta=outcome.get("score_after", 0.0) - outcome.get("score_before", 0.0),
             )
             return (
                 outcome.get("new_config"),  # type: ignore[return-value]
@@ -140,7 +143,31 @@ def _patch_optimize_runtime(
         def __init__(self, configs_dir: str, store: FakeConversationStore) -> None:
             self.configs_dir = configs_dir
             self.store = store
-            self.version_manager = SimpleNamespace()
+            version_dir = Path(configs_dir)
+            version_dir.mkdir(parents=True, exist_ok=True)
+
+            class FakeVersionManager:
+                """Minimal version manager that persists candidate configs for tests."""
+
+                def __init__(self, target_dir: Path) -> None:
+                    self.configs_dir = target_dir
+                    self._next_version = 2
+
+                def save_version(
+                    self,
+                    config: dict[str, object],
+                    scores: dict[str, float],
+                    *,
+                    status: str,
+                ) -> SimpleNamespace:
+                    del scores, status
+                    version = self._next_version
+                    self._next_version += 1
+                    filename = f"v{version:03d}.yaml"
+                    (self.configs_dir / filename).write_text(json.dumps(config, indent=2), encoding="utf-8")
+                    return SimpleNamespace(version=version, filename=filename)
+
+            self.version_manager = FakeVersionManager(version_dir)
 
         def get_active_config(self) -> dict[str, object]:
             return {"model": "baseline"}
@@ -157,6 +184,28 @@ def _patch_optimize_runtime(
         ),
         optimizer=SimpleNamespace(skill_autolearn_enabled=False),
     )
+    baseline_eval_payload = {
+        "config_path": str(Path("configs") / "v001.yaml"),
+        "scores": {
+            "quality": 0.74,
+            "safety": 1.0,
+            "latency": 0.9,
+            "cost": 0.9,
+            "composite": 0.74,
+        },
+        "passed": 0,
+        "total": 1,
+        "results": [
+            {
+                "case_id": "case-routing",
+                "category": "routing",
+                "passed": False,
+                "quality_score": 0.4,
+                "safety_passed": True,
+                "details": "routing: missing billing specialist",
+            }
+        ],
+    }
 
     monkeypatch.setattr(runner_module, "ConversationStore", FakeConversationStore)
     monkeypatch.setattr(runner_module, "Observer", FakeObserver)
@@ -180,6 +229,19 @@ def _patch_optimize_runtime(
     monkeypatch.setattr(runner_module, "_print_cli_plan", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner_module, "_print_next_actions", lambda *args, **kwargs: None)
     monkeypatch.setattr(runner_module, "_generate_recommendations", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        runner_module,
+        "_latest_eval_payload_for_active_config",
+        lambda *_args, **_kwargs: (Path(".autoagent/eval_results_latest.json"), baseline_eval_payload),
+    )
+
+    def _next_report(_data: dict) -> object:
+        next_item = state.reports.pop(0)
+        if isinstance(next_item, BaseException):
+            raise next_item
+        return next_item
+
+    monkeypatch.setattr(runner_module, "_health_report_from_eval", _next_report)
 
 
 def _read_tsv_rows(log_path: Path) -> list[list[str]]:
@@ -248,7 +310,8 @@ def test_optimize_creates_experiment_log_tsv_on_first_run(
     assert float(rows[1][3]) == pytest.approx(0.81)
     assert float(rows[1][4]) == pytest.approx(0.07)
     assert rows[1][5] == "keep"
-    assert rows[1][6] == "Improve routing prompts"
+    assert rows[1][6].startswith("Improve routing prompts")
+    assert "candidate v002" in rows[1][6]
 
 
 def test_optimize_appends_experiment_log_rows_across_multiple_runs(
@@ -296,7 +359,8 @@ def test_optimize_appends_experiment_log_rows_across_multiple_runs(
     assert rows[1][0] == "1"
     assert rows[2][0] == "2"
     assert rows[2][5] == "discard"
-    assert rows[2][6] == "Increase tool timeout"
+    assert rows[2][6].startswith("Increase tool timeout")
+    assert "rejected_no_improvement" in rows[2][6]
 
 
 def test_optimize_continuous_catches_keyboard_interrupt_and_prints_summary(
