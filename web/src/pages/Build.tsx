@@ -8,15 +8,19 @@ import {
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  AlertTriangle,
   Archive,
   Brain,
+  Code2,
   Copy,
   Download,
   FileText,
   FolderOpen,
+  ListTree,
   MessageSquare,
   Play,
   Send,
+  ShieldCheck,
   Sparkles,
   UploadCloud,
   WandSparkles,
@@ -62,6 +66,31 @@ interface IntentSummary {
   count: number;
 }
 
+type InstructionStudioMode = 'raw' | 'form';
+
+interface InstructionFormState {
+  preamble: string;
+  role: string;
+  primaryGoal: string;
+  guidelines: string;
+  constraints: string;
+  subtaskName: string;
+  stepOneName: string;
+  stepOneTrigger: string;
+  stepOneAction: string;
+  stepTwoName: string;
+  stepTwoTrigger: string;
+  stepTwoAction: string;
+  examples: string;
+}
+
+interface InstructionValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  form: InstructionFormState;
+}
+
 const BUILD_ARTIFACT_STORAGE_KEY = 'autoagent.build-artifacts.v1';
 
 const PROMPT_EXAMPLES = [
@@ -82,6 +111,77 @@ const BUILDER_PROMPTS = [
   'Add a tool for checking flight status',
   'Make it more empathetic',
   'Add a policy that it should never reveal internal codes',
+];
+
+const DEFAULT_INSTRUCTION_FORM: InstructionFormState = {
+  preamble: 'CURRENT CHANNEL: web chat',
+  role: 'Customer support router.',
+  primaryGoal: 'Route customer requests to the right specialist and keep the response safe and concise.',
+  guidelines: 'Keep the tone calm and practical.\nAsk one clarifying question when a required detail is missing.',
+  constraints:
+    'Protect customer privacy and never expose another customer\'s data.\nRefuse unsafe or policy-violating requests politely.',
+  subtaskName: 'Routing',
+  stepOneName: 'Identify Intent',
+  stepOneTrigger: 'A customer asks for help.',
+  stepOneAction: 'Identify whether the request is about support, orders, or recommendations.',
+  stepTwoName: 'Clarify Missing Details',
+  stepTwoTrigger: 'The request is ambiguous or lacks a required detail.',
+  stepTwoAction: 'Ask one focused clarifying question before answering or routing.',
+  examples:
+    'EXAMPLE 1:\nBegin example\n[user]\nWhere is my order #1001?\n[model]\nI can help with that. I\'ll route this to the order specialist so we can check the latest shipping status.\nEnd example',
+};
+
+const WEATHER_ROUTING_GUIDE_XML = `CURRENT CUSTOMER: {username}
+
+<role>The main Weather Agent coordinating multiple agents.</role>
+<persona>
+  <primary_goal>To provide weather information.</primary_goal>
+  Follow the constraints and task flow precisely.
+</persona>
+<constraints>
+  1. Use {@TOOL: get_weather} only for specific weather requests.
+  2. If the user's name is known, greet them by name.
+</constraints>
+<taskflow>
+  <subtask name="Query Analysis and Routing">
+    <step name="Analyze User Query">
+      <trigger>User provides a query.</trigger>
+      <action>Determine whether the query is a greeting, farewell, weather request, or something else.</action>
+    </step>
+    <step name="Handle Weather Request">
+      <trigger>User query is identified as a specific weather request.</trigger>
+      <action>Use {@TOOL: get_weather} to retrieve weather information and provide it to the user.</action>
+    </step>
+  </subtask>
+</taskflow>
+<examples>
+  EXAMPLE 1:
+  Begin example
+  [user]
+  What's the weather in London?
+  [model]
+  The weather in London is 15 C and Cloudy.
+  End example
+</examples>`;
+
+const XML_GUIDE_LIBRARY = [
+  {
+    label: 'Weather Routing Guide',
+    description: 'Adapted from the Google XML structure example.',
+    xml: WEATHER_ROUTING_GUIDE_XML,
+  },
+  {
+    label: 'Support Skeleton',
+    description: 'A practical starter layout for customer support agents.',
+    xml: buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM),
+  },
+  {
+    label: 'Few-Shot Block',
+    description: 'Drop in a compact example block when instructions alone are not enough.',
+    xml: `${buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM)}
+
+<!-- Add examples sparingly and only for stubborn behavior gaps. -->`,
+  },
 ];
 
 /**
@@ -472,6 +572,8 @@ export function StudioWorkspace({
   const [agentConfig, setAgentConfig] = useState<GeneratedAgentConfig | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composer, setComposer] = useState('');
+  const [instructionMode, setInstructionMode] = useState<InstructionStudioMode>('raw');
+  const [instructionXml, setInstructionXml] = useState(() => buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
 
   const importMutation = useImportTranscriptArchive();
   const generateMutation = useGenerateAgent();
@@ -526,6 +628,8 @@ export function StudioWorkspace({
     setAgentConfig(null);
     setMessages([]);
     setComposer('');
+    setInstructionMode('raw');
+    setInstructionXml(buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
     artifactIdRef.current = null;
     artifactCreatedAtRef.current = null;
 
@@ -541,8 +645,19 @@ export function StudioWorkspace({
       return;
     }
 
+    const instructionValidation = validateInstructionXmlDraft(instructionXml);
+    if (!instructionValidation.valid) {
+      toastError(
+        'Instruction XML invalid',
+        instructionValidation.errors[0] ?? 'Fix the XML draft before generating the agent.'
+      );
+      return;
+    }
+
+    const generationPrompt = `${nextPrompt}\n\nDefault XML instruction draft:\n${instructionXml}`;
+
     generateMutation.mutate(
-      { prompt: nextPrompt },
+      { prompt: generationPrompt },
       {
         onSuccess: (config) => {
           artifactIdRef.current = null;
@@ -559,7 +674,7 @@ export function StudioWorkspace({
             config.metadata.agent_name,
             'Generated from a prompt',
             configYaml,
-            { promptUsed: nextPrompt }
+            { promptUsed: generationPrompt }
           );
           toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
         },
@@ -576,9 +691,18 @@ export function StudioWorkspace({
       return;
     }
 
+    const instructionValidation = validateInstructionXmlDraft(instructionXml);
+    if (!instructionValidation.valid) {
+      toastError(
+        'Instruction XML invalid',
+        instructionValidation.errors[0] ?? 'Fix the XML draft before generating the agent.'
+      );
+      return;
+    }
+
     generateMutation.mutate(
       {
-        prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}`,
+        prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}\n\nDefault XML instruction draft:\n${instructionXml}`,
         transcript_report_id: transcriptReport.report_id,
       },
       {
@@ -765,9 +889,16 @@ export function StudioWorkspace({
             </div>
           </div>
 
+          <InstructionStudio
+            mode={instructionMode}
+            onModeChange={setInstructionMode}
+            xml={instructionXml}
+            onXmlChange={setInstructionXml}
+          />
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-gray-500">
-              Start with the job, channels, policies, and any must-have tools or routing rules.
+              Start with the job, channels, policies, and any must-have tools or routing rules. The validated XML draft is included when you generate the agent.
             </div>
             <button
               type="button"
@@ -1172,6 +1303,260 @@ export function SavedArtifactsWorkspace({
             <EmptyState text="Transcript reports will appear here after uploads are analyzed." />
           )}
         </ArtifactSection>
+      </div>
+    </section>
+  );
+}
+
+function InstructionStudio({
+  mode,
+  onModeChange,
+  xml,
+  onXmlChange,
+}: {
+  mode: InstructionStudioMode;
+  onModeChange: (mode: InstructionStudioMode) => void;
+  xml: string;
+  onXmlChange: (xml: string) => void;
+}) {
+  const parsed = parseInstructionXmlDraft(xml);
+  const [formState, setFormState] = useState<InstructionFormState>(parsed.form);
+
+  useEffect(() => {
+    if (parsed.valid) {
+      setFormState(parsed.form);
+    }
+  }, [xml]);
+
+  function handleRawChange(value: string) {
+    onXmlChange(value);
+    const nextParsed = parseInstructionXmlDraft(value);
+    if (nextParsed.valid) {
+      setFormState(nextParsed.form);
+    }
+  }
+
+  function handleFormFieldChange(field: keyof InstructionFormState, value: string) {
+    const nextForm = {
+      ...formState,
+      [field]: value,
+    };
+    setFormState(nextForm);
+    onXmlChange(buildInstructionXmlFromForm(nextForm));
+  }
+
+  function handleLibraryInsert(snippet: string) {
+    onXmlChange(snippet);
+    const nextParsed = parseInstructionXmlDraft(snippet);
+    setFormState(nextParsed.form);
+  }
+
+  return (
+    <section className="overflow-hidden rounded-[28px] border border-amber-200 bg-[linear-gradient(180deg,rgba(255,251,235,0.96),rgba(255,255,255,1))] shadow-sm shadow-amber-100/60">
+      <div className="border-b border-amber-200 px-6 py-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+              <Code2 className="h-3.5 w-3.5" />
+              Google XML Default
+            </div>
+            <h3 className="mt-3 text-lg font-semibold text-gray-900">XML Instruction Studio</h3>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-gray-600">
+              Draft the default instruction in the recommended XML shape, switch between raw and form editing, and borrow starter snippets from the guide without leaving the page.
+            </p>
+          </div>
+
+          <div className="inline-flex rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
+            <button
+              type="button"
+              aria-pressed={mode === 'raw'}
+              onClick={() => onModeChange('raw')}
+              className={classNames(
+                'rounded-xl px-3 py-2 text-sm font-medium transition',
+                mode === 'raw' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              )}
+            >
+              Raw XML
+            </button>
+            <button
+              type="button"
+              aria-pressed={mode === 'form'}
+              onClick={() => onModeChange('form')}
+              className={classNames(
+                'rounded-xl px-3 py-2 text-sm font-medium transition',
+                mode === 'form' ? 'bg-gray-900 text-white' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              )}
+            >
+              Form View
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-5 px-6 py-6">
+        <div className="grid gap-3 lg:grid-cols-3">
+          {XML_GUIDE_LIBRARY.map((example) => (
+            <button
+              key={example.label}
+              type="button"
+              aria-label={example.label}
+              onClick={() => handleLibraryInsert(example.xml)}
+              className="group rounded-3xl border border-amber-200 bg-white/90 p-4 text-left transition hover:-translate-y-0.5 hover:border-amber-300 hover:shadow-md hover:shadow-amber-100/70"
+            >
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-sm font-semibold text-gray-900">{example.label}</p>
+                <Sparkles className="h-4 w-4 text-amber-500 transition group-hover:rotate-6" />
+              </div>
+              <p className="mt-2 text-sm leading-relaxed text-gray-600">{example.description}</p>
+            </button>
+          ))}
+        </div>
+
+        {parsed.errors.length > 0 ? (
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+            <div className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-1">
+                {parsed.errors.map((error) => (
+                  <p key={error}>{error}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {parsed.warnings.length > 0 ? (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <div className="flex items-start gap-2">
+              <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0" />
+              <div className="space-y-1">
+                {parsed.warnings.map((warning) => (
+                  <p key={warning}>{warning}</p>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        {mode === 'raw' ? (
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(280px,0.85fr)]">
+            <div className="rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Editor
+                  </p>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Edit the source directly. When the XML is valid, form mode stays in sync automatically.
+                  </p>
+                </div>
+              </div>
+              <textarea
+                aria-label="XML instruction editor"
+                value={xml}
+                onChange={(event) => handleRawChange(event.target.value)}
+                rows={22}
+                spellCheck={false}
+                className="min-h-[420px] w-full resize-y rounded-2xl border border-gray-200 bg-[#0F172A] px-4 py-4 font-mono text-[13px] leading-6 text-slate-100 outline-none transition focus:border-amber-400 focus:ring-4 focus:ring-amber-100"
+              />
+            </div>
+
+            <div className="rounded-3xl border border-gray-200 bg-[#111827] p-4 shadow-sm">
+              <div className="mb-3 flex items-center gap-2 text-slate-200">
+                <ListTree className="h-4 w-4 text-amber-300" />
+                <p className="text-sm font-semibold">Syntax Highlight Preview</p>
+              </div>
+              <pre
+                aria-label="XML syntax preview"
+                className="max-h-[420px] overflow-auto rounded-2xl border border-white/10 bg-black/30 p-4 font-mono text-[12px] leading-6 text-slate-100"
+              >
+                {renderHighlightedXml(xml)}
+              </pre>
+            </div>
+          </div>
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="space-y-2 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <span className="text-sm font-semibold text-gray-900">Instruction role</span>
+              <input
+                aria-label="Instruction role"
+                value={formState.role}
+                onChange={(event) => handleFormFieldChange('role', event.target.value)}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </label>
+
+            <label className="space-y-2 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <span className="text-sm font-semibold text-gray-900">Primary goal</span>
+              <input
+                aria-label="Primary goal"
+                value={formState.primaryGoal}
+                onChange={(event) => handleFormFieldChange('primaryGoal', event.target.value)}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </label>
+
+            <label className="space-y-2 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <span className="text-sm font-semibold text-gray-900">Persona guidance</span>
+              <textarea
+                value={formState.guidelines}
+                onChange={(event) => handleFormFieldChange('guidelines', event.target.value)}
+                rows={5}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </label>
+
+            <label className="space-y-2 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <span className="text-sm font-semibold text-gray-900">Constraints</span>
+              <textarea
+                value={formState.constraints}
+                onChange={(event) => handleFormFieldChange('constraints', event.target.value)}
+                rows={5}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </label>
+
+            <div className="space-y-3 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-sm font-semibold text-gray-900">Taskflow</p>
+              <input
+                value={formState.subtaskName}
+                onChange={(event) => handleFormFieldChange('subtaskName', event.target.value)}
+                placeholder="Subtask name"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+              <input
+                value={formState.stepOneName}
+                onChange={(event) => handleFormFieldChange('stepOneName', event.target.value)}
+                placeholder="Step one name"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+              <textarea
+                value={formState.stepOneTrigger}
+                onChange={(event) => handleFormFieldChange('stepOneTrigger', event.target.value)}
+                rows={2}
+                placeholder="Step one trigger"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+              <textarea
+                value={formState.stepOneAction}
+                onChange={(event) => handleFormFieldChange('stepOneAction', event.target.value)}
+                rows={2}
+                placeholder="Step one action"
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </div>
+
+            <div className="space-y-3 rounded-3xl border border-gray-200 bg-white p-4 shadow-sm">
+              <p className="text-sm font-semibold text-gray-900">Examples</p>
+              <textarea
+                value={formState.examples}
+                onChange={(event) => handleFormFieldChange('examples', event.target.value)}
+                rows={12}
+                className="w-full rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 font-mono text-[13px] leading-6 text-gray-900 outline-none transition focus:border-amber-400 focus:bg-white focus:ring-4 focus:ring-amber-100"
+              />
+            </div>
+          </div>
+        )}
       </div>
     </section>
   );
@@ -1687,6 +2072,219 @@ function humanizeArtifactSource(source: BuildArtifactSource): string {
 function formatTimestamp(value: string | number): string {
   const date = typeof value === 'number' ? new Date(value) : new Date(value);
   return Number.isNaN(date.getTime()) ? 'unknown time' : date.toLocaleString();
+}
+
+function buildInstructionXmlFromForm(form: InstructionFormState): string {
+  const guidelines = splitInstructionLines(form.guidelines);
+  const constraints = splitInstructionLines(form.constraints);
+  const examples = splitInstructionExamples(form.examples);
+  const preamble = form.preamble.trim();
+  const lines: string[] = [];
+
+  if (preamble) {
+    lines.push(preamble, '');
+  }
+
+  lines.push(`<role>${escapeInstructionXml(form.role.trim())}</role>`);
+  lines.push('<persona>');
+  lines.push(`  <primary_goal>${escapeInstructionXml(form.primaryGoal.trim())}</primary_goal>`);
+  for (const line of guidelines) {
+    lines.push(`  ${escapeInstructionXml(line)}`);
+  }
+  lines.push('</persona>');
+  lines.push('<constraints>');
+  for (const [index, line] of constraints.entries()) {
+    lines.push(`  ${index + 1}. ${escapeInstructionXml(line)}`);
+  }
+  lines.push('</constraints>');
+  lines.push('<taskflow>');
+  lines.push(`  <subtask name="${escapeInstructionXml(form.subtaskName.trim())}">`);
+  lines.push(`    <step name="${escapeInstructionXml(form.stepOneName.trim())}">`);
+  lines.push(`      <trigger>${escapeInstructionXml(form.stepOneTrigger.trim())}</trigger>`);
+  lines.push(`      <action>${escapeInstructionXml(form.stepOneAction.trim())}</action>`);
+  lines.push('    </step>');
+
+  if (form.stepTwoName.trim() || form.stepTwoTrigger.trim() || form.stepTwoAction.trim()) {
+    lines.push(`    <step name="${escapeInstructionXml(form.stepTwoName.trim())}">`);
+    lines.push(`      <trigger>${escapeInstructionXml(form.stepTwoTrigger.trim())}</trigger>`);
+    lines.push(`      <action>${escapeInstructionXml(form.stepTwoAction.trim())}</action>`);
+    lines.push('    </step>');
+  }
+
+  lines.push('  </subtask>');
+  lines.push('</taskflow>');
+  lines.push('<examples>');
+  for (const example of examples) {
+    for (const line of example.split('\n')) {
+      lines.push(`  ${line}`);
+    }
+  }
+  lines.push('</examples>');
+  return lines.join('\n');
+}
+
+function validateInstructionXmlDraft(xml: string): InstructionValidationResult {
+  return parseInstructionXmlDraft(xml);
+}
+
+function parseInstructionXmlDraft(xml: string): InstructionValidationResult {
+  const fallbackForm = {
+    ...DEFAULT_INSTRUCTION_FORM,
+  };
+
+  if (!xml.trim()) {
+    return {
+      valid: false,
+      errors: ['XML parse error: the instruction draft is empty.'],
+      warnings: [],
+      form: fallbackForm,
+    };
+  }
+
+  const parser = new DOMParser();
+  const document = parser.parseFromString(`<instruction>${xml}</instruction>`, 'application/xml');
+  const parserError = document.querySelector('parsererror');
+  if (parserError) {
+    return {
+      valid: false,
+      errors: [`XML parse error: ${parserError.textContent?.trim() ?? 'Unable to parse XML.'}`],
+      warnings: [],
+      form: fallbackForm,
+    };
+  }
+
+  const root = document.documentElement;
+  const roleNode = findDirectChild(root, 'role');
+  const personaNode = findDirectChild(root, 'persona');
+  const primaryGoalNode = personaNode ? findDirectChild(personaNode, 'primary_goal') : null;
+  const constraintsNode = findDirectChild(root, 'constraints');
+  const taskflowNode = findDirectChild(root, 'taskflow');
+  const examplesNode = findDirectChild(root, 'examples');
+  const firstSubtask = taskflowNode ? findDirectChild(taskflowNode, 'subtask') : null;
+  const steps = firstSubtask
+    ? Array.from(firstSubtask.children).filter((child) => child.tagName === 'step')
+    : [];
+  const firstStep = steps[0] ?? null;
+  const secondStep = steps[1] ?? null;
+
+  const errors: string[] = [];
+  if (!roleNode?.textContent?.trim()) {
+    errors.push('Missing required <role> section.');
+  }
+  if (!primaryGoalNode?.textContent?.trim()) {
+    errors.push('Missing required <persona><primary_goal> section.');
+  }
+  if (!constraintsNode?.textContent?.trim()) {
+    errors.push('Missing required <constraints> section.');
+  }
+  if (!firstSubtask || !firstStep) {
+    errors.push('Missing required <taskflow> with at least one <subtask> and <step>.');
+  }
+
+  const warnings: string[] = [];
+  if (!examplesNode?.textContent?.trim()) {
+    warnings.push('Add examples only when they solve a specific behavior gap.');
+  }
+
+  const personaGuidelines = personaNode
+    ? Array.from(personaNode.childNodes)
+        .filter((node) => node.nodeType === Node.TEXT_NODE)
+        .map((node) => node.textContent?.trim() ?? '')
+        .filter(Boolean)
+        .join('\n')
+    : fallbackForm.guidelines;
+
+  const form: InstructionFormState = {
+    preamble: root.firstChild?.nodeType === Node.TEXT_NODE ? root.firstChild.textContent?.trim() ?? '' : '',
+    role: roleNode?.textContent?.trim() ?? fallbackForm.role,
+    primaryGoal: primaryGoalNode?.textContent?.trim() ?? fallbackForm.primaryGoal,
+    guidelines: personaGuidelines || fallbackForm.guidelines,
+    constraints: normalizeInstructionListText(constraintsNode?.textContent ?? ''),
+    subtaskName: firstSubtask?.getAttribute('name')?.trim() || fallbackForm.subtaskName,
+    stepOneName: firstStep?.getAttribute('name')?.trim() || fallbackForm.stepOneName,
+    stepOneTrigger:
+      findDirectChild(firstStep, 'trigger')?.textContent?.trim() || fallbackForm.stepOneTrigger,
+    stepOneAction:
+      findDirectChild(firstStep, 'action')?.textContent?.trim() || fallbackForm.stepOneAction,
+    stepTwoName: secondStep?.getAttribute('name')?.trim() || fallbackForm.stepTwoName,
+    stepTwoTrigger:
+      findDirectChild(secondStep, 'trigger')?.textContent?.trim() || fallbackForm.stepTwoTrigger,
+    stepTwoAction:
+      findDirectChild(secondStep, 'action')?.textContent?.trim() || fallbackForm.stepTwoAction,
+    examples: (examplesNode?.textContent ?? '').trim() || fallbackForm.examples,
+  };
+
+  return {
+    valid: errors.length === 0,
+    errors,
+    warnings,
+    form,
+  };
+}
+
+function findDirectChild(node: Element | null, tagName: string): Element | null {
+  if (!node) {
+    return null;
+  }
+  return Array.from(node.children).find((child) => child.tagName === tagName) ?? null;
+}
+
+function splitInstructionLines(value: string): string[] {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean);
+}
+
+function splitInstructionExamples(value: string): string[] {
+  const normalized = value.trim();
+  if (!normalized) {
+    return [];
+  }
+  return normalized
+    .split(/\n(?=EXAMPLE\s+\d+:)/g)
+    .map((example) => example.trim())
+    .filter(Boolean);
+}
+
+function normalizeInstructionListText(value: string): string {
+  return value
+    .split('\n')
+    .map((line) => line.replace(/^\s*(?:[-*]|\d+[.)])\s*/, '').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+function escapeInstructionXml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+function renderHighlightedXml(xml: string): ReactNode[] {
+  return xml.split('\n').map((line, lineIndex) => (
+    <span key={`xml-line-${lineIndex}`} className="block">
+      {line.split(/(<[^>]+>)/g).map((segment, segmentIndex) => {
+        if (!segment) {
+          return null;
+        }
+        const key = `xml-segment-${lineIndex}-${segmentIndex}`;
+        if (segment.startsWith('<') && segment.endsWith('>')) {
+          return (
+            <span key={key} className="text-amber-300">
+              {segment}
+            </span>
+          );
+        }
+        return (
+          <span key={key} className="text-slate-200">
+            {segment}
+          </span>
+        );
+      })}
+    </span>
+  ));
 }
 
 function configToYaml(config: GeneratedAgentConfig): string {

@@ -61,6 +61,8 @@ import click
 import yaml
 from click.core import ParameterSource
 
+from agent.instruction_builder import is_xml_instruction, validate_xml_instruction
+from agent.migrate_to_xml import migrate_instruction_text
 from agent.config.loader import load_config
 from agent.config.runtime import load_runtime_config
 from agent.config.schema import validate_config, config_diff as schema_config_diff
@@ -169,7 +171,7 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 # Command visibility tiers for simplified help output
 PRIMARY_COMMANDS = {"new", "build", "eval", "optimize", "deploy", "status", "doctor", "shell"}
-SECONDARY_COMMANDS = {"review", "config", "model", "provider", "mode", "memory", "template", "connect"}
+SECONDARY_COMMANDS = {"review", "config", "instruction", "model", "provider", "mode", "memory", "template", "connect"}
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
     "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
@@ -295,6 +297,95 @@ def _load_config_dict(config_path: str) -> dict:
         raise click_error(f"Config file not found: {config_path}") from exc
     except yaml.YAMLError as exc:
         raise click_error(f"Could not parse config file: {config_path}") from exc
+
+
+def _resolve_instruction_config_path(config_path: str | None) -> Path:
+    """Resolve the config file targeted by `autoagent instruction` commands."""
+    if config_path is not None:
+        return _resolve_invocation_input_path(Path(config_path))
+
+    workspace = _require_workspace("instruction")
+    resolved = workspace.resolve_active_config()
+    if resolved is None:
+        raise click.ClickException("No active config found in the current workspace.")
+    return resolved.path
+
+
+def _read_instruction_config(path: Path) -> dict[str, Any]:
+    """Read an instruction-bearing config file from YAML or JSON."""
+    if not path.exists():
+        raise click.ClickException(f"Config file not found: {path}")
+    raw_text = path.read_text(encoding="utf-8")
+    try:
+        if path.suffix.lower() == ".json":
+            payload = json.loads(raw_text)
+        else:
+            payload = yaml.safe_load(raw_text)
+    except (json.JSONDecodeError, yaml.YAMLError) as exc:
+        raise click.ClickException(f"Could not parse config file {path}: {exc}") from exc
+
+    if not isinstance(payload, dict):
+        raise click.ClickException(f"Config file {path} must contain a mapping/object.")
+    return payload
+
+
+def _write_instruction_config(path: Path, config: dict[str, Any]) -> None:
+    """Write an updated config file back to disk."""
+    if path.suffix.lower() == ".json":
+        path.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+
+def _instruction_locator(
+    config: dict[str, Any],
+    *,
+    specialist: str = "root",
+) -> tuple[list[str], str]:
+    """Locate the editable instruction field inside a config dictionary."""
+    if specialist != "root":
+        prompts = config.setdefault("prompts", {})
+        if not isinstance(prompts, dict):
+            raise click.ClickException("Config prompts section must be a mapping.")
+        return ["prompts", specialist], str(prompts.get(specialist, "") or "")
+
+    prompts = config.get("prompts")
+    if isinstance(prompts, dict) and "root" in prompts:
+        return ["prompts", "root"], str(prompts.get("root", "") or "")
+
+    if "system_prompt" in config:
+        return ["system_prompt"], str(config.get("system_prompt", "") or "")
+
+    if "instruction" in config:
+        return ["instruction"], str(config.get("instruction", "") or "")
+
+    prompts = config.setdefault("prompts", {})
+    if not isinstance(prompts, dict):
+        config["prompts"] = {}
+        prompts = config["prompts"]
+    return ["prompts", "root"], str(prompts.get("root", "") or "")
+
+
+def _set_instruction_value(config: dict[str, Any], path_parts: list[str], value: str) -> None:
+    """Set an instruction value inside a nested config dictionary."""
+    target: dict[str, Any] = config
+    for key in path_parts[:-1]:
+        child = target.get(key)
+        if not isinstance(child, dict):
+            child = {}
+            target[key] = child
+        target = child
+    target[path_parts[-1]] = value
+
+
+def _instruction_agent_name(config: dict[str, Any]) -> str | None:
+    """Return a human-friendly agent name when the config includes one."""
+    metadata = config.get("metadata")
+    if isinstance(metadata, dict):
+        agent_name = metadata.get("agent_name")
+        if isinstance(agent_name, str) and agent_name.strip():
+            return agent_name.strip()
+    return None
 
 
 def _enter_discovered_workspace(command_name: str | None) -> AutoAgentWorkspace | None:
@@ -2489,6 +2580,12 @@ def eval_group() -> None:
 @click.option("--category", default=None, help="Run only a specific category.")
 @click.option("--output", default=None, help="Write results JSON to file.")
 @click.option(
+    "--instruction-overrides",
+    "instruction_overrides_path",
+    default=None,
+    help="Path to a YAML/JSON file containing XML instruction section overrides.",
+)
+@click.option(
     "--real-agent",
     is_flag=True,
     default=False,
@@ -2509,7 +2606,8 @@ def eval_group() -> None:
     help="Render text, a final JSON envelope, or stream JSON progress events.",
 )
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
-             category: str | None, output: str | None, real_agent: bool = False,
+             category: str | None, output: str | None, instruction_overrides_path: str | None,
+             real_agent: bool = False,
              require_live: bool = False,
              json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
@@ -2562,6 +2660,12 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
 
     resolution = resolve_config_snapshot(config_path=config_path, command="eval run")
     persist_config_lockfile(resolution)
+
+    if instruction_overrides_path:
+        overrides = _load_config_dict(str(_resolve_invocation_input_path(Path(instruction_overrides_path))))
+        if config is None:
+            config = {}
+        config["_instruction_overrides"] = overrides
 
     runner = _build_eval_runner(
         runtime,
@@ -3817,6 +3921,146 @@ def compare_candidates(configs_dir: str, json_output: bool = False) -> None:
     for entry in candidates:
         composite = float((entry.get("scores") or {}).get("composite", 0.0))
         click.echo(f"- v{entry['version']:03d}  status={entry['status']}  composite={composite:.4f}")
+
+
+# ---------------------------------------------------------------------------
+# autoagent instruction (subgroup)
+# ---------------------------------------------------------------------------
+
+@cli.group("instruction")
+def instruction_group() -> None:
+    """Inspect, edit, validate, generate, and migrate agent instructions."""
+
+
+@instruction_group.command("show")
+@click.option("--config", "config_path", default=None, help="Path to config YAML/JSON.")
+@click.option("--specialist", default="root", show_default=True, help="Prompt key to inspect.")
+def instruction_show(config_path: str | None, specialist: str) -> None:
+    """Display the current instruction text for the active config."""
+    target_path = _resolve_instruction_config_path(config_path)
+    config = _read_instruction_config(target_path)
+    _path_parts, current_text = _instruction_locator(config, specialist=specialist)
+    click.echo(current_text)
+
+
+@instruction_group.command("edit")
+@click.option("--config", "config_path", default=None, help="Path to config YAML/JSON.")
+@click.option("--specialist", default="root", show_default=True, help="Prompt key to edit.")
+def instruction_edit(config_path: str | None, specialist: str) -> None:
+    """Open the current instruction in the configured editor and save changes."""
+    target_path = _resolve_instruction_config_path(config_path)
+    config = _read_instruction_config(target_path)
+    path_parts, current_text = _instruction_locator(config, specialist=specialist)
+    edited_text = click.edit(current_text, extension=".xml" if is_xml_instruction(current_text) else ".txt")
+    if edited_text is None:
+        click.echo("Instruction edit cancelled.")
+        return
+
+    updated_text = edited_text.strip()
+    if not updated_text:
+        raise click.ClickException("Instruction cannot be empty.")
+
+    if is_xml_instruction(updated_text):
+        validation = validate_xml_instruction(updated_text)
+        if not validation["valid"]:
+            raise click.ClickException("Instruction XML is invalid: " + ", ".join(validation["errors"]))
+
+    _set_instruction_value(config, path_parts, updated_text)
+    _write_instruction_config(target_path, config)
+    click.echo(f"Updated instruction in {target_path}")
+
+
+@instruction_group.command("validate")
+@click.option("--config", "config_path", default=None, help="Path to config YAML/JSON.")
+@click.option("--specialist", default="root", show_default=True, help="Prompt key to validate.")
+def instruction_validate(config_path: str | None, specialist: str) -> None:
+    """Validate that the current instruction uses the recommended XML structure."""
+    target_path = _resolve_instruction_config_path(config_path)
+    config = _read_instruction_config(target_path)
+    _path_parts, current_text = _instruction_locator(config, specialist=specialist)
+    validation = validate_xml_instruction(current_text)
+
+    for warning in validation["warnings"]:
+        click.echo(click.style(f"Warning: {warning}", fg="yellow"))
+
+    if not validation["valid"]:
+        for error in validation["errors"]:
+            click.echo(click.style(f"Error: {error}", fg="red"))
+        raise click.ClickException("Instruction XML is invalid.")
+
+    click.echo("Instruction XML is valid.")
+
+
+@instruction_group.command("generate")
+@click.option("--brief", required=True, help="Natural-language brief for the instruction draft.")
+@click.option("--config", "config_path", default=None, help="Path to config YAML/JSON.")
+@click.option("--specialist", default="root", show_default=True, help="Prompt key to generate.")
+@click.option("--apply", is_flag=True, default=False, help="Write the generated XML back to the config.")
+def instruction_generate(
+    brief: str,
+    config_path: str | None,
+    specialist: str,
+    apply: bool,
+) -> None:
+    """Generate a new XML instruction draft from a natural-language brief."""
+    normalized_brief = brief.strip().rstrip(".")
+    lowered_brief = normalized_brief.lower()
+    for prefix in ("create ", "build ", "design "):
+        if lowered_brief.startswith(prefix):
+            normalized_brief = normalized_brief[len(prefix):].strip()
+            lowered_brief = normalized_brief.lower()
+            break
+    if lowered_brief.startswith(("a ", "an ")):
+        seed_text = f"You are {normalized_brief}."
+    else:
+        seed_text = f"You are a {normalized_brief}."
+
+    target_path = _resolve_instruction_config_path(config_path) if apply or config_path else None
+    config: dict[str, Any] | None = None
+    path_parts: list[str] | None = None
+    agent_name: str | None = None
+
+    if target_path is not None:
+        config = _read_instruction_config(target_path)
+        path_parts, _existing_text = _instruction_locator(config, specialist=specialist)
+        agent_name = _instruction_agent_name(config)
+
+    generated_text = migrate_instruction_text(seed_text, agent_name=agent_name)
+    validation = validate_xml_instruction(generated_text)
+    if not validation["valid"]:
+        raise click.ClickException("Generated XML instruction is invalid: " + ", ".join(validation["errors"]))
+
+    if apply:
+        if config is None or path_parts is None or target_path is None:
+            raise click.ClickException("Could not resolve a config path to apply the generated instruction.")
+        _set_instruction_value(config, path_parts, generated_text)
+        _write_instruction_config(target_path, config)
+        click.echo(f"Applied generated XML instruction to {target_path}")
+        return
+
+    click.echo(generated_text)
+
+
+@instruction_group.command("migrate")
+@click.option("--config", "config_path", default=None, help="Path to config YAML/JSON.")
+@click.option("--specialist", default="root", show_default=True, help="Prompt key to migrate.")
+def instruction_migrate(config_path: str | None, specialist: str) -> None:
+    """Convert the current plain-text instruction into the recommended XML format."""
+    target_path = _resolve_instruction_config_path(config_path)
+    config = _read_instruction_config(target_path)
+    path_parts, current_text = _instruction_locator(config, specialist=specialist)
+
+    migrated_text = migrate_instruction_text(
+        current_text,
+        agent_name=_instruction_agent_name(config),
+    )
+    validation = validate_xml_instruction(migrated_text)
+    if not validation["valid"]:
+        raise click.ClickException("Migrated XML instruction is invalid: " + ", ".join(validation["errors"]))
+
+    _set_instruction_value(config, path_parts, migrated_text)
+    _write_instruction_config(target_path, config)
+    click.echo(f"Migrated instruction to XML in {target_path}")
 
 
 # ---------------------------------------------------------------------------

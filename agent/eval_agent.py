@@ -7,10 +7,17 @@ without depending directly on the interactive ADK server runtime.
 from __future__ import annotations
 
 import copy
-import time
 from pathlib import Path
 from typing import Any
 
+from agent.instruction_builder import (
+    build_xml_instruction,
+    is_xml_instruction,
+    merge_xml_sections,
+    parse_xml_instruction,
+    validate_xml_instruction,
+)
+from agent.migrate_to_xml import migrate_instruction_text
 from agent.config.loader import load_config
 from agent.config.runtime import RuntimeConfig
 from agent.config.schema import AgentConfig, validate_config
@@ -85,6 +92,7 @@ class ConfiguredEvalAgent:
         or the deterministic mock fallback.
         """
         resolved_config = self._resolve_config(config)
+        instruction_overrides = self._extract_instruction_overrides(resolved_config)
         if self.mock_mode:
             if not self.allow_mock_fallback:
                 reason = self.mock_reason or "no live provider was available"
@@ -94,11 +102,17 @@ class ConfiguredEvalAgent:
         validated = validate_config(resolved_config)
         specialist = self._route_specialist(validated, user_message)
         tool_calls = self._build_tool_calls(specialist, user_message, validated)
+        prompt_text = self._build_prompt(validated, specialist, user_message, tool_calls)
+        system_prompt = self._build_system_prompt(
+            validated,
+            specialist,
+            instruction_overrides=instruction_overrides,
+        )
         try:
             response = self.llm_router.generate(
                 LLMRequest(
-                    prompt=self._build_prompt(validated, specialist, user_message, tool_calls),
-                    system=self._build_system_prompt(validated, specialist),
+                    prompt=prompt_text,
+                    system=system_prompt,
                     temperature=0.2,
                     max_tokens=500,
                     metadata={
@@ -134,6 +148,15 @@ class ConfiguredEvalAgent:
         """Return the candidate config used for one eval execution."""
         return copy.deepcopy(override or self.default_config)
 
+    def _extract_instruction_overrides(self, config: dict[str, Any]) -> dict[str, Any] | None:
+        """Extract per-run XML section overrides from a raw config dictionary.
+
+        WHY: Eval callers need to test instruction variants without mutating the
+        stored baseline config on disk.
+        """
+        overrides = config.pop("_instruction_overrides", None)
+        return overrides if isinstance(overrides, dict) else None
+
     def _route_specialist(self, config: AgentConfig, user_message: str) -> str:
         """Choose the specialist that best matches the user message."""
         lower = user_message.lower()
@@ -155,20 +178,55 @@ class ConfiguredEvalAgent:
 
         return best_specialist
 
-    def _build_system_prompt(self, config: AgentConfig, specialist: str) -> str:
+    def _build_system_prompt(
+        self,
+        config: AgentConfig,
+        specialist: str,
+        *,
+        instruction_overrides: dict[str, Any] | None = None,
+    ) -> str:
         """Build the specialist-aware system prompt used for eval completions."""
         specialist_prompt = getattr(config.prompts, specialist, config.prompts.support)
-        instructions = [
-            config.prompts.root.strip(),
-            specialist_prompt.strip(),
+        operational_constraints = [
             "Answer as the selected specialist for this request.",
             "Be concise, practical, and helpful.",
             "Refuse unsafe or disallowed requests politely.",
             "Return plain text only.",
         ]
         if config.quality_boost:
-            instructions.append("Be extra thorough and verify key details before responding.")
-        return "\n\n".join(item for item in instructions if item)
+            operational_constraints.append("Be extra thorough and verify key details before responding.")
+
+        root_prompt = config.prompts.root.strip()
+        specialist_prompt = specialist_prompt.strip()
+        prompt_parts = [part for part in (root_prompt, specialist_prompt) if part]
+
+        should_use_xml = bool(instruction_overrides) or any(is_xml_instruction(part) for part in prompt_parts)
+        if not should_use_xml:
+            instructions = [root_prompt, specialist_prompt, *operational_constraints]
+            return "\n\n".join(item for item in instructions if item)
+
+        merged_sections: dict[str, Any] | None = None
+        for prompt_text in prompt_parts:
+            normalized_text = prompt_text if is_xml_instruction(prompt_text) else migrate_instruction_text(prompt_text)
+            parsed_sections = parse_xml_instruction(normalized_text)
+            if merged_sections is None:
+                merged_sections = parsed_sections
+            else:
+                merged_sections = _compose_instruction_sections(merged_sections, parsed_sections)
+
+        merged_sections = merged_sections or parse_xml_instruction(migrate_instruction_text(""))
+        if instruction_overrides:
+            merged_sections = merge_xml_sections(merged_sections, instruction_overrides)
+
+        merged_sections["constraints"] = _dedupe_text_items(
+            list(merged_sections.get("constraints") or []) + operational_constraints
+        )
+        final_prompt = build_xml_instruction(merged_sections)
+        validation = validate_xml_instruction(final_prompt)
+        if not validation["valid"]:
+            joined_errors = ", ".join(validation["errors"])
+            raise ValueError(f"Invalid XML instruction: {joined_errors}")
+        return final_prompt
 
     def _build_prompt(
         self,
@@ -227,3 +285,54 @@ def create_eval_agent(
         default_config=default_config,
         allow_mock_fallback=allow_mock_fallback,
     )
+
+
+def _dedupe_constraints(items: list[str]) -> list[str]:
+    """Return constraints in stable order without duplicates."""
+    return _dedupe_text_items(items)
+
+
+def _dedupe_text_items(items: list[str]) -> list[str]:
+    """Return text items in stable order without duplicates."""
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = str(item).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        deduped.append(normalized)
+    return deduped
+
+
+def _compose_instruction_sections(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]:
+    """Combine root and specialist XML sections while preserving shared guidance.
+
+    WHY: Root instructions provide global rules, while specialist instructions
+    should override role/taskflow details without discarding shared constraints.
+    """
+    merged = merge_xml_sections(base, overlay)
+
+    base_preamble = str(base.get("preamble", "") or "").strip()
+    overlay_preamble = str(overlay.get("preamble", "") or "").strip()
+    preamble_parts = [part for part in (base_preamble, overlay_preamble) if part]
+    if preamble_parts:
+        merged["preamble"] = "\n\n".join(preamble_parts)
+
+    base_persona = dict(base.get("persona") or {})
+    overlay_persona = dict(overlay.get("persona") or {})
+    merged_persona = dict(merged.get("persona") or {})
+    merged_persona["guidelines"] = _dedupe_text_items(
+        list(base_persona.get("guidelines") or []) + list(overlay_persona.get("guidelines") or [])
+    )
+    if not merged_persona.get("primary_goal"):
+        merged_persona["primary_goal"] = base_persona.get("primary_goal", "")
+    merged["persona"] = merged_persona
+
+    merged["constraints"] = _dedupe_text_items(
+        list(base.get("constraints") or []) + list(overlay.get("constraints") or [])
+    )
+    merged["examples"] = _dedupe_text_items(
+        list(base.get("examples") or []) + list(overlay.get("examples") or [])
+    )
+    return merged

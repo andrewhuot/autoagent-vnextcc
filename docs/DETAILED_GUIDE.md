@@ -129,6 +129,43 @@ my-project/
     └── providers.json       # optional provider registry
 ```
 
+### XML Instructions Are Now the Default
+
+New workspaces now start with an XML root instruction in `prompts.root`.
+
+Inspect it directly:
+
+```bash
+autoagent instruction show
+```
+
+Validate the structure:
+
+```bash
+autoagent instruction validate
+```
+
+Open it in your editor:
+
+```bash
+autoagent instruction edit
+```
+
+If you are upgrading an older workspace that still uses plain text:
+
+```bash
+autoagent instruction migrate
+autoagent instruction validate
+```
+
+You can also generate a fresh XML draft from a short brief:
+
+```bash
+autoagent instruction generate --brief "customer support agent for order tracking and refunds" --apply
+```
+
+For the full XML format and workflow, see [XML Instructions](xml-instructions.md).
+
 ## 4. Build Your First Agent
 
 Generate a config and eval draft from a natural-language prompt:
@@ -175,6 +212,15 @@ What the build step creates:
 - A new versioned config file
 - A generated eval case file
 - A build artifact JSON file for inspection/debugging
+
+The Build page now includes an XML Instruction Studio in the prompt workflow:
+
+- Raw XML editor
+- Form-based section editor
+- Inline validation warnings
+- Guide-inspired XML snippet library
+
+The validated XML draft is included when the agent is generated so you can author instruction structure before you start refinement.
 
 Advanced entry points:
 
@@ -232,6 +278,19 @@ Show the latest results again any time:
 
 ```bash
 autoagent eval show latest
+```
+
+To test XML instruction variants without editing the baseline config, create a YAML override file such as:
+
+```yaml
+constraints:
+  - Always confirm the cancellation reason before taking action.
+```
+
+Then run:
+
+```bash
+autoagent eval run --instruction-overrides instruction_override.yaml
 ```
 
 The **composite score** (0.0–1.0) blends quality, safety, latency, and cost. Higher is better.

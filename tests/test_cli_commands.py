@@ -10,6 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 import runner as runner_module
@@ -62,6 +63,12 @@ class TestCLIStructure:
         assert "list" in result.output
         assert "show" in result.output
         assert "diff" in result.output
+
+    def test_instruction_group_exists(self, runner):
+        result = runner.invoke(cli, ["instruction", "--help"])
+        assert result.exit_code == 0
+        for command_name in ["show", "edit", "validate", "generate", "migrate"]:
+            assert command_name in result.output
 
     def test_top_level_commands(self, runner):
         result = runner.invoke(cli, ["--help"])
@@ -153,6 +160,93 @@ class TestInitCommand:
         cases_dir = Path(tmp_dir) / "evals" / "cases"
         yaml_files = list(cases_dir.glob("*.yaml"))
         assert len(yaml_files) > 0
+
+
+class TestInstructionCommands:
+    def test_instruction_show_and_validate_use_active_workspace_instruction(self, runner, tmp_path, monkeypatch):
+        workspace = tmp_path / "instruction-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+        assert init_result.exit_code == 0, init_result.output
+
+        config_path = workspace / "configs" / "v001.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["prompts"]["root"] = """
+<role>Customer support specialist.</role>
+<persona>
+  <primary_goal>Resolve support issues.</primary_goal>
+  Be concise and helpful.
+</persona>
+<constraints>
+  1. Verify account details before sensitive actions.
+</constraints>
+<taskflow>
+  <subtask name="Support">
+    <step name="Answer">
+      <trigger>User requests support.</trigger>
+      <action>Respond with the next best step.</action>
+    </step>
+  </subtask>
+</taskflow>
+<examples>
+</examples>
+""".strip()
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+        monkeypatch.chdir(workspace)
+
+        show_result = runner.invoke(cli, ["instruction", "show"])
+        assert show_result.exit_code == 0, show_result.output
+        assert "<role>Customer support specialist.</role>" in show_result.output
+
+        validate_result = runner.invoke(cli, ["instruction", "validate"])
+        assert validate_result.exit_code == 0, validate_result.output
+        assert "valid" in validate_result.output.lower()
+
+    def test_instruction_migrate_rewrites_plain_text_instruction_as_xml(self, runner, tmp_path, monkeypatch):
+        workspace = tmp_path / "migrate-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+        assert init_result.exit_code == 0, init_result.output
+
+        config_path = workspace / "configs" / "v001.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["prompts"]["root"] = (
+            "You are a customer support assistant. "
+            "Help with refunds and tracking. "
+            "Verify identity before changing an order."
+        )
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
+
+        monkeypatch.chdir(workspace)
+        result = runner.invoke(cli, ["instruction", "migrate"])
+
+        assert result.exit_code == 0, result.output
+        migrated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert "<role>" in migrated["prompts"]["root"]
+        assert "<taskflow>" in migrated["prompts"]["root"]
+
+    def test_instruction_generate_can_apply_generated_xml_to_workspace(self, runner, tmp_path, monkeypatch):
+        workspace = tmp_path / "generate-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+        assert init_result.exit_code == 0, init_result.output
+
+        monkeypatch.chdir(workspace)
+        result = runner.invoke(
+            cli,
+            [
+                "instruction",
+                "generate",
+                "--brief",
+                "Create a customer support agent for order tracking and refunds.",
+                "--apply",
+            ],
+        )
+
+        assert result.exit_code == 0, result.output
+        config_path = workspace / "configs" / "v001.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert "<role>" in config["prompts"]["root"]
+        assert "<constraints>" in config["prompts"]["root"]
+        assert "<examples>" in config["prompts"]["root"]
 
 
 class TestJourneyCommands:
@@ -393,6 +487,72 @@ class TestEvalCommands:
 
         assert result.exit_code == 0, result.output
         assert captured["use_mock"] is True
+
+    def test_eval_run_accepts_instruction_override_file(self, runner, tmp_path, monkeypatch):
+        """`eval run --instruction-overrides` should pass XML section overrides into the agent config."""
+        workspace = tmp_path / "eval-override-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+        assert init_result.exit_code == 0, init_result.output
+
+        override_path = workspace / "instruction_override.yaml"
+        override_path.write_text(
+            yaml.safe_dump(
+                {
+                    "constraints": [
+                        "Always confirm the cancellation reason before taking action.",
+                    ]
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        monkeypatch.chdir(workspace)
+        captured: dict[str, object] = {}
+
+        fake_score = SimpleNamespace(
+            quality=0.8,
+            safety=1.0,
+            latency=0.9,
+            cost=0.95,
+            composite=0.87,
+            confidence_intervals={},
+            safety_failures=0,
+            total_cases=1,
+            passed_cases=1,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            warnings=[],
+            provenance={},
+            run_id="run-override",
+            results=[],
+        )
+
+        class _FakeEvalRunner:
+            mock_mode_messages: list[str] = []
+
+            def run(self, config=None, dataset_path=None, split="all"):
+                del dataset_path, split
+                captured["config"] = config
+                return fake_score
+
+        monkeypatch.setattr(
+            runner_module,
+            "_build_eval_runner",
+            lambda *args, **kwargs: _FakeEvalRunner(),
+        )
+        monkeypatch.setattr(runner_module, "_warn_mock_modes", lambda **kwargs: None)
+
+        result = runner.invoke(
+            cli,
+            ["eval", "run", "--instruction-overrides", str(override_path), "--json"],
+        )
+
+        assert result.exit_code == 0, result.output
+        assert isinstance(captured["config"], dict)
+        assert captured["config"]["_instruction_overrides"]["constraints"] == [
+            "Always confirm the cancellation reason before taking action.",
+        ]
 
 
 class TestStatusCommand:

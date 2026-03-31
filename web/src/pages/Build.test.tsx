@@ -54,6 +54,9 @@ describe('Build', () => {
     expect(screen.getByRole('tab', { name: 'Builder Chat' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Saved Artifacts' })).toBeInTheDocument();
     expect(screen.getByLabelText('Agent description')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'XML Instruction Studio' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Raw XML' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('XML instruction editor')).toBeInTheDocument();
   });
 
   it('switches to the builder chat workspace without losing the builder controls', async () => {
@@ -100,5 +103,38 @@ describe('Build', () => {
     expect(screen.getByRole('heading', { name: 'Saved Artifacts' })).toBeInTheDocument();
     expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
     expect(screen.getByText('Generated from a prompt')).toBeInTheDocument();
+  });
+
+  it('switches the XML instruction studio into form mode', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Form View' }));
+
+    expect(screen.getByRole('button', { name: 'Form View' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByLabelText('Instruction role')).toBeInTheDocument();
+    expect(screen.getByLabelText('Primary goal')).toBeInTheDocument();
+  });
+
+  it('shows inline XML validation feedback when the raw editor becomes malformed', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const editor = screen.getByLabelText('XML instruction editor');
+    await user.clear(editor);
+    await user.type(editor, '<role>Broken</role><persona>');
+
+    expect(screen.getByText(/XML parse error/i)).toBeInTheDocument();
+  });
+
+  it('can insert a guide example into the XML editor from the examples library', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Weather Routing Guide' }));
+
+    const editor = screen.getByLabelText('XML instruction editor') as HTMLTextAreaElement;
+    expect(editor.value).toContain('<role>The main Weather Agent coordinating multiple agents.</role>');
+    expect(editor.value).toContain('Begin example');
   });
 });
