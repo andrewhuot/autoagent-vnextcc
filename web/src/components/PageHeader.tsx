@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 
 interface PageHeaderProps {
   title: string;
@@ -7,6 +7,10 @@ interface PageHeaderProps {
 }
 
 export function PageHeader({ title, description, actions }: PageHeaderProps) {
+  useEffect(() => {
+    document.title = `${title} • AutoAgent`;
+  }, [title]);
+
   return (
     <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="min-w-0 flex-1">

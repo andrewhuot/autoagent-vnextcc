@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from 'react';
 import {
   LineChart,
   Line,
@@ -5,7 +6,6 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
-  ResponsiveContainer,
 } from 'recharts';
 
 interface ScoreChartProps {
@@ -14,6 +14,43 @@ interface ScoreChartProps {
 }
 
 export function ScoreChart({ data, height = 240 }: ScoreChartProps) {
+  const frameRef = useRef<HTMLDivElement | null>(null);
+  const [chartSize, setChartSize] = useState({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+
+    function updateSize() {
+      const nextFrame = frameRef.current;
+      if (!nextFrame) return;
+      const nextRect = nextFrame.getBoundingClientRect();
+      setChartSize({
+        width: Math.max(0, Math.floor(nextRect.width)),
+        height: Math.max(0, Math.floor(nextRect.height)),
+      });
+    }
+
+    updateSize();
+    const animationId = window.requestAnimationFrame(updateSize);
+
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', updateSize);
+      return () => {
+        window.cancelAnimationFrame(animationId);
+        window.removeEventListener('resize', updateSize);
+      };
+    }
+
+    const observer = new ResizeObserver(() => updateSize());
+    observer.observe(frame);
+
+    return () => {
+      window.cancelAnimationFrame(animationId);
+      observer.disconnect();
+    };
+  }, []);
+
   if (data.length === 0) {
     return (
       <div
@@ -26,9 +63,14 @@ export function ScoreChart({ data, height = 240 }: ScoreChartProps) {
   }
 
   return (
-    <div style={{ height, minHeight: height, minWidth: 240 }}>
-      <ResponsiveContainer width="100%" height="100%">
-        <LineChart data={data} margin={{ top: 8, right: 8, bottom: 0, left: -16 }}>
+    <div ref={frameRef} className="w-full" style={{ height, minHeight: height, minWidth: 240 }}>
+      {chartSize.width > 0 && chartSize.height > 0 ? (
+        <LineChart
+          width={chartSize.width}
+          height={chartSize.height}
+          data={data}
+          margin={{ top: 8, right: 8, bottom: 0, left: -16 }}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" vertical={false} />
           <XAxis
             dataKey="label"
@@ -59,7 +101,7 @@ export function ScoreChart({ data, height = 240 }: ScoreChartProps) {
             activeDot={{ r: 4 }}
           />
         </LineChart>
-      </ResponsiveContainer>
+      ) : null}
     </div>
   );
 }

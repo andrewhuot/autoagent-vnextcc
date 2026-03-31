@@ -56,7 +56,7 @@ export function MetricCard({
         </div>
         {sparklineData && sparklineData.length > 1 && (
           <div className="w-16 h-8 flex-shrink-0" style={{ minWidth: 64, minHeight: 32 }}>
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={64} minHeight={32}>
               <LineChart data={sparklineData.map((v, i) => ({ idx: i, value: v }))}>
                 <Line
                   type="monotone"

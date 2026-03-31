@@ -229,4 +229,19 @@ describe('Compare', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('I do not know.')).toBeInTheDocument();
   });
+
+  it('keeps the run button disabled until two distinct configs are selected', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const runButton = screen.getByRole('button', { name: 'Run comparison' });
+    expect(runButton).toBeEnabled();
+
+    await user.selectOptions(screen.getByLabelText('Config B'), 'v001.yaml');
+
+    expect(runButton).toBeDisabled();
+    expect(
+      screen.getByText('Choose two different configs to compare. Build or import another version if only one is available.')
+    ).toBeInTheDocument();
+  });
 });

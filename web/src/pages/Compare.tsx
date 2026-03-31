@@ -79,9 +79,16 @@ export function Compare() {
     );
   }, [comparison]);
 
+  const hasTwoDistinctConfigs = Boolean(configA) && Boolean(configB) && configA !== configB;
+
   function handleStartComparison() {
     if (!configA || !configB) {
       toastError('Choose both configs', 'Select a left and right config before starting a comparison.');
+      return;
+    }
+
+    if (configA === configB) {
+      toastError('Choose two versions', 'Select two different configs to run a meaningful comparison.');
       return;
     }
 
@@ -184,12 +191,17 @@ export function Compare() {
             </div>
             <button
               onClick={handleStartComparison}
-              disabled={startComparison.isPending}
+              disabled={startComparison.isPending || !hasTwoDistinctConfigs}
               className="mt-4 inline-flex items-center gap-2 rounded-xl bg-gray-900 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
             >
               <ArrowLeftRight className="h-4 w-4" />
               {startComparison.isPending ? 'Running…' : 'Run comparison'}
             </button>
+            {!hasTwoDistinctConfigs && (
+              <p className="mt-2 text-sm text-amber-700">
+                Choose two different configs to compare. Build or import another version if only one is available.
+              </p>
+            )}
           </div>
 
           <div className="rounded-2xl border border-gray-200 bg-gray-50 p-4">
