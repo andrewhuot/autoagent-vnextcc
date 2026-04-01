@@ -1355,6 +1355,8 @@ export interface SetupProviderSummary {
 export interface SetupApiKeyStatus {
   name: string;
   configured: boolean;
+  masked_value: string | null;
+  source: string | null;
 }
 
 export interface SetupDataStoreStatus {
@@ -1378,12 +1380,35 @@ export interface SetupOverview {
     mode_source: string;
     message: string;
     providers: SetupProviderSummary[];
+    real_provider_configured?: boolean;
     api_keys: SetupApiKeyStatus[];
     data_stores: SetupDataStoreStatus[];
     issues: string[];
   };
   mcp_clients: SetupMcpClientStatus[];
   recommended_commands: string[];
+}
+
+export interface SettingsModeSummary {
+  preferred_mode: string;
+  effective_mode: string;
+  mode_source: string;
+  message: string;
+  real_provider_configured: boolean;
+}
+
+export interface SaveProviderKeysResponse {
+  message: string;
+  api_keys: SetupApiKeyStatus[];
+  mode: SettingsModeSummary;
+}
+
+export interface TestProviderKeyResponse {
+  provider: string;
+  model: string;
+  valid: boolean;
+  message: string;
+  masked_value: string | null;
 }
 
 // ---------------------------------------------------------------------------

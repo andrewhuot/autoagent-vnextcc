@@ -76,6 +76,7 @@ import type {
   GeneratedAgentConfig,
   ChatRefineResponse,
   Runbook,
+  SaveProviderKeysResponse,
   SetupOverview,
   SkillLeaderboardEntry,
   SkillMarketplaceListing,
@@ -89,6 +90,7 @@ import type {
   PromoteTraceResult,
   TranscriptReport,
   TranscriptReportSummary,
+  TestProviderKeyResponse,
   UnifiedSkill,
 } from './types';
 import type { ArtifactRef, ArtifactType } from './builder-types';
@@ -198,6 +200,13 @@ function numberRecord(value: unknown): Record<string, number> {
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, numberValue(item)])
   );
+}
+
+function emitSettingsUpdated(): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+  window.dispatchEvent(new Event('agentlab:settings-updated'));
 }
 
 function normalizeContextHealthReport(payload: unknown): ContextHealthReport {
@@ -1025,6 +1034,74 @@ export function useSetupOverview() {
     queryKey: ['setupOverview'],
     queryFn: () => fetchApi('/setup/overview'),
     refetchInterval: 15000,
+  });
+}
+
+export function useSaveProviderKeys() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    SaveProviderKeysResponse,
+    ApiRequestError,
+    {
+      openai_api_key?: string;
+      anthropic_api_key?: string;
+      google_api_key?: string;
+    }
+  >({
+    mutationFn: (payload) =>
+      fetchApi('/settings/keys', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['setupOverview'] });
+      emitSettingsUpdated();
+    },
+  });
+}
+
+export function useTestProviderKey() {
+  return useMutation<
+    TestProviderKeyResponse,
+    ApiRequestError,
+    {
+      provider: 'openai' | 'anthropic' | 'google';
+      api_key?: string;
+      model?: string;
+    }
+  >({
+    mutationFn: (payload) =>
+      fetchApi('/settings/test-key', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+  });
+}
+
+export function useSetRuntimeMode() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    {
+      preferred_mode: string;
+      effective_mode: string;
+      mode_source: string;
+      message: string;
+      real_provider_configured: boolean;
+    },
+    ApiRequestError,
+    { mode: 'mock' | 'auto' | 'live' }
+  >({
+    mutationFn: (payload) =>
+      fetchApi('/settings/mode', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['setupOverview'] });
+      emitSettingsUpdated();
+    },
   });
 }
 

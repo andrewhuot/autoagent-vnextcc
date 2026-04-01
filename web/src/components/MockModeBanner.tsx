@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
-import { AlertTriangle, X } from 'lucide-react';
+import { Link, useLocation } from 'react-router-dom';
+import { AlertTriangle } from 'lucide-react';
 
 const BANNER_COPY = 'Running in mock mode — add API keys for live optimization';
-const DISMISS_KEY = 'agentlab.mock_mode_banner.dismissed';
 const OPTIMIZATION_ROUTE_PREFIXES = ['/dashboard', '/evals', '/optimize', '/live-optimize', '/improvements'];
 
 interface MockModeHealthPayload {
@@ -16,37 +15,22 @@ function isOptimizationRoute(pathname: string): boolean {
   return OPTIMIZATION_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
-function readDismissedState(): boolean {
-  try {
-    return window.localStorage.getItem(DISMISS_KEY) === 'true';
-  } catch {
-    return false;
-  }
-}
-
-function persistDismissedState(value: boolean): void {
-  try {
-    if (value) {
-      window.localStorage.setItem(DISMISS_KEY, 'true');
-      return;
-    }
-    window.localStorage.removeItem(DISMISS_KEY);
-  } catch {
-    // Ignore storage errors and keep rendering from in-memory state.
-  }
-}
-
 export function MockModeBanner() {
   const location = useLocation();
   const [mockMode, setMockMode] = useState(false);
-  const [canDismiss, setCanDismiss] = useState(false);
   const [detail, setDetail] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState(() => readDismissedState());
+  const [refreshToken, setRefreshToken] = useState(0);
 
   const shouldRenderOnRoute = useMemo(
     () => isOptimizationRoute(location.pathname),
     [location.pathname]
   );
+
+  useEffect(() => {
+    const onSettingsUpdated = () => setRefreshToken((value) => value + 1);
+    window.addEventListener('agentlab:settings-updated', onSettingsUpdated);
+    return () => window.removeEventListener('agentlab:settings-updated', onSettingsUpdated);
+  }, []);
 
   useEffect(() => {
     if (!shouldRenderOnRoute) {
@@ -67,21 +51,13 @@ export function MockModeBanner() {
               (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
             )
           : [];
-        const providerConfigured = data?.real_provider_configured === true;
 
         setMockMode(data?.mock_mode === true || reasons.length > 0);
-        setCanDismiss(providerConfigured);
         setDetail(reasons.find((value) => value !== BANNER_COPY) ?? null);
-
-        if (!providerConfigured) {
-          persistDismissedState(false);
-          setDismissed(false);
-        }
       })
       .catch(() => {
         if (!cancelled) {
           setMockMode(false);
-          setCanDismiss(false);
           setDetail(null);
         }
       });
@@ -89,18 +65,10 @@ export function MockModeBanner() {
     return () => {
       cancelled = true;
     };
-  }, [shouldRenderOnRoute]);
+  }, [refreshToken, shouldRenderOnRoute]);
 
-  if (!shouldRenderOnRoute || !mockMode || (canDismiss && dismissed)) {
+  if (!shouldRenderOnRoute || !mockMode) {
     return null;
-  }
-
-  function handleDismiss() {
-    if (!canDismiss) {
-      return;
-    }
-    persistDismissedState(true);
-    setDismissed(true);
   }
 
   return (
@@ -118,16 +86,12 @@ export function MockModeBanner() {
         </div>
       </div>
 
-      {canDismiss ? (
-        <button
-          type="button"
-          onClick={handleDismiss}
-          aria-label="Dismiss mock mode warning"
-          className="rounded-md p-1 text-amber-800 transition hover:bg-amber-100 hover:text-amber-950"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      ) : null}
+      <Link
+        to="/setup"
+        className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+      >
+        Exit Mock Mode
+      </Link>
     </div>
   );
 }

@@ -12,6 +12,7 @@ import click
 
 from agent.config.runtime import RuntimeConfig, load_runtime_config
 from cli.errors import with_doctor_hint
+from cli.workspace_env import load_workspace_env
 from optimizer.providers import has_real_provider_credentials
 
 
@@ -64,12 +65,14 @@ def describe_providers(runtime: RuntimeConfig) -> list[dict[str, Any]]:
             continue
         seen.add(key)
         env_name = model.api_key_env
+        configured = bool(env_name and os.environ.get(env_name))
         providers.append(
             {
                 "provider": model.provider,
                 "model": model.model,
                 "api_key_env": env_name,
-                "credential_set": bool(env_name and os.environ.get(env_name)),
+                "credential_set": configured,
+                "configured": configured,
             }
         )
     return providers
@@ -77,6 +80,7 @@ def describe_providers(runtime: RuntimeConfig) -> list[dict[str, Any]]:
 
 def summarize_mode_state(config_path: str = "agentlab.yaml") -> dict[str, Any]:
     """Return preferred/effective mode details plus provider configuration."""
+    load_workspace_env()
     runtime = load_runtime_config(config_path)
     workspace_mode = get_mode_preference()
     config_mode = "mock" if runtime.optimizer.use_mock else "live"

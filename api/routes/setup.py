@@ -11,6 +11,7 @@ from fastapi import APIRouter
 
 from cli.mcp_setup import _client_specs, _has_agentlab_entry
 from cli.mode import summarize_mode_state
+from cli.workspace_env import collect_provider_api_key_statuses
 from cli.workspace import discover_workspace
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
@@ -67,9 +68,7 @@ async def get_setup_overview() -> dict[str, Any]:
             }
         )
 
-    api_keys = []
-    for env_var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY"):
-        api_keys.append({"name": env_var, "configured": bool(os.environ.get(env_var))})
+    api_keys = collect_provider_api_key_statuses()
 
     mcp_clients = []
     for name, spec in sorted(_client_specs().items()):
@@ -112,6 +111,7 @@ async def get_setup_overview() -> dict[str, Any]:
             "mode_source": mode_summary["mode_source"],
             "message": mode_summary["message"],
             "providers": mode_summary["providers"],
+            "real_provider_configured": mode_summary["real_provider_configured"],
             "api_keys": api_keys,
             "data_stores": data_stores,
             "issues": issues,

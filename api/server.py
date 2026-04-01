@@ -66,6 +66,7 @@ from api.routes import (
     rewards as rewards_routes,
     policy_opt as policy_opt_routes,
     preferences as preferences_routes,
+    settings as settings_routes,
     builder_demo as builder_demo_routes,
     generated_evals as generated_evals_routes,
     compare as compare_routes,
@@ -461,6 +462,7 @@ app.include_router(optimize_stream_routes.router)
 app.include_router(quickfix_routes.router)
 app.include_router(config_routes.router)
 app.include_router(setup_routes.router)
+app.include_router(settings_routes.router)
 app.include_router(health_routes.router)
 app.include_router(conversations_routes.router)
 app.include_router(deploy_routes.router)
