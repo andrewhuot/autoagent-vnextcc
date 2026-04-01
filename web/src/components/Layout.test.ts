@@ -113,6 +113,8 @@ describe('Sidebar', () => {
     expect(screen.getByRole('link', { name: 'Connect' })).toHaveAttribute('href', '/connect');
     expect(screen.getByRole('link', { name: 'CX Studio' })).toHaveAttribute('href', '/cx/studio');
     expect(screen.getByRole('link', { name: 'ADK Import' })).toHaveAttribute('href', '/adk/import');
+    expect(screen.getByRole('link', { name: 'CLI' })).toHaveAttribute('href', '/cli');
+    expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', '/docs');
     expect(screen.queryByRole('link', { name: 'CX Import' })).not.toBeInTheDocument();
   });
 
@@ -197,5 +199,25 @@ describe('App', () => {
     expect(window.location.pathname).toBe('/improvements');
     expect(window.location.search).toBe('?tab=review');
     expect(await screen.findByRole('heading', { name: 'Improvements', level: 2 })).toBeInTheDocument();
+  });
+
+  it('mounts the CLI launcher page at /cli', async () => {
+    installLocalStorageMock();
+    window.history.pushState({}, '', '/cli');
+
+    render(createElement(App));
+
+    expect(await screen.findByRole('heading', { name: 'Launch the CLI' })).toBeInTheDocument();
+    expect(screen.getByText('npx agentlab')).toBeInTheDocument();
+  });
+
+  it('mounts the documentation page at /docs', async () => {
+    installLocalStorageMock();
+    window.history.pushState({}, '', '/docs');
+
+    render(createElement(App));
+
+    expect((await screen.findAllByRole('heading', { name: 'Documentation' })).length).toBeGreaterThan(0);
+    expect(screen.getByRole('heading', { name: 'Using the CLI' })).toBeInTheDocument();
   });
 });

@@ -40,8 +40,12 @@ describe('shared taxonomy', () => {
 describe('navigation schema', () => {
   const sections: NavigationSection[] = getNavigationSections();
 
-  it('groups routes by the shared CLI taxonomy', () => {
-    expect(sections.map((section) => section.group)).toEqual(COMMAND_GROUPS);
+  it('keeps the shared CLI taxonomy order and adds help before settings', () => {
+    expect(sections.map((section) => section.group)).toEqual([
+      ...COMMAND_GROUPS.slice(0, -1),
+      'help',
+      'settings',
+    ]);
   });
 
   it('maps build and optimize routes to the unified sections', () => {
@@ -70,6 +74,8 @@ describe('navigation schema', () => {
     expect(getBreadcrumbForPath('/improvements')).toEqual(['Review']);
     expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
     expect(getBreadcrumbForPath('/connect')).toEqual(['Import']);
+    expect(getBreadcrumbForPath('/cli')).toEqual(['Help']);
+    expect(getBreadcrumbForPath('/docs')).toEqual(['Help']);
     expect(getBreadcrumbForPath('/settings')).toEqual(['Settings']);
   });
 
@@ -102,6 +108,20 @@ describe('navigation schema', () => {
       '/optimize',
       '/improvements',
       '/deploy',
+      '/cli',
+      '/docs',
     ]);
+  });
+
+  it('adds a dedicated help section with CLI and docs links', () => {
+    const helpSection = sections.find((section) => section.group === 'help');
+
+    expect(helpSection?.label).toBe('Help');
+    expect(helpSection?.items).toEqual([
+      { label: 'CLI', path: '/cli' },
+      { label: 'Docs', path: '/docs' },
+    ]);
+    expect(getRouteTitle('/cli')).toBe('CLI');
+    expect(getRouteTitle('/docs')).toBe('Documentation');
   });
 });

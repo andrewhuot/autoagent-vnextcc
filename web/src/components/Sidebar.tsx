@@ -23,6 +23,7 @@ import {
   Scale,
   Layers,
   BookOpen,
+  Terminal,
   MapPin,
   Sparkles,
   GitPullRequest,
@@ -88,6 +89,8 @@ const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/sandbox': Layers,
   '/what-if': RefreshCw,
   '/knowledge': BookOpen,
+  '/cli': Terminal,
+  '/docs': BookOpen,
   '/setup': Settings2,
   '/settings': Settings,
 };

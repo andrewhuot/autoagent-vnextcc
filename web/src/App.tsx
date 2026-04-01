@@ -42,6 +42,8 @@ import { RewardAudit } from './pages/RewardAudit';
 import { Build } from './pages/Build';
 import { Improvements } from './pages/Improvements';
 import { Connect } from './pages/Connect';
+import { CliLauncher } from './pages/CliLauncher';
+import { Docs } from './pages/Docs';
 import { getRouteRedirect } from './lib/navigation';
 
 const queryClient = new QueryClient({
@@ -117,6 +119,8 @@ export default function App() {
             <Route path="/notifications" element={<Notifications />} />
             <Route path="/sandbox" element={<Sandbox />} />
             <Route path="/knowledge" element={<Knowledge />} />
+            <Route path="/cli" element={<CliLauncher />} />
+            <Route path="/docs" element={<Docs />} />
             <Route path="/what-if" element={<WhatIf />} />
             <Route path="/review" element={<LegacyRouteRedirect />} />
             <Route path="/reviews" element={<LegacyRouteRedirect />} />

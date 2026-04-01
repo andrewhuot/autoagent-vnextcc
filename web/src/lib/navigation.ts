@@ -4,6 +4,8 @@ import {
   type CommandGroup,
 } from '../../../shared/taxonomy';
 
+export type NavigationGroup = CommandGroup | 'help';
+
 export interface NavigationItem {
   label: string;
   path: string;
@@ -11,7 +13,7 @@ export interface NavigationItem {
 }
 
 export interface NavigationSection {
-  group: CommandGroup;
+  group: NavigationGroup;
   label: string;
   description: string;
   items: NavigationItem[];
@@ -132,6 +134,15 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     ],
   },
   {
+    group: 'help',
+    label: 'Help',
+    description: 'CLI shortcuts, onboarding guides, and in-app documentation.',
+    items: [
+      { label: 'CLI', path: '/cli' },
+      { label: 'Docs', path: '/docs' },
+    ],
+  },
+  {
     group: 'settings',
     label: COMMAND_TAXONOMY.settings.label,
     description: COMMAND_TAXONOMY.settings.description,
@@ -208,6 +219,8 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/sandbox': { title: 'Sandbox', breadcrumbs: ['Integrations'] },
   '/what-if': { title: 'What-If Replay', breadcrumbs: ['Integrations'] },
   '/knowledge': { title: 'Knowledge', breadcrumbs: ['Integrations'] },
+  '/cli': { title: 'CLI', breadcrumbs: ['Help'] },
+  '/docs': { title: 'Documentation', breadcrumbs: ['Help'] },
   '/review': { title: 'Improvements', breadcrumbs: ['Review'], redirectTo: '/improvements?tab=review' },
   '/reviews': { title: 'Improvements', breadcrumbs: ['Review'], redirectTo: '/improvements?tab=review' },
   '/autofix': {
@@ -271,6 +284,8 @@ const SIMPLE_MODE_PATHS = new Set([
   '/optimize',
   '/improvements',
   '/deploy',
+  '/cli',
+  '/docs',
 ]);
 
 export function getSimpleNavigationSections(): NavigationSection[] {
