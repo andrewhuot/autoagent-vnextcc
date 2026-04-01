@@ -110,6 +110,10 @@ describe('Sidebar', () => {
     expect(
       screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)
     ).toEqual(getSimpleNavigationSections().map((section) => section.label));
+    expect(screen.getByRole('link', { name: 'Connect' })).toHaveAttribute('href', '/connect');
+    expect(screen.getByRole('link', { name: 'CX Studio' })).toHaveAttribute('href', '/cx/studio');
+    expect(screen.getByRole('link', { name: 'ADK Import' })).toHaveAttribute('href', '/adk/import');
+    expect(screen.queryByRole('link', { name: 'CX Import' })).not.toBeInTheDocument();
   });
 
   it('toggles to the full navigation surface and persists pro mode', async () => {
@@ -123,6 +127,7 @@ describe('Sidebar', () => {
     expect(
       screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)
     ).toEqual(getNavigationSections().map((section) => section.label));
+    expect(screen.getByRole('link', { name: 'CX Import' })).toHaveAttribute('href', '/cx/import');
     expect(localStorageMock.setItem).toHaveBeenCalledWith('agentlab-sidebar-mode', 'pro');
   });
 });

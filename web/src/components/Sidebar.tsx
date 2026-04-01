@@ -2,6 +2,7 @@ import { NavLink } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import {
   type LucideIcon,
+  Cloud,
   Hammer,
   LayoutDashboard,
   FlaskConical,
@@ -36,12 +37,19 @@ import {
   Target,
   ShieldCheck,
 } from 'lucide-react';
-import { getNavigationSections, getSimpleNavigationSections } from '../lib/navigation';
+import {
+  getNavigationSections,
+  getSidebarMode,
+  getSimpleNavigationSections,
+  setSidebarMode,
+} from '../lib/navigation';
 import { classNames } from '../lib/utils';
 
 const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/build': Hammer,
   '/intelligence': BrainCircuit,
+  '/connect': Download,
+  '/cx/studio': Cloud,
   '/cx/import': Download,
   '/adk/import': Download,
   '/evals': FlaskConical,
@@ -90,20 +98,10 @@ interface SidebarProps {
 }
 
 export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
-  const [simpleMode, setSimpleMode] = useState(() => {
-    try {
-      return localStorage.getItem('agentlab-sidebar-mode') !== 'pro';
-    } catch {
-      return true;
-    }
-  });
+  const [simpleMode, setSimpleMode] = useState(() => getSidebarMode() !== 'pro');
 
   useEffect(() => {
-    try {
-      localStorage.setItem('agentlab-sidebar-mode', simpleMode ? 'simple' : 'pro');
-    } catch {
-      // ignore
-    }
+    setSidebarMode(simpleMode ? 'simple' : 'pro');
   }, [simpleMode]);
 
   const sections = (simpleMode ? getSimpleNavigationSections() : getNavigationSections()).map(

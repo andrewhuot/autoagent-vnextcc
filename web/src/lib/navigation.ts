@@ -23,6 +23,11 @@ export interface RouteMetadata {
   redirectTo?: string;
 }
 
+export type SidebarMode = 'simple' | 'pro';
+
+export const SIDEBAR_MODE_STORAGE_KEY = 'agentlab-sidebar-mode';
+export const SIDEBAR_MODE_EVENT = 'agentlab-sidebar-mode-change';
+
 const NAVIGATION_SECTIONS: NavigationSection[] = [
   {
     group: 'home',
@@ -46,8 +51,8 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     items: [
       { label: 'Connect', path: '/connect' },
       { label: 'CX Studio', path: '/cx/studio' },
-      { label: 'CX Import', path: '/cx/import' },
       { label: 'ADK Import', path: '/adk/import' },
+      { label: 'CX Import', path: '/cx/import' },
     ],
   },
   {
@@ -235,12 +240,31 @@ export function getNavigationSections(): NavigationSection[] {
   }));
 }
 
+export function getSidebarMode(): SidebarMode {
+  try {
+    return window.localStorage.getItem(SIDEBAR_MODE_STORAGE_KEY) === 'pro' ? 'pro' : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+
+export function setSidebarMode(mode: SidebarMode) {
+  try {
+    window.localStorage.setItem(SIDEBAR_MODE_STORAGE_KEY, mode);
+    window.dispatchEvent(new CustomEvent<SidebarMode>(SIDEBAR_MODE_EVENT, { detail: mode }));
+  } catch {
+    // ignore storage access failures
+  }
+}
+
 /** Essential pages shown in Simple mode. */
 const SIMPLE_MODE_PATHS = new Set([
   '/dashboard',
   '/setup',
   '/build',
   '/connect',
+  '/cx/studio',
+  '/adk/import',
   '/evals',
   '/results',
   '/compare',

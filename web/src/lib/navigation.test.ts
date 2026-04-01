@@ -79,8 +79,8 @@ describe('navigation schema', () => {
     expect(importSection?.items.map((item) => item.path)).toEqual([
       '/connect',
       '/cx/studio',
-      '/cx/import',
       '/adk/import',
+      '/cx/import',
     ]);
     expect(getRouteTitle('/connect')).toBe('Connect');
   });
@@ -94,6 +94,8 @@ describe('navigation schema', () => {
       '/setup',
       '/build',
       '/connect',
+      '/cx/studio',
+      '/adk/import',
       '/evals',
       '/results',
       '/compare',
