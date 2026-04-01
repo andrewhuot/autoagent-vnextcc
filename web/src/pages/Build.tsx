@@ -24,6 +24,7 @@ import {
   Sparkles,
   UploadCloud,
   WandSparkles,
+  X,
 } from 'lucide-react';
 import {
   previewGeneratedAgent,
@@ -280,9 +281,11 @@ export function BuilderChatWorkspace({
   const [previewComposer, setPreviewComposer] = useState('');
   const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const artifactCreatedAtRef = useRef<string | null>(null);
   const busy = pending || previewPending || savePending;
+  const builderYamlPreview = session?.config ? builderConfigToYaml(session.config) : '';
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -416,6 +419,19 @@ export function BuilderChatWorkspace({
     }
   }
 
+  async function handleCopyYaml() {
+    if (!builderYamlPreview || !navigator.clipboard?.writeText) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(builderYamlPreview);
+      toastSuccess('Copied YAML', 'The current builder draft YAML is in your clipboard.');
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : 'Copy failed');
+    }
+  }
+
   const messages = session?.messages ?? [
     {
       message_id: 'builder-starter',
@@ -442,232 +458,269 @@ export function BuilderChatWorkspace({
   }, [previewComposer, session?.config, session?.updated_at]);
 
   const body = (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]">
-      <section className="flex min-h-[560px] flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
-        <div className="border-b border-gray-200 px-5 py-4">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
-                Conversational Builder
-              </p>
-              <h3 className="mt-1 text-lg font-semibold tracking-tight text-gray-900">
-                Describe the agent you want to build
-              </h3>
-            </div>
-            <div
-              className={classNames(
-                'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium',
-                session
-                  ? session.mock_mode
-                    ? 'border-amber-200 bg-amber-50 text-amber-800'
-                    : 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                  : 'border-sky-200 bg-sky-50 text-sky-800'
-              )}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-              {session ? (session.mock_mode ? 'Fallback mode' : 'Live LLM') : 'Awaiting config'}
-            </div>
-          </div>
-          {session?.mock_mode && session.mock_reason ? (
-            <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
-          ) : null}
-        </div>
-
-        <div
-          ref={messageListRef}
-          data-testid="builder-message-list"
-          className="flex-1 space-y-4 overflow-y-auto px-5 py-5"
-        >
-          {messages.map((message) => (
-            <div
-              key={message.message_id}
-              className={classNames(
-                'max-w-[88%] rounded-2xl border px-4 py-3 text-sm leading-6',
-                message.role === 'user'
-                  ? 'ml-auto border-sky-200 bg-sky-50 text-sky-950'
-                  : 'border-gray-200 bg-gray-50 text-gray-700'
-              )}
-            >
-              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400">
-                {message.role === 'user' ? 'You' : 'Builder'}
-              </p>
-              <p>{message.content}</p>
-            </div>
-          ))}
-
-          {error ? (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-              {error}
-            </div>
-          ) : null}
-        </div>
-
-        <div className="border-t border-gray-200 bg-gray-50/80 px-5 py-4">
-          <div className="mb-3 flex flex-wrap gap-2">
-            {BUILDER_PROMPTS.map((prompt) => (
-              <button
-                key={prompt}
-                type="button"
-                onClick={() => setComposer(prompt)}
-                className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 transition hover:border-gray-300 hover:text-gray-900"
+    <>
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-stretch">
+        <section className="flex min-h-[560px] h-full flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
+          <div className="border-b border-gray-200 px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                  Conversational Builder
+                </p>
+                <h3 className="mt-1 text-lg font-semibold tracking-tight text-gray-900">
+                  Describe the agent you want to build
+                </h3>
+              </div>
+              <div
+                className={classNames(
+                  'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium',
+                  session
+                    ? session.mock_mode
+                      ? 'border-amber-200 bg-amber-50 text-amber-800'
+                      : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                    : 'border-sky-200 bg-sky-50 text-sky-800'
+                )}
               >
-                {prompt}
-              </button>
-            ))}
-          </div>
-
-          <div className="rounded-[24px] border border-gray-200 bg-white p-3 shadow-sm">
-            <textarea
-              data-testid="builder-composer"
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              placeholder="Describe the agent you want to build..."
-              rows={4}
-              className="min-h-[112px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-400"
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  void submitMessage(composer);
-                }
-              }}
-            />
-            <div className="flex items-center justify-between border-t border-gray-100 px-2 pt-3">
-              <p className="text-xs text-gray-400">
-                Ask for a base agent, then refine tools, policies, tone, and evals.
-              </p>
-              <button
-                data-testid="builder-send"
-                onClick={() => void submitMessage(composer)}
-                disabled={busy}
-                className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Send className="h-4 w-4" />
-                Send
-              </button>
+                <Sparkles className="h-3.5 w-3.5" />
+                {session ? (session.mock_mode ? 'Fallback mode' : 'Live LLM') : 'Awaiting config'}
+              </div>
             </div>
+            {session?.mock_mode && session.mock_reason ? (
+              <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
+            ) : null}
           </div>
-        </div>
-      </section>
 
-      <aside className="flex min-h-[560px] flex-col rounded-[28px] border border-gray-200 bg-white p-5 shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
-        <div className="mb-4">
-          <h3 className="text-lg font-semibold tracking-tight text-gray-900">Live Config</h3>
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
-            Preview
-          </p>
-          <p
-            data-testid="builder-preview-agent-name"
-            className="mt-1 text-lg font-semibold tracking-tight text-gray-900"
+          <div
+            ref={messageListRef}
+            data-testid="builder-message-list"
+            className="flex-1 space-y-4 overflow-y-auto px-5 py-5"
           >
-            {session?.config.agent_name ?? 'Preview pending'}
-          </p>
-          {session?.config.model ? (
-            <p className="mt-1 text-xs font-medium uppercase tracking-[0.18em] text-gray-400">
-              Model: {session.config.model}
-            </p>
-          ) : null}
-          <p className="mt-1 text-sm text-gray-600">
-            The preview stays in sync with the conversation, can be tested against the runtime agent, and can be saved straight into the workspace.
-          </p>
-        </div>
+            {messages.map((message) => (
+              <div
+                key={message.message_id}
+                className={classNames(
+                  'max-w-[88%] rounded-2xl border px-4 py-3 text-sm leading-6',
+                  message.role === 'user'
+                    ? 'ml-auto border-sky-200 bg-sky-50 text-sky-950'
+                    : 'border-gray-200 bg-gray-50 text-gray-700'
+                )}
+              >
+                <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                  {message.role === 'user' ? 'You' : 'Builder'}
+                </p>
+                <p>{message.content}</p>
+              </div>
+            ))}
 
-        <div className="mb-4 flex flex-wrap gap-2">
-          <StatPill testId="builder-stat-tools" label={`${session?.stats.tool_count ?? 0} tools`} />
-          <StatPill
-            testId="builder-stat-policies"
-            label={`${session?.stats.policy_count ?? 0} policies`}
-          />
-          <StatPill
-            testId="builder-stat-routes"
-            label={`${session?.stats.routing_rule_count ?? 0} routes`}
-          />
-        </div>
+            {error ? (
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+                {error}
+              </div>
+            ) : null}
+          </div>
 
-        <div className="space-y-4">
-          <ConfigPreview config={session?.config ?? null} />
-
-          <div className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
-              Eval Readiness
-            </p>
-            <p data-testid="builder-eval-summary" className="mt-2 text-sm font-medium text-gray-900">
-              {session?.evals ? `${session.evals.case_count} draft evals` : 'No evals generated yet'}
-            </p>
-            <div className="mt-3 space-y-2">
-              {(session?.evals?.scenarios ?? []).map((scenario) => (
-                <div key={scenario.name} className="rounded-xl border border-gray-200 bg-white px-3 py-2">
-                  <p className="text-xs font-semibold text-gray-900">{scenario.name}</p>
-                  <p className="mt-1 text-xs leading-5 text-gray-600">{scenario.description}</p>
-                </div>
+          <div className="border-t border-gray-200 bg-gray-50/80 px-5 py-4">
+            <div className="mb-3 flex flex-wrap gap-2">
+              {BUILDER_PROMPTS.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => setComposer(prompt)}
+                  className="rounded-full border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 transition hover:border-gray-300 hover:text-gray-900"
+                >
+                  {prompt}
+                </button>
               ))}
             </div>
-          </div>
 
-          <div className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
-              Preview / Test
-            </p>
-            <textarea
-              aria-label="Builder preview message"
-              data-testid="builder-preview-input"
-              value={previewComposer}
-              onChange={(event) => setPreviewComposer(event.target.value)}
-              placeholder="Try a sample traveler request..."
-              rows={3}
-              className="mt-3 min-h-[88px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-            />
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="rounded-[24px] border border-gray-200 bg-white p-3 shadow-sm">
+              <textarea
+                data-testid="builder-composer"
+                value={composer}
+                onChange={(event) => setComposer(event.target.value)}
+                placeholder="Describe the agent you want to build..."
+                rows={4}
+                className="min-h-[112px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-400"
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitMessage(composer);
+                  }
+                }}
+              />
+              <div className="flex items-center justify-between border-t border-gray-100 px-2 pt-3">
+                <p className="text-xs text-gray-400">
+                  Ask for a base agent, then refine tools, policies, tone, and evals.
+                </p>
+                <button
+                  data-testid="builder-send"
+                  onClick={() => void submitMessage(composer)}
+                  disabled={busy}
+                  className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Send className="h-4 w-4" />
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <aside className="flex min-h-[560px] h-full flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
+          <div className="border-b border-gray-200 px-5 py-4">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-sky-600">
+                  <Play className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Preview Workspace
+                  </p>
+                  <h3 className="mt-1 text-lg font-semibold tracking-tight text-gray-900">
+                    Test Agent
+                  </h3>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Try sample messages against the latest draft, then save it to the workspace when it feels right.
+                  </p>
+                </div>
+              </div>
               <button
                 type="button"
-                onClick={() => void handlePreview()}
-                disabled={!session?.session_id || !previewComposer.trim() || busy}
-                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => setConfigModalOpen(true)}
+                disabled={!session?.config}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Code2 className="h-4 w-4" />
+                View Config
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-1 min-h-0 flex-col px-5 py-5">
+            <div className="rounded-2xl border border-gray-200 bg-gray-50/80 px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Agent
+                  </p>
+                  <p
+                    data-testid="builder-preview-agent-name"
+                    className="mt-2 truncate text-base font-semibold text-gray-900"
+                  >
+                    {session?.config.agent_name ?? 'Draft pending'}
+                  </p>
+                </div>
+                <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                  {session?.config.model ?? 'Model pending'}
+                </span>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                <StatPill testId="builder-stat-tools" label={`${session?.stats.tool_count ?? 0} tools`} />
+                <StatPill
+                  testId="builder-stat-policies"
+                  label={`${session?.stats.policy_count ?? 0} policies`}
+                />
+                <StatPill
+                  testId="builder-stat-routes"
+                  label={`${session?.stats.routing_rule_count ?? 0} routes`}
+                />
+              </div>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50/70 px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Eval Readiness
+                  </p>
+                  <p data-testid="builder-eval-summary" className="mt-2 text-sm font-medium text-gray-900">
+                    {session?.evals ? `${session.evals.case_count} draft evals` : 'No evals generated yet'}
+                  </p>
+                </div>
+                {session?.evals?.scenarios?.[0] ? (
+                  <span className="rounded-full border border-gray-200 bg-white px-3 py-1 text-xs font-medium text-gray-600">
+                    {session.evals.scenarios[0].name}
+                  </span>
+                ) : null}
+              </div>
+              {session?.evals?.scenarios?.[0] ? (
+                <p className="mt-2 text-xs leading-5 text-gray-600">
+                  {session.evals.scenarios[0].description}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="mt-4 flex flex-1 min-h-0 flex-col rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Preview / Test
+              </p>
+              <textarea
+                aria-label="Builder preview message"
+                data-testid="builder-preview-input"
+                value={previewComposer}
+                onChange={(event) => setPreviewComposer(event.target.value)}
+                placeholder="Try a sample traveler request..."
+                rows={4}
+                className="mt-3 min-h-[132px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+              />
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handlePreview()}
+                  disabled={!session?.session_id || !previewComposer.trim() || busy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Play className="h-4 w-4" />
+                  {previewPending ? 'Testing...' : 'Test Agent'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleSave()}
+                  disabled={!session?.session_id || busy}
+                  className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <FolderOpen className="h-4 w-4" />
+                  {savePending ? 'Saving...' : 'Save to Workspace'}
+                </button>
+              </div>
+              <div className="mt-4 flex-1 overflow-y-auto">
+                <PreviewResultCard
+                  result={previewResult}
+                  emptyText="Run a sample conversation to verify the current builder draft against the runtime agent."
+                />
+                {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
+              </div>
+            </div>
+
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                data-testid="builder-run-eval"
+                onClick={() => void submitMessage('Generate evals for this')}
+                disabled={!session?.session_id || busy}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Play className="h-4 w-4" />
-                {previewPending ? 'Testing...' : 'Test Agent'}
-              </button>
-              <button
-                type="button"
-                onClick={() => void handleSave()}
-                disabled={!session?.session_id || busy}
-                className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <FolderOpen className="h-4 w-4" />
-                {savePending ? 'Saving...' : 'Save to Workspace'}
+                Run Eval
               </button>
             </div>
-            <div className="mt-4">
-              <PreviewResultCard
-                result={previewResult}
-                emptyText="Run a sample conversation to verify the current builder draft against the runtime agent."
-              />
-            </div>
-            {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
           </div>
-        </div>
+        </aside>
+      </div>
 
-        <div className="mt-auto flex gap-3 pt-4">
-          <button
-            data-testid="builder-download"
-            onClick={handleExport}
-            disabled={!session?.session_id || busy}
-            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Download className="h-4 w-4" />
-            Download Config
-          </button>
-          <button
-            data-testid="builder-run-eval"
-            onClick={() => void submitMessage('Generate evals for this')}
-            disabled={!session?.session_id || busy}
-            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            <Play className="h-4 w-4" />
-            Run Eval
-          </button>
-        </div>
-      </aside>
-    </div>
+      <ConfigModal
+        open={configModalOpen}
+        onClose={() => setConfigModalOpen(false)}
+        yaml={builderYamlPreview}
+        config={session?.config ?? null}
+        onCopy={handleCopyYaml}
+        onDownload={handleExport}
+        copyDisabled={!builderYamlPreview}
+        downloadDisabled={!session?.session_id || busy}
+        emptyText="Start the conversation on the left and the draft config will appear here in real time."
+      />
+    </>
   );
 
   if (!showHeader) {
@@ -718,6 +771,7 @@ export function StudioWorkspace({
   const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
   const [savePending, setSavePending] = useState(false);
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
 
   const importMutation = useImportTranscriptArchive();
   const generateMutation = useGenerateAgent();
@@ -788,6 +842,7 @@ export function StudioWorkspace({
     setPreviewComposer('');
     setPreviewResult(null);
     setSaveResult(null);
+    setConfigModalOpen(false);
     artifactIdRef.current = null;
     artifactCreatedAtRef.current = null;
 
@@ -828,6 +883,7 @@ export function StudioWorkspace({
           const configYaml = configToYaml(config);
           setAgentConfig(config);
           setPhase('refine');
+          setConfigModalOpen(false);
           setPreviewResult(null);
           setSaveResult(null);
           setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
@@ -884,6 +940,7 @@ export function StudioWorkspace({
           const configYaml = configToYaml(config);
           setAgentConfig(config);
           setPhase('refine');
+          setConfigModalOpen(false);
           setPreviewResult(null);
           setSaveResult(null);
           setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
@@ -1277,129 +1334,135 @@ export function StudioWorkspace({
     );
 
   const refineBody = (
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1.55fr)_minmax(360px,1fr)]">
-      <section className="flex min-h-[720px] flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-100 px-5 py-4">
-          <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-gray-500" />
-            <h3 className="text-base font-semibold text-gray-900">Conversational Refinement</h3>
+    <>
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-stretch">
+        <section className="flex min-h-[720px] h-full flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <div className="flex items-center gap-2">
+              <MessageSquare className="h-4 w-4 text-gray-500" />
+              <h3 className="text-base font-semibold text-gray-900">Conversational Refinement</h3>
+            </div>
+            <p className="mt-1 text-sm text-gray-500">
+              Ask for policy changes, new tools, routing updates, or safer behavior. Each reply updates the build draft in the background while you keep testing.
+            </p>
           </div>
-          <p className="mt-1 text-sm text-gray-500">
-            Ask for policy changes, new tools, routing updates, or safer behavior. Each reply updates the live YAML preview.
-          </p>
-        </div>
 
-        <div className="border-b border-gray-100 px-5 py-3">
-          <div className="flex flex-wrap gap-2">
-            {REFINEMENT_EXAMPLES.map((example) => (
-              <button
-                key={example}
-                type="button"
-                onClick={() => setComposer(example)}
-                className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-100 hover:text-gray-900"
-              >
-                {example}
-              </button>
+          <div className="border-b border-gray-100 px-5 py-3">
+            <div className="flex flex-wrap gap-2">
+              {REFINEMENT_EXAMPLES.map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  onClick={() => setComposer(example)}
+                  className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:border-gray-300 hover:bg-gray-100 hover:text-gray-900"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+            {messages.map((message) => (
+              <ChatBubble key={message.id} message={message} />
             ))}
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto px-5 py-5">
-          {messages.map((message) => (
-            <ChatBubble key={message.id} message={message} />
-          ))}
-          {refineMutation.isPending && (
-            <div className="max-w-[85%] rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
-              Updating the config...
-            </div>
-          )}
-          <div ref={chatEndRef} />
-        </div>
-
-        <div className="border-t border-gray-100 px-5 py-4">
-          <div className="flex gap-3">
-            <textarea
-              aria-label="Refinement message"
-              value={composer}
-              onChange={(event) => setComposer(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' && !event.shiftKey) {
-                  event.preventDefault();
-                  handleRefineSend();
-                }
-              }}
-              rows={3}
-              placeholder="Tell the studio what to change next..."
-              className="min-h-[84px] flex-1 resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
-              disabled={refinementBusy}
-            />
-            <button
-              type="button"
-              aria-label="Send refinement message"
-              onClick={handleRefineSend}
-              disabled={refinementBusy || !composer.trim()}
-              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
-      </section>
-
-      <section className="flex min-h-[720px] flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-100 px-5 py-4">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <div className="flex items-center gap-2">
-                <Brain className="h-4 w-4 text-gray-500" />
-                <h3 className="text-base font-semibold text-gray-900">Live Build Draft</h3>
+            {refineMutation.isPending && (
+              <div className="max-w-[85%] rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-500">
+                Updating the config...
               </div>
-              <p className="mt-1 text-sm text-gray-500">
-                Inspect the generated build draft as YAML while you refine the agent. Saving writes the runnable workspace config for `agentlab eval run`.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={handleCopyYaml}
-              className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900"
-            >
-              <Copy className="h-4 w-4" />
-              Copy
-            </button>
+            )}
+            <div ref={chatEndRef} />
           </div>
-        </div>
 
-        {agentConfig && (
-          <>
-            <div className="grid grid-cols-3 gap-px border-b border-gray-100 bg-gray-100">
-              <MetricCard label="Tools" value={String(agentConfig.tools.length)} compact />
-              <MetricCard label="Policies" value={String(agentConfig.policies.length)} compact />
-              <MetricCard label="Routes" value={String(agentConfig.routing_rules.length)} compact />
+          <div className="border-t border-gray-100 px-5 py-4">
+            <div className="flex gap-3">
+              <textarea
+                aria-label="Refinement message"
+                value={composer}
+                onChange={(event) => setComposer(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    handleRefineSend();
+                  }
+                }}
+                rows={3}
+                placeholder="Tell the studio what to change next..."
+                className="min-h-[84px] flex-1 resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+                disabled={refinementBusy}
+              />
+              <button
+                type="button"
+                aria-label="Send refinement message"
+                onClick={handleRefineSend}
+                disabled={refinementBusy || !composer.trim()}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Send className="h-4 w-4" />
+              </button>
             </div>
+          </div>
+        </section>
 
-            <div className="border-b border-gray-100 px-5 py-4">
-              <div className="rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">Agent</p>
-                <p className="mt-2 text-sm font-semibold text-gray-900">
-                  {agentConfig.metadata.agent_name}
-                </p>
-                <p className="mt-1 text-xs font-medium uppercase tracking-[0.18em] text-gray-400">
-                  Model: {agentConfig.model}
-                </p>
-                <p className="mt-1 text-sm text-gray-500">
-                  {agentConfig.metadata.created_from === 'transcript'
-                    ? 'Generated from transcript intelligence.'
-                    : 'Generated from a natural-language prompt.'}
-                </p>
+        <section className="flex min-h-[720px] h-full flex-col overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-sky-50 text-sky-600">
+                  <Play className="h-4 w-4" />
+                </div>
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                    Preview Workspace
+                  </p>
+                  <h3 className="mt-1 text-base font-semibold text-gray-900">Test Agent</h3>
+                  <p className="mt-1 text-sm text-gray-500">
+                    Validate the refined draft with sample messages, then save it once the behavior feels right.
+                  </p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setConfigModalOpen(true)}
+                disabled={!agentConfig}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Code2 className="h-4 w-4" />
+                View Config
+              </button>
             </div>
+          </div>
 
-            <div className="flex-1 overflow-y-auto bg-[#0B1020] px-0 py-0">
-              <YamlPreview yaml={yamlPreview} />
-            </div>
+          {agentConfig && (
+            <div className="flex flex-1 min-h-0 flex-col px-5 py-5">
+              <div className="rounded-2xl border border-gray-200 bg-gray-50/80 px-4 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                      Agent
+                    </p>
+                    <p className="mt-2 text-base font-semibold text-gray-900">
+                      {agentConfig.metadata.agent_name}
+                    </p>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {agentConfig.metadata.created_from === 'transcript'
+                        ? 'Generated from transcript intelligence.'
+                        : 'Generated from a natural-language prompt.'}
+                    </p>
+                  </div>
+                  <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                    {agentConfig.model}
+                  </span>
+                </div>
 
-            <div className="space-y-4 border-t border-gray-100 p-4">
-              <div className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <StatPill label={`${agentConfig.tools.length} tools`} />
+                  <StatPill label={`${agentConfig.policies.length} policies`} />
+                  <StatPill label={`${agentConfig.routing_rules.length} routes`} />
+                </div>
+              </div>
+
+              <div className="mt-4 flex flex-1 min-h-0 flex-col rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
                   Preview / Test
                 </p>
@@ -1408,8 +1471,8 @@ export function StudioWorkspace({
                   value={previewComposer}
                   onChange={(event) => setPreviewComposer(event.target.value)}
                   placeholder="Try a sample end-user message..."
-                  rows={3}
-                  className="mt-3 min-h-[88px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                  rows={4}
+                  className="mt-3 min-h-[132px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
                 />
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button
@@ -1431,46 +1494,50 @@ export function StudioWorkspace({
                     {savePending ? 'Saving...' : 'Save to Workspace'}
                   </button>
                 </div>
-                <div className="mt-4">
+                <div className="mt-4 flex-1 overflow-y-auto">
                   <PreviewResultCard
                     result={previewResult}
                     emptyText="Run a sample conversation to verify the refined draft before saving."
                   />
+                  {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
                 </div>
-                {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
               </div>
 
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
-              <button
-                type="button"
-                onClick={() => navigate('/evals?new=1')}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
-              >
-                <Sparkles className="h-4 w-4" />
-                Generate Evals
-              </button>
-              <button
-                type="button"
-                onClick={handleExport}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
-              >
-                <Download className="h-4 w-4" />
-                Download Draft
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/evals?run=1')}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
-              >
-                <Play className="h-4 w-4" />
-                Run Eval
-              </button>
+              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => navigate('/evals?new=1')}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                >
+                  <Sparkles className="h-4 w-4" />
+                  Generate Evals
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigate('/evals?run=1')}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  <Play className="h-4 w-4" />
+                  Run Eval
+                </button>
               </div>
             </div>
-          </>
-        )}
-      </section>
-    </div>
+          )}
+        </section>
+      </div>
+
+      <ConfigModal
+        open={configModalOpen}
+        onClose={() => setConfigModalOpen(false)}
+        yaml={yamlPreview}
+        config={agentConfig}
+        onCopy={handleCopyYaml}
+        onDownload={handleExport}
+        copyDisabled={!agentConfig}
+        downloadDisabled={!agentConfig}
+        emptyText="Generate an agent first and the draft configuration will appear here."
+      />
+    </>
   );
 
   const body = (
@@ -2157,14 +2224,170 @@ function StatPill({ label, testId }: { label: string; testId?: string }) {
   );
 }
 
-function ConfigPreview({ config }: { config: BuilderConfig | null }) {
+function ConfigModal({
+  open,
+  onClose,
+  yaml,
+  config,
+  onCopy,
+  onDownload,
+  copyDisabled = false,
+  downloadDisabled = false,
+  emptyText,
+}: {
+  open: boolean;
+  onClose: () => void;
+  yaml: string;
+  config: object | null;
+  onCopy: () => void | Promise<void>;
+  onDownload: () => void | Promise<void>;
+  copyDisabled?: boolean;
+  downloadDisabled?: boolean;
+  emptyText: string;
+}) {
+  const [activeTab, setActiveTab] = useState<'yaml' | 'json'>('yaml');
+
+  useEffect(() => {
+    if (open) {
+      setActiveTab('yaml');
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [open, onClose]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <div
+      data-testid="config-modal-backdrop"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="agent-configuration-title"
+        className="flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-[28px] border border-white/20 bg-white shadow-2xl"
+        onClick={(event) => event.stopPropagation()}
+      >
+        <div className="border-b border-gray-200 px-5 py-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Agent Draft
+              </p>
+              <h2 id="agent-configuration-title" className="mt-1 text-xl font-semibold tracking-tight text-gray-900">
+                Agent Configuration
+              </h2>
+              <p className="mt-1 text-sm text-gray-600">
+                Review the full YAML and JSON draft, copy it, or download the latest version.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void onCopy()}
+                disabled={copyDisabled}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Copy className="h-4 w-4" />
+                Copy YAML
+              </button>
+              <button
+                type="button"
+                onClick={() => void onDownload()}
+                disabled={downloadDisabled}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 hover:text-gray-900 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Download className="h-4 w-4" />
+                Download Draft
+              </button>
+              <button
+                type="button"
+                aria-label="Close configuration modal"
+                onClick={onClose}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 transition hover:bg-gray-50 hover:text-gray-900"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('yaml')}
+              className={classNames(
+                'rounded-lg px-3 py-1.5 text-sm font-medium transition',
+                activeTab === 'yaml'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900'
+              )}
+            >
+              YAML
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('json')}
+              className={classNames(
+                'rounded-lg px-3 py-1.5 text-sm font-medium transition',
+                activeTab === 'json'
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-900'
+              )}
+            >
+              JSON
+            </button>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto bg-gray-50/70 p-4">
+          {activeTab === 'yaml' ? (
+            yaml ? (
+              <div className="overflow-hidden rounded-2xl border border-slate-200 bg-[#0B1020]">
+                <YamlPreview yaml={yaml} />
+              </div>
+            ) : (
+              <EmptyState text={emptyText} />
+            )
+          ) : (
+            <ConfigPreview config={config} emptyText={emptyText} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfigPreview({
+  config,
+  emptyText = 'Start the conversation on the left and the draft config will appear here in real time.',
+}: {
+  config: object | null;
+  emptyText?: string;
+}) {
   if (!config) {
     return (
       <div
         data-testid="builder-config-preview"
         className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/70 p-4 text-sm text-gray-500"
       >
-        Start the conversation on the left and the draft config will appear here in real time.
+        {emptyText}
       </div>
     );
   }
@@ -2176,7 +2399,7 @@ function ConfigPreview({ config }: { config: BuilderConfig | null }) {
       className="overflow-hidden rounded-2xl border border-slate-200 bg-slate-950"
     >
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3 text-xs text-slate-400">
-        <span>Live Config</span>
+        <span>Structured Config</span>
         <span>JSON preview</span>
       </div>
       <pre className="overflow-x-auto px-4 py-4 text-xs leading-6">
@@ -2799,6 +3022,55 @@ function configToYaml(config: GeneratedAgentConfig): string {
     lines.push(`  - name: ${criterion.name}`);
     lines.push(`    weight: ${criterion.weight}`);
     lines.push(`    description: ${JSON.stringify(criterion.description)}`);
+  }
+
+  return lines.join('\n');
+}
+
+function builderConfigToYaml(config: BuilderConfig): string {
+  const lines: string[] = [
+    `agent_name: ${config.agent_name}`,
+    `model: ${config.model}`,
+    '',
+    'system_prompt: |',
+    ...config.system_prompt.split('\n').map((line) => `  ${line}`),
+    '',
+    'tools:',
+  ];
+
+  for (const tool of config.tools) {
+    lines.push(`  - name: ${tool.name}`);
+    lines.push(`    description: ${tool.description}`);
+    lines.push(`    when_to_use: ${JSON.stringify(tool.when_to_use)}`);
+  }
+
+  lines.push('', 'routing_rules:');
+  for (const rule of config.routing_rules) {
+    lines.push(`  - name: ${rule.name}`);
+    lines.push(`    intent: ${rule.intent}`);
+    lines.push(`    description: ${JSON.stringify(rule.description)}`);
+  }
+
+  lines.push('', 'policies:');
+  for (const policy of config.policies) {
+    lines.push(`  - name: ${policy.name}`);
+    lines.push(`    description: ${JSON.stringify(policy.description)}`);
+  }
+
+  lines.push('', 'eval_criteria:');
+  for (const criterion of config.eval_criteria) {
+    lines.push(`  - name: ${criterion.name}`);
+    lines.push(`    description: ${JSON.stringify(criterion.description)}`);
+  }
+
+  lines.push('', 'metadata:');
+  const metadataEntries = Object.entries(config.metadata ?? {});
+  if (metadataEntries.length === 0) {
+    lines.push('  {}');
+  } else {
+    for (const [key, value] of metadataEntries) {
+      lines.push(`  ${key}: ${JSON.stringify(value)}`);
+    }
   }
 
   return lines.join('\n');

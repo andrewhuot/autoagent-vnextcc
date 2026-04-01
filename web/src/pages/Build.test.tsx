@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Build } from './Build';
 
@@ -20,6 +20,126 @@ function renderPage(initialEntry = '/build') {
       </MemoryRouter>
     </QueryClientProvider>
   );
+}
+
+function jsonResponse(body: unknown, init?: ResponseInit) {
+  return new Response(JSON.stringify(body), {
+    status: init?.status ?? 200,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+}
+
+function mockBuilderSession() {
+  return {
+    session_id: 'builder-session-123',
+    mock_mode: false,
+    messages: [
+      {
+        message_id: 'builder-user-1',
+        role: 'user' as const,
+        content: 'Build a refund agent',
+        created_at: 1,
+      },
+      {
+        message_id: 'builder-assistant-1',
+        role: 'assistant' as const,
+        content: 'I drafted a refund-focused agent with triage and escalation rules.',
+        created_at: 2,
+      },
+    ],
+    config: {
+      agent_name: 'Refund Rescue',
+      model: 'gpt-5.4-mini',
+      system_prompt: 'Help customers with refunds, replacements, and escalation.',
+      tools: [
+        {
+          name: 'refund_lookup',
+          description: 'Look up order refund eligibility.',
+          when_to_use: 'Use when a customer asks about a refund.',
+        },
+      ],
+      routing_rules: [
+        {
+          name: 'refund_request',
+          intent: 'refund',
+          description: 'Route refund questions to the refund specialist.',
+        },
+      ],
+      policies: [
+        {
+          name: 'No PII leakage',
+          description: 'Never expose another customer’s information.',
+        },
+      ],
+      eval_criteria: [
+        {
+          name: 'Correct routing',
+          description: 'Refund questions route to the correct specialist.',
+        },
+      ],
+      metadata: {
+        tone: 'calm',
+      },
+    },
+    stats: {
+      tool_count: 1,
+      policy_count: 1,
+      routing_rule_count: 1,
+    },
+    evals: {
+      case_count: 2,
+      scenarios: [
+        {
+          name: 'Standard refund',
+          description: 'Customer asks for a straightforward refund.',
+        },
+      ],
+    },
+    updated_at: 1234567890,
+  };
+}
+
+function mockGeneratedConfig() {
+  return {
+    model: 'gpt-5.4',
+    system_prompt: 'Resolve support issues safely and escalate when needed.',
+    tools: [
+      {
+        name: 'order_lookup',
+        description: 'Look up orders by order ID.',
+        parameters: ['order_id'],
+      },
+    ],
+    routing_rules: [
+      {
+        condition: 'refund_request',
+        action: 'route_to_refunds',
+        priority: 10,
+      },
+    ],
+    policies: [
+      {
+        name: 'Protect customer data',
+        description: 'Do not reveal customer data without verification.',
+        enforcement: 'strict' as const,
+      },
+    ],
+    eval_criteria: [
+      {
+        name: 'Safe escalation',
+        weight: 0.5,
+        description: 'Escalates when the request requires a human.',
+      },
+    ],
+    metadata: {
+      agent_name: 'Order Guardian',
+      version: 'v1',
+      created_from: 'prompt' as const,
+    },
+  };
 }
 
 describe('Build', () => {
@@ -68,8 +188,51 @@ describe('Build', () => {
 
     expect(screen.getByText('Conversational Builder')).toBeInTheDocument();
     expect(screen.getByTestId('builder-composer')).toBeInTheDocument();
-    expect(screen.getByText('Download Config')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByText('Run Eval')).toBeInTheDocument();
+  });
+
+  it('moves builder config into a modal and makes testing the main right-panel workflow', async () => {
+    const user = userEvent.setup();
+    const builderSession = mockBuilderSession();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/builder/chat') {
+          return jsonResponse(builderSession);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Builder Chat' }));
+    await user.clear(screen.getByTestId('builder-composer'));
+    await user.type(screen.getByTestId('builder-composer'), 'Build a refund agent');
+    await user.click(screen.getByTestId('builder-send'));
+
+    expect(await screen.findByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Live Config' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save to Workspace' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'View Config' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Agent Configuration' });
+    expect(within(dialog).getByRole('button', { name: 'Copy YAML' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download Draft' })).toBeInTheDocument();
+    expect(within(dialog).getByTestId('yaml-preview')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'JSON' }));
+    expect(within(dialog).getByTestId('builder-config-preview')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Close configuration modal' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog', { name: 'Agent Configuration' })).not.toBeInTheDocument();
+    });
   });
 
   it('opens a deep-linked build tab from the route query string', () => {
@@ -140,5 +303,42 @@ describe('Build', () => {
     const editor = screen.getByLabelText('XML instruction editor') as HTMLTextAreaElement;
     expect(editor.value).toContain('<role>The main Weather Agent coordinating multiple agents.</role>');
     expect(editor.value).toContain('Begin example');
+  });
+
+  it('moves the generated draft config into a modal and promotes testing in refine mode', async () => {
+    const user = userEvent.setup();
+    const generatedConfig = mockGeneratedConfig();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/intelligence/generate-agent') {
+          return jsonResponse(generatedConfig);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.type(screen.getByLabelText('Agent description'), 'Build an order support agent');
+    await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
+
+    expect(await screen.findByRole('heading', { name: 'Conversational Refinement' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Live Build Draft' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate Evals' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run Eval' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'View Config' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Agent Configuration' });
+    expect(within(dialog).getByRole('button', { name: 'Copy YAML' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download Draft' })).toBeInTheDocument();
+    expect(within(dialog).getByTestId('yaml-preview')).toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'JSON' }));
+    expect(within(dialog).getByTestId('builder-config-preview')).toBeInTheDocument();
   });
 });
