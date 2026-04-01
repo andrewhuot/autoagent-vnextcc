@@ -392,6 +392,21 @@ export interface GeneratedEvalSuite {
   };
 }
 
+export interface GeneratedEvalSuiteSummary {
+  suite_id: string;
+  agent_name: string;
+  source_kind: string;
+  status: 'generating' | 'ready' | 'accepted' | 'rejected';
+  mock_mode: boolean;
+  created_at?: string | null;
+  updated_at?: string | null;
+  accepted_at?: string | null;
+  accepted_eval_path?: string | null;
+  transcript_count: number;
+  category_counts: Record<string, number>;
+  case_count: number;
+}
+
 export interface GenerateEvalResponse {
   suite_id: string;
   status: string;

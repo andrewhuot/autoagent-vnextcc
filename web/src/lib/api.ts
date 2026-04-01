@@ -80,6 +80,7 @@ import type {
   Runbook,
   SaveProviderKeysResponse,
   SaveAgentResult,
+  GeneratedEvalSuiteSummary,
   SetupOverview,
   SkillLeaderboardEntry,
   SkillMarketplaceListing,
@@ -721,7 +722,11 @@ export function useEvalDetail(runId: string | undefined) {
 export function useStartEval() {
   const queryClient = useQueryClient();
 
-  return useMutation<{ task_id: string; message: string }, ApiRequestError, { config_path?: string; category?: string }>({
+  return useMutation<
+    { task_id: string; message: string },
+    ApiRequestError,
+    { config_path?: string; category?: string; generated_suite_id?: string }
+  >({
     mutationFn: (params) =>
       fetchApi('/eval/run', {
         method: 'POST',
@@ -749,6 +754,19 @@ export function useGenerateEvals() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generatedSuite'] });
+      queryClient.invalidateQueries({ queryKey: ['generatedSuites'] });
+    },
+  });
+}
+
+export function useGeneratedSuites(limit = 20) {
+  return useQuery<GeneratedEvalSuiteSummary[]>({
+    queryKey: ['generatedSuites', limit],
+    queryFn: async () => {
+      const payload = await fetchApi<{ suites: GeneratedEvalSuiteSummary[]; count: number }>(
+        `/evals/generated?limit=${limit}`,
+      );
+      return payload.suites;
     },
   });
 }
@@ -773,6 +791,7 @@ export function useAcceptSuite() {
       fetchApi(`/eval/generated/${suiteId}/accept`, { method: 'POST' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generatedSuite'] });
+      queryClient.invalidateQueries({ queryKey: ['generatedSuites'] });
     },
   });
 }
@@ -792,6 +811,7 @@ export function useUpdateGeneratedCase() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generatedSuite'] });
+      queryClient.invalidateQueries({ queryKey: ['generatedSuites'] });
     },
   });
 }
@@ -804,6 +824,7 @@ export function useDeleteGeneratedCase() {
       fetchApi(`/eval/generated/${suiteId}/cases/${caseId}`, { method: 'DELETE' }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['generatedSuite'] });
+      queryClient.invalidateQueries({ queryKey: ['generatedSuites'] });
     },
   });
 }

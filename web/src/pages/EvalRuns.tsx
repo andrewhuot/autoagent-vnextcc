@@ -7,6 +7,7 @@ import {
   useCurriculumBatches,
   useEvalRuns,
   useGenerateCurriculum,
+  useGeneratedSuites,
   useStartEval,
   useAgents,
 } from '../lib/api';
@@ -37,6 +38,10 @@ export function EvalRuns() {
   const { data: agents } = useAgents();
   const { data: selectedAgentDetail } = useAgent(activeAgent?.id);
   const { data: runs, isLoading, isError, refetch } = useEvalRuns();
+  const {
+    data: generatedSuites = [],
+    isLoading: generatedSuitesLoading,
+  } = useGeneratedSuites();
   const { data: curriculumData } = useCurriculumBatches();
   const startEval = useStartEval();
   const generateCurriculum = useGenerateCurriculum();
@@ -45,6 +50,7 @@ export function EvalRuns() {
   const [showForm, setShowForm] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [generatedSuiteId, setGeneratedSuiteId] = useState<string | null>(null);
+  const [expandedSuiteId, setExpandedSuiteId] = useState<string | null>(null);
   const [category, setCategory] = useState('');
   const [selectedRuns, setSelectedRuns] = useState<string[]>([]);
   const [runAgents, setRunAgents] = useState<Record<string, AgentLibraryItem>>({});
@@ -123,7 +129,7 @@ export function EvalRuns() {
     setSearchParams(next, { replace: true });
   }
 
-  function handleStartEval() {
+  function handleStartEval(options?: { generatedSuiteId?: string }) {
     if (!activeAgent) {
       toastError('Select an agent', 'Pick an agent from the library before starting an eval.');
       return;
@@ -132,7 +138,8 @@ export function EvalRuns() {
     startEval.mutate(
       {
         config_path: activeAgent.config_path,
-        category: category.trim() || undefined,
+        category: options?.generatedSuiteId ? undefined : category.trim() || undefined,
+        generated_suite_id: options?.generatedSuiteId,
       },
       {
         onSuccess: (response) => {
@@ -142,7 +149,9 @@ export function EvalRuns() {
           }));
           toastInfo(
             `Eval ${response.task_id.slice(0, 8)} started`,
-            `Running against ${activeAgent.name}.`
+            options?.generatedSuiteId
+              ? `Running eval set against ${activeAgent.name}.`
+              : `Running against ${activeAgent.name}.`
           );
           setShowForm(false);
           setCategory('');
@@ -211,6 +220,26 @@ export function EvalRuns() {
     );
   }
 
+  function suiteStatusLabel(status: string) {
+    if (status === 'accepted') {
+      return 'accepted';
+    }
+    if (status === 'rejected') {
+      return 'rejected';
+    }
+    return 'draft';
+  }
+
+  function suiteStatusClass(status: string) {
+    if (status === 'accepted') {
+      return 'bg-green-100 text-green-700';
+    }
+    if (status === 'rejected') {
+      return 'bg-red-100 text-red-700';
+    }
+    return 'bg-amber-100 text-amber-700';
+  }
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -238,11 +267,17 @@ export function EvalRuns() {
               Generate Evals
             </button>
             <button
-              onClick={() => setShowForm(true)}
+              onClick={() => handleStartEval()}
               className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
             >
               <Plus className="h-4 w-4" />
               New Eval Run
+            </button>
+            <button
+              onClick={() => setShowForm(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              Advanced
             </button>
           </div>
         }
@@ -332,6 +367,91 @@ export function EvalRuns() {
           Unable to load eval runs. Try refreshing the page.
         </div>
       )}
+
+      <section className="rounded-lg border border-gray-200 bg-white p-5">
+        <div className="mb-4 flex items-start justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900">Eval Sets</h3>
+            <p className="mt-1 text-xs text-gray-600">
+              Browse generated eval suites, accept drafts, and launch accepted eval sets with the active agent.
+            </p>
+          </div>
+          {!activeAgent && (
+            <p className="max-w-xs text-right text-xs text-gray-500">
+              Select an agent above to run an eval set from this page.
+            </p>
+          )}
+        </div>
+
+        {generatedSuitesLoading ? (
+          <LoadingSkeleton rows={3} />
+        ) : generatedSuites.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-600">
+            No eval sets yet — generate one from your agent config
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {generatedSuites.map((suite) => {
+              const expanded = expandedSuiteId === suite.suite_id;
+              const createdAt = suite.created_at ?? suite.updated_at ?? new Date().toISOString();
+              return (
+                <div key={suite.suite_id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-semibold text-gray-900">{suite.agent_name}</p>
+                        <span
+                          className={`rounded-full px-2.5 py-1 text-[11px] font-medium ${suiteStatusClass(suite.status)}`}
+                        >
+                          {suiteStatusLabel(suite.status)}
+                        </span>
+                        <span className="font-mono text-[11px] text-gray-400">{suite.suite_id}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-gray-500">
+                        {suite.case_count} cases · {formatTimestamp(createdAt)}
+                      </p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {Object.entries(suite.category_counts).map(([label, count]) => (
+                          <span
+                            key={label}
+                            className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] text-gray-600"
+                          >
+                            {label.replaceAll('_', ' ')} · {count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      {suite.status === 'accepted' && (
+                        <button
+                          onClick={() => handleStartEval({ generatedSuiteId: suite.suite_id })}
+                          disabled={startEval.isPending || !activeAgent}
+                          className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
+                        >
+                          Run Eval
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setExpandedSuiteId(expanded ? null : suite.suite_id)}
+                        className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:bg-gray-50"
+                      >
+                        {expanded ? 'Hide Cases' : 'View Cases'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {expanded && (
+                    <div className="mt-4 border-t border-gray-200 pt-4">
+                      <GeneratedEvalReview suiteId={suite.suite_id} />
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       <section className="rounded-lg border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-start justify-between gap-3">
@@ -552,7 +672,7 @@ export function EvalRuns() {
           description="Run your first eval:"
           cliHint="agentlab eval run"
           actionLabel="Create Eval Run"
-          onAction={() => setShowForm(true)}
+          onAction={() => handleStartEval()}
         />
       ) : (
         <EmptyState

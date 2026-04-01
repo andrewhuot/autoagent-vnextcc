@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   useCurriculumBatches: vi.fn(),
   useEvalRuns: vi.fn(),
   useGenerateCurriculum: vi.fn(),
+  useGeneratedSuites: vi.fn(),
   useStartEval: vi.fn(),
 }));
 
@@ -24,6 +25,7 @@ vi.mock('../lib/api', () => ({
   useCurriculumBatches: apiMocks.useCurriculumBatches,
   useEvalRuns: apiMocks.useEvalRuns,
   useGenerateCurriculum: apiMocks.useGenerateCurriculum,
+  useGeneratedSuites: apiMocks.useGeneratedSuites,
   useStartEval: apiMocks.useStartEval,
 }));
 
@@ -110,23 +112,52 @@ describe('EvalRuns', () => {
       data: { batches: [], progression: [] },
       isLoading: false,
     });
+    apiMocks.useGeneratedSuites.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    });
     apiMocks.useGenerateCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useApplyCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
   });
 
-  it('uses the selected agent instead of a config version dropdown when starting an eval', async () => {
+  it('starts a new eval from the header action using the selected agent config path', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
       options?.onSuccess?.({ task_id: 'task-123456', message: 'Eval run started' });
     });
     apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
 
-    renderPage('/evals?agent=agent-v002&new=1');
+    renderPage('/evals?agent=agent-v002');
 
-    expect(screen.queryByText('Config Version')).not.toBeInTheDocument();
     expect((await screen.findAllByText('Order Guardian')).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('button', { name: 'New Eval Run' }));
 
-    await user.click(screen.getByRole('button', { name: 'Start Eval' }));
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        config_path: '/workspace/configs/v002.yaml',
+        category: undefined,
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('starts a new eval from the empty-state CTA when an agent is selected', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-empty-123', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage('/evals?agent=agent-v002');
+
+    await user.click(screen.getByRole('button', { name: 'Create Eval Run' }));
 
     expect(mutate).toHaveBeenCalledWith(
       {
@@ -156,5 +187,62 @@ describe('EvalRuns', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Optimize' }));
     expect(await screen.findByText('Optimize Page')).toBeInTheDocument();
+  });
+
+  it('renders Eval Sets and runs an accepted suite with the selected agent config', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-suite-123', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+    apiMocks.useGeneratedSuites.mockReturnValue({
+      data: [
+        {
+          suite_id: 'suite_accepted_001',
+          agent_name: 'Checkout Guard',
+          source_kind: 'config',
+          status: 'accepted',
+          mock_mode: true,
+          created_at: '2026-04-01T12:30:00Z',
+          updated_at: '2026-04-01T12:40:00Z',
+          accepted_at: '2026-04-01T12:45:00Z',
+          accepted_eval_path: 'evals/cases/generated_suite_accepted_001.yaml',
+          transcript_count: 0,
+          category_counts: { safety: 3, routing: 2 },
+          case_count: 5,
+        },
+      ],
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage('/evals?agent=agent-v002');
+
+    expect(screen.getByText('Eval Sets')).toBeInTheDocument();
+    expect(screen.getByText('Checkout Guard')).toBeInTheDocument();
+    expect(screen.getByText(/5 cases/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Run Eval' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        config_path: '/workspace/configs/v002.yaml',
+        generated_suite_id: 'suite_accepted_001',
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('shows the requested empty state when no eval sets exist yet', () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useGeneratedSuites.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage('/evals?agent=agent-v002');
+
+    expect(screen.getByText('No eval sets yet — generate one from your agent config')).toBeInTheDocument();
   });
 });

@@ -92,6 +92,10 @@ BUILD_ARTIFACT_STORE_PATH = os.environ.get(
     "AGENTLAB_BUILD_ARTIFACTS",
     ".agentlab/build_artifacts.json",
 )
+GENERATED_EVAL_STORE_DIR = os.environ.get(
+    "AGENTLAB_GENERATED_EVALS",
+    ".agentlab/generated_evals",
+)
 WEB_DIST_DIR = Path(__file__).parent.parent / "web" / "dist"
 
 
@@ -129,7 +133,7 @@ async def lifespan(app: FastAPI):
     from deployer.versioning import ConfigVersionManager
     from evals.execution_mode import requested_live_mode
     from evals.pairwise import PairwiseComparisonStore
-    from evals.auto_generator import AutoEvalGenerator
+    from evals.auto_generator import AutoEvalGenerator, GeneratedEvalSuiteStore
     from evals.runner import EvalRunner
     from evals.what_if import WhatIfEngine
     from logger.structured import configure_structured_logging
@@ -208,6 +212,7 @@ async def lifespan(app: FastAPI):
         llm_router=studio_router,
         report_store=transcript_report_store,
     )
+    generated_eval_store = GeneratedEvalSuiteStore(store_dir=GENERATED_EVAL_STORE_DIR)
 
     # Initialize skills system
     skill_store = SkillStore(db_path=".agentlab/core_skills.db")
@@ -288,7 +293,8 @@ async def lifespan(app: FastAPI):
     app.state.pairwise_store = PairwiseComparisonStore(
         base_dir=os.environ.get("AGENTLAB_PAIRWISE_DIR", ".agentlab/pairwise")
     )
-    app.state.auto_eval_generator = AutoEvalGenerator()
+    app.state.generated_eval_store = generated_eval_store
+    app.state.auto_eval_generator = AutoEvalGenerator(store=generated_eval_store)
     app.state.proposer = proposer
     app.state.transcript_report_store = transcript_report_store
     app.state.transcript_intelligence_service = transcript_intelligence_service
