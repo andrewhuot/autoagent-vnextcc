@@ -633,6 +633,23 @@ class TestDoctorCommand:
         assert "OPENAI_API_KEY" in result.output
         assert "Not set" in result.output
 
+    def test_doctor_reports_runtime_provider_ready_without_provider_registry(self, runner, tmp_dir):
+        """doctor should treat runtime-configured providers as ready even before registry setup."""
+        config_file = os.path.join(tmp_dir, "agentlab.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: false\n", encoding="utf-8")
+        env = {
+            **os.environ,
+            "OPENAI_API_KEY": "",
+            "ANTHROPIC_API_KEY": "",
+            "GOOGLE_API_KEY": "g-test-key",
+        }
+
+        result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
+
+        assert result.exit_code == 0
+        assert "google:" in result.output.lower()
+        assert "gemini-2.5-pro ready" in result.output
+
     def test_doctor_status_line_reports_ready_workspace(self, runner, tmp_dir):
         """Mock-mode workspaces should still report a healthy doctor summary."""
         config_file = os.path.join(tmp_dir, "agentlab.yaml")

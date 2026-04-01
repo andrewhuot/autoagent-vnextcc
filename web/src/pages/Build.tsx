@@ -26,6 +26,8 @@ import {
   WandSparkles,
 } from 'lucide-react';
 import {
+  previewGeneratedAgent,
+  saveGeneratedAgent,
   useBuilderArtifacts,
   useChatRefine,
   useGenerateAgent,
@@ -35,6 +37,8 @@ import {
 } from '../lib/api';
 import {
   exportBuilderConfig,
+  previewBuilderSession,
+  saveBuilderSession,
   sendBuilderMessage,
   type BuilderConfig,
   type BuilderSessionPayload,
@@ -44,6 +48,8 @@ import { toastError, toastSuccess } from '../lib/toast';
 import type {
   BuildArtifact,
   BuildArtifactSource,
+  BuildPreviewResult,
+  BuildSaveResult,
   GeneratedAgentConfig,
   TranscriptReport,
   TranscriptReportSummary,
@@ -268,9 +274,15 @@ export function BuilderChatWorkspace({
   const [composer, setComposer] = useState('');
   const [session, setSession] = useState<BuilderSessionPayload | null>(null);
   const [pending, setPending] = useState(false);
+  const [previewPending, setPreviewPending] = useState(false);
+  const [savePending, setSavePending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [previewComposer, setPreviewComposer] = useState('');
+  const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
+  const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const artifactCreatedAtRef = useRef<string | null>(null);
+  const busy = pending || previewPending || savePending;
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -290,6 +302,8 @@ export function BuilderChatWorkspace({
       startTransition(() => {
         setSession(nextSession);
         setComposer('');
+        setPreviewResult(null);
+        setSaveResult(null);
       });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Builder request failed');
@@ -299,7 +313,7 @@ export function BuilderChatWorkspace({
   }
 
   async function handleExport() {
-    if (!session?.session_id || pending) {
+    if (!session?.session_id || busy) {
       return;
     }
 
@@ -346,6 +360,62 @@ export function BuilderChatWorkspace({
     }
   }
 
+  async function handlePreview() {
+    const message = previewComposer.trim();
+    if (!session?.session_id || !message || busy) {
+      return;
+    }
+
+    setPreviewPending(true);
+    setError(null);
+
+    try {
+      const preview = await previewBuilderSession({
+        session_id: session.session_id,
+        message,
+      });
+      setPreviewResult(preview);
+    } catch (previewError) {
+      setError(previewError instanceof Error ? previewError.message : 'Preview failed');
+    } finally {
+      setPreviewPending(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!session?.session_id || busy) {
+      return;
+    }
+
+    setSavePending(true);
+    setError(null);
+
+    try {
+      const saved = await saveBuilderSession({ session_id: session.session_id });
+      setSaveResult(saved);
+      toastSuccess('Saved to workspace', saved.config_path);
+
+      const createdAt = artifactCreatedAtRef.current ?? new Date().toISOString();
+      artifactCreatedAtRef.current = createdAt;
+
+      onArtifactCreated?.({
+        artifact_id: saved.artifact_id,
+        title: session.config.agent_name,
+        summary: `Saved builder chat config for ${session.config.agent_name}`,
+        source: 'builder_chat',
+        status: 'complete',
+        created_at: createdAt,
+        updated_at: new Date().toISOString(),
+        config_yaml: saved.actual_config_yaml,
+        builder_session_id: session.session_id,
+      });
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Save failed');
+    } finally {
+      setSavePending(false);
+    }
+  }
+
   const messages = session?.messages ?? [
     {
       message_id: 'builder-starter',
@@ -364,6 +434,13 @@ export function BuilderChatWorkspace({
     container.scrollTop = container.scrollHeight;
   }, [messages.length]);
 
+  useEffect(() => {
+    if (!session?.config || previewComposer.trim()) {
+      return;
+    }
+    setPreviewComposer(defaultPreviewMessageForBuilderConfig(session.config));
+  }, [previewComposer, session?.config, session?.updated_at]);
+
   const body = (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]">
       <section className="flex min-h-[560px] flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
@@ -377,11 +454,23 @@ export function BuilderChatWorkspace({
                 Describe the agent you want to build
               </h3>
             </div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-800">
+            <div
+              className={classNames(
+                'inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium',
+                session
+                  ? session.mock_mode
+                    ? 'border-amber-200 bg-amber-50 text-amber-800'
+                    : 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                  : 'border-sky-200 bg-sky-50 text-sky-800'
+              )}
+            >
               <Sparkles className="h-3.5 w-3.5" />
-              Mock mode
+              {session ? (session.mock_mode ? 'Fallback mode' : 'Live LLM') : 'Awaiting config'}
             </div>
           </div>
+          {session?.mock_mode && session.mock_reason ? (
+            <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
+          ) : null}
         </div>
 
         <div
@@ -449,7 +538,7 @@ export function BuilderChatWorkspace({
               <button
                 data-testid="builder-send"
                 onClick={() => void submitMessage(composer)}
-                disabled={pending}
+                disabled={busy}
                 className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Send className="h-4 w-4" />
@@ -472,8 +561,13 @@ export function BuilderChatWorkspace({
           >
             {session?.config.agent_name ?? 'Preview pending'}
           </p>
+          {session?.config.model ? (
+            <p className="mt-1 text-xs font-medium uppercase tracking-[0.18em] text-gray-400">
+              Model: {session.config.model}
+            </p>
+          ) : null}
           <p className="mt-1 text-sm text-gray-600">
-            The preview stays in sync with the conversation and is ready to export at any point.
+            The preview stays in sync with the conversation, can be tested against the runtime agent, and can be saved straight into the workspace.
           </p>
         </div>
 
@@ -508,13 +602,55 @@ export function BuilderChatWorkspace({
               ))}
             </div>
           </div>
+
+          <div className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+              Preview / Test
+            </p>
+            <textarea
+              aria-label="Builder preview message"
+              data-testid="builder-preview-input"
+              value={previewComposer}
+              onChange={(event) => setPreviewComposer(event.target.value)}
+              placeholder="Try a sample traveler request..."
+              rows={3}
+              className="mt-3 min-h-[88px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+            />
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void handlePreview()}
+                disabled={!session?.session_id || !previewComposer.trim() || busy}
+                className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Play className="h-4 w-4" />
+                {previewPending ? 'Testing...' : 'Test Agent'}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSave()}
+                disabled={!session?.session_id || busy}
+                className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <FolderOpen className="h-4 w-4" />
+                {savePending ? 'Saving...' : 'Save to Workspace'}
+              </button>
+            </div>
+            <div className="mt-4">
+              <PreviewResultCard
+                result={previewResult}
+                emptyText="Run a sample conversation to verify the current builder draft against the runtime agent."
+              />
+            </div>
+            {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
+          </div>
         </div>
 
         <div className="mt-auto flex gap-3 pt-4">
           <button
             data-testid="builder-download"
             onClick={handleExport}
-            disabled={!session?.session_id || pending}
+            disabled={!session?.session_id || busy}
             className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
@@ -523,7 +659,7 @@ export function BuilderChatWorkspace({
           <button
             data-testid="builder-run-eval"
             onClick={() => void submitMessage('Generate evals for this')}
-            disabled={!session?.session_id || pending}
+            disabled={!session?.session_id || busy}
             className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-sky-600 px-3.5 py-2.5 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Play className="h-4 w-4" />
@@ -572,8 +708,16 @@ export function StudioWorkspace({
   const [agentConfig, setAgentConfig] = useState<GeneratedAgentConfig | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composer, setComposer] = useState('');
-  const [instructionMode, setInstructionMode] = useState<InstructionStudioMode>('raw');
+  const [instructionMode, setInstructionMode] = useState<InstructionStudioMode>('form');
   const [instructionXml, setInstructionXml] = useState(() => buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
+  const [requestedAgentName, setRequestedAgentName] = useState('');
+  const [requestedModel, setRequestedModel] = useState('');
+  const [toolHintsInput, setToolHintsInput] = useState('');
+  const [previewComposer, setPreviewComposer] = useState('');
+  const [previewPending, setPreviewPending] = useState(false);
+  const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
+  const [savePending, setSavePending] = useState(false);
+  const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
 
   const importMutation = useImportTranscriptArchive();
   const generateMutation = useGenerateAgent();
@@ -589,6 +733,14 @@ export function StudioWorkspace({
   const yamlPreview = agentConfig ? configToYaml(agentConfig) : '';
   const transcriptIntents = transcriptReport ? buildIntentSummaries(transcriptReport) : [];
   const patternSignals = transcriptReport ? buildPatternSignals(transcriptReport) : [];
+  const refinementBusy = refineMutation.isPending || previewPending || savePending;
+
+  useEffect(() => {
+    if (!agentConfig || previewComposer.trim()) {
+      return;
+    }
+    setPreviewComposer(defaultPreviewMessageForGeneratedConfig(agentConfig));
+  }, [agentConfig, previewComposer]);
 
   function persistArtifact(
     source: BuildArtifactSource,
@@ -628,8 +780,14 @@ export function StudioWorkspace({
     setAgentConfig(null);
     setMessages([]);
     setComposer('');
-    setInstructionMode('raw');
+    setInstructionMode('form');
     setInstructionXml(buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
+    setRequestedAgentName('');
+    setRequestedModel('');
+    setToolHintsInput('');
+    setPreviewComposer('');
+    setPreviewResult(null);
+    setSaveResult(null);
     artifactIdRef.current = null;
     artifactCreatedAtRef.current = null;
 
@@ -654,19 +812,28 @@ export function StudioWorkspace({
       return;
     }
 
-    const generationPrompt = `${nextPrompt}\n\nDefault XML instruction draft:\n${instructionXml}`;
+    const toolHints = parseToolHints(toolHintsInput);
 
     generateMutation.mutate(
-      { prompt: generationPrompt },
+      {
+        prompt: nextPrompt,
+        instruction_xml: instructionXml,
+        requested_model: requestedModel.trim() || undefined,
+        requested_agent_name: requestedAgentName.trim() || undefined,
+        tool_hints: toolHints,
+      },
       {
         onSuccess: (config) => {
           artifactIdRef.current = null;
           const configYaml = configToYaml(config);
           setAgentConfig(config);
           setPhase('refine');
+          setPreviewResult(null);
+          setSaveResult(null);
+          setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
           setMessages([
             buildAssistantMessage(
-              `I drafted **${config.metadata.agent_name}** with ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies. Tell me what to refine next.`
+              `I drafted **${config.metadata.agent_name}** on **${config.model}** with ${config.tools.length} tools, ${config.routing_rules.length} routing rules, and ${config.policies.length} policies. Tell me what to refine next.`
             ),
           ]);
           persistArtifact(
@@ -674,7 +841,7 @@ export function StudioWorkspace({
             config.metadata.agent_name,
             'Generated from a prompt',
             configYaml,
-            { promptUsed: generationPrompt }
+            { promptUsed: nextPrompt }
           );
           toastSuccess('Agent generated', `${config.metadata.agent_name} is ready for refinement.`);
         },
@@ -700,10 +867,16 @@ export function StudioWorkspace({
       return;
     }
 
+    const toolHints = parseToolHints(toolHintsInput);
+
     generateMutation.mutate(
       {
-        prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}\n\nDefault XML instruction draft:\n${instructionXml}`,
+        prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}`,
         transcript_report_id: transcriptReport.report_id,
+        instruction_xml: instructionXml,
+        requested_model: requestedModel.trim() || undefined,
+        requested_agent_name: requestedAgentName.trim() || undefined,
+        tool_hints: toolHints,
       },
       {
         onSuccess: (config) => {
@@ -711,9 +884,12 @@ export function StudioWorkspace({
           const configYaml = configToYaml(config);
           setAgentConfig(config);
           setPhase('refine');
+          setPreviewResult(null);
+          setSaveResult(null);
+          setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
           setMessages([
             buildAssistantMessage(
-              `I turned the transcript analysis into **${config.metadata.agent_name}**. The config already reflects the top intent gaps, workflow signals, and FAQ patterns from the upload.`
+              `I turned the transcript analysis into **${config.metadata.agent_name}** on **${config.model}**. The config already reflects the top intent gaps, workflow signals, and FAQ patterns from the upload.`
             ),
           ]);
           persistArtifact(
@@ -775,6 +951,8 @@ export function StudioWorkspace({
 
     setMessages((current) => [...current, buildUserMessage(message)]);
     setComposer('');
+    setPreviewResult(null);
+    setSaveResult(null);
 
     refineMutation.mutate(
       {
@@ -809,6 +987,59 @@ export function StudioWorkspace({
     );
   }
 
+  async function handlePreviewRun() {
+    const message = previewComposer.trim();
+    if (!message || !agentConfig || refinementBusy) {
+      return;
+    }
+
+    setPreviewPending(true);
+    try {
+      const preview = await previewGeneratedAgent({
+        message,
+        config: agentConfig,
+      });
+      setPreviewResult(preview);
+    } catch (error) {
+      toastError('Preview failed', error instanceof Error ? error.message : String(error));
+    } finally {
+      setPreviewPending(false);
+    }
+  }
+
+  async function handleSaveToWorkspace() {
+    if (!agentConfig || refinementBusy) {
+      return;
+    }
+
+    setSavePending(true);
+    try {
+      const saved = await saveGeneratedAgent({
+        config: agentConfig,
+        source: currentMode,
+        prompt_used: currentMode === 'prompt' ? prompt.trim() : undefined,
+        transcript_report_id: transcriptReport?.report_id,
+      });
+      setSaveResult(saved);
+      toastSuccess('Saved to workspace', saved.config_path);
+      persistArtifact(
+        currentMode,
+        agentConfig.metadata.agent_name,
+        'Saved to workspace',
+        saved.actual_config_yaml,
+        {
+          promptUsed: currentMode === 'prompt' ? prompt.trim() : undefined,
+          transcriptReportId: transcriptReport?.report_id,
+          status: 'complete',
+        }
+      );
+    } catch (error) {
+      toastError('Save failed', error instanceof Error ? error.message : String(error));
+    } finally {
+      setSavePending(false);
+    }
+  }
+
   async function handleCopyYaml() {
     if (!agentConfig || !navigator.clipboard?.writeText) {
       return;
@@ -832,12 +1063,12 @@ export function StudioWorkspace({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${slugify(agentConfig.metadata.agent_name)}.yaml`;
+    link.download = `${slugify(agentConfig.metadata.agent_name)}-build-draft.yaml`;
     link.click();
     URL.revokeObjectURL(url);
-    toastSuccess('Config exported', 'Downloaded the YAML config.');
+    toastSuccess('Draft exported', 'Downloaded the current build draft YAML.');
 
-    persistArtifact(currentMode, agentConfig.metadata.agent_name, 'Exported YAML config', yaml, {
+    persistArtifact(currentMode, agentConfig.metadata.agent_name, 'Exported build draft YAML', yaml, {
       promptUsed: currentMode === 'prompt' ? prompt.trim() : undefined,
       transcriptReportId: transcriptReport?.report_id,
       status: 'exported',
@@ -888,6 +1119,15 @@ export function StudioWorkspace({
               ))}
             </div>
           </div>
+
+          <BuildDetailsFields
+            agentName={requestedAgentName}
+            onAgentNameChange={setRequestedAgentName}
+            model={requestedModel}
+            onModelChange={setRequestedModel}
+            toolHints={toolHintsInput}
+            onToolHintsChange={setToolHintsInput}
+          />
 
           <InstructionStudio
             mode={instructionMode}
@@ -1007,6 +1247,15 @@ export function StudioWorkspace({
                 </div>
               </AnalysisSection>
 
+              <BuildDetailsFields
+                agentName={requestedAgentName}
+                onAgentNameChange={setRequestedAgentName}
+                model={requestedModel}
+                onModelChange={setRequestedModel}
+                toolHints={toolHintsInput}
+                onToolHintsChange={setToolHintsInput}
+              />
+
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="text-sm text-gray-500">
                   The generated agent will incorporate the transcript gaps, workflow suggestions, and FAQ patterns.
@@ -1082,13 +1331,13 @@ export function StudioWorkspace({
               rows={3}
               placeholder="Tell the studio what to change next..."
               className="min-h-[84px] flex-1 resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
-              disabled={refineMutation.isPending}
+              disabled={refinementBusy}
             />
             <button
               type="button"
               aria-label="Send refinement message"
               onClick={handleRefineSend}
-              disabled={refineMutation.isPending || !composer.trim()}
+              disabled={refinementBusy || !composer.trim()}
               className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gray-900 text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
               <Send className="h-4 w-4" />
@@ -1103,10 +1352,10 @@ export function StudioWorkspace({
             <div>
               <div className="flex items-center gap-2">
                 <Brain className="h-4 w-4 text-gray-500" />
-                <h3 className="text-base font-semibold text-gray-900">Live YAML Config</h3>
+                <h3 className="text-base font-semibold text-gray-900">Live Build Draft</h3>
               </div>
               <p className="mt-1 text-sm text-gray-500">
-                Inspect the generated config as YAML while you refine the agent.
+                Inspect the generated build draft as YAML while you refine the agent. Saving writes the runnable workspace config for `agentlab eval run`.
               </p>
             </div>
             <button
@@ -1134,6 +1383,9 @@ export function StudioWorkspace({
                 <p className="mt-2 text-sm font-semibold text-gray-900">
                   {agentConfig.metadata.agent_name}
                 </p>
+                <p className="mt-1 text-xs font-medium uppercase tracking-[0.18em] text-gray-400">
+                  Model: {agentConfig.model}
+                </p>
                 <p className="mt-1 text-sm text-gray-500">
                   {agentConfig.metadata.created_from === 'transcript'
                     ? 'Generated from transcript intelligence.'
@@ -1146,7 +1398,49 @@ export function StudioWorkspace({
               <YamlPreview yaml={yamlPreview} />
             </div>
 
-            <div className="grid grid-cols-1 gap-2 border-t border-gray-100 p-4 sm:grid-cols-3">
+            <div className="space-y-4 border-t border-gray-100 p-4">
+              <div className="rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                  Preview / Test
+                </p>
+                <textarea
+                  aria-label="Preview message"
+                  value={previewComposer}
+                  onChange={(event) => setPreviewComposer(event.target.value)}
+                  placeholder="Try a sample end-user message..."
+                  rows={3}
+                  className="mt-3 min-h-[88px] w-full resize-none rounded-2xl border border-gray-200 bg-white px-3 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+                />
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handlePreviewRun()}
+                    disabled={!previewComposer.trim() || !agentConfig || refinementBusy}
+                    className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <Play className="h-4 w-4" />
+                    {previewPending ? 'Testing...' : 'Test Agent'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleSaveToWorkspace()}
+                    disabled={!agentConfig || refinementBusy}
+                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    <FolderOpen className="h-4 w-4" />
+                    {savePending ? 'Saving...' : 'Save to Workspace'}
+                  </button>
+                </div>
+                <div className="mt-4">
+                  <PreviewResultCard
+                    result={previewResult}
+                    emptyText="Run a sample conversation to verify the refined draft before saving."
+                  />
+                </div>
+                {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-4">
               <button
                 type="button"
                 onClick={() => navigate('/evals?new=1')}
@@ -1161,7 +1455,7 @@ export function StudioWorkspace({
                 className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
               >
                 <Download className="h-4 w-4" />
-                Export
+                Download Draft
               </button>
               <button
                 type="button"
@@ -1171,6 +1465,7 @@ export function StudioWorkspace({
                 <Play className="h-4 w-4" />
                 Run Eval
               </button>
+              </div>
             </div>
           </>
         )}
@@ -1185,7 +1480,7 @@ export function StudioWorkspace({
           title="Intelligence Studio"
           description={
             agentConfig
-              ? `Refining ${agentConfig.metadata.agent_name} through conversation and live YAML inspection.`
+              ? `Refining ${agentConfig.metadata.agent_name} through conversation, live draft inspection, and runtime previews.`
               : 'Refine the generated agent.'
           }
           actions={
@@ -1305,6 +1600,147 @@ export function SavedArtifactsWorkspace({
         </ArtifactSection>
       </div>
     </section>
+  );
+}
+
+function BuildDetailsFields({
+  agentName,
+  onAgentNameChange,
+  model,
+  onModelChange,
+  toolHints,
+  onToolHintsChange,
+}: {
+  agentName: string;
+  onAgentNameChange: (value: string) => void;
+  model: string;
+  onModelChange: (value: string) => void;
+  toolHints: string;
+  onToolHintsChange: (value: string) => void;
+}) {
+  return (
+    <section className="rounded-3xl border border-gray-200 bg-gray-50/80 p-4">
+      <div className="mb-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+          Agent Details
+        </p>
+        <p className="mt-1 text-sm text-gray-600">
+          These fields map directly into the generated config instead of being inferred from placeholder data.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <label className="space-y-2">
+          <span className="text-sm font-medium text-gray-700">Agent name</span>
+          <input
+            aria-label="Agent name"
+            value={agentName}
+            onChange={(event) => onAgentNameChange(event.target.value)}
+            placeholder="Airline Support Agent"
+            className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          />
+        </label>
+
+        <label className="space-y-2">
+          <span className="text-sm font-medium text-gray-700">Model</span>
+          <input
+            aria-label="Model"
+            value={model}
+            onChange={(event) => onModelChange(event.target.value)}
+            placeholder="gpt-4o"
+            className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+          />
+        </label>
+      </div>
+
+      <label className="mt-4 block space-y-2">
+        <span className="text-sm font-medium text-gray-700">Tool hints</span>
+        <textarea
+          aria-label="Tool hints"
+          value={toolHints}
+          onChange={(event) => onToolHintsChange(event.target.value)}
+          placeholder="flight_status_lookup, knowledge_base_lookup"
+          rows={3}
+          className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+        />
+        <p className="text-xs text-gray-500">
+          Separate multiple tools with commas or new lines.
+        </p>
+      </label>
+    </section>
+  );
+}
+
+function PreviewResultCard({
+  result,
+  emptyText,
+}: {
+  result: BuildPreviewResult | null;
+  emptyText: string;
+}) {
+  if (!result) {
+    return (
+      <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-4 text-sm text-gray-500">
+        {emptyText}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white px-4 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span
+          className={classNames(
+            'inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.18em]',
+            result.mock_mode
+              ? 'bg-amber-100 text-amber-800'
+              : 'bg-emerald-100 text-emerald-800'
+          )}
+        >
+          {result.mock_mode ? 'Mock preview' : 'Live preview'}
+        </span>
+        <span className="text-xs text-gray-500">
+          {result.specialist_used} specialist
+        </span>
+        <span className="text-xs text-gray-500">{Math.round(result.latency_ms)} ms</span>
+        <span className="text-xs text-gray-500">{result.token_count} tokens</span>
+      </div>
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-gray-800">{result.response}</p>
+      {result.tool_calls.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {result.tool_calls.map((toolCall, index) => (
+            <span
+              key={`${String(toolCall.name ?? 'tool')}-${index}`}
+              className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600"
+            >
+              Tool: {String(toolCall.name ?? toolCall.tool_name ?? `call_${index + 1}`)}
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {result.mock_mode && result.mock_reasons.length > 0 ? (
+        <p className="mt-3 text-xs text-amber-700">{result.mock_reasons.join(' ')}</p>
+      ) : null}
+    </div>
+  );
+}
+
+function SaveResultCard({
+  result,
+  className,
+}: {
+  result: BuildSaveResult;
+  className?: string;
+}) {
+  return (
+    <div className={classNames('rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4', className)}>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+        Saved to Workspace
+      </p>
+      <p className="mt-2 text-sm font-medium text-emerald-900">{result.config_path}</p>
+      <p className="mt-1 text-sm text-emerald-800">Config version: v{String(result.config_version).padStart(3, '0')}</p>
+      <p className="mt-1 text-xs text-emerald-700">Eval cases: {result.eval_cases_path}</p>
+    </div>
   );
 }
 
@@ -2287,12 +2723,43 @@ function renderHighlightedXml(xml: string): ReactNode[] {
   ));
 }
 
+function parseToolHints(value: string): string[] {
+  return value
+    .split(/[\n,]/)
+    .map((item) => item.trim())
+    .filter((item, index, items) => item.length > 0 && items.indexOf(item) === index);
+}
+
+function defaultPreviewMessageForGeneratedConfig(config: GeneratedAgentConfig): string {
+  const toolNames = config.tools.map((tool) => tool.name.toLowerCase());
+  if (toolNames.some((name) => name.includes('flight') || name.includes('booking'))) {
+    return 'My flight was delayed. Can you check the latest status and help me change my booking?';
+  }
+  if (toolNames.some((name) => name.includes('order') || name.includes('refund'))) {
+    return 'I need help with my order and want to know what my refund options are.';
+  }
+  return `Can you help me with ${config.metadata.agent_name}?`;
+}
+
+function defaultPreviewMessageForBuilderConfig(config: BuilderConfig): string {
+  const toolNames = config.tools.map((tool) => tool.name.toLowerCase());
+  if (toolNames.some((name) => name.includes('flight') || name.includes('booking'))) {
+    return 'My flight was delayed. Can you check the latest status and help me change my booking?';
+  }
+  if (toolNames.some((name) => name.includes('knowledge') || name.includes('faq'))) {
+    return 'Can you answer a policy question using the knowledge base?';
+  }
+  return `Can you help me with ${config.agent_name}?`;
+}
+
 function configToYaml(config: GeneratedAgentConfig): string {
   const lines: string[] = [
     'metadata:',
     `  agent_name: ${config.metadata.agent_name}`,
     `  version: ${config.metadata.version}`,
     `  created_from: ${config.metadata.created_from}`,
+    '',
+    `model: ${config.model}`,
     '',
     'system_prompt: |',
     ...config.system_prompt.split('\n').map((line) => `  ${line}`),

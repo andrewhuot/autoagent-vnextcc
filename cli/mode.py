@@ -132,6 +132,26 @@ def load_runtime_with_mode_preference(config_path: str = "agentlab.yaml") -> Run
     return runtime
 
 
+def load_runtime_with_builder_live_preference(config_path: str = "agentlab.yaml") -> RuntimeConfig:
+    """Load runtime config for Build flows, preferring live providers when available.
+
+    WHY: Build/config generation becomes misleading when it silently stays in
+    mock mode even though the operator has already configured real provider
+    credentials. The builder should use live providers unless the workspace has
+    been explicitly pinned to mock mode.
+    """
+    summary = summarize_mode_state(config_path)
+    runtime = summary["runtime"].model_copy(deep=True)
+    workspace_mode = summary["workspace_mode"]
+
+    if workspace_mode == "mock":
+        runtime.optimizer.use_mock = True
+    else:
+        runtime.optimizer.use_mock = not summary["real_provider_configured"]
+
+    return runtime
+
+
 def ensure_live_mode_ready(config_path: str = "agentlab.yaml") -> dict[str, Any]:
     """Validate that live mode has at least one configured real provider credential."""
     summary = summarize_mode_state(config_path)

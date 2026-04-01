@@ -20,6 +20,8 @@ import type {
   BuildArtifact,
   BuildArtifactSource,
   BuildArtifactStatus,
+  BuildPreviewResult,
+  BuildSaveResult,
   ConfigDiff,
   ConfigActivateResult,
   ConfigEditResult,
@@ -2398,7 +2400,18 @@ export function useBuilderArtifacts(params?: {
 
 export function useGenerateAgent() {
   const queryClient = useQueryClient();
-  return useMutation<GeneratedAgentConfig, ApiRequestError, { prompt: string; transcript_report_id?: string }>({
+  return useMutation<
+    GeneratedAgentConfig,
+    ApiRequestError,
+    {
+      prompt: string;
+      transcript_report_id?: string;
+      instruction_xml?: string;
+      requested_model?: string;
+      requested_agent_name?: string;
+      tool_hints?: string[];
+    }
+  >({
     mutationFn: (body) =>
       fetchApi('/intelligence/generate-agent', {
         method: 'POST',
@@ -2471,6 +2484,29 @@ export function useChatRefine() {
         method: 'POST',
         body: JSON.stringify(body),
       }),
+  });
+}
+
+export function saveGeneratedAgent(body: {
+  config: GeneratedAgentConfig;
+  source: BuildArtifactSource;
+  prompt_used?: string;
+  transcript_report_id?: string;
+  builder_session_id?: string;
+}) {
+  return fetchApi<BuildSaveResult>('/intelligence/save-agent', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function previewGeneratedAgent(body: {
+  message: string;
+  config: GeneratedAgentConfig;
+}) {
+  return fetchApi<BuildPreviewResult>('/intelligence/preview-agent', {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 

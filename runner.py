@@ -5803,6 +5803,25 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                     f"  {check['provider'] + ':':<22}"
                     + click.style(f"\u2717 {check['model']} missing {check['api_key_env']}", fg="red")
                 )
+    elif mode_summary["providers"]:
+        for provider in mode_summary["providers"]:
+            env_name = provider.get("api_key_env") or "an API key"
+            if provider.get("credential_set"):
+                click.echo(
+                    f"  {provider['provider'] + ':':<22}"
+                    + click.style(
+                        f"\u2713 {provider['model']} ready (from runtime config)",
+                        fg="green",
+                    )
+                )
+            else:
+                click.echo(
+                    f"  {provider['provider'] + ':':<22}"
+                    + click.style(
+                        f"\u26a0 {provider['model']} missing {env_name} (optional unless selected)",
+                        fg="yellow",
+                    )
+                )
     else:
         click.echo(
             "  Registry:           "

@@ -1254,6 +1254,7 @@ export interface AgentConfigMetadata {
 }
 
 export interface GeneratedAgentConfig {
+  model: string;
   system_prompt: string;
   tools: AgentTool[];
   routing_rules: RoutingRule[];
@@ -1265,6 +1266,26 @@ export interface GeneratedAgentConfig {
 export interface ChatRefineResponse {
   response: string;
   config: GeneratedAgentConfig;
+}
+
+export interface BuildPreviewResult {
+  response: string;
+  tool_calls: Array<Record<string, unknown>>;
+  latency_ms: number;
+  token_count: number;
+  specialist_used: string;
+  mock_mode: boolean;
+  mock_reasons: string[];
+}
+
+export interface BuildSaveResult {
+  artifact_id: string;
+  config_path: string;
+  config_version: number;
+  eval_cases_path: string;
+  runtime_config_path: string;
+  workspace_path: string;
+  actual_config_yaml: string;
 }
 
 export interface ApplyInsightResult {

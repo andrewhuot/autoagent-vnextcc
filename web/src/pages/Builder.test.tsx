@@ -8,6 +8,7 @@ function buildSessionPayload(overrides: Record<string, unknown> = {}) {
   return {
     session_id: 'session-123',
     mock_mode: true,
+    mock_reason: 'No configured builder LLM router is available.',
     messages: [
       {
         message_id: 'assistant-intro',
@@ -30,6 +31,7 @@ function buildSessionPayload(overrides: Record<string, unknown> = {}) {
     ],
     config: {
       agent_name: 'Airline Customer Support Agent',
+      model: 'gpt-4o',
       system_prompt: 'You are an airline support agent.',
       tools: [
         {

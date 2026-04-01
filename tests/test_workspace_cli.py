@@ -138,6 +138,36 @@ def test_mode_set_auto_restores_credential_detection(
     assert "Current mode: LIVE" in show_result.output
 
 
+def test_mode_preference_survives_workspace_metadata_rewrites(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A saved live-mode preference should survive normal workspace metadata updates."""
+    workspace = tmp_path / "mode-persist"
+    monkeypatch.setenv("GOOGLE_API_KEY", "g-test")
+
+    init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    set_result = runner.invoke(cli, ["mode", "set", "live"])
+    assert set_result.exit_code == 0, set_result.output
+    assert _workspace_metadata(workspace)["mode"] == "live"
+
+    discovered_workspace = runner_module.discover_workspace()
+    assert discovered_workspace is not None
+    discovered_workspace.set_active_config(1, filename="v001.yaml")
+
+    show_result = runner.invoke(cli, ["mode", "show"])
+
+    assert show_result.exit_code == 0, show_result.output
+    assert "Preferred mode: LIVE" in show_result.output
+    assert "Current mode: LIVE" in show_result.output
+    assert _workspace_metadata(workspace)["mode"] == "live"
+
+
 def test_init_mode_live_writes_live_runtime_config(
     runner: CliRunner,
     tmp_path: Path,

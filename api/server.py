@@ -122,7 +122,7 @@ async def lifespan(app: FastAPI):
     """Initialize shared resources on startup, clean up on shutdown."""
     from agent import create_eval_agent
     from agent.tracing import instrument_eval_runner
-    from cli.mode import load_runtime_with_mode_preference
+    from cli.mode import load_runtime_with_builder_live_preference, load_runtime_with_mode_preference
     from deployer.canary import Deployer
     from deployer.versioning import ConfigVersionManager
     from evals.execution_mode import requested_live_mode
@@ -190,6 +190,8 @@ async def lifespan(app: FastAPI):
     instrument_eval_runner(eval_runner, trace_store, agent_path="eval", branch="api")
     eval_runner.mock_mode_messages = list(eval_agent.mock_mode_messages)
     router = build_router_from_runtime_config(runtime.optimizer)
+    studio_runtime = load_runtime_with_builder_live_preference()
+    studio_router = build_router_from_runtime_config(studio_runtime.optimizer)
     proposer = Proposer(
         use_mock=router.mock_mode,
         llm_router=router,
@@ -201,7 +203,7 @@ async def lifespan(app: FastAPI):
         latest_path=Path(BUILD_ARTIFACT_STORE_PATH).parent / "build_artifact_latest.json",
     )
     transcript_intelligence_service = TranscriptIntelligenceService(
-        llm_router=router,
+        llm_router=studio_router,
         report_store=transcript_report_store,
     )
 

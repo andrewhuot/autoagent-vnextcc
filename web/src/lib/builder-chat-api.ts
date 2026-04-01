@@ -1,3 +1,5 @@
+import type { BuildPreviewResult, BuildSaveResult } from './types';
+
 export interface BuilderMessage {
   message_id: string;
   role: 'assistant' | 'user';
@@ -29,6 +31,7 @@ export interface BuilderEvalCriterion {
 
 export interface BuilderConfig {
   agent_name: string;
+  model: string;
   system_prompt: string;
   tools: BuilderTool[];
   routing_rules: BuilderRoutingRule[];
@@ -45,6 +48,7 @@ export interface BuilderEvalDraft {
 export interface BuilderSessionPayload {
   session_id: string;
   mock_mode: boolean;
+  mock_reason?: string;
   messages: BuilderMessage[];
   config: BuilderConfig;
   stats: {
@@ -94,6 +98,23 @@ export function exportBuilderConfig(body: {
   format?: 'yaml' | 'json';
 }): Promise<BuilderExportPayload> {
   return fetchBuilderApi('/api/builder/export', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function saveBuilderSession(body: { session_id: string }): Promise<BuildSaveResult> {
+  return fetchBuilderApi('/api/builder/save', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+export function previewBuilderSession(body: {
+  session_id: string;
+  message: string;
+}): Promise<BuildPreviewResult> {
+  return fetchBuilderApi('/api/builder/preview', {
     method: 'POST',
     body: JSON.stringify(body),
   });

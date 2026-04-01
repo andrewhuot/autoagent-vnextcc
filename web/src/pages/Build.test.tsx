@@ -121,6 +121,8 @@ describe('Build', () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(screen.getByRole('button', { name: 'Raw XML' }));
+
     const editor = screen.getByLabelText('XML instruction editor');
     await user.clear(editor);
     await user.type(editor, '<role>Broken</role><persona>');
@@ -132,6 +134,7 @@ describe('Build', () => {
     const user = userEvent.setup();
     renderPage();
 
+    await user.click(screen.getByRole('button', { name: 'Raw XML' }));
     await user.click(screen.getByRole('button', { name: 'Weather Routing Guide' }));
 
     const editor = screen.getByLabelText('XML instruction editor') as HTMLTextAreaElement;

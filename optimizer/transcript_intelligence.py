@@ -196,6 +196,8 @@ class TranscriptIntelligenceService:
         self._reports: dict[str, TranscriptReport] = self._load_reports_from_store()
         self.last_generation_used_llm = False
         self.last_refinement_used_llm = False
+        self.last_generation_failure_reason = ""
+        self.last_refinement_failure_reason = ""
 
     def list_reports(self) -> list[dict[str, Any]]:
         self._reports = self._load_reports_from_store()
@@ -1649,6 +1651,7 @@ class TranscriptIntelligenceService:
         """
         router = self._llm_router
         if router is None or getattr(router, "mock_mode", False):
+            self.last_generation_failure_reason = ""
             return None
 
         transcript_summary = self._build_generation_report_summary(transcript_report_id)
@@ -1689,16 +1692,20 @@ class TranscriptIntelligenceService:
                     metadata={"task": "build_generate_agent_config"},
                 )
             )
-        except Exception:
+        except Exception as exc:
+            self.last_generation_failure_reason = str(exc)
             return None
 
         parsed = self._extract_json_payload(response.text)
         if parsed is None:
+            self.last_generation_failure_reason = "The live provider response was not valid JSON."
             return None
 
         normalized = self._normalize_generated_config_output(parsed)
         if not normalized["system_prompt"].strip():
+            self.last_generation_failure_reason = "The live provider response did not include a usable system prompt."
             return None
+        self.last_generation_failure_reason = ""
         return normalized
 
     def _refine_agent_config_with_llm(
@@ -1714,6 +1721,7 @@ class TranscriptIntelligenceService:
         """
         router = self._llm_router
         if router is None or getattr(router, "mock_mode", False):
+            self.last_refinement_failure_reason = ""
             return None
 
         payload = {
@@ -1752,21 +1760,25 @@ class TranscriptIntelligenceService:
                     metadata={"task": "build_refine_agent_config"},
                 )
             )
-        except Exception:
+        except Exception as exc:
+            self.last_refinement_failure_reason = str(exc)
             return None
 
         parsed = self._extract_json_payload(response.text)
         if parsed is None:
+            self.last_refinement_failure_reason = "The live provider response was not valid JSON."
             return None
 
         next_config = parsed.get("config")
         if not isinstance(next_config, dict):
+            self.last_refinement_failure_reason = "The live provider response did not include an updated config payload."
             return None
 
         normalized = self._normalize_generated_config_output(next_config)
         response_text = str(parsed.get("response") or "").strip()
         if not response_text:
             response_text = "Updated the config to match the latest refinement request."
+        self.last_refinement_failure_reason = ""
         return {
             "response": response_text,
             "config": normalized,

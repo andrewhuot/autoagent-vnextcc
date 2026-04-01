@@ -173,6 +173,16 @@ class BuilderChatService:
 
     def _mock_reason(self) -> str:
         """Return a stable user-facing reason when the studio is not using a live router."""
+        generation_failure = str(
+            getattr(self._studio_service, "last_generation_failure_reason", "") or ""
+        ).strip()
+        refinement_failure = str(
+            getattr(self._studio_service, "last_refinement_failure_reason", "") or ""
+        ).strip()
+        if refinement_failure:
+            return refinement_failure
+        if generation_failure:
+            return generation_failure
         router = getattr(self._studio_service, "_llm_router", None)
         if router is None:
             return "No configured builder LLM router is available."

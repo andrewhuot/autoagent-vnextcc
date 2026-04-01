@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import yaml
 
 from builder.workspace_config import persist_generated_config, preview_generated_config
+from cli.mode import load_runtime_with_builder_live_preference
 from optimizer.providers import build_router_from_runtime_config
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
 from shared.build_artifact_store import BuildArtifactStore
@@ -82,7 +83,8 @@ def _get_service(request: Request) -> TranscriptIntelligenceService:
             runtime_config = getattr(request.app.state, "runtime_config", None)
             if runtime_config is not None:
                 try:
-                    llm_router = build_router_from_runtime_config(runtime_config.optimizer)
+                    builder_runtime = load_runtime_with_builder_live_preference()
+                    llm_router = build_router_from_runtime_config(builder_runtime.optimizer)
                 except Exception:
                     llm_router = None
         report_store = getattr(request.app.state, "transcript_report_store", None)

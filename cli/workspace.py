@@ -32,6 +32,9 @@ class WorkspaceMetadata:
     agent_name: str = "My Agent"
     platform: str = "Google ADK"
     demo_seeded: bool = False
+    mode: str | None = None
+    updated_at: float | None = None
+    updated_by: str | None = None
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> WorkspaceMetadata:
@@ -46,11 +49,14 @@ class WorkspaceMetadata:
             agent_name=str(data.get("agent_name") or "My Agent"),
             platform=str(data.get("platform") or "Google ADK"),
             demo_seeded=bool(data.get("demo_seeded", False)),
+            mode=(str(data.get("mode")).strip().lower() or None) if data.get("mode") is not None else None,
+            updated_at=float(data["updated_at"]) if data.get("updated_at") is not None else None,
+            updated_by=(str(data.get("updated_by")).strip() or None) if data.get("updated_by") is not None else None,
         )
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize metadata for storage in `.agentlab/workspace.json`."""
-        return {
+        payload = {
             "schema_version": self.schema_version,
             "name": self.name,
             "active_config_version": self.active_config_version,
@@ -61,6 +67,13 @@ class WorkspaceMetadata:
             "platform": self.platform,
             "demo_seeded": self.demo_seeded,
         }
+        if self.mode:
+            payload["mode"] = self.mode
+        if self.updated_at is not None:
+            payload["updated_at"] = self.updated_at
+        if self.updated_by:
+            payload["updated_by"] = self.updated_by
+        return payload
 
 
 @dataclass
