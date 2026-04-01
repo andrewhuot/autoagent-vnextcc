@@ -29,6 +29,18 @@ export function ToastViewport() {
               {toast.description && (
                 <p className="mt-1 text-sm opacity-90">{toast.description}</p>
               )}
+              {toast.action && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    toast.action?.onClick();
+                    dismissToast(toast.id);
+                  }}
+                  className="mt-3 rounded-md border border-current/20 bg-white/70 px-3 py-1.5 text-xs font-semibold transition hover:bg-white"
+                >
+                  {toast.action.label}
+                </button>
+              )}
             </div>
             <button
               aria-label="Dismiss notification"

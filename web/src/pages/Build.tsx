@@ -8,6 +8,7 @@ import {
 } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
+  ArrowRight,
   AlertTriangle,
   Archive,
   Brain,
@@ -28,7 +29,7 @@ import {
 } from 'lucide-react';
 import {
   previewGeneratedAgent,
-  saveGeneratedAgent,
+  useSaveAgent,
   useBuilderArtifacts,
   useChatRefine,
   useGenerateAgent,
@@ -39,14 +40,15 @@ import {
 import {
   exportBuilderConfig,
   previewBuilderSession,
-  saveBuilderSession,
   sendBuilderMessage,
   type BuilderConfig,
   type BuilderSessionPayload,
 } from '../lib/builder-chat-api';
 import { PageHeader } from '../components/PageHeader';
+import { useActiveAgent } from '../lib/active-agent';
 import { toastError, toastSuccess } from '../lib/toast';
 import type {
+  AgentLibraryItem,
   BuildArtifact,
   BuildArtifactSource,
   BuildPreviewResult,
@@ -191,6 +193,29 @@ const XML_GUIDE_LIBRARY = [
   },
 ];
 
+function buildEvalRoute(agentId: string, mode: 'run' | 'generate'): string {
+  const params = new URLSearchParams({ agent: agentId });
+  if (mode === 'run') {
+    params.set('new', '1');
+  } else {
+    params.set('generator', '1');
+  }
+  return `/evals?${params.toString()}`;
+}
+
+function navigateToEvalWorkflow(
+  navigate: ReturnType<typeof useNavigate>,
+  agent: AgentLibraryItem,
+  mode: 'run' | 'generate'
+) {
+  navigate(buildEvalRoute(agent.id, mode), {
+    state: {
+      agent,
+      open: mode,
+    },
+  });
+}
+
 /**
  * Unified build workspace that combines prompt-led studio, transcript-led studio, builder chat,
  * and saved artifacts in one tabbed surface.
@@ -272,6 +297,9 @@ export function BuilderChatWorkspace({
   showHeader?: boolean;
   onArtifactCreated?: (artifact: BuildArtifact) => void;
 }) {
+  const navigate = useNavigate();
+  const { setActiveAgent } = useActiveAgent();
+  const saveAgent = useSaveAgent();
   const [composer, setComposer] = useState('');
   const [session, setSession] = useState<BuilderSessionPayload | null>(null);
   const [pending, setPending] = useState(false);
@@ -281,6 +309,7 @@ export function BuilderChatWorkspace({
   const [previewComposer, setPreviewComposer] = useState('');
   const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
+  const [savedAgent, setSavedAgent] = useState<AgentLibraryItem | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const artifactCreatedAtRef = useRef<string | null>(null);
@@ -307,6 +336,7 @@ export function BuilderChatWorkspace({
         setComposer('');
         setPreviewResult(null);
         setSaveResult(null);
+        setSavedAgent(null);
       });
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : 'Builder request failed');
@@ -385,38 +415,78 @@ export function BuilderChatWorkspace({
     }
   }
 
-  async function handleSave() {
+  function applySavedAgent(
+    agent: AgentLibraryItem,
+    saved: BuildSaveResult,
+    options?: { showToast?: boolean },
+  ) {
+    const showToast = options?.showToast ?? true;
+    setSavedAgent(agent);
+    setSaveResult(saved);
+    setActiveAgent(agent);
+
+    if (showToast) {
+      toastSuccess('Saved to workspace', saved.config_path, {
+        action: {
+          label: 'Run Eval',
+          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run'),
+        },
+      });
+    }
+
+    const createdAt = artifactCreatedAtRef.current ?? new Date().toISOString();
+    artifactCreatedAtRef.current = createdAt;
+
+    onArtifactCreated?.({
+      artifact_id: saved.artifact_id,
+      title: session?.config.agent_name ?? agent.name,
+      summary: `Saved builder chat config for ${session?.config.agent_name ?? agent.name}`,
+      source: 'builder_chat',
+      status: 'complete',
+      created_at: createdAt,
+      updated_at: new Date().toISOString(),
+      config_yaml: saved.actual_config_yaml,
+      builder_session_id: session?.session_id,
+    });
+  }
+
+  async function saveCurrentBuilderAgent(options?: { showToast?: boolean }) {
     if (!session?.session_id || busy) {
-      return;
+      return null;
     }
 
     setSavePending(true);
     setError(null);
 
     try {
-      const saved = await saveBuilderSession({ session_id: session.session_id });
-      setSaveResult(saved);
-      toastSuccess('Saved to workspace', saved.config_path);
-
-      const createdAt = artifactCreatedAtRef.current ?? new Date().toISOString();
-      artifactCreatedAtRef.current = createdAt;
-
-      onArtifactCreated?.({
-        artifact_id: saved.artifact_id,
-        title: session.config.agent_name,
-        summary: `Saved builder chat config for ${session.config.agent_name}`,
-        source: 'builder_chat',
-        status: 'complete',
-        created_at: createdAt,
-        updated_at: new Date().toISOString(),
-        config_yaml: saved.actual_config_yaml,
-        builder_session_id: session.session_id,
+      const payload = await saveAgent.mutateAsync({
+        source: 'built',
+        build_source: 'builder_chat',
+        session_id: session.session_id,
       });
+      if (!payload.save_result) {
+        throw new Error('The saved agent response did not include workspace metadata.');
+      }
+      applySavedAgent(payload.agent, payload.save_result, { showToast: options?.showToast ?? true });
+      return payload.agent;
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Save failed');
+      return null;
     } finally {
       setSavePending(false);
     }
+  }
+
+  async function handleSave() {
+    await saveCurrentBuilderAgent();
+  }
+
+  async function handleContinueToEval() {
+    const agent = savedAgent ?? await saveCurrentBuilderAgent({ showToast: false });
+    if (!agent) {
+      return;
+    }
+    navigateToEvalWorkflow(navigate, agent, 'run');
   }
 
   async function handleCopyYaml() {
@@ -691,13 +761,23 @@ export function BuilderChatWorkspace({
                   emptyText="Run a sample conversation to verify the current builder draft against the runtime agent."
                 />
                 {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
+                {saveResult && savedAgent ? (
+                  <button
+                    type="button"
+                    onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run')}
+                    className="mt-3 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                  >
+                    Continue to Eval
+                    <ArrowRight className="h-4 w-4" />
+                  </button>
+                ) : null}
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 data-testid="builder-run-eval"
-                onClick={() => void submitMessage('Generate evals for this')}
+                onClick={() => void handleContinueToEval()}
                 disabled={!session?.session_id || busy}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
@@ -750,6 +830,8 @@ export function StudioWorkspace({
   onArtifactCreated?: (artifact: BuildArtifact) => void;
 }) {
   const navigate = useNavigate();
+  const { setActiveAgent } = useActiveAgent();
+  const saveAgent = useSaveAgent();
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const artifactIdRef = useRef<string | null>(null);
   const artifactCreatedAtRef = useRef<string | null>(null);
@@ -771,6 +853,7 @@ export function StudioWorkspace({
   const [previewResult, setPreviewResult] = useState<BuildPreviewResult | null>(null);
   const [savePending, setSavePending] = useState(false);
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
+  const [savedAgent, setSavedAgent] = useState<AgentLibraryItem | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
 
   const importMutation = useImportTranscriptArchive();
@@ -842,6 +925,7 @@ export function StudioWorkspace({
     setPreviewComposer('');
     setPreviewResult(null);
     setSaveResult(null);
+    setSavedAgent(null);
     setConfigModalOpen(false);
     artifactIdRef.current = null;
     artifactCreatedAtRef.current = null;
@@ -886,6 +970,7 @@ export function StudioWorkspace({
           setConfigModalOpen(false);
           setPreviewResult(null);
           setSaveResult(null);
+          setSavedAgent(null);
           setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
           setMessages([
             buildAssistantMessage(
@@ -943,6 +1028,7 @@ export function StudioWorkspace({
           setConfigModalOpen(false);
           setPreviewResult(null);
           setSaveResult(null);
+          setSavedAgent(null);
           setPreviewComposer(defaultPreviewMessageForGeneratedConfig(config));
           setMessages([
             buildAssistantMessage(
@@ -1010,6 +1096,7 @@ export function StudioWorkspace({
     setComposer('');
     setPreviewResult(null);
     setSaveResult(null);
+    setSavedAgent(null);
 
     refineMutation.mutate(
       {
@@ -1064,37 +1151,79 @@ export function StudioWorkspace({
     }
   }
 
-  async function handleSaveToWorkspace() {
-    if (!agentConfig || refinementBusy) {
+  function applySavedDraft(
+    agent: AgentLibraryItem,
+    saved: BuildSaveResult,
+    options?: { showToast?: boolean },
+  ) {
+    const showToast = options?.showToast ?? true;
+    setSavedAgent(agent);
+    setSaveResult(saved);
+    setActiveAgent(agent);
+
+    if (showToast) {
+      toastSuccess('Saved to workspace', saved.config_path, {
+        action: {
+          label: 'Run Eval',
+          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run'),
+        },
+      });
+    }
+
+    if (!agentConfig) {
       return;
+    }
+
+    persistArtifact(
+      currentMode,
+      agentConfig.metadata.agent_name,
+      'Saved to workspace',
+      saved.actual_config_yaml,
+      {
+        promptUsed: currentMode === 'prompt' ? prompt.trim() : undefined,
+        transcriptReportId: transcriptReport?.report_id,
+        status: 'complete',
+      }
+    );
+  }
+
+  async function saveCurrentGeneratedAgent(options?: { showToast?: boolean }) {
+    if (!agentConfig || refinementBusy) {
+      return null;
     }
 
     setSavePending(true);
     try {
-      const saved = await saveGeneratedAgent({
+      const payload = await saveAgent.mutateAsync({
+        source: 'built',
+        build_source: currentMode,
         config: agentConfig,
-        source: currentMode,
         prompt_used: currentMode === 'prompt' ? prompt.trim() : undefined,
         transcript_report_id: transcriptReport?.report_id,
       });
-      setSaveResult(saved);
-      toastSuccess('Saved to workspace', saved.config_path);
-      persistArtifact(
-        currentMode,
-        agentConfig.metadata.agent_name,
-        'Saved to workspace',
-        saved.actual_config_yaml,
-        {
-          promptUsed: currentMode === 'prompt' ? prompt.trim() : undefined,
-          transcriptReportId: transcriptReport?.report_id,
-          status: 'complete',
-        }
-      );
+      if (!payload.save_result) {
+        throw new Error('The saved agent response did not include workspace metadata.');
+      }
+      applySavedDraft(payload.agent, payload.save_result, { showToast: options?.showToast ?? true });
+      return payload.agent;
     } catch (error) {
       toastError('Save failed', error instanceof Error ? error.message : String(error));
+      return null;
     } finally {
       setSavePending(false);
     }
+  }
+
+  async function handleSaveToWorkspace() {
+    await saveCurrentGeneratedAgent();
+  }
+
+  async function handleFlowToEvals(mode: 'run' | 'generate') {
+    const agent = savedAgent ?? await saveCurrentGeneratedAgent({ showToast: false });
+    if (!agent) {
+      return;
+    }
+    navigateToEvalWorkflow(navigate, agent, mode);
   }
 
   async function handleCopyYaml() {
@@ -1500,13 +1629,23 @@ export function StudioWorkspace({
                     emptyText="Run a sample conversation to verify the refined draft before saving."
                   />
                   {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
+                  {saveResult && savedAgent ? (
+                    <button
+                      type="button"
+                      onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run')}
+                      className="mt-3 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                    >
+                      Continue to Eval
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  ) : null}
                 </div>
               </div>
 
               <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <button
                   type="button"
-                  onClick={() => navigate('/evals?new=1')}
+                  onClick={() => void handleFlowToEvals('generate')}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                 >
                   <Sparkles className="h-4 w-4" />
@@ -1514,7 +1653,7 @@ export function StudioWorkspace({
                 </button>
                 <button
                   type="button"
-                  onClick={() => navigate('/evals?run=1')}
+                  onClick={() => void handleFlowToEvals('run')}
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
                 >
                   <Play className="h-4 w-4" />

@@ -6,6 +6,8 @@ import type {
   AdkImportResult,
   AutonomousLoopResult,
   ApplyInsightResult,
+  AgentLibraryDetail,
+  AgentLibraryItem,
   ArchiveEntry,
   AutoFixApplyOutcome,
   AutoFixHistoryEntry,
@@ -77,6 +79,7 @@ import type {
   ChatRefineResponse,
   Runbook,
   SaveProviderKeysResponse,
+  SaveAgentResult,
   SetupOverview,
   SkillLeaderboardEntry,
   SkillMarketplaceListing,
@@ -975,6 +978,7 @@ export function useStartOptimize() {
     {
       window: number;
       force: boolean;
+      config_path?: string;
       mode: 'standard' | 'advanced' | 'research';
       objective: string;
       guardrails: string[];
@@ -991,6 +995,54 @@ export function useStartOptimize() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['optimizeHistory'] });
       queryClient.invalidateQueries({ queryKey: ['health'] });
+    },
+  });
+}
+
+export function useAgents() {
+  return useQuery<AgentLibraryItem[]>({
+    queryKey: ['agents'],
+    queryFn: async () => {
+      const payload = await fetchApi<{ agents: AgentLibraryItem[] }>('/agents');
+      return (payload.agents ?? []).slice().sort((a, b) => b.created_at.localeCompare(a.created_at));
+    },
+  });
+}
+
+export function useAgent(agentId: string | null | undefined) {
+  return useQuery<AgentLibraryDetail>({
+    queryKey: ['agents', agentId],
+    enabled: Boolean(agentId),
+    queryFn: () => fetchApi<AgentLibraryDetail>(`/agents/${encodeURIComponent(agentId || '')}`),
+  });
+}
+
+export function useSaveAgent() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    SaveAgentResult,
+    ApiRequestError,
+    {
+      source: 'built' | 'imported' | 'connected';
+      build_source?: 'prompt' | 'transcript' | 'builder_chat';
+      name?: string;
+      config?: Record<string, unknown>;
+      session_id?: string;
+      config_path?: string;
+      prompt_used?: string;
+      transcript_report_id?: string;
+      builder_session_id?: string;
+    }
+  >({
+    mutationFn: (params) =>
+      fetchApi('/agents', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] });
+      queryClient.invalidateQueries({ queryKey: ['configs'] });
     },
   });
 }

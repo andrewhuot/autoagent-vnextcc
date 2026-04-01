@@ -17,6 +17,8 @@ vi.mock('../lib/websocket', () => ({
 }));
 
 vi.mock('../lib/api', () => ({
+  useAgent: () => ({ data: null, isLoading: false }),
+  useAgents: () => ({ data: [], isLoading: false }),
   useConfigs: () => ({ data: [] }),
   useConversations: () => ({ data: [] }),
   useEvalRuns: () => ({ data: [] }),
@@ -25,7 +27,11 @@ vi.mock('../lib/api', () => ({
   useCurriculumBatches: () => ({ data: [] }),
   useGenerateCurriculum: () => ({ mutate: vi.fn(), isPending: false }),
   useSavedBuildArtifacts: () => ({ data: [] }),
+  useSaveAgent: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useStartEval: () => ({ mutate: vi.fn(), isPending: false }),
+  useStartOptimize: () => ({ mutate: vi.fn(), isPending: false }),
+  useOptimizeHistory: () => ({ data: [], isLoading: false, refetch: vi.fn() }),
+  useTaskStatus: () => ({ data: null }),
   useTranscriptReports: () => ({ data: [] }),
   useImportTranscriptArchive: () => ({ mutate: vi.fn(), isPending: false }),
   useGenerateAgent: () => ({ mutate: vi.fn(), isPending: false }),

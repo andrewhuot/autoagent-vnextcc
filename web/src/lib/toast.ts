@@ -2,12 +2,22 @@ import { create } from 'zustand';
 
 export type ToastTone = 'success' | 'error' | 'warning' | 'info';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastItem {
   id: string;
   title: string;
   description?: string;
+  action?: ToastAction;
   tone: ToastTone;
   createdAt: number;
+}
+
+export interface ToastOptions {
+  action?: ToastAction;
 }
 
 interface ToastStore {
@@ -53,18 +63,18 @@ export const useToastStore = create<ToastStore>((set) => ({
   },
 }));
 
-export function toastSuccess(title: string, description?: string) {
-  return useToastStore.getState().pushToast({ title, description, tone: 'success' });
+export function toastSuccess(title: string, description?: string, options?: ToastOptions) {
+  return useToastStore.getState().pushToast({ title, description, tone: 'success', action: options?.action });
 }
 
-export function toastError(title: string, description?: string) {
-  return useToastStore.getState().pushToast({ title, description, tone: 'error' });
+export function toastError(title: string, description?: string, options?: ToastOptions) {
+  return useToastStore.getState().pushToast({ title, description, tone: 'error', action: options?.action });
 }
 
-export function toastInfo(title: string, description?: string) {
-  return useToastStore.getState().pushToast({ title, description, tone: 'info' });
+export function toastInfo(title: string, description?: string, options?: ToastOptions) {
+  return useToastStore.getState().pushToast({ title, description, tone: 'info', action: options?.action });
 }
 
-export function toastWarning(title: string, description?: string) {
-  return useToastStore.getState().pushToast({ title, description, tone: 'warning' });
+export function toastWarning(title: string, description?: string, options?: ToastOptions) {
+  return useToastStore.getState().pushToast({ title, description, tone: 'warning', action: options?.action });
 }

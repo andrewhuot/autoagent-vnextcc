@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Wand2, Loader2, ArrowRight } from 'lucide-react';
 import { useGenerateEvals } from '../lib/api';
 import { toastError, toastSuccess } from '../lib/toast';
@@ -6,6 +6,7 @@ import { toastError, toastSuccess } from '../lib/toast';
 interface EvalGeneratorProps {
   onSuiteGenerated?: (suiteId: string) => void;
   defaultAgentName?: string;
+  defaultAgentConfig?: Record<string, unknown> | null;
 }
 
 const PLACEHOLDER_CONFIG = JSON.stringify(
@@ -19,7 +20,11 @@ const PLACEHOLDER_CONFIG = JSON.stringify(
   2,
 );
 
-export function EvalGenerator({ onSuiteGenerated, defaultAgentName = '' }: EvalGeneratorProps) {
+export function EvalGenerator({
+  onSuiteGenerated,
+  defaultAgentName = '',
+  defaultAgentConfig = null,
+}: EvalGeneratorProps) {
   const [agentName, setAgentName] = useState(defaultAgentName);
   const [agentConfig, setAgentConfig] = useState('');
   const [suiteResult, setSuiteResult] = useState<{
@@ -28,6 +33,20 @@ export function EvalGenerator({ onSuiteGenerated, defaultAgentName = '' }: EvalG
   } | null>(null);
 
   const generateEvals = useGenerateEvals();
+
+  useEffect(() => {
+    if (!defaultAgentName) {
+      return;
+    }
+    setAgentName(defaultAgentName);
+  }, [defaultAgentName]);
+
+  useEffect(() => {
+    if (!defaultAgentConfig) {
+      return;
+    }
+    setAgentConfig(JSON.stringify(defaultAgentConfig, null, 2));
+  }, [defaultAgentConfig]);
 
   const handleGenerate = () => {
     let parsed: Record<string, unknown>;
@@ -84,7 +103,7 @@ export function EvalGenerator({ onSuiteGenerated, defaultAgentName = '' }: EvalG
     <div className="rounded-lg border border-gray-200 bg-white p-6">
       <h3 className="text-lg font-semibold text-gray-900">Generate Eval Suite</h3>
       <p className="mt-1 text-sm text-gray-500">
-        Provide your agent configuration to auto-generate a tailored eval suite.
+        Generate a tailored eval suite from the selected agent without copy and paste.
       </p>
 
       <div className="mt-5 space-y-4">
@@ -106,6 +125,11 @@ export function EvalGenerator({ onSuiteGenerated, defaultAgentName = '' }: EvalG
           <label htmlFor="agent-config" className="block text-sm font-medium text-gray-700">
             Agent Config (JSON)
           </label>
+          {defaultAgentConfig && (
+            <p className="mt-1 text-xs text-gray-500">
+              Loaded from the currently selected agent. You can tweak it here before generating if needed.
+            </p>
+          )}
           <textarea
             id="agent-config"
             rows={8}

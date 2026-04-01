@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { FlaskConical, Plus, X, Wand2 } from 'lucide-react';
-import { useApplyCurriculum, useConfigs, useCurriculumBatches, useEvalRuns, useGenerateCurriculum, useStartEval } from '../lib/api';
+import {
+  useAgent,
+  useApplyCurriculum,
+  useCurriculumBatches,
+  useEvalRuns,
+  useGenerateCurriculum,
+  useStartEval,
+  useAgents,
+} from '../lib/api';
+import { AgentSelector } from '../components/AgentSelector';
 import { StatusBadge } from '../components/StatusBadge';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
@@ -10,14 +19,24 @@ import { ScoreDisplay } from '../components/ScoreDisplay';
 import { EvalGenerator } from '../components/EvalGenerator';
 import { GeneratedEvalReview } from '../components/GeneratedEvalReview';
 import { wsClient } from '../lib/websocket';
+import { useActiveAgent } from '../lib/active-agent';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
 import { formatTimestamp, statusVariant } from '../lib/utils';
+import type { AgentLibraryItem } from '../lib/types';
+
+interface EvalJourneyState {
+  agent?: AgentLibraryItem;
+  open?: 'run' | 'generate';
+}
 
 export function EvalRuns() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { activeAgent, setActiveAgent } = useActiveAgent();
+  const { data: agents } = useAgents();
+  const { data: selectedAgentDetail } = useAgent(activeAgent?.id);
   const { data: runs, isLoading, isError, refetch } = useEvalRuns();
-  const { data: configs } = useConfigs();
   const { data: curriculumData } = useCurriculumBatches();
   const startEval = useStartEval();
   const generateCurriculum = useGenerateCurriculum();
@@ -26,47 +45,110 @@ export function EvalRuns() {
   const [showForm, setShowForm] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
   const [generatedSuiteId, setGeneratedSuiteId] = useState<string | null>(null);
-  const [configVersion, setConfigVersion] = useState<string>('');
   const [category, setCategory] = useState('');
   const [selectedRuns, setSelectedRuns] = useState<string[]>([]);
-  const showCreateForm = showForm || searchParams.get('new') === '1';
+  const [runAgents, setRunAgents] = useState<Record<string, AgentLibraryItem>>({});
+  const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
+  const [completedRunId, setCompletedRunId] = useState<string | null>(null);
+  const [selectionHydrated, setSelectionHydrated] = useState(false);
+
+  const navigationState = (location.state as EvalJourneyState | null) ?? null;
+  const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
+  const showGeneratorPanel =
+    showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
+
+  useEffect(() => {
+    if (selectionHydrated) {
+      return;
+    }
+    if (navigationState?.agent) {
+      setActiveAgent(navigationState.agent);
+      setSelectionHydrated(true);
+      return;
+    }
+
+    const agentId = searchParams.get('agent');
+    if (!agentId) {
+      setSelectionHydrated(true);
+      return;
+    }
+    if (!agents?.length) {
+      return;
+    }
+    const matched = agents.find((agent) => agent.id === agentId);
+    if (matched) {
+      setActiveAgent(matched);
+    }
+    setSelectionHydrated(true);
+  }, [agents, navigationState?.agent, searchParams, selectionHydrated, setActiveAgent]);
 
   useEffect(() => {
     const unsubscribe = wsClient.onMessage('eval_complete', (payload) => {
       const data = payload as { task_id: string; composite: number; passed: number; total: number };
+      const evalAgent = runAgents[data.task_id] ?? activeAgent ?? null;
+
       toastSuccess(
         `Eval ${data.task_id.slice(0, 8)} completed`,
         `Composite ${(data.composite * 100).toFixed(1)} · ${data.passed}/${data.total} passed`
       );
+
+      if (evalAgent) {
+        setCompletedAgent(evalAgent);
+        setCompletedRunId(data.task_id);
+      }
+
+      setRunAgents((current) => {
+        const next = { ...current };
+        delete next[data.task_id];
+        return next;
+      });
       refetch();
     });
 
     return () => unsubscribe();
-  }, [refetch]);
+  }, [activeAgent, refetch, runAgents]);
 
   const comparisonRuns = useMemo(() => {
     if (!runs || selectedRuns.length !== 2) return [];
     return runs.filter((run) => selectedRuns.includes(run.run_id));
   }, [runs, selectedRuns]);
 
+  function syncAgentSearchParam(agent: AgentLibraryItem | null) {
+    const next = new URLSearchParams(searchParams);
+    if (agent) {
+      next.set('agent', agent.id);
+    } else {
+      next.delete('agent');
+    }
+    setSearchParams(next, { replace: true });
+  }
+
   function handleStartEval() {
-    const selectedConfig = configs?.find((entry) => String(entry.version) === configVersion);
-    const configPath = selectedConfig ? `configs/${selectedConfig.filename}` : undefined;
+    if (!activeAgent) {
+      toastError('Select an agent', 'Pick an agent from the library before starting an eval.');
+      return;
+    }
 
     startEval.mutate(
       {
-        config_path: configPath,
+        config_path: activeAgent.config_path,
         category: category.trim() || undefined,
       },
       {
         onSuccess: (response) => {
-          toastInfo(`Eval ${response.task_id.slice(0, 8)} started`, 'You can monitor live status from this table.');
+          setRunAgents((current) => ({
+            ...current,
+            [response.task_id]: activeAgent,
+          }));
+          toastInfo(
+            `Eval ${response.task_id.slice(0, 8)} started`,
+            `Running against ${activeAgent.name}.`
+          );
           setShowForm(false);
-          setConfigVersion('');
           setCategory('');
           const next = new URLSearchParams(searchParams);
           next.delete('new');
-          setSearchParams(next);
+          setSearchParams(next, { replace: true });
         },
         onError: (error) => {
           toastError('Failed to start eval', error.message);
@@ -92,7 +174,14 @@ export function EvalRuns() {
     setShowForm(false);
     const next = new URLSearchParams(searchParams);
     next.delete('new');
-    setSearchParams(next);
+    setSearchParams(next, { replace: true });
+  }
+
+  function closeGenerator() {
+    setShowGenerator(false);
+    const next = new URLSearchParams(searchParams);
+    next.delete('generator');
+    setSearchParams(next, { replace: true });
   }
 
   function handleGenerateCurriculum() {
@@ -139,7 +228,10 @@ export function EvalRuns() {
         actions={
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { setShowGenerator(true); setGeneratedSuiteId(null); }}
+              onClick={() => {
+                setShowGenerator(true);
+                setGeneratedSuiteId(null);
+              }}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
             >
               <Wand2 className="h-4 w-4" />
@@ -156,20 +248,57 @@ export function EvalRuns() {
         }
       />
 
-      {showGenerator && !generatedSuiteId && (
+      <AgentSelector onChange={syncAgentSearchParam} />
+
+      {completedAgent && completedRunId && (
+        <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-sky-900">{completedAgent.name} is ready for optimization</p>
+              <p className="mt-1 text-sm text-sky-800">
+                Carry the same agent straight into Optimize without picking a config again.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                navigate(`/optimize?agent=${encodeURIComponent(completedAgent.id)}`, {
+                  state: {
+                    agent: completedAgent,
+                    evalRunId: completedRunId,
+                  },
+                })
+              }
+              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+            >
+              Optimize
+            </button>
+          </div>
+        </section>
+      )}
+
+      {showGeneratorPanel && !generatedSuiteId && (
         <section className="rounded-lg border border-gray-200 bg-white p-5">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">AI Eval Generation</h3>
             <button
-              onClick={() => setShowGenerator(false)}
+              onClick={closeGenerator}
               className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
-          <EvalGenerator
-            onSuiteGenerated={(suiteId) => setGeneratedSuiteId(suiteId)}
-          />
+          {activeAgent ? (
+            <EvalGenerator
+              defaultAgentName={activeAgent.name}
+              defaultAgentConfig={selectedAgentDetail?.config ?? null}
+              onSuiteGenerated={(suiteId) => setGeneratedSuiteId(suiteId)}
+            />
+          ) : (
+            <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-sm text-gray-600">
+              Choose an agent above to generate a tailored eval suite from its saved config.
+            </div>
+          )}
         </section>
       )}
 
@@ -178,7 +307,10 @@ export function EvalRuns() {
           <div className="mb-3 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-900">Review Generated Evals</h3>
             <button
-              onClick={() => { setGeneratedSuiteId(null); setShowGenerator(false); }}
+              onClick={() => {
+                setGeneratedSuiteId(null);
+                closeGenerator();
+              }}
               className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
             >
               <X className="h-4 w-4" />
@@ -189,7 +321,7 @@ export function EvalRuns() {
             onAccepted={() => {
               toastSuccess('Eval suite accepted', 'Generated cases are now available for eval runs.');
               setGeneratedSuiteId(null);
-              setShowGenerator(false);
+              closeGenerator();
             }}
           />
         </section>
@@ -285,21 +417,19 @@ export function EvalRuns() {
             </button>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <label className="mb-1 block text-xs text-gray-500">Config Version</label>
-              <select
-                value={configVersion}
-                onChange={(event) => setConfigVersion(event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                <option value="">Latest active</option>
-                {(configs || []).map((config) => (
-                  <option key={config.version} value={config.version}>
-                    v{config.version} · {config.status}
-                  </option>
-                ))}
-              </select>
+          <div className="grid gap-3 sm:grid-cols-[1.2fr_1fr_auto]">
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
+              <label className="mb-1 block text-xs text-gray-500">Selected agent</label>
+              {activeAgent ? (
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{activeAgent.name}</p>
+                  <p className="text-xs text-gray-500">
+                    {activeAgent.model} · {activeAgent.status}
+                  </p>
+                </div>
+              ) : (
+                <p className="text-sm text-gray-500">Choose an agent from the library above to run this eval.</p>
+              )}
             </div>
 
             <div>
@@ -316,7 +446,7 @@ export function EvalRuns() {
             <div className="flex items-end">
               <button
                 onClick={handleStartEval}
-                disabled={startEval.isPending}
+                disabled={startEval.isPending || !activeAgent}
                 className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
               >
                 {startEval.isPending ? 'Starting...' : 'Start Eval'}
@@ -415,7 +545,7 @@ export function EvalRuns() {
             </table>
           </div>
         </section>
-      ) : (
+      ) : activeAgent ? (
         <EmptyState
           icon={FlaskConical}
           title="No eval runs yet"
@@ -423,6 +553,14 @@ export function EvalRuns() {
           cliHint="agentlab eval run"
           actionLabel="Create Eval Run"
           onAction={() => setShowForm(true)}
+        />
+      ) : (
+        <EmptyState
+          icon={FlaskConical}
+          title="Pick an agent to start evaluating"
+          description="Build or connect an agent first, then run your first eval from the same saved config."
+          actionLabel="Open Build"
+          onAction={() => navigate('/build')}
         />
       )}
     </div>

@@ -30,8 +30,10 @@ class _DummyOptimizer:
         self.search_strategy = SearchStrategy.SIMPLE
         self.search_budget = SimpleNamespace(max_candidates=3, max_eval_budget=2, max_cost_dollars=1.0)
         self.applied_settings: list[tuple[str, int, int, float]] = []
+        self.received_current_configs: list[dict] = []
 
     def optimize(self, report, current_config, failure_samples=None):  # noqa: ANN001, ARG002
+        self.received_current_configs.append(current_config)
         self.applied_settings.append(
             (
                 self.search_strategy.value,
@@ -133,3 +135,34 @@ def test_start_optimization_applies_requested_mode_settings(client: TestClient, 
     optimizer = app.state.optimizer
     assert optimizer.applied_settings == [("full", 20, 10, 7.5)]
     assert optimizer.search_strategy == SearchStrategy.SIMPLE
+
+
+def test_start_optimization_uses_selected_agent_config_when_config_path_is_provided(
+    client: TestClient,
+    app: FastAPI,
+    tmp_path,
+) -> None:
+    config_path = tmp_path / "selected-agent.yaml"
+    config_path.write_text("model: selected-model\nprompts:\n  root: Selected config prompt\n", encoding="utf-8")
+
+    response = client.post(
+        "/api/optimize/run",
+        json={
+            "window": 25,
+            "force": True,
+            "mode": "standard",
+            "objective": "",
+            "guardrails": [],
+            "research_algorithm": "",
+            "budget_cycles": 5,
+            "budget_dollars": 3.0,
+            "config_path": str(config_path),
+        },
+    )
+
+    assert response.status_code == 202
+    time.sleep(0.2)
+
+    optimizer = app.state.optimizer
+    assert optimizer.received_current_configs[-1]["model"] == "selected-model"
+    assert optimizer.received_current_configs[-1]["prompts"]["root"] == "Selected config prompt"

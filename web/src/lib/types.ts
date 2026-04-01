@@ -1288,6 +1288,28 @@ export interface BuildSaveResult {
   actual_config_yaml: string;
 }
 
+export type AgentLibrarySource = 'built' | 'imported' | 'connected';
+
+export interface AgentLibraryItem {
+  id: string;
+  config_version?: number;
+  name: string;
+  model: string;
+  created_at: string;
+  source: AgentLibrarySource;
+  config_path: string;
+  status: string;
+}
+
+export interface AgentLibraryDetail extends AgentLibraryItem {
+  config: Record<string, unknown>;
+}
+
+export interface SaveAgentResult {
+  agent: AgentLibraryDetail;
+  save_result: BuildSaveResult | null;
+}
+
 export interface ApplyInsightResult {
   status: string;
   drafted_change_prompt: string;

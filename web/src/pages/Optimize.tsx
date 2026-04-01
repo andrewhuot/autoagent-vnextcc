@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Play, Sparkles, Zap, Plus, Trash2 } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { DiffViewer } from '../components/DiffViewer';
@@ -9,14 +9,21 @@ import { PageHeader } from '../components/PageHeader';
 import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { TimelineEntry } from '../components/TimelineEntry';
-import { useOptimizeHistory, useStartOptimize, useTaskStatus } from '../lib/api';
+import { AgentSelector } from '../components/AgentSelector';
+import { useActiveAgent } from '../lib/active-agent';
+import { useAgents, useOptimizeHistory, useStartOptimize, useTaskStatus } from '../lib/api';
 import { wsClient } from '../lib/websocket';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
 import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
-import type { DiffLine } from '../lib/types';
+import type { AgentLibraryItem, DiffLine } from '../lib/types';
 
 type OptimizeMode = 'standard' | 'advanced' | 'research';
 type OptimizeTab = 'run' | 'live';
+
+interface OptimizeJourneyState {
+  agent?: AgentLibraryItem;
+  evalRunId?: string;
+}
 
 const modeDescriptions: Record<OptimizeMode, string> = {
   standard: 'Default optimization with safety gates and regression checks.',
@@ -93,8 +100,40 @@ function OptimizeTabButton({
 }
 
 export function Optimize() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const location = useLocation();
+  const { activeAgent, setActiveAgent } = useActiveAgent();
+  const { data: agents } = useAgents();
   const [activeTab, setActiveTab] = useState<OptimizeTab>('run');
   const [visitedTabs, setVisitedTabs] = useState<Set<OptimizeTab>>(() => new Set(['run']));
+  const [selectionHydrated, setSelectionHydrated] = useState(false);
+
+  const journeyState = (location.state as OptimizeJourneyState | null) ?? null;
+  const selectedEvalRunId = journeyState?.evalRunId ?? null;
+
+  useEffect(() => {
+    if (selectionHydrated) {
+      return;
+    }
+    if (journeyState?.agent) {
+      setActiveAgent(journeyState.agent);
+      setSelectionHydrated(true);
+      return;
+    }
+    const agentId = searchParams.get('agent');
+    if (!agentId) {
+      setSelectionHydrated(true);
+      return;
+    }
+    if (!agents?.length) {
+      return;
+    }
+    const matched = agents.find((agent) => agent.id === agentId);
+    if (matched) {
+      setActiveAgent(matched);
+    }
+    setSelectionHydrated(true);
+  }, [agents, journeyState?.agent, searchParams, selectionHydrated, setActiveAgent]);
 
   function selectTab(tab: OptimizeTab) {
     setActiveTab(tab);
@@ -106,6 +145,16 @@ export function Optimize() {
       next.add(tab);
       return next;
     });
+  }
+
+  function syncAgentSearchParam(agent: AgentLibraryItem | null) {
+    const next = new URLSearchParams(searchParams);
+    if (agent) {
+      next.set('agent', agent.id);
+    } else {
+      next.delete('agent');
+    }
+    setSearchParams(next, { replace: true });
   }
 
   return (
@@ -123,6 +172,15 @@ export function Optimize() {
         }
       />
 
+      <AgentSelector onChange={syncAgentSearchParam} />
+
+      {selectedEvalRunId && activeAgent && (
+        <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          Optimizing <span className="font-semibold">{activeAgent.name}</span> using context from eval run{' '}
+          <span className="font-mono">{selectedEvalRunId.slice(0, 8)}</span>.
+        </section>
+      )}
+
       <section className="rounded-lg border border-gray-200 bg-white p-2">
         <div className="flex flex-wrap gap-1">
           {optimizeTabs.map((tab) => (
@@ -138,7 +196,7 @@ export function Optimize() {
 
       {visitedTabs.has('run') && (
         <section hidden={activeTab !== 'run'}>
-          <OptimizeRunSection />
+          <OptimizeRunSection activeAgent={activeAgent} evalRunId={selectedEvalRunId} />
         </section>
       )}
       {visitedTabs.has('live') && (
@@ -150,7 +208,14 @@ export function Optimize() {
   );
 }
 
-function OptimizeRunSection() {
+function OptimizeRunSection({
+  activeAgent,
+  evalRunId,
+}: {
+  activeAgent: AgentLibraryItem | null;
+  evalRunId: string | null;
+}) {
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { data: history, isLoading, refetch } = useOptimizeHistory();
   const startOptimize = useStartOptimize();
@@ -159,6 +224,8 @@ function OptimizeRunSection() {
   const [force, setForce] = useState(() => searchParams.get('new') === '1');
   const [expandedAttempt, setExpandedAttempt] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+  const [activeTaskAgent, setActiveTaskAgent] = useState<AgentLibraryItem | null>(null);
+  const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>('standard');
   const [objective, setObjective] = useState('');
   const [guardrails, setGuardrails] = useState<string[]>([]);
@@ -172,16 +239,20 @@ function OptimizeRunSection() {
   useEffect(() => {
     const unsubscribe = wsClient.onMessage('optimize_complete', (payload) => {
       const data = payload as { task_id: string; accepted: boolean; status: string };
+      const optimizationAgent = activeTaskAgent ?? activeAgent ?? null;
       if (data.accepted) {
         toastSuccess('Optimization accepted', data.status);
       } else {
         toastInfo('Optimization completed', data.status);
       }
+      if (optimizationAgent) {
+        setCompletedAgent(optimizationAgent);
+      }
       refetch();
     });
 
     return () => unsubscribe();
-  }, [refetch]);
+  }, [activeAgent, activeTaskAgent, refetch]);
 
   useEffect(() => {
     if (!taskStatus.data) return;
@@ -193,13 +264,16 @@ function OptimizeRunSection() {
       } else {
         toastInfo('Optimization cycle finished', result.status_message || 'No deployable change this cycle.');
       }
+      if (activeTaskAgent) {
+        setCompletedAgent(activeTaskAgent);
+      }
       refetch();
     }
 
     if (taskStatus.data.status === 'failed') {
       toastError('Optimization failed', taskStatus.data.error || 'Unknown error');
     }
-  }, [refetch, taskStatus.data]);
+  }, [activeTaskAgent, refetch, taskStatus.data]);
 
   const taskIsRunning =
     !!activeTaskId &&
@@ -218,10 +292,16 @@ function OptimizeRunSection() {
   const selectedAttempt = attempts.find((attempt) => attempt.attempt_id === expandedAttempt) || null;
 
   function handleStart() {
+    if (!activeAgent) {
+      toastError('Select an agent', 'Pick an agent from the library before starting optimization.');
+      return;
+    }
+
     startOptimize.mutate(
       {
         window: windowSize,
         force,
+        config_path: activeAgent.config_path,
         mode: optimizeMode,
         objective,
         guardrails,
@@ -232,7 +312,11 @@ function OptimizeRunSection() {
       {
         onSuccess: (response) => {
           setActiveTaskId(response.task_id);
-          toastInfo(`Optimization ${response.task_id.slice(0, 8)} started`, 'Running observe → propose → eval gates.');
+          setActiveTaskAgent(activeAgent);
+          toastInfo(
+            `Optimization ${response.task_id.slice(0, 8)} started`,
+            `Running against ${activeAgent.name}.`
+          );
         },
         onError: (error) => {
           toastError('Failed to start optimization', error.message);
@@ -252,13 +336,42 @@ function OptimizeRunSection() {
 
   return (
     <div className="space-y-6">
+      {completedAgent && (
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-emerald-900">{completedAgent.name} finished its optimization cycle</p>
+              <p className="mt-1 text-sm text-emerald-800">
+                Keep the loop moving by reviewing the results or re-running evals on the same saved agent.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => navigate(`/evals?agent=${encodeURIComponent(completedAgent.id)}&new=1`, { state: { agent: completedAgent } })}
+                className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                Re-eval
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/improvements')}
+                className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+              >
+                View Results
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       <PageHeader
         title="Optimize"
         description="Run optimization cycles and inspect exactly which candidate changes were accepted or rejected."
         actions={
           <button
             onClick={handleStart}
-            disabled={startOptimize.isPending || taskIsRunning}
+            disabled={startOptimize.isPending || taskIsRunning || !activeAgent}
             className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
           >
             <Play className="h-4 w-4" />
@@ -285,6 +398,12 @@ function OptimizeRunSection() {
           ))}
         </div>
         <p className="text-xs text-gray-500">{modeDescriptions[optimizeMode]}</p>
+
+        {evalRunId && (
+          <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+            Using eval context from run <span className="font-mono">{evalRunId.slice(0, 8)}</span> while optimizing this agent.
+          </div>
+        )}
 
         {optimizeMode === 'research' && (
           <div className="mt-4 space-y-4 rounded-lg border border-blue-200 bg-blue-50 p-4">
@@ -425,11 +544,13 @@ function OptimizeRunSection() {
             </label>
           </div>
           <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-            Optimizer applies strict safety + regression gates. A cycle only deploys if the candidate clears all checks.
+            {activeAgent
+              ? `Optimization will run against ${activeAgent.name} using its saved config.`
+              : 'Choose an agent above before starting optimization.'}
           </div>
         </div>
 
-        {taskIsRunning && (
+        {taskIsRunning && activeTaskId && (
           <div className="mt-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-medium text-blue-800">Active task {activeTaskId.slice(0, 8)}</p>
@@ -519,13 +640,21 @@ function OptimizeRunSection() {
             )}
           </div>
         </section>
-      ) : (
+      ) : activeAgent ? (
         <EmptyState
           icon={Zap}
           title="No optimization history"
           description="Start a cycle to let the optimizer inspect failures, propose a config update, and run gate checks."
           actionLabel="Start optimization"
           onAction={handleStart}
+        />
+      ) : (
+        <EmptyState
+          icon={Zap}
+          title="Pick an agent to optimize"
+          description="Build or connect an agent first, then bring it here to optimize the same saved config."
+          actionLabel="Open Build"
+          onAction={() => navigate('/build')}
         />
       )}
     </div>

@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from api.routes import (
     builder as builder_routes,
+    agents as agents_routes,
     datasets as datasets_routes,
     outcomes as outcomes_routes,
     a2a as a2a_routes,
@@ -454,6 +455,7 @@ app.add_middleware(
 # API routes
 # ---------------------------------------------------------------------------
 app.include_router(builder_routes.router)
+app.include_router(agents_routes.router)
 app.include_router(builder_demo_routes.router)
 app.include_router(demo_routes.router)
 app.include_router(eval_routes.router)

@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { EvalRuns } from './EvalRuns';
+import { useActiveAgentStore } from '../lib/active-agent';
+
+let evalCompleteHandler: ((payload: unknown) => void) | null = null;
 
 const apiMocks = vi.hoisted(() => ({
+  useAgent: vi.fn(),
+  useAgents: vi.fn(),
   useApplyCurriculum: vi.fn(),
-  useConfigs: vi.fn(),
   useCurriculumBatches: vi.fn(),
   useEvalRuns: vi.fn(),
   useGenerateCurriculum: vi.fn(),
@@ -13,8 +18,9 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../lib/api', () => ({
+  useAgent: apiMocks.useAgent,
+  useAgents: apiMocks.useAgents,
   useApplyCurriculum: apiMocks.useApplyCurriculum,
-  useConfigs: apiMocks.useConfigs,
   useCurriculumBatches: apiMocks.useCurriculumBatches,
   useEvalRuns: apiMocks.useEvalRuns,
   useGenerateCurriculum: apiMocks.useGenerateCurriculum,
@@ -23,7 +29,10 @@ vi.mock('../lib/api', () => ({
 
 vi.mock('../lib/websocket', () => ({
   wsClient: {
-    onMessage: vi.fn(() => () => undefined),
+    onMessage: vi.fn((_type: string, handler: (payload: unknown) => void) => {
+      evalCompleteHandler = handler;
+      return () => undefined;
+    }),
   },
 }));
 
@@ -33,16 +42,23 @@ vi.mock('../lib/toast', () => ({
   toastSuccess: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(initialEntry = '/evals') {
   return render(
-    <MemoryRouter initialEntries={['/evals']}>
-      <EvalRuns />
+    <MemoryRouter initialEntries={[initialEntry]}>
+      <Routes>
+        <Route path="/evals" element={<EvalRuns />} />
+        <Route path="/optimize" element={<div>Optimize Page</div>} />
+      </Routes>
     </MemoryRouter>
   );
 }
 
 describe('EvalRuns', () => {
   beforeEach(() => {
+    evalCompleteHandler = null;
+    window.sessionStorage.clear();
+    useActiveAgentStore.getState().clearActiveAgent();
+
     apiMocks.useEvalRuns.mockReturnValue({
       data: [
         {
@@ -60,19 +76,85 @@ describe('EvalRuns', () => {
       isError: false,
       refetch: vi.fn(),
     });
-    apiMocks.useConfigs.mockReturnValue({ data: [], isLoading: false });
+    apiMocks.useAgents.mockReturnValue({
+      data: [
+        {
+          id: 'agent-v002',
+          name: 'Order Guardian',
+          model: 'gpt-5.4',
+          created_at: '2026-04-01T12:00:00.000Z',
+          source: 'built',
+          config_path: '/workspace/configs/v002.yaml',
+          status: 'candidate',
+        },
+      ],
+      isLoading: false,
+    });
+    apiMocks.useAgent.mockReturnValue({
+      data: {
+        id: 'agent-v002',
+        name: 'Order Guardian',
+        model: 'gpt-5.4',
+        created_at: '2026-04-01T12:00:00.000Z',
+        source: 'built',
+        config_path: '/workspace/configs/v002.yaml',
+        status: 'candidate',
+        config: {
+          model: 'gpt-5.4',
+          system_prompt: 'Resolve support issues safely.',
+        },
+      },
+      isLoading: false,
+    });
     apiMocks.useCurriculumBatches.mockReturnValue({
       data: { batches: [], progression: [] },
       isLoading: false,
     });
-    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useGenerateCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useApplyCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
   });
 
-  it('shows an eval mode badge for each run', () => {
-    renderPage();
+  it('uses the selected agent instead of a config version dropdown when starting an eval', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-123456', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
 
-    expect(screen.getByText('mixed')).toBeInTheDocument();
+    renderPage('/evals?agent=agent-v002&new=1');
+
+    expect(screen.queryByText('Config Version')).not.toBeInTheDocument();
+    expect((await screen.findAllByText('Order Guardian')).length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Start Eval' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        config_path: '/workspace/configs/v002.yaml',
+        category: undefined,
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('shows an optimize handoff after the selected agent finishes evaluating', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-123456', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+
+    renderPage('/evals?agent=agent-v002&new=1');
+
+    await user.click(screen.getByRole('button', { name: 'Start Eval' }));
+    evalCompleteHandler?.({
+      task_id: 'task-123456',
+      composite: 0.91,
+      passed: 11,
+      total: 12,
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Optimize' }));
+    expect(await screen.findByText('Optimize Page')).toBeInTheDocument();
   });
 });

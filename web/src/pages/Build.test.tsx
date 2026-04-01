@@ -1,11 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { ToastViewport, } from '../components/ToastViewport';
 import { Build } from './Build';
 
 function renderPage(initialEntry = '/build') {
+  return renderJourney(initialEntry, <Build />);
+}
+
+function renderJourney(initialEntry = '/build', element = <Build />) {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -16,7 +21,11 @@ function renderPage(initialEntry = '/build') {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[initialEntry]}>
-        <Build />
+        <Routes>
+          <Route path="/build" element={element} />
+          <Route path="/evals" element={<div>Eval Page</div>} />
+        </Routes>
+        <ToastViewport />
       </MemoryRouter>
     </QueryClientProvider>
   );
@@ -340,5 +349,110 @@ describe('Build', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'JSON' }));
     expect(within(dialog).getByTestId('builder-config-preview')).toBeInTheDocument();
+  });
+
+  it('saves a generated agent and exposes a continue-to-eval handoff', async () => {
+    const user = userEvent.setup();
+    const generatedConfig = mockGeneratedConfig();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/intelligence/generate-agent') {
+          return jsonResponse(generatedConfig);
+        }
+        if (url === '/api/agents' && init?.method === 'POST') {
+          return jsonResponse(
+            {
+              agent: {
+                id: 'agent-v002',
+                name: 'Order Guardian',
+                model: 'gpt-5.4',
+                created_at: '2026-04-01T12:00:00.000Z',
+                source: 'built',
+                config_path: '/tmp/workspace/configs/v002.yaml',
+                status: 'candidate',
+              },
+              save_result: {
+                artifact_id: 'artifact-456',
+                config_path: '/tmp/workspace/configs/v002.yaml',
+                config_version: 2,
+                eval_cases_path: '/tmp/workspace/evals/cases/generated_build.yaml',
+                runtime_config_path: '/tmp/workspace/agentlab.yaml',
+                workspace_path: '/tmp/workspace',
+                actual_config_yaml: 'model: gpt-5.4\n',
+              },
+            },
+            { status: 201 }
+          );
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderJourney();
+
+    await user.type(screen.getByLabelText('Agent description'), 'Build an order support agent');
+    await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
+    await screen.findByRole('heading', { name: 'Conversational Refinement' });
+
+    await user.click(screen.getByRole('button', { name: 'Save to Workspace' }));
+
+    expect(await screen.findByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
+    expect(screen.getAllByText('/tmp/workspace/configs/v002.yaml').length).toBeGreaterThan(0);
+  });
+
+  it('auto-saves the current draft before navigating into an eval run', async () => {
+    const user = userEvent.setup();
+    const generatedConfig = mockGeneratedConfig();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url === '/api/intelligence/generate-agent') {
+        return jsonResponse(generatedConfig);
+      }
+      if (url === '/api/agents' && init?.method === 'POST') {
+        return jsonResponse(
+          {
+            agent: {
+              id: 'agent-v002',
+              name: 'Order Guardian',
+              model: 'gpt-5.4',
+              created_at: '2026-04-01T12:00:00.000Z',
+              source: 'built',
+              config_path: '/tmp/workspace/configs/v002.yaml',
+              status: 'candidate',
+            },
+            save_result: {
+              artifact_id: 'artifact-456',
+              config_path: '/tmp/workspace/configs/v002.yaml',
+              config_version: 2,
+              eval_cases_path: '/tmp/workspace/evals/cases/generated_build.yaml',
+              runtime_config_path: '/tmp/workspace/agentlab.yaml',
+              workspace_path: '/tmp/workspace',
+              actual_config_yaml: 'model: gpt-5.4\n',
+            },
+          },
+          { status: 201 }
+        );
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderJourney();
+
+    await user.type(screen.getByLabelText('Agent description'), 'Build an order support agent');
+    await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
+    await screen.findByRole('heading', { name: 'Conversational Refinement' });
+
+    await user.click(screen.getByRole('button', { name: 'Run Eval' }));
+
+    expect(await screen.findByText('Eval Page')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/agents',
+      expect.objectContaining({
+        method: 'POST',
+      })
+    );
   });
 });

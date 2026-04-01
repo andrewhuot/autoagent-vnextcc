@@ -551,6 +551,10 @@ class OptimizeRequest(BaseModel):
     """Request to start an optimization cycle."""
     window: int = Field(100, ge=1, le=10000, description="Number of recent conversations to analyze")
     force: bool = Field(False, description="Force optimization even if system appears healthy")
+    config_path: Optional[str] = Field(
+        None,
+        description="Optional config path for optimizing a selected agent instead of the active config",
+    )
     mode: str = Field(
         "standard",
         pattern="^(standard|advanced|research)$",

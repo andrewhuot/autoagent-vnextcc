@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from api.models import (
@@ -108,7 +110,14 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                 return result
 
             task.progress = 30
-            current_config = _ensure_active_config(deployer)
+            if body.config_path:
+                config_path = Path(body.config_path)
+                if not config_path.exists():
+                    raise HTTPException(status_code=404, detail=f"Config file not found: {body.config_path}")
+                with config_path.open("r", encoding="utf-8") as handle:
+                    current_config = yaml.safe_load(handle) or {}
+            else:
+                current_config = _ensure_active_config(deployer)
             failure_samples = _build_failure_samples(store)
 
             task.progress = 40
