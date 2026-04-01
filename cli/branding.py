@@ -33,27 +33,32 @@ def render_startup_banner(version: str) -> str:
     """Render the compact branded banner used on key startup surfaces."""
     logo_style = {"fg": "blue", "bold": True}
     title_style = {"fg": "white", "bold": True}
+    subtitle_style = {"fg": "cyan", "bold": True}
+
+    logo_lines = [
+        "  o   o   ",
+        "   \\ /    ",
+        "    O     ",
+        "   / \\    ",
+        "  o   o   ",
+    ]
+    title_lines = [
+        "   _                _   _         _",
+        "  /_\\  __ _ ___ _ _| |_| |   __ _| |__",
+        " / _ \\/ _` / -_) ' \\  _| |__/ _` | '_ \\",
+        "/_/ \\_\\__, \\___|_||_\\__|____\\__,_|_.__/",
+        "      |___/",
+    ]
 
     lines = [
-        click.style("      /\\        ", **logo_style)
-        + click.style("___         __        ___                     __", **title_style),
-        click.style("     /==\\       ", **logo_style)
-        + click.style("/   | __  __/ /_____  /   | ____ ____  ____  / /_", **title_style),
-        click.style("    /====\\      ", **logo_style)
-        + click.style("/ /| |/ / / / __/ __ \\/ /| |/ __ `/ _ \\/ __ \\/ __/", **title_style),
-        click.style("    |::::|      ", **logo_style)
-        + click.style("/ ___ / /_/ / /_/ /_/ / ___ / /_/ /  __/ / / / /_", **title_style),
-        click.style("    /|__|\\     ", **logo_style)
-        + click.style("/_/  |_|\\__,_/\\__/\\____/_/  |_|\\__, /\\___/_/ /_/\\__/", **title_style),
-        click.style("      ||        ", **logo_style)
-        + click.style("                         /____/", fg="white", bold=True),
-        click.style("      ||        ", **logo_style)
-        + click.style("Continuous Agent Optimization Platform", fg="cyan", bold=True)
-        + click.style(f"   v{version}", fg="cyan", bold=True),
-        click.style("      ||        ", **logo_style)
-        + click.style("Created by Andrew Huot", dim=True),
-        click.style("  " + "-" * 72, dim=True),
+        click.style(logo_line, **logo_style) + click.style(title_line, **title_style)
+        for logo_line, title_line in zip(logo_lines, title_lines, strict=True)
     ]
+    lines.append(
+        " " * len(logo_lines[0])
+        + click.style(f"Experiment. Evaluate. Refine.   v{version}", **subtitle_style)
+    )
+    lines.append(click.style("  " + "-" * 72, dim=True))
     return "\n".join(lines)
 
 

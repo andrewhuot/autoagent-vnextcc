@@ -96,15 +96,13 @@ class TestBrandedBanner:
     def test_root_help_shows_branded_banner(self, runner):
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
-        assert "Continuous Agent Optimization Platform" in result.output
-        assert "Created by Andrew Huot" in result.output
+        assert "Experiment. Evaluate. Refine." in result.output
         assert "AgentLab" in result.output
 
     def test_root_help_suppresses_banner_with_no_banner_flag(self, runner):
         result = runner.invoke(cli, ["--no-banner", "--help"])
         assert result.exit_code == 0
-        assert "Continuous Agent Optimization Platform" not in result.output
-        assert "Created by Andrew Huot" not in result.output
+        assert "Experiment. Evaluate. Refine." not in result.output
 
     def test_server_shows_banner_before_startup_message(self, runner, monkeypatch):
         captured: dict[str, object] = {}
@@ -120,7 +118,7 @@ class TestBrandedBanner:
         result = runner.invoke(cli, ["server", "--host", "127.0.0.1", "--port", "8123", "--reload"])
 
         assert result.exit_code == 0
-        assert "Continuous Agent Optimization Platform" in result.output
+        assert "Experiment. Evaluate. Refine." in result.output
         assert "Starting AgentLab VNextCC server on 127.0.0.1:8123" in result.output
         assert captured == {
             "app": "api.server:app",
@@ -138,7 +136,7 @@ class TestBrandedBanner:
         result = runner.invoke(cli, ["server", "--quiet"])
 
         assert result.exit_code == 0
-        assert "Continuous Agent Optimization Platform" not in result.output
+        assert "Experiment. Evaluate. Refine." not in result.output
 
 
 class TestInitCommand:

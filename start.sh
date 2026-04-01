@@ -95,14 +95,12 @@ activate_venv() {
 # ─── Checks ────────────────────────────────────────────────────────────────────
 banner() {
   echo ""
-  echo -e "${BLUE}      /\\\\        ${RESET}${BOLD_WHITE}___         __        ___                     __${RESET}"
-  echo -e "${BLUE}     /==\\\\       ${RESET}${BOLD_WHITE}/   | __  __/ /_____  /   | ____ ____  ____  / /_${RESET}"
-  echo -e "${BLUE}    /====\\\\      ${RESET}${BOLD_WHITE}/ /| |/ / / / __/ __ \\/ /| |/ __ \`/ _ \\/ __ \\/ __/${RESET}"
-  echo -e "${BLUE}    |::::|      ${RESET}${BOLD_WHITE}/ ___ / /_/ / /_/ /_/ / ___ / /_/ /  __/ / / / /_${RESET}"
-  echo -e "${BLUE}    /|__|\\     ${RESET}${BOLD_WHITE}/_/  |_|\\__,_/\\__/\\____/_/  |_|\\__, /\\___/_/ /_/\\__/${RESET}"
-  echo -e "${BLUE}      ||        ${RESET}${BOLD_WHITE}                         /____/${RESET}"
-  echo -e "${BLUE}      ||        ${RESET}${BOLD_CYAN}Continuous Agent Optimization Platform${RESET}${BOLD_CYAN}   v${AGENTLAB_VERSION}${RESET}"
-  echo -e "${BLUE}      ||        ${RESET}${DIM}Created by Andrew Huot${RESET}"
+  echo -e "${BLUE}  o   o   ${RESET}${BOLD_WHITE}   _                _   _         _${RESET}"
+  echo -e "${BLUE}   \\\\ /    ${RESET}${BOLD_WHITE}  /_\\\\  __ _ ___ _ _| |_| |   __ _| |__${RESET}"
+  echo -e "${BLUE}    O     ${RESET}${BOLD_WHITE} / _ \\\\/ _\` / -_) ' \\\\  _| |__/ _\` | '_ \\\\${RESET}"
+  echo -e "${BLUE}   / \\\\    ${RESET}${BOLD_WHITE}/_/ \\\\_\\\\__, \\\\___|_||_\\\\__|____\\\\__,_|_.__/${RESET}"
+  echo -e "${BLUE}  o   o   ${RESET}${BOLD_WHITE}      |___/${RESET}"
+  echo -e "          ${BOLD_CYAN}Experiment. Evaluate. Refine.   v${AGENTLAB_VERSION}${RESET}"
   echo -e "${DIM}  ------------------------------------------------------------------------${RESET}"
   echo ""
 }
