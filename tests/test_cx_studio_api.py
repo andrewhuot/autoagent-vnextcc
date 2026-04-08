@@ -117,6 +117,85 @@ def test_auth_returns_auth_metadata(
     assert response.json()["auth_type"] == "service_account"
 
 
+def test_import_returns_portability_parity_fields(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Import route should expose the richer parity fields in the response contract."""
+
+    class _FakeAuth:
+        def __init__(self, credentials_path: str | None = None) -> None:
+            self.credentials_path = credentials_path
+
+    class _FakeClient:
+        def __init__(self, auth) -> None:  # noqa: ANN001
+            self.auth = auth
+
+    class _FakeImporter:
+        def __init__(self, client) -> None:  # noqa: ANN001
+            self.client = client
+
+        def import_agent(self, ref, output_dir, include_test_cases):  # noqa: ANN001
+            assert ref.agent_id == "support-bot"
+            assert output_dir == "/tmp/out"
+            assert include_test_cases is True
+
+            class _Result:
+                config_path = "/tmp/out/configs/v001.yaml"
+                eval_path = "/tmp/out/evals/imported.yaml"
+                snapshot_path = "/tmp/out/.agentlab/cx/snapshot.json"
+                agent_name = "Support Bot"
+                surfaces_mapped = ["instructions", "webhooks", "routing"]
+                test_cases_imported = 1
+                workspace_path = "/tmp/out"
+                portability_report = {
+                    "platform": "cx_studio",
+                    "summary": {
+                        "supported_parity_surfaces": 3,
+                        "partial_parity_surfaces": 1,
+                        "read_only_parity_surfaces": 2,
+                        "unsupported_parity_surfaces": 1,
+                    },
+                    "surfaces": [
+                        {
+                            "surface_id": "instructions",
+                            "label": "Instructions",
+                            "parity_status": "supported",
+                            "coverage_status": "imported",
+                            "portability_status": "optimizable",
+                            "export_status": "ready",
+                            "documentation_refs": [
+                                "https://docs.cloud.google.com/dialogflow/cx/docs/reference/rest/v3/projects.locations.agents.playbooks"
+                            ],
+                            "code_refs": ["cx_studio/surface_inventory.py"],
+                        }
+                    ],
+                }
+
+            return _Result()
+
+    monkeypatch.setattr("cx_studio.CxAuth", _FakeAuth)
+    monkeypatch.setattr("cx_studio.CxClient", _FakeClient)
+    monkeypatch.setattr("cx_studio.CxImporter", _FakeImporter)
+
+    response = client.post(
+        "/api/cx/import",
+        json={
+            "project": "demo-project",
+            "location": "us-central1",
+            "agent_id": "support-bot",
+            "output_dir": "/tmp/out",
+            "include_test_cases": True,
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["portability_report"]["summary"]["supported_parity_surfaces"] == 3
+    assert payload["portability_report"]["surfaces"][0]["parity_status"] == "supported"
+    assert payload["portability_report"]["surfaces"][0]["documentation_refs"]
+
+
 def test_diff_returns_changes_and_conflicts(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,

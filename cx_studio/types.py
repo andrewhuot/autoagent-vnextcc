@@ -69,6 +69,7 @@ class CxAgent(BaseModel):
     description: str = ""
     time_zone: str = ""
     start_flow: str = ""
+    start_playbook: str = ""
     generative_settings: dict[str, Any] = Field(default_factory=dict)
     speech_to_text_settings: dict[str, Any] = Field(default_factory=dict)
     text_to_speech_settings: dict[str, Any] = Field(default_factory=dict)
@@ -82,6 +83,7 @@ class CxPage(BaseModel):
     display_name: str = ""
     entry_fulfillment: dict[str, Any] = Field(default_factory=dict)
     form: dict[str, Any] = Field(default_factory=dict)
+    transition_route_groups: list[str] = Field(default_factory=list)
     transition_routes: list[dict[str, Any]] = Field(default_factory=list)
     event_handlers: list[dict[str, Any]] = Field(default_factory=list)
     raw: dict[str, Any] = Field(default_factory=dict)
@@ -93,6 +95,7 @@ class CxFlow(BaseModel):
     name: str = ""
     display_name: str = ""
     description: str = ""
+    transition_route_groups: list[str] = Field(default_factory=list)
     transition_routes: list[dict[str, Any]] = Field(default_factory=list)
     event_handlers: list[dict[str, Any]] = Field(default_factory=list)
     pages: list[CxPage] = Field(default_factory=list)
@@ -145,6 +148,14 @@ class CxPlaybook(BaseModel):
     goal: str = ""
     steps: list[dict[str, Any]] = Field(default_factory=list)
     examples: list[dict[str, Any]] = Field(default_factory=list)
+    input_parameter_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    output_parameter_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    referenced_tools: list[str] = Field(default_factory=list)
+    referenced_playbooks: list[str] = Field(default_factory=list)
+    referenced_flows: list[str] = Field(default_factory=list)
+    code_block: dict[str, Any] = Field(default_factory=dict)
+    handlers: list[dict[str, Any]] = Field(default_factory=list)
+    llm_model_settings: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
 
     @property
@@ -163,6 +174,17 @@ class CxTool(BaseModel):
     display_name: str = ""
     tool_type: str = ""
     spec: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class CxGenerator(BaseModel):
+    """CX generator resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    prompt_text: str = ""
+    placeholders: list[dict[str, Any]] = Field(default_factory=list)
+    llm_model_settings: dict[str, Any] = Field(default_factory=dict)
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -207,6 +229,7 @@ class CxAgentSnapshot(BaseModel):
     webhooks: list[CxWebhook] = Field(default_factory=list)
     playbooks: list[CxPlaybook] = Field(default_factory=list)
     tools: list[CxTool] = Field(default_factory=list)
+    generators: list[CxGenerator] = Field(default_factory=list)
     test_cases: list[CxTestCase] = Field(default_factory=list)
     environments: list[CxEnvironment] = Field(default_factory=list)
     data_stores: list[CxDataStore] = Field(default_factory=list)

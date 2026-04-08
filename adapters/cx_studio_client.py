@@ -17,10 +17,12 @@ from cx_studio.types import (
     CxEntityType,
     CxEnvironment,
     CxFlow,
+    CxGenerator,
     CxIntent,
     CxPage,
     CxPlaybook,
     CxTestCase,
+    CxTool,
     CxWebhook,
 )
 
@@ -480,6 +482,26 @@ class CxStudioClient:
         )
         return [self._parse_playbook(item) for item in items]
 
+    def list_tools(self, agent_name: str) -> list[CxTool]:
+        """List tools for an agent."""
+
+        items = self._iterate_pages(
+            f"{agent_name}/tools",
+            item_key="tools",
+            location=self._location_from_name(agent_name),
+        )
+        return [self._parse_tool(item) for item in items]
+
+    def list_generators(self, agent_name: str) -> list[CxGenerator]:
+        """List generators for an agent."""
+
+        items = self._iterate_pages(
+            f"{agent_name}/generators",
+            item_key="generators",
+            location=self._location_from_name(agent_name),
+        )
+        return [self._parse_generator(item) for item in items]
+
     def create_playbook(
         self,
         parent: str,
@@ -551,6 +573,8 @@ class CxStudioClient:
             entity_types=self.list_entity_types(agent_name),
             webhooks=self.list_webhooks(agent_name),
             playbooks=self.list_playbooks(agent_name),
+            tools=self.list_tools(agent_name),
+            generators=self.list_generators(agent_name),
             test_cases=self.list_test_cases(agent_name),
             environments=self.list_environments(agent_name),
             fetched_at=datetime.now(timezone.utc).isoformat(),
@@ -578,6 +602,7 @@ class CxStudioClient:
             description=item.get("description", ""),
             time_zone=item.get("timeZone", ""),
             start_flow=item.get("startFlow", ""),
+            start_playbook=item.get("startPlaybook", ""),
             generative_settings=item.get("generativeSettings", {}),
             speech_to_text_settings=item.get("speechToTextSettings", {}),
             text_to_speech_settings=item.get("textToSpeechSettings", {}),
@@ -592,6 +617,7 @@ class CxStudioClient:
             name=item.get("name", ""),
             display_name=item.get("displayName", ""),
             description=item.get("description", ""),
+            transition_route_groups=item.get("transitionRouteGroups", []),
             transition_routes=item.get("transitionRoutes", []),
             event_handlers=item.get("eventHandlers", []),
             pages=pages,
@@ -607,6 +633,7 @@ class CxStudioClient:
             display_name=item.get("displayName", ""),
             entry_fulfillment=item.get("entryFulfillment", {}),
             form=item.get("form", {}),
+            transition_route_groups=item.get("transitionRouteGroups", []),
             transition_routes=item.get("transitionRoutes", []),
             event_handlers=item.get("eventHandlers", []),
             raw=dict(item),
@@ -684,6 +711,45 @@ class CxStudioClient:
             goal=item.get("goal", ""),
             steps=item.get("steps", []),
             examples=item.get("examples", []),
+            input_parameter_definitions=item.get("inputParameterDefinitions", []),
+            output_parameter_definitions=item.get("outputParameterDefinitions", []),
+            referenced_tools=item.get("referencedTools", []),
+            referenced_playbooks=item.get("referencedPlaybooks", []),
+            referenced_flows=item.get("referencedFlows", []),
+            code_block=item.get("codeBlock", {}),
+            handlers=item.get("handlers", []),
+            llm_model_settings=item.get("llmModelSettings", {}),
+            raw=dict(item),
+        )
+
+    @staticmethod
+    def _parse_tool(item: dict[str, Any]) -> CxTool:
+        """Parse a raw tool payload into a typed model."""
+
+        return CxTool(
+            name=item.get("name", ""),
+            display_name=item.get("displayName", ""),
+            tool_type=item.get("toolType", ""),
+            spec=dict(item),
+            raw=dict(item),
+        )
+
+    @staticmethod
+    def _parse_generator(item: dict[str, Any]) -> CxGenerator:
+        """Parse a raw generator payload into a typed model."""
+
+        prompt_text = item.get("promptText", "")
+        if not prompt_text:
+            prompt = item.get("prompt", {})
+            if isinstance(prompt, dict):
+                prompt_text = str(prompt.get("text", ""))
+
+        return CxGenerator(
+            name=item.get("name", ""),
+            display_name=item.get("displayName", ""),
+            prompt_text=prompt_text,
+            placeholders=item.get("placeholders", []),
+            llm_model_settings=item.get("llmModelSettings", {}),
             raw=dict(item),
         )
 

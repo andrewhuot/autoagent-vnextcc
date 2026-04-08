@@ -25,6 +25,15 @@ class PortabilityStatus(str, Enum):
     UNSUPPORTED = "unsupported"
 
 
+class ParityStatus(str, Enum):
+    """How complete current platform support is for a documented source surface."""
+
+    SUPPORTED = "supported"
+    PARTIAL = "partial"
+    READ_ONLY = "read_only"
+    UNSUPPORTED = "unsupported"
+
+
 class ExportReadinessStatus(str, Enum):
     """Whether a surfaced construct can round-trip back to the source runtime."""
 
@@ -39,11 +48,14 @@ class PortabilitySurface(BaseModel):
     surface_id: str
     label: str
     coverage_status: ImportCoverageStatus = ImportCoverageStatus.MISSING
+    parity_status: ParityStatus = ParityStatus.UNSUPPORTED
     portability_status: PortabilityStatus = PortabilityStatus.UNSUPPORTED
     export_status: ExportReadinessStatus = ExportReadinessStatus.BLOCKED
     optimization_surface_id: str = ""
     rationale: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
+    documentation_refs: list[str] = Field(default_factory=list)
+    code_refs: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -145,6 +157,10 @@ class PortabilitySummary(BaseModel):
     optimizable_surfaces: int = 0
     read_only_surfaces: int = 0
     unsupported_surfaces: int = 0
+    supported_parity_surfaces: int = 0
+    partial_parity_surfaces: int = 0
+    read_only_parity_surfaces: int = 0
+    unsupported_parity_surfaces: int = 0
     ready_export_surfaces: int = 0
     lossy_export_surfaces: int = 0
     blocked_export_surfaces: int = 0

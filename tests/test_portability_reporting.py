@@ -16,6 +16,8 @@ from cx_studio.types import (
     CxAgent,
     CxAgentRef,
     CxAgentSnapshot,
+    CxEnvironment,
+    CxGenerator,
     CxFlow,
     CxIntent,
     CxPage,
@@ -170,13 +172,20 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
             name=agent_name,
             display_name="Support Bot",
             description="Primary customer support agent.",
+            start_flow=start_flow_name,
             generative_settings={"llmModelSettings": {"model": "gemini-2.0-flash"}},
+            speech_to_text_settings={"enableSpeechAdaptation": True},
+            text_to_speech_settings={"outputAudioEncoding": "OUTPUT_AUDIO_ENCODING_LINEAR_16"},
         ),
         playbooks=[
             CxPlaybook(
                 name=playbook_name,
                 display_name="Main",
                 instruction="Resolve support issues quickly and safely.",
+                input_parameter_definitions=[{"name": "order_id", "type": "string"}],
+                output_parameter_definitions=[{"name": "resolution_status", "type": "string"}],
+                code_block={"language": "python", "code": "return {'resolution_status': 'queued'}"},
+                handlers=[{"event": "playbook-complete", "generator": f"{agent_name}/generators/resolve-summary"}],
             )
         ],
         flows=[
@@ -184,6 +193,7 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                 name=start_flow_name,
                 display_name="Default Start Flow",
                 description="Handles incoming support requests.",
+                transition_route_groups=[f"{agent_name}/transitionRouteGroups/shared-escalation"],
                 transition_routes=[
                     {
                         "intent": intent_name,
@@ -195,11 +205,13 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                     CxPage(
                         name=order_page,
                         display_name="Order Status",
+                        form={"parameters": [{"displayName": "order_id", "required": True}]},
+                        transition_route_groups=[f"{agent_name}/transitionRouteGroups/shared-escalation"],
                         transition_routes=[],
-                        event_handlers=[],
+                        event_handlers=[{"event": "sys.no-match-default", "targetFlow": start_flow_name}],
                     )
                 ],
-                event_handlers=[],
+                event_handlers=[{"event": "sys.no-input-default", "targetPage": order_page}],
             )
         ],
         intents=[
@@ -207,6 +219,7 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                 name=intent_name,
                 display_name="Order Status",
                 training_phrases=[{"parts": [{"text": "where is my order"}]}],
+                parameters=[{"id": "order_id", "entityType": "@sys.any"}],
             )
         ],
         webhooks=[
@@ -225,6 +238,14 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                 spec={"description": "Search the FAQ index", "timeout_ms": 3000},
             )
         ],
+        generators=[
+            CxGenerator(
+                name=f"{agent_name}/generators/resolve-summary",
+                display_name="Resolve Summary",
+                prompt_text="Summarize the resolution outcome for the customer.",
+                placeholders=[{"name": "resolution_status"}],
+            )
+        ],
         test_cases=[
             CxTestCase(
                 name=f"{agent_name}/testCases/order-status-smoke",
@@ -236,6 +257,13 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                     }
                 ],
                 expected_output={"targetPage": order_page},
+            )
+        ],
+        environments=[
+            CxEnvironment(
+                name=f"{agent_name}/environments/production",
+                display_name="Production",
+                version_configs=[{"flow": start_flow_name, "version": f"{start_flow_name}/versions/5"}],
             )
         ],
         fetched_at="2026-04-08T12:00:00Z",
@@ -324,22 +352,79 @@ def test_cx_import_builds_portability_report_for_realistic_snapshot(tmp_path: Pa
     report = result.portability_report
 
     assert report.platform == "cx_studio"
-    assert report.summary.imported_surfaces >= 7
+    assert report.summary.imported_surfaces >= 10
     assert report.optimization_eligibility.score > 0
     assert report.topology.summary.flow_count == 1
     assert report.topology.summary.page_count == 1
     assert report.topology.summary.webhook_count == 1
     assert report.topology.summary.tool_count == 2
+    assert report.summary.supported_parity_surfaces >= 3
+    assert report.summary.partial_parity_surfaces >= 2
+    assert report.summary.read_only_parity_surfaces >= 6
+    assert report.summary.unsupported_parity_surfaces >= 2
 
     instructions = _surface(report, "instructions")
     assert instructions.coverage_status == "imported"
+    assert instructions.parity_status == "supported"
     assert instructions.portability_status == "optimizable"
     assert instructions.export_status == "ready"
+    assert any("projects.locations.agents.playbooks" in ref for ref in instructions.documentation_refs)
+    assert any("cx_studio/surface_inventory.py" in ref for ref in instructions.code_refs)
 
     callbacks = _surface(report, "callbacks")
     assert callbacks.coverage_status == "missing"
+    assert callbacks.parity_status == "unsupported"
     assert callbacks.portability_status == "unsupported"
     assert callbacks.export_status == "blocked"
+
+    routing = _surface(report, "routing")
+    assert routing.parity_status == "partial"
+    assert routing.export_status == "blocked"
+
+    tools = _surface(report, "app_tools")
+    assert tools.coverage_status == "imported"
+    assert tools.parity_status == "read_only"
+    assert tools.export_status == "blocked"
+
+    speech = _surface(report, "agent_speech_settings")
+    assert speech.coverage_status == "imported"
+    assert speech.parity_status == "read_only"
+
+    playbook_parameters = _surface(report, "playbook_parameters")
+    assert playbook_parameters.coverage_status == "imported"
+    assert playbook_parameters.parity_status == "read_only"
+
+    playbook_handlers = _surface(report, "playbook_handlers")
+    assert playbook_handlers.coverage_status == "imported"
+    assert playbook_handlers.parity_status == "read_only"
+
+    page_forms = _surface(report, "page_forms")
+    assert page_forms.coverage_status == "imported"
+    assert page_forms.parity_status == "read_only"
+
+    intent_parameters = _surface(report, "intent_parameters")
+    assert intent_parameters.coverage_status == "imported"
+    assert intent_parameters.parity_status == "read_only"
+
+    route_groups = _surface(report, "transition_route_groups")
+    assert route_groups.coverage_status == "referenced"
+    assert route_groups.parity_status == "partial"
+
+    generators = _surface(report, "generators")
+    assert generators.coverage_status == "imported"
+    assert generators.parity_status == "read_only"
+
+    environments = _surface(report, "environments")
+    assert environments.coverage_status == "imported"
+    assert environments.parity_status == "read_only"
+
+    versions = _surface(report, "versions")
+    assert versions.coverage_status == "referenced"
+    assert versions.parity_status == "partial"
+
+    playbook_examples = _surface(report, "playbook_examples")
+    assert playbook_examples.coverage_status == "missing"
+    assert playbook_examples.parity_status == "unsupported"
 
     assert "app_tools" in report.export_matrix.blocked_surfaces
 

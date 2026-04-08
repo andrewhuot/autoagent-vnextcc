@@ -1510,6 +1510,134 @@ export interface ProjectMemory {
   updated_at: string;
 }
 
+// ---------------------------------------------------------------------------
+// Shared portability contracts
+// ---------------------------------------------------------------------------
+
+export type ImportCoverageStatus = 'imported' | 'partial' | 'referenced' | 'missing';
+
+export type PortabilityParityStatus = 'supported' | 'partial' | 'read_only' | 'unsupported';
+
+export type PortabilityStatus = 'optimizable' | 'read_only' | 'unsupported';
+
+export type ExportReadinessStatus = 'ready' | 'lossy' | 'blocked';
+
+export interface ImportedCallback {
+  name: string;
+  binding: string;
+  stage: string;
+  source_ref: string;
+  portability_status: PortabilityStatus;
+  export_status: ExportReadinessStatus;
+  rationale: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface ImportGraphNode {
+  node_id: string;
+  node_type: string;
+  label: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ImportGraphEdge {
+  source_id: string;
+  target_id: string;
+  edge_type: string;
+  metadata: Record<string, unknown>;
+}
+
+export interface ImportTopologySummary {
+  node_count: number;
+  edge_count: number;
+  max_depth: number;
+  agent_count: number;
+  tool_count: number;
+  callback_count: number;
+  flow_count: number;
+  page_count: number;
+  intent_count: number;
+  webhook_count: number;
+  test_case_count: number;
+  orchestration_modes: string[];
+}
+
+export interface ImportTopology {
+  nodes: ImportGraphNode[];
+  edges: ImportGraphEdge[];
+  summary: ImportTopologySummary;
+}
+
+export interface OptimizationEligibilityScore {
+  score: number;
+  coverage_score: number;
+  optimizability_score: number;
+  export_score: number;
+  blockers: string[];
+  rationale: string[];
+}
+
+export interface ExportCapabilityRow {
+  surface_id: string;
+  label: string;
+  status: ExportReadinessStatus;
+  blockers: string[];
+  writable_paths: string[];
+  notes: string[];
+}
+
+export interface ExportCapabilityMatrix {
+  status: ExportReadinessStatus;
+  round_trip_ready: boolean;
+  ready_surfaces: string[];
+  lossy_surfaces: string[];
+  blocked_surfaces: string[];
+  surfaces: ExportCapabilityRow[];
+  rationale: string[];
+}
+
+export interface PortabilitySurface {
+  surface_id: string;
+  label: string;
+  coverage_status: ImportCoverageStatus;
+  parity_status: PortabilityParityStatus;
+  portability_status: PortabilityStatus;
+  export_status: ExportReadinessStatus;
+  optimization_surface_id: string;
+  rationale: string[];
+  source_refs: string[];
+  documentation_refs: string[];
+  code_refs: string[];
+  metadata: Record<string, unknown>;
+}
+
+export interface PortabilitySummary {
+  total_surfaces: number;
+  imported_surfaces: number;
+  optimizable_surfaces: number;
+  read_only_surfaces: number;
+  unsupported_surfaces: number;
+  supported_parity_surfaces: number;
+  partial_parity_surfaces: number;
+  read_only_parity_surfaces: number;
+  unsupported_parity_surfaces: number;
+  ready_export_surfaces: number;
+  lossy_export_surfaces: number;
+  blocked_export_surfaces: number;
+}
+
+export interface PortabilityReport {
+  platform: string;
+  source: string;
+  summary: PortabilitySummary;
+  surfaces: PortabilitySurface[];
+  callbacks: ImportedCallback[];
+  topology: ImportTopology;
+  optimization_eligibility: OptimizationEligibilityScore;
+  export_matrix: ExportCapabilityMatrix;
+  notes: string[];
+}
+
 // CX Agent Studio types
 export interface CxAgentSummary {
   name: string;
@@ -1555,6 +1683,7 @@ export interface CxImportResult {
   surfaces_mapped: string[];
   test_cases_imported: number;
   workspace_path?: string | null;
+  portability_report?: PortabilityReport | null;
 }
 
 export interface CxExportResult {
@@ -1562,6 +1691,7 @@ export interface CxExportResult {
   pushed: boolean;
   resources_updated: number;
   conflicts: CxConflict[];
+  export_matrix?: ExportCapabilityMatrix | null;
 }
 
 export interface CxChange {
@@ -1830,12 +1960,14 @@ export interface AdkImportResult {
   agent_name: string;
   surfaces_mapped: string[];
   tools_imported: number;
+  portability_report?: PortabilityReport | null;
 }
 
 export interface AdkExportResult {
   output_path: string | null;
   changes: Array<{ file: string; field: string; action: string }>;
   files_modified: number;
+  export_matrix?: ExportCapabilityMatrix | null;
 }
 
 export interface AdkDeployResult {

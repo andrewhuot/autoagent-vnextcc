@@ -10,6 +10,7 @@ from portability.types import (
     ImportTopology,
     ImportedCallback,
     OptimizationEligibilityScore,
+    ParityStatus,
     PortabilityReport,
     PortabilityStatus,
     PortabilitySummary,
@@ -162,6 +163,18 @@ def build_portability_report(
         ),
         unsupported_surfaces=sum(
             1 for surface in surfaces if surface.portability_status == PortabilityStatus.UNSUPPORTED
+        ),
+        supported_parity_surfaces=sum(
+            1 for surface in surfaces if surface.parity_status == ParityStatus.SUPPORTED
+        ),
+        partial_parity_surfaces=sum(
+            1 for surface in surfaces if surface.parity_status == ParityStatus.PARTIAL
+        ),
+        read_only_parity_surfaces=sum(
+            1 for surface in surfaces if surface.parity_status == ParityStatus.READ_ONLY
+        ),
+        unsupported_parity_surfaces=sum(
+            1 for surface in surfaces if surface.parity_status == ParityStatus.UNSUPPORTED
         ),
         ready_export_surfaces=len(export_matrix.ready_surfaces),
         lossy_export_surfaces=len(export_matrix.lossy_surfaces),
