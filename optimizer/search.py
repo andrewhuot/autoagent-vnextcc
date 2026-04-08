@@ -78,12 +78,17 @@ _OPERATOR_TO_FAMILY: dict[str, OperatorFamily] = {
     "routing_edit": OperatorFamily.MCTS_EXPLORATION,
     "model_swap": OperatorFamily.MCTS_EXPLORATION,
     "callback_patch": OperatorFamily.MCTS_EXPLORATION,
+    "workflow_edit": OperatorFamily.MCTS_EXPLORATION,
     "generation_settings": OperatorFamily.LOCAL_TUNING,
     "tool_description_edit": OperatorFamily.LOCAL_TUNING,
     "context_caching": OperatorFamily.LOCAL_TUNING,
     "memory_policy": OperatorFamily.LOCAL_TUNING,
+    "tool_contract_edit": OperatorFamily.LOCAL_TUNING,
     "instruction_rewrite": OperatorFamily.DIVERSITY_INJECTION,
     "few_shot_edit": OperatorFamily.DIVERSITY_INJECTION,
+    "skill_rewrite": OperatorFamily.DIVERSITY_INJECTION,
+    "policy_edit": OperatorFamily.DIVERSITY_INJECTION,
+    "handoff_schema_edit": OperatorFamily.LOCAL_TUNING,
 }
 
 

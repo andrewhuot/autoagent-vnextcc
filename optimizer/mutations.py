@@ -377,6 +377,23 @@ def _validate_handoff_schema_edit(config: dict[str, Any]) -> bool:
     return isinstance(config.get("handoff_schemas"), dict)
 
 
+def _apply_workflow_edit(
+    config: dict[str, Any], params: dict[str, Any]
+) -> dict[str, Any]:
+    """Edit workflow orchestration settings (step order, parallelism, fallbacks)."""
+    cfg = copy.deepcopy(config)
+    if "workflow" not in cfg:
+        cfg["workflow"] = {}
+    for key in ("steps", "parallel", "fallback_policy", "max_retries", "timeout_seconds", "metadata"):
+        if key in params:
+            cfg["workflow"][key] = params[key]
+    return cfg
+
+
+def _validate_workflow_edit(config: dict[str, Any]) -> bool:
+    return isinstance(config.get("workflow"), dict)
+
+
 # ---------------------------------------------------------------------------
 # Default registry factory
 # ---------------------------------------------------------------------------
@@ -580,6 +597,21 @@ def create_default_registry() -> MutationRegistry:
             supports_autodeploy=False,
             description="Edit a handoff schema's fields or validation rules.",
             apply=_apply_handoff_schema_edit,
+        )
+    )
+
+    registry.register(
+        MutationOperator(
+            name="workflow_edit",
+            surface=MutationSurface.workflow,
+            risk_class=RiskClass.high,
+            preconditions=["workflow section exists or can be created"],
+            validator=_validate_workflow_edit,
+            rollback_strategy="revert workflow config to previous version",
+            estimated_eval_cost=0.05,
+            supports_autodeploy=False,
+            description="Edit workflow orchestration settings (step order, parallelism, fallbacks).",
+            apply=_apply_workflow_edit,
         )
     )
 

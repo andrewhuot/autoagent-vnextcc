@@ -37,6 +37,7 @@ import {
   Inbox,
   Target,
   ShieldCheck,
+  Workflow,
 } from 'lucide-react';
 import {
   getNavigationSections,
@@ -56,6 +57,7 @@ const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/evals': FlaskConical,
   '/results': Search,
   '/compare': ArrowLeftRight,
+  '/studio': Workflow,
   '/optimize': Zap,
   '/live-optimize': Sparkles,
   '/improvements': Sparkles,
