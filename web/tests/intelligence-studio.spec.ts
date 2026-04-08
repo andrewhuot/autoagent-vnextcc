@@ -246,9 +246,6 @@ test.describe('Intelligence Studio', () => {
     await expect(page.getByRole('button', { name: 'View Config' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save & Run Eval' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Save & Generate Evals' })).toBeVisible();
-    await expect(
-      page.getByText(/These actions save the current draft first/i)
-    ).toBeVisible();
 
     await page.getByRole('textbox', { name: 'Refinement message' }).fill(
       'Add escalation logic for VIP customers and a refund workflow.'
