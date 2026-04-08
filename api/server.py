@@ -37,6 +37,7 @@ from api.routes import (
     conversations as conversations_routes,
     curriculum as curriculum_routes,
     cx_studio as cx_studio_routes,
+    studio as studio_routes,
     demo as demo_routes,
     deploy as deploy_routes,
     diagnose as diagnose_routes,
@@ -498,6 +499,7 @@ app.include_router(runbooks_routes.router)
 app.include_router(memory_routes.router)
 app.include_router(curriculum_routes.router)
 app.include_router(cx_studio_routes.router)
+app.include_router(studio_routes.router)
 app.include_router(adk_routes.router)
 app.include_router(cicd_routes.router)
 app.include_router(skills_routes.router)

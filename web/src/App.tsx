@@ -40,6 +40,7 @@ import { PreferenceInbox } from './pages/PreferenceInbox';
 import { PolicyCandidates } from './pages/PolicyCandidates';
 import { RewardAudit } from './pages/RewardAudit';
 import { Build } from './pages/Build';
+import { Studio } from './pages/studio/Studio';
 import { Improvements } from './pages/Improvements';
 import { Connect } from './pages/Connect';
 import { CliLauncher } from './pages/CliLauncher';
@@ -88,6 +89,7 @@ export default function App() {
             <Route path="/compare" element={<Compare />} />
             <Route path="/evals/:id" element={<EvalDetail />} />
             <Route path="/optimize" element={<Optimize />} />
+            <Route path="/studio" element={<Studio />} />
             <Route path="/live-optimize" element={<LiveOptimize />} />
             <Route path="/improvements" element={<Improvements />} />
             <Route path="/configs" element={<Configs />} />
