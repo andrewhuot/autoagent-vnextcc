@@ -10,7 +10,7 @@ from typing import Any
 from .errors import CxExportError
 from .mapper import CxMapper
 from .portability import build_cx_export_matrix
-from .types import CxAgentRef, CxAgentSnapshot, ExportResult
+from .types import CxAgentRef, CxAgentSnapshot, ChangeSafety, ExportResult
 
 _MISSING = object()
 
@@ -164,7 +164,11 @@ class CxExporter:
         source: CxAgentSnapshot,
         target: CxAgentSnapshot,
     ) -> list[dict[str, Any]]:
-        """Compute field-level changes for the CX surfaces we manage."""
+        """Compute field-level changes for the CX surfaces we manage.
+
+        Each change is tagged with a ``safety`` classification (safe/lossy/blocked)
+        and a ``rationale`` explaining the classification.
+        """
 
         source_fields = self._field_entries(source)
         target_fields = self._field_entries(target)
@@ -191,11 +195,15 @@ class CxExporter:
             elif target_value is _MISSING:
                 action = "delete"
 
+            safety, rationale = self._classify_change_safety(resource, field, action)
+
             change: dict[str, Any] = {
                 "resource": resource,
                 "name": display_name or name.split("/")[-1],
                 "field": field,
                 "action": action,
+                "safety": safety.value,
+                "rationale": rationale,
             }
             if source_value is not _MISSING:
                 change["before"] = source_value
@@ -204,6 +212,41 @@ class CxExporter:
             changes.append(change)
 
         return changes
+
+    @staticmethod
+    def _classify_change_safety(
+        resource: str,
+        field: str,
+        action: str,
+    ) -> tuple[ChangeSafety, str]:
+        """Classify a single change as safe, lossy, or blocked.
+
+        Classification is based on which CX surfaces currently support
+        round-trip writes via the exporter.
+        """
+
+        # Safe: surfaces with full round-trip support
+        _SAFE_CHANGES: dict[str, set[str]] = {
+            "agent": {"description", "generative_settings"},
+            "playbook": {"instruction"},
+            "webhook": {"generic_web_service", "timeout_seconds", "disabled"},
+        }
+
+        # Lossy: surfaces where writes work but may lose fidelity
+        _LOSSY_CHANGES: dict[str, set[str]] = {
+            "flow": {"description", "transition_routes"},
+        }
+
+        safe_fields = _SAFE_CHANGES.get(resource, set())
+        if field in safe_fields:
+            return ChangeSafety.SAFE, f"{resource}.{field} round-trips faithfully to CX"
+
+        lossy_fields = _LOSSY_CHANGES.get(resource, set())
+        if field in lossy_fields:
+            return ChangeSafety.LOSSY, f"{resource}.{field} writes back but may lose CX-specific attributes"
+
+        # Everything else is blocked
+        return ChangeSafety.BLOCKED, f"{resource}.{field} is read-only and cannot be pushed to CX"
 
     def _detect_conflicts(
         self,

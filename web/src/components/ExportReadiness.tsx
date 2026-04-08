@@ -1,5 +1,5 @@
-import { AlertTriangle, CheckCircle2, Info, ShieldAlert, ArrowUpDown } from 'lucide-react';
-import type { ExportCapabilityMatrix } from '../lib/types';
+import { AlertTriangle, CheckCircle2, Info, ShieldAlert, ArrowUpDown, Ban } from 'lucide-react';
+import type { CxChange, ExportCapabilityMatrix } from '../lib/types';
 
 export interface ExportSurface {
   name: string;
@@ -11,6 +11,7 @@ export interface ExportReadinessProps {
   adapter: 'ADK' | 'CX';
   surfaces?: ExportSurface[];
   exportMatrix?: ExportCapabilityMatrix | null;
+  changes?: CxChange[];
   changeCount?: number;
   conflictCount?: number;
   exportAttempted?: boolean;
@@ -54,10 +55,17 @@ function deriveSurfaces(
   return adapter === 'ADK' ? DEFAULT_ADK_SURFACES : DEFAULT_CX_SURFACES;
 }
 
+const SAFETY_STYLES = {
+  safe: { icon: '✓', color: 'text-green-600', bg: 'bg-green-50', label: 'Safe' },
+  lossy: { icon: '~', color: 'text-amber-600', bg: 'bg-amber-50', label: 'Lossy' },
+  blocked: { icon: '✕', color: 'text-red-600', bg: 'bg-red-50', label: 'Blocked' },
+} as const;
+
 export function ExportReadiness({
   adapter,
   surfaces,
   exportMatrix,
+  changes,
   changeCount,
   conflictCount,
   exportAttempted,
@@ -65,6 +73,10 @@ export function ExportReadiness({
   const effectiveSurfaces = deriveSurfaces(adapter, surfaces, exportMatrix);
   const preservable = effectiveSurfaces.filter((s) => s.preservable);
   const notPreservable = effectiveSurfaces.filter((s) => !s.preservable);
+
+  const safeChanges = changes?.filter((c) => c.safety === 'safe') ?? [];
+  const lossyChanges = changes?.filter((c) => c.safety === 'lossy') ?? [];
+  const blockedChanges = changes?.filter((c) => c.safety === 'blocked') ?? [];
 
   return (
     <div className="space-y-3 rounded-lg border border-gray-200 bg-white p-4" data-testid="export-readiness">
@@ -115,6 +127,73 @@ export function ExportReadiness({
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Per-change safety classification */}
+      {changes && changes.length > 0 && (
+        <div className="space-y-2 border-t border-gray-100 pt-2" data-testid="change-classification">
+          <p className="text-xs font-medium text-gray-700">Change Classification</p>
+
+          {safeChanges.length > 0 && (
+            <div className="space-y-1">
+              <p className="flex items-center gap-1 text-xs font-medium text-green-700">
+                <CheckCircle2 className="h-3 w-3" />
+                Safe to push ({safeChanges.length})
+              </p>
+              {safeChanges.map((change, i) => (
+                <div key={`safe-${i}`} className="ml-4 flex items-center gap-2 text-xs">
+                  <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${SAFETY_STYLES.safe.bg} ${SAFETY_STYLES.safe.color}`}>
+                    {SAFETY_STYLES.safe.label}
+                  </span>
+                  <span className="text-gray-700">
+                    {change.action.toUpperCase()} {change.resource}/{change.name || change.field}
+                  </span>
+                  {change.rationale && <span className="text-gray-400">— {change.rationale}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {lossyChanges.length > 0 && (
+            <div className="space-y-1">
+              <p className="flex items-center gap-1 text-xs font-medium text-amber-700">
+                <AlertTriangle className="h-3 w-3" />
+                Lossy — may lose CX-specific attributes ({lossyChanges.length})
+              </p>
+              {lossyChanges.map((change, i) => (
+                <div key={`lossy-${i}`} className="ml-4 flex items-center gap-2 text-xs">
+                  <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${SAFETY_STYLES.lossy.bg} ${SAFETY_STYLES.lossy.color}`}>
+                    {SAFETY_STYLES.lossy.label}
+                  </span>
+                  <span className="text-gray-700">
+                    {change.action.toUpperCase()} {change.resource}/{change.name || change.field}
+                  </span>
+                  {change.rationale && <span className="text-gray-400">— {change.rationale}</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {blockedChanges.length > 0 && (
+            <div className="space-y-1">
+              <p className="flex items-center gap-1 text-xs font-medium text-red-700">
+                <Ban className="h-3 w-3" />
+                Blocked — cannot push to CX ({blockedChanges.length})
+              </p>
+              {blockedChanges.map((change, i) => (
+                <div key={`blocked-${i}`} className="ml-4 flex items-center gap-2 text-xs">
+                  <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${SAFETY_STYLES.blocked.bg} ${SAFETY_STYLES.blocked.color}`}>
+                    {SAFETY_STYLES.blocked.label}
+                  </span>
+                  <span className="text-gray-700">
+                    {change.action.toUpperCase()} {change.resource}/{change.name || change.field}
+                  </span>
+                  {change.rationale && <span className="text-gray-400">— {change.rationale}</span>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 

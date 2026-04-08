@@ -1702,6 +1702,8 @@ export interface CxChange {
   name?: string;
   before?: unknown;
   after?: unknown;
+  safety?: 'safe' | 'lossy' | 'blocked';
+  rationale?: string;
 }
 
 export interface CxConflict {
@@ -1720,10 +1722,42 @@ export interface CxAuthResult {
   credentials_path: string | null;
 }
 
+export interface CxPreflightResult {
+  passed: boolean;
+  errors: string[];
+  warnings: string[];
+  safe_surfaces: string[];
+  lossy_surfaces: string[];
+  blocked_surfaces: string[];
+}
+
+export interface CxCanaryState {
+  phase: string;
+  traffic_pct: number;
+  deployed_version: string;
+  previous_version: string;
+  environment: string;
+  promoted_at: string;
+  rolled_back_at: string;
+}
+
 export interface CxDeployResult {
   environment: string;
   status: string;
   version_info: Record<string, unknown>;
+  phase?: string;
+  canary?: CxCanaryState;
+}
+
+export interface CxDeployStatusResult {
+  app: string;
+  agent: string;
+  deployments: Array<{
+    name: string;
+    description: string;
+    versions: Array<Record<string, unknown>>;
+  }>;
+  canary?: CxCanaryState;
 }
 
 export interface CxWidgetResult {
