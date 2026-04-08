@@ -72,6 +72,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     label: COMMAND_TAXONOMY.optimize.label,
     description: COMMAND_TAXONOMY.optimize.description,
     items: [
+      { label: 'Optimize Studio', path: '/studio' },
       { label: 'Optimize', path: '/optimize' },
       { label: 'Live Optimize', path: '/live-optimize' },
     ],
@@ -172,6 +173,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/evals': { title: 'Eval Runs', breadcrumbs: ['Eval'] },
   '/results': { title: 'Results Explorer', breadcrumbs: ['Eval'] },
   '/compare': { title: 'Compare', breadcrumbs: ['Eval'] },
+  '/studio': { title: 'Optimize Studio', breadcrumbs: ['Optimize'] },
   '/optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
   '/live-optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
   '/improvements': { title: 'Improvements', breadcrumbs: ['Review'] },

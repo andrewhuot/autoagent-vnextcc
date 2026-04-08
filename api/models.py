@@ -1056,3 +1056,226 @@ class SkillSearchRequest(BaseModel):
     kind: Optional[str] = Field(None, description="Filter by kind: build or runtime")
     domain: Optional[str] = Field(None, description="Filter by domain")
     tags: Optional[str] = Field(None, description="Comma-separated tags filter")
+
+
+# ---------------------------------------------------------------------------
+# Studio Models
+# ---------------------------------------------------------------------------
+
+# --- Spec ---
+
+class StudioSpecVersionItem(BaseModel):
+    """Compact record for a single spec version in list views."""
+    version_id: str = Field(..., description="Version identifier (e.g. 'v003')")
+    version_num: int = Field(..., description="Numeric version")
+    created_at: float = Field(..., description="Unix timestamp")
+    status: str = Field(..., description="active | canary | retired | rolled_back")
+    config_hash: str = Field("", description="Short content hash")
+    composite_score: float = Field(0.0, description="Composite eval score at deployment")
+    label: str = Field("", description="Optional human label")
+
+
+class StudioSpecVersionListResponse(BaseModel):
+    """List of all spec versions."""
+    versions: list[StudioSpecVersionItem] = Field(default_factory=list)
+    active_version_id: Optional[str] = Field(None)
+    total: int = Field(0)
+
+
+class StudioSpecContentResponse(BaseModel):
+    """Full content of a spec version."""
+    version_id: str
+    version_num: int
+    status: str
+    created_at: float
+    config_hash: str
+    composite_score: float
+    markdown: str = Field("", description="System prompt / spec rendered as Markdown")
+    raw_config: dict[str, Any] = Field(default_factory=dict, description="Full raw config dict")
+
+
+class StudioSpecParseRequest(BaseModel):
+    """Markdown spec text to parse/validate."""
+    content: str = Field(..., description="Markdown content to parse", min_length=1)
+
+
+class StudioSpecParseResponse(BaseModel):
+    """Result of parsing/validating a Markdown spec."""
+    valid: bool
+    word_count: int = 0
+    section_count: int = 0
+    warnings: list[str] = Field(default_factory=list)
+    extracted_sections: dict[str, str] = Field(default_factory=dict)
+
+
+class StudioSpecDiffResponse(BaseModel):
+    """Diff metadata between two spec versions."""
+    from_version_id: str
+    to_version_id: str
+    added_lines: int = 0
+    removed_lines: int = 0
+    changed_sections: list[str] = Field(default_factory=list)
+    diff_text: str = ""
+
+
+# --- Observe ---
+
+class StudioObsSource(BaseModel):
+    """Status of a single observability data source."""
+    source_id: str
+    name: str
+    kind: str = Field("", description="production | staging | sandbox | synthetic")
+    status: str = Field("ok", description="ok | degraded | unreachable | no_data")
+    last_seen_at: Optional[float] = None
+    conversation_count: int = 0
+    error_rate: float = 0.0
+    latency_p50_ms: float = 0.0
+    latency_p95_ms: float = 0.0
+
+
+class StudioObsMetricsSummary(BaseModel):
+    """Aggregated metrics snapshot for the Observe page."""
+    snapshot_at: float = Field(default_factory=lambda: 0.0)
+    window_hours: int = 24
+    total_conversations: int = 0
+    success_rate: float = 0.0
+    safety_pass_rate: float = 0.0
+    avg_quality_score: float = 0.0
+    avg_latency_ms: float = 0.0
+    avg_tokens_per_turn: float = 0.0
+    error_rate: float = 0.0
+    top_failure_categories: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class StudioObsIssueCluster(BaseModel):
+    """A cluster of similar issues surfaced from traces."""
+    cluster_id: str
+    category: str
+    summary: str
+    count: int = 0
+    severity: str = "medium"
+    first_seen_at: Optional[float] = None
+    last_seen_at: Optional[float] = None
+    example_trace_ids: list[str] = Field(default_factory=list)
+
+
+class StudioObsIssueListResponse(BaseModel):
+    clusters: list[StudioObsIssueCluster] = Field(default_factory=list)
+    total: int = 0
+    window_hours: int = 24
+
+
+class StudioObsTraceItem(BaseModel):
+    """Compact trace record for the trace list."""
+    trace_id: str
+    session_id: str = ""
+    started_at: Optional[float] = None
+    duration_ms: float = 0.0
+    outcome: str = "unknown"
+    quality_score: float = 0.0
+    error: Optional[str] = None
+    agent_path: str = ""
+
+
+class StudioObsTraceListResponse(BaseModel):
+    traces: list[StudioObsTraceItem] = Field(default_factory=list)
+    total: int = 0
+    limit: int = 50
+    offset: int = 0
+
+
+# --- Optimize ---
+
+class StudioSessionItem(BaseModel):
+    """Compact record for an optimization session in list views."""
+    session_id: str
+    created_at: float
+    status: str = Field("active", description="active | completed | failed | promoted")
+    attempt_count: int = 0
+    accepted_count: int = 0
+    best_composite: float = 0.0
+    baseline_composite: float = 0.0
+    delta: float = 0.0
+    label: str = ""
+
+
+class StudioSessionListResponse(BaseModel):
+    sessions: list[StudioSessionItem] = Field(default_factory=list)
+    total: int = 0
+
+
+class StudioSessionCreateRequest(BaseModel):
+    """Request body to start a new optimization session."""
+    label: str = Field("", description="Human-readable session label")
+    baseline_version_id: Optional[str] = Field(None, description="Config version to use as baseline")
+    eval_suite_id: Optional[str] = Field(None, description="Eval suite to run against")
+
+
+class StudioSessionCreateResponse(BaseModel):
+    session_id: str
+    status: str = "active"
+    message: str = ""
+
+
+class StudioCandidate(BaseModel):
+    """A single optimization candidate within a session."""
+    candidate_id: str
+    attempt_id: str = ""
+    status: str = Field("", description="accepted | rejected_* | pending")
+    change_description: str = ""
+    config_section: str = ""
+    score_before: float = 0.0
+    score_after: float = 0.0
+    delta: float = 0.0
+    p_value: float = 1.0
+    created_at: float = 0.0
+
+
+class StudioCandidateListResponse(BaseModel):
+    session_id: str
+    candidates: list[StudioCandidate] = Field(default_factory=list)
+    total: int = 0
+
+
+class StudioEvalSuiteSummary(BaseModel):
+    """Eval suite summary for a session."""
+    session_id: str
+    eval_run_id: str = ""
+    status: str = "no_data"
+    total_cases: int = 0
+    passed_cases: int = 0
+    quality: float = 0.0
+    safety: float = 0.0
+    latency: float = 0.0
+    cost: float = 0.0
+    composite: float = 0.0
+    warnings: list[str] = Field(default_factory=list)
+
+
+class StudioBacktestMetrics(BaseModel):
+    """Backtest performance comparison for a session."""
+    session_id: str
+    baseline_composite: float = 0.0
+    candidate_composite: float = 0.0
+    delta: float = 0.0
+    is_significant: bool = False
+    p_value: float = 1.0
+    effect_size: float = 0.0
+    cases_run: int = 0
+    safety_regressions: int = 0
+    latency_change_pct: float = 0.0
+
+
+class StudioPromoteRequest(BaseModel):
+    candidate_id: str = Field(..., description="Candidate ID to promote")
+    strategy: str = Field("canary", description="canary | full | rollback")
+    note: str = Field("", description="Optional promotion note")
+
+
+class StudioPromoteResponse(BaseModel):
+    session_id: str
+    candidate_id: str
+    strategy: str
+    status: str
+    message: str = ""
+    new_version_id: Optional[str] = None
