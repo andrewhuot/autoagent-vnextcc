@@ -198,9 +198,9 @@ describe('IntelligenceStudio', () => {
 
     expect(await screen.findByRole('heading', { name: 'Conversational Refinement' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Generate Evals' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save & Generate Evals' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run Eval' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save & Run Eval' })).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'View Config' }));
 

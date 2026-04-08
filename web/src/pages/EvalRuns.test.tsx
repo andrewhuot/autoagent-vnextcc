@@ -245,4 +245,19 @@ describe('EvalRuns', () => {
 
     expect(screen.getByText('No eval sets yet — generate one from your agent config')).toBeInTheDocument();
   });
+
+  it('shows a first-run form instead of a duplicate empty-state CTA when build opens the create flow', () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage('/evals?agent=agent-v002&new=1');
+
+    expect(screen.getByRole('heading', { name: 'Start First Evaluation' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Create Eval Run' })).not.toBeInTheDocument();
+  });
 });

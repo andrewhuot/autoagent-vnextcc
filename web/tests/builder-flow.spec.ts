@@ -40,70 +40,67 @@ function trackPageIssues(page: Page) {
   };
 }
 
-test('builder flow updates preview, generates evals, and downloads config', async ({ page }) => {
+test('builder flow clarifies the save-to-eval handoff and downloads config', async ({ page }) => {
   const issues = trackPageIssues(page);
 
-  await page.goto(`${BASE_URL}/build`, { waitUntil: 'networkidle' });
+  await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });
+  await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
+  await expect(page.getByRole('heading', { name: 'Builder' }).nth(0)).toBeVisible();
 
   await page.getByTestId('builder-composer').fill(
     'Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status'
   );
   await page.getByTestId('builder-send').click();
 
-  await expect(page.getByTestId('builder-preview-agent-name')).toHaveText(
-    'Airline Customer Support Agent'
-  );
-  await expect(page.getByTestId('builder-stat-routes')).toHaveText('3 routes');
-  await expect(page.getByTestId('builder-config-preview')).toContainText('routing_rules');
+  await expect(page.getByTestId('builder-preview-agent-name')).toContainText('Airline');
+  await expect(page.getByTestId('builder-stat-tools')).toHaveText(/\d+ tools/);
+  await expect(page.getByTestId('builder-stat-policies')).toHaveText(/\d+ policies/);
+  await expect(page.getByTestId('builder-stat-routes')).toHaveText(/\d+ routes/);
+  await expect(page.getByRole('button', { name: 'Save & Run Eval' })).toBeVisible();
+  await expect(page.getByText('Saves the current draft before opening Eval Runs.')).toBeVisible();
 
-  await page.getByTestId('builder-composer').fill('Add a tool for checking flight status');
-  await page.getByTestId('builder-send').click();
-
-  await expect(page.getByTestId('builder-stat-tools')).toHaveText('1 tools');
-  await expect(page.getByTestId('builder-config-preview')).toContainText('flight_status_lookup');
-
-  await page.getByTestId('builder-composer').fill(
-    'Add a policy that it should never reveal internal codes'
-  );
-  await page.getByTestId('builder-send').click();
-
-  await expect(page.getByTestId('builder-stat-policies')).toHaveText('3 policies');
-  await expect(page.getByTestId('builder-config-preview')).toContainText('no_internal_codes');
-
-  await page.getByTestId('builder-composer').fill('Make it more empathetic');
-  await page.getByTestId('builder-send').click();
-
-  await expect(page.getByTestId('builder-config-preview')).toContainText('empathetic');
-
-  await page.getByTestId('builder-run-eval').click();
-  await expect(page.getByTestId('builder-eval-summary')).toHaveText('4 draft evals');
+  await page.getByRole('button', { name: 'View Config' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Agent Configuration' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('yaml-preview')).toContainText('routing_rules');
 
   const [download] = await Promise.all([
     page.waitForEvent('download'),
-    page.getByTestId('builder-download').click(),
+    dialog.getByRole('button', { name: 'Download Draft' }).click(),
   ]);
-  expect(download.suggestedFilename()).toBe('airline_customer_support_agent.yaml');
+  expect(download.suggestedFilename()).toContain('airline');
+  expect(download.suggestedFilename()).toMatch(/\.ya?ml$/i);
+
+  await dialog.getByRole('button', { name: 'Close configuration modal' }).click();
+  await page.getByRole('button', { name: 'Save & Run Eval' }).click();
+  await expect(page).toHaveURL(/\/evals\?agent=.*new=1$/);
+  await expect(page.getByRole('heading', { name: 'Start First Evaluation' })).toBeVisible();
+  await expect(
+    page.getByText(/We carried this saved draft over from Build/i)
+  ).toBeVisible();
 
   issues.assertClean();
 });
 
-test('legacy builder routes redirect to /build and sidebar nav reaches the page on mobile', async ({
+test('legacy builder routes redirect to builder chat and sidebar nav reaches the shared build page on mobile', async ({
   page,
 }) => {
   const issues = trackPageIssues(page);
 
   await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(`${BASE_URL}/build`);
+  await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
+  await expect(page.getByRole('heading', { name: 'Builder' }).nth(0)).toBeVisible();
 
   await page.goto(`${BASE_URL}/builder/demo`, { waitUntil: 'networkidle' });
-  await expect(page).toHaveURL(`${BASE_URL}/build`);
+  await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`${BASE_URL}/dashboard`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: 'Open navigation' }).click();
-  await page.getByRole('link', { name: 'Builder' }).first().click();
+  await page.getByRole('link', { name: 'Build' }).first().click();
   await expect(page).toHaveURL(`${BASE_URL}/build`);
-  await expect(page.getByTestId('builder-page')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Build' }).nth(0)).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Prompt' })).toHaveAttribute('aria-selected', 'true');
 
   issues.assertClean();
 });

@@ -62,6 +62,7 @@ export function EvalRuns() {
   const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
   const showGeneratorPanel =
     showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
+  const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
 
   useEffect(() => {
     if (selectionHydrated) {
@@ -531,7 +532,16 @@ export function EvalRuns() {
       {showCreateForm && (
         <section className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-sm font-semibold text-gray-900">Start New Evaluation</h3>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-900">
+                {isFirstRunJourney ? 'Start First Evaluation' : 'Start New Evaluation'}
+              </h3>
+              <p className="mt-1 text-sm text-gray-600">
+                {isFirstRunJourney
+                  ? 'We carried this saved draft over from Build so you can run the first eval without reselecting the config.'
+                  : 'Launch an eval against the selected agent and optionally tag it with a category.'}
+              </p>
+            </div>
             <button onClick={closeForm} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700">
               <X className="h-4 w-4" />
             </button>
@@ -666,14 +676,16 @@ export function EvalRuns() {
           </div>
         </section>
       ) : activeAgent ? (
-        <EmptyState
-          icon={FlaskConical}
-          title="No eval runs yet"
-          description="Run your first eval:"
-          cliHint="agentlab eval run"
-          actionLabel="Create Eval Run"
-          onAction={() => handleStartEval()}
-        />
+        showCreateForm ? null : (
+          <EmptyState
+            icon={FlaskConical}
+            title="No eval runs yet"
+            description="Run your first eval:"
+            cliHint="agentlab eval run"
+            actionLabel="Create Eval Run"
+            onAction={() => handleStartEval()}
+          />
+        )
       ) : (
         <EmptyState
           icon={FlaskConical}

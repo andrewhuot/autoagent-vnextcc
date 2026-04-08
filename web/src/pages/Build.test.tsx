@@ -3,7 +3,7 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { ToastViewport, } from '../components/ToastViewport';
+import { ToastViewport } from '../components/ToastViewport';
 import { Build } from './Build';
 
 function renderPage(initialEntry = '/build') {
@@ -195,11 +195,17 @@ describe('Build', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Builder Chat' }));
 
+    expect(screen.getByRole('heading', { name: 'Builder' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /describe the agent you want to build, preview the runtime behavior, and carry the saved draft straight into evals/i
+      )
+    ).toBeInTheDocument();
     expect(screen.getByText('Conversational Builder')).toBeInTheDocument();
     expect(screen.getByTestId('builder-composer')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
-    expect(screen.getByText('Run Eval')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save & Run Eval' })).toBeInTheDocument();
   });
 
   it('moves builder config into a modal and makes testing the main right-panel workflow', async () => {
@@ -227,6 +233,7 @@ describe('Build', () => {
     expect(screen.queryByRole('heading', { name: 'Live Config' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save to Workspace' })).toBeInTheDocument();
+    expect(screen.getByText('Saves the current draft before opening Eval Runs.')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'View Config' }));
 
@@ -244,10 +251,11 @@ describe('Build', () => {
     });
   });
 
-  it('opens a deep-linked build tab from the route query string', () => {
+  it('opens a deep-linked build tab from the route query string with intelligence framing', () => {
     renderPage('/build?tab=transcript');
 
     expect(screen.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('heading', { name: 'Intelligence Studio' })).toBeInTheDocument();
     expect(screen.getByText('Start from Transcripts')).toBeInTheDocument();
   });
 
@@ -273,7 +281,7 @@ describe('Build', () => {
 
     await user.click(screen.getByRole('tab', { name: 'Saved Artifacts' }));
 
-    expect(screen.getByRole('heading', { name: 'Saved Artifacts' })).toBeInTheDocument();
+    expect(screen.getAllByRole('heading', { name: 'Saved Artifacts' }).length).toBeGreaterThan(0);
     expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
     expect(screen.getByText('Generated from a prompt')).toBeInTheDocument();
   });
@@ -337,8 +345,13 @@ describe('Build', () => {
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Live Build Draft' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Generate Evals' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Run Eval' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save & Generate Evals' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save & Run Eval' })).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'These actions save the current draft first so Eval Runs uses the exact config you just refined.'
+      )
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'View Config' }));
 
@@ -445,7 +458,7 @@ describe('Build', () => {
     await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
     await screen.findByRole('heading', { name: 'Conversational Refinement' });
 
-    await user.click(screen.getByRole('button', { name: 'Run Eval' }));
+    await user.click(screen.getByRole('button', { name: 'Save & Run Eval' }));
 
     expect(await screen.findByText('Eval Page')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(

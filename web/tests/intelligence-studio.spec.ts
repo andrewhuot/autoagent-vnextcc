@@ -222,15 +222,20 @@ function collectBrowserIssues(page: Page) {
 }
 
 test.describe('Intelligence Studio', () => {
-  test('supports prompt and transcript flows from /intelligence', async ({ page }) => {
+  test('supports prompt and transcript flows from the shared build workspace', async ({ page }) => {
     const assertHealthy = collectBrowserIssues(page);
     const transcriptFile = path.join(TEST_DIR, 'fixtures', 'intelligence-transcripts.json');
     await mockIntelligenceRoutes(page);
 
     await page.goto(`${BASE_URL}/intelligence`, { waitUntil: 'networkidle' });
 
+    await expect(page).toHaveURL(`${BASE_URL}/build?tab=transcript`);
     await expect(page.getByRole('heading', { name: 'Intelligence Studio' }).nth(0)).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Start from Prompt' })).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Transcript' })).toHaveAttribute('aria-selected', 'true');
+
+    await page.getByRole('tab', { name: 'Prompt' }).click();
+    await expect(page.getByRole('heading', { name: 'Build' }).nth(0)).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Prompt' })).toHaveAttribute('aria-selected', 'true');
 
     await page.getByRole('button', {
       name: /Build a customer service agent for order tracking, cancellations, and refunds/i,
@@ -238,8 +243,12 @@ test.describe('Intelligence Studio', () => {
     await page.getByRole('button', { name: 'Generate Agent' }).click();
 
     await expect(page.getByRole('heading', { name: 'Conversational Refinement' })).toBeVisible();
-    await expect(page.getByRole('heading', { name: 'Live YAML Config' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Run Eval' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'View Config' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save & Run Eval' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Save & Generate Evals' })).toBeVisible();
+    await expect(
+      page.getByText(/These actions save the current draft first/i)
+    ).toBeVisible();
 
     await page.getByRole('textbox', { name: 'Refinement message' }).fill(
       'Add escalation logic for VIP customers and a refund workflow.'
@@ -247,8 +256,8 @@ test.describe('Intelligence Studio', () => {
     await page.getByRole('button', { name: 'Send refinement message' }).click();
     await expect(page.getByText(/Applied the following changes:/i)).toBeVisible();
 
-    await page.getByRole('button', { name: 'Start Over' }).click();
-    await page.getByRole('button', { name: 'Start from Transcripts' }).click();
+    await page.goto(`${BASE_URL}/intelligence`, { waitUntil: 'networkidle' });
+    await expect(page.getByRole('heading', { name: 'Intelligence Studio' }).nth(0)).toBeVisible();
     await page.getByLabel('Upload transcript files').setInputFiles(transcriptFile);
 
     await expect(page.getByText('Top Intents')).toBeVisible();
@@ -256,8 +265,11 @@ test.describe('Intelligence Studio', () => {
     await expect(page.getByText('Extracted FAQs')).toBeVisible();
 
     await page.getByRole('button', { name: 'Generate Agent' }).click();
-    await expect(page.getByRole('heading', { name: 'Live YAML Config' })).toBeVisible();
-    await expect(page.getByTestId('yaml-preview')).toContainText('created_from: transcript');
+    await expect(page.getByRole('button', { name: 'View Config' })).toBeVisible();
+
+    await page.getByRole('button', { name: 'View Config' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Agent Configuration' });
+    await expect(dialog.getByTestId('yaml-preview')).toContainText('created_from: transcript');
 
     assertHealthy();
   });
