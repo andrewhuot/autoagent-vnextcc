@@ -18,6 +18,13 @@ export interface RouteContext {
   breadcrumbs: BreadcrumbItem[];
 }
 
+interface DemoJourneyContext {
+  stepLabel: string;
+  summary: string;
+  detail: string;
+  activeStep: number;
+}
+
 function toBreadcrumbItems(labels: string[]): BreadcrumbItem[] {
   return labels.map((label, index) => {
     if (label === 'Eval Runs' && index > 0) {
@@ -61,6 +68,104 @@ export function getRouteContext(pathname: string, search = ''): RouteContext {
   return { title, breadcrumbs };
 }
 
+// Surface a lightweight demo narrative in shared chrome so Build and Eval pages feel connected.
+export function getDemoJourneyContext(pathname: string, search = ''): DemoJourneyContext | null {
+  const normalizedPathname = pathname.split('?')[0]?.split('#')[0] ?? pathname;
+
+  if (normalizedPathname === '/build') {
+    return {
+      stepLabel: 'Step 1 of 3',
+      summary: 'Build the draft',
+      detail:
+        'Shape the config in Build, then use Save & Run Eval to carry that exact saved draft into Eval Runs.',
+      activeStep: 0,
+    };
+  }
+
+  if (normalizedPathname === '/evals') {
+    const params = new URLSearchParams(search);
+    const carriedFromBuild = params.get('new') === '1';
+
+    return {
+      stepLabel: 'Step 3 of 3',
+      summary: carriedFromBuild ? 'Run the saved draft from Build' : 'Launch and review evals',
+      detail: carriedFromBuild
+        ? 'The saved draft stays selected so you can launch the first run without re-choosing the config.'
+        : 'Start a run, inspect the results, and compare follow-up iterations from the same page.',
+      activeStep: 2,
+    };
+  }
+
+  return null;
+}
+
+function DemoJourneyStrip({
+  context,
+}: {
+  context: DemoJourneyContext;
+}) {
+  const steps = [
+    { label: 'Build', href: '/build' },
+    { label: 'Save & Run Eval' },
+    { label: 'Eval Runs', href: '/evals' },
+  ];
+
+  return (
+    <div className="border-b border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,0.98))]">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+              Demo Journey
+            </span>
+            <span className="text-xs font-medium text-gray-500">{context.stepLabel}</span>
+          </div>
+          <p className="mt-2 text-sm font-semibold text-gray-900">{context.summary}</p>
+          <p className="mt-1 max-w-2xl text-sm text-gray-600">{context.detail}</p>
+        </div>
+
+        <ol className="grid gap-2 sm:grid-cols-3">
+          {steps.map((step, index) => {
+            const isActive = context.activeStep === index;
+            const isComplete = context.activeStep > index;
+            const className = isActive
+              ? 'border-sky-200 bg-sky-50 text-sky-800'
+              : isComplete
+                ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+                : 'border-gray-200 bg-white text-gray-500';
+
+            const content = (
+              <>
+                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-current/20 bg-white text-[11px] font-semibold">
+                  {index + 1}
+                </span>
+                <span className="text-sm font-medium">{step.label}</span>
+              </>
+            );
+
+            return (
+              <li key={step.label}>
+                {step.href ? (
+                  <Link
+                    to={step.href}
+                    className={`flex items-center gap-2 rounded-2xl border px-3 py-2.5 transition hover:border-gray-300 hover:text-gray-900 ${className}`}
+                  >
+                    {content}
+                  </Link>
+                ) : (
+                  <div className={`flex items-center gap-2 rounded-2xl border px-3 py-2.5 ${className}`}>
+                    {content}
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 function useGlobalShortcuts() {
   const navigate = useNavigate();
 
@@ -95,6 +200,10 @@ export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
   const routeContext = useMemo(
     () => getRouteContext(location.pathname, location.search),
+    [location.pathname, location.search]
+  );
+  const demoJourneyContext = useMemo(
+    () => getDemoJourneyContext(location.pathname, location.search),
     [location.pathname, location.search]
   );
   const title = routeContext.title;
@@ -159,6 +268,8 @@ export function Layout({ children }: { children: ReactNode }) {
             </kbd>
           </button>
         </header>
+
+        {demoJourneyContext ? <DemoJourneyStrip context={demoJourneyContext} /> : null}
 
         <main className="flex-1 px-5 py-6 sm:px-6">
           <div

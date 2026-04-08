@@ -131,7 +131,9 @@ describe('EvalRuns', () => {
     renderPage('/evals?agent=agent-v002');
 
     expect((await screen.findAllByText('Order Guardian')).length).toBeGreaterThan(0);
-    await user.click(screen.getByRole('button', { name: 'New Eval Run' }));
+    await user.click(screen.getByRole('button', { name: 'Set Up Eval Run' }));
+    expect(screen.getByRole('heading', { name: 'Start New Evaluation' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Start Eval' }));
 
     expect(mutate).toHaveBeenCalledWith(
       {
@@ -157,7 +159,9 @@ describe('EvalRuns', () => {
 
     renderPage('/evals?agent=agent-v002');
 
-    await user.click(screen.getByRole('button', { name: 'Create Eval Run' }));
+    await user.click(screen.getByRole('button', { name: 'Set Up First Eval' }));
+    expect(screen.getByRole('heading', { name: 'Start First Evaluation' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Run First Eval' }));
 
     expect(mutate).toHaveBeenCalledWith(
       {
@@ -258,6 +262,7 @@ describe('EvalRuns', () => {
     renderPage('/evals?agent=agent-v002&new=1');
 
     expect(screen.getByRole('heading', { name: 'Start First Evaluation' })).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Create Eval Run' })).not.toBeInTheDocument();
+    expect(screen.getByText('Saved draft from Build')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Set Up First Eval' })).not.toBeInTheDocument();
   });
 });

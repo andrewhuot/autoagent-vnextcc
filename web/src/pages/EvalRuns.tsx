@@ -130,6 +130,13 @@ export function EvalRuns() {
     setSearchParams(next, { replace: true });
   }
 
+  function openCreateForm() {
+    setShowForm(true);
+    const next = new URLSearchParams(searchParams);
+    next.set('new', '1');
+    setSearchParams(next, { replace: true });
+  }
+
   function handleStartEval(options?: { generatedSuiteId?: string }) {
     if (!activeAgent) {
       toastError('Select an agent', 'Pick an agent from the library before starting an eval.');
@@ -244,8 +251,36 @@ export function EvalRuns() {
   if (isLoading) {
     return (
       <div className="space-y-4">
-        <LoadingSkeleton rows={4} />
-        <LoadingSkeleton rows={7} />
+        <PageHeader
+          title="Eval Runs"
+          description="Launch evaluations, inspect progress, and compare the quality impact of different runs."
+        />
+
+        <section className="rounded-2xl border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] p-5 shadow-sm shadow-sky-100/60">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+              Step 3 of 3
+            </span>
+            <span className="text-xs font-medium text-gray-500">Preparing the eval workspace</span>
+          </div>
+          <p className="mt-3 max-w-2xl text-sm text-gray-600">
+            AgentLab is loading the selected draft, recent runs, and generated suites so the next eval is ready to launch.
+          </p>
+        </section>
+
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <p className="text-sm font-semibold text-gray-900">Loading recent eval context</p>
+          <div className="mt-4">
+            <LoadingSkeleton rows={4} />
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-gray-200 bg-white p-5">
+          <p className="text-sm font-semibold text-gray-900">Loading runs and eval sets</p>
+          <div className="mt-4">
+            <LoadingSkeleton rows={7} />
+          </div>
+        </section>
       </div>
     );
   }
@@ -268,17 +303,11 @@ export function EvalRuns() {
               Generate Evals
             </button>
             <button
-              onClick={() => handleStartEval()}
+              onClick={openCreateForm}
               className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
             >
               <Plus className="h-4 w-4" />
-              New Eval Run
-            </button>
-            <button
-              onClick={() => setShowForm(true)}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-            >
-              Advanced
+              Set Up Eval Run
             </button>
           </div>
         }
@@ -530,7 +559,22 @@ export function EvalRuns() {
       </section>
 
       {showCreateForm && (
-        <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] p-5 shadow-sm shadow-sky-100/60">
+          {isFirstRunJourney && activeAgent ? (
+            <div className="mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="inline-flex rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+                  Saved draft from Build
+                </span>
+                <span className="text-xs font-medium text-sky-700">Step 3 of 3</span>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-sky-950">Run the first eval for {activeAgent.name}</p>
+              <p className="mt-1 text-sm leading-relaxed text-sky-900">
+                The saved config is already selected, so you can add an optional label and launch the first run without jumping back to Build.
+              </p>
+            </div>
+          ) : null}
+
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h3 className="text-sm font-semibold text-gray-900">
@@ -547,15 +591,18 @@ export function EvalRuns() {
             </button>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-[1.2fr_1fr_auto]">
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2">
-              <label className="mb-1 block text-xs text-gray-500">Selected agent</label>
+          <div className="grid gap-3 lg:grid-cols-[1.2fr_1fr_auto]">
+            <div className="rounded-2xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Selected agent
+              </label>
               {activeAgent ? (
                 <div>
                   <p className="text-sm font-semibold text-gray-900">{activeAgent.name}</p>
                   <p className="text-xs text-gray-500">
                     {activeAgent.model} · {activeAgent.status}
                   </p>
+                  <p className="mt-2 truncate text-xs text-gray-500">{activeAgent.config_path}</p>
                 </div>
               ) : (
                 <p className="text-sm text-gray-500">Choose an agent from the library above to run this eval.</p>
@@ -563,7 +610,9 @@ export function EvalRuns() {
             </div>
 
             <div>
-              <label className="mb-1 block text-xs text-gray-500">Category</label>
+              <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Category
+              </label>
               <input
                 type="text"
                 value={category}
@@ -571,6 +620,7 @@ export function EvalRuns() {
                 placeholder="Optional, e.g. safety"
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
               />
+              <p className="mt-2 text-xs text-gray-600">Optional label for grouping runs later in Compare and Results Explorer.</p>
             </div>
 
             <div className="flex items-end">
@@ -579,7 +629,7 @@ export function EvalRuns() {
                 disabled={startEval.isPending || !activeAgent}
                 className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
               >
-                {startEval.isPending ? 'Starting...' : 'Start Eval'}
+                {startEval.isPending ? 'Starting...' : isFirstRunJourney ? 'Run First Eval' : 'Start Eval'}
               </button>
             </div>
           </div>
@@ -680,10 +730,10 @@ export function EvalRuns() {
           <EmptyState
             icon={FlaskConical}
             title="No eval runs yet"
-            description="Run your first eval:"
+            description="Set up the first run for the selected saved draft, then inspect results and compare follow-up runs here."
             cliHint="agentlab eval run"
-            actionLabel="Create Eval Run"
-            onAction={() => handleStartEval()}
+            actionLabel="Set Up First Eval"
+            onAction={openCreateForm}
           />
         )
       ) : (
