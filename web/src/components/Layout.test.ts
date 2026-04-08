@@ -26,6 +26,7 @@ vi.mock('../lib/api', () => ({
   useBuilderArtifacts: () => ({ data: [] }),
   useCurriculumBatches: () => ({ data: [] }),
   useGenerateCurriculum: () => ({ mutate: vi.fn(), isPending: false }),
+  useGeneratedSuites: () => ({ data: [], isLoading: false }),
   useSavedBuildArtifacts: () => ({ data: [] }),
   useSaveAgent: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useStartEval: () => ({ mutate: vi.fn(), isPending: false }),
@@ -184,16 +185,14 @@ describe('App', () => {
     );
   });
 
-  it('redirects /eval to the eval runs page with the empty-state guidance', async () => {
+  it('redirects /eval to the eval runs page', async () => {
     installLocalStorageMock();
     window.history.pushState({}, '', '/eval');
 
     render(createElement(App));
 
     expect(window.location.pathname).toBe('/evals');
-    expect(await screen.findByText('No eval runs yet')).toBeInTheDocument();
-    expect(screen.getByText('Run your first eval:')).toBeInTheDocument();
-    expect(screen.getByText('agentlab eval run')).toBeInTheDocument();
+    expect(await screen.findByText('Pick an agent to start evaluating')).toBeInTheDocument();
   });
 
   it('redirects /review to the plural review route', async () => {

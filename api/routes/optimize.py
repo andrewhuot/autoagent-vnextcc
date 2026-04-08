@@ -18,6 +18,7 @@ from api.models import (
 )
 from api.tasks import Task
 from optimizer.memory import OptimizationAttempt
+from optimizer.surface_inventory import build_surface_inventory
 
 router = APIRouter(prefix="/api/optimize", tags=["optimize"])
 
@@ -316,6 +317,13 @@ async def list_optimization_history(
         }
         for a in attempts
     ]
+
+
+@router.get("/surfaces")
+async def get_optimization_surfaces() -> dict[str, Any]:
+    """Return structured coverage for optimization component surfaces."""
+
+    return build_surface_inventory()
 
 
 @router.get("/history/{attempt_id}")

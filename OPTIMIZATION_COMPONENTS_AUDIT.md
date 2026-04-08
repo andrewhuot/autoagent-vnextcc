@@ -1,229 +1,545 @@
 # Optimization Components Audit
 
-> **Date**: 2026-04-08
-> **Branch**: `feat/optimize-components-audit-claude`
-> **Scope**: Does the optimizer inspect, mutate, and expose all ADK/agent config surfaces? Are integration seams ready for external coding agents?
-
----
+Date: 2026-04-08
 
 ## Executive Summary
 
-The optimization system is **architecturally strong** — it defines 14 mutation surfaces with typed operators, a multi-strategy search engine (simple → adaptive → full → pro), and an MCP server with 22+ tools for external agent integration. However, there are **critical gaps between what the system _models_ and what the optimizer _actually targets_** in practice. Several first-class config surfaces (guardrails, sub-agent topology, output validators) exist in the domain model but have no mutation operators, no proposer logic, and no MCP tools to inspect or modify them.
+The current optimization loop does **not** fully cover normal ADK / agent components end to end.
 
-**Verdict**: The foundation is solid. The gaps are enumerable and fixable. The biggest risk is that the optimizer silently ignores surfaces that matter most for production agent quality.
+What exists today is a mix of:
 
----
+- a **broad declared mutation model** in `optimizer/mutations.py`
+- a **narrower live optimization path** in `optimizer/loop.py`, `optimizer/search.py`, `optimizer/proposer.py`, `observer/opportunities.py`, `optimizer/nl_editor.py`, and `optimizer/autofix_proposers.py`
+- a **narrowest canonical config contract** in `agent/config/schema.py`
 
-## Q1: Does the optimization loop inspect all normal ADK/agent config surfaces?
+The practical result is:
 
-### Surfaces modeled in the domain (`core/types.py`)
+1. The system is strongest on **instructions**, **routing**, and some **basic tool/config tuning**.
+2. It is partial on **model**, **context caching**, **memory policy**, and **ADK import/export**.
+3. It is nominal or disconnected on **callbacks**, **guardrails/policies**, **tool contracts**, **handoff schemas/artifacts**, **sub-agents/topology/workflow**, and several **context/memory hook** surfaces.
+4. External coding-agent seams are already meaningful on the **read/evidence** side, but the **write/optimize** side is fragmented and not yet component-aware.
 
-| Surface | AgentNodeType / EdgeType | In MutationSurface enum? | Has mutation operator? | Proposer targets it? |
-|---------|--------------------------|--------------------------|------------------------|----------------------|
-| Instructions / prompts | — (config field) | ✅ `instruction` | ✅ `instruction_rewrite` | ✅ mock + LLM |
-| Few-shot examples | — (config field) | ✅ `few_shot` | ✅ `few_shot_edit` | ❌ mock only hits prompts |
-| Tool descriptions | `tool_contract` node | ✅ `tool_description` | ✅ `tool_description_edit` | ✅ (tool_failure bucket) |
-| Model selection | — (config field) | ✅ `model` | ✅ `model_swap` | ❌ no proposer path |
-| Generation settings | — (config field) | ✅ `generation_settings` | ✅ `generation_settings` | ❌ no proposer path |
-| Callbacks | — (config field) | ✅ `callback` | ✅ `callback_patch` | ❌ no proposer path |
-| Context caching | — (config field) | ✅ `context_caching` | ✅ `context_caching` | ❌ no proposer path |
-| Memory policy | `memory` node | ✅ `memory_policy` | ✅ `memory_policy` | ❌ no proposer path |
-| Routing rules | `router` node, `routes_to` edge | ✅ `routing` | ✅ `routing_edit` | ✅ (routing_error bucket) |
-| Workflow / orchestration | — | ✅ `workflow` | ❌ **no operator** | ❌ |
-| Skills | `skill` node | ✅ `skill` | ✅ `skill_rewrite` | ❌ no proposer path |
-| Policies / guardrails config | `guardrail` node, `guards` edge | ✅ `policy` | ✅ `policy_edit` | ❌ no proposer path |
-| Tool contracts | `tool_contract` node, `uses_tool` edge | ✅ `tool_contract` | ✅ `tool_contract_edit` | ❌ no proposer path |
-| Handoff schemas | `handoff_schema` node, `hands_off_to` edge | ✅ `handoff_schema` | ✅ `handoff_schema_edit` | ❌ no proposer path |
+The shipped inventory currently reports **18 total surfaces**:
 
-### Surfaces in the domain model but **missing from MutationSurface enum entirely**
+- **2 full**
+- **8 partial**
+- **7 nominal**
+- **1 none**
 
-| Surface | Where it lives | Gap |
-|---------|----------------|-----|
-| **Guardrail rules** (input/output validators) | `core/guardrails.py`, `core/guardrail_library.py` | `policy` surface exists but targets policy packs, not guardrail chain composition (add/remove/reorder guardrails) |
-| **Sub-agent topology** (add/remove specialists) | `multi_agent/patterns.py`, `agent/specialists/` | No mutation surface. Routing edits change _keywords_ but can't add/remove sub-agents |
-| **Judge configuration** | `judge` node type, `judged_by` edge | No mutation surface — judges are treated as fixed infrastructure |
-| **Output format / response schema** | Implicit in instructions | No dedicated surface — changes are buried in instruction rewrites |
-| **Specialist instructions** (per-sub-agent prompts) | `agent/specialists/*.py` | `instruction_rewrite` targets `prompts.root` or named keys, but the mock proposer only touches `root` |
+The strongest direction is to move toward a **component-aware canonical agent representation** that sits above the current `AgentConfig`, not to keep adding one-off fields or more prompt-centric mutations.
 
-### Key finding
+As a low-risk scaffolding improvement, this audit also adds:
 
-**13 of 14 mutation surfaces have operators. The `workflow` surface has an enum value but no registered operator.** More critically, only 3 surfaces are reachable from the mock proposer (instructions, routing, tools). The LLM proposer _can_ target any surface via free-form JSON, but has no structured awareness of surfaces like guardrails, callbacks, memory, or handoffs.
+- `optimizer/surface_inventory.py`
+- `GET /api/optimize/surfaces`
 
-**References**:
-- `optimizer/mutations.py:40-57` — `MutationSurface` enum (14 values)
-- `optimizer/mutations.py:385-586` — `create_default_registry()` (13 operators, missing `workflow`)
-- `optimizer/proposer.py:76-196` — `_mock_propose()` (only targets routing, prompts, thresholds, tools)
-- `optimizer/proposer.py:198-318` — `_llm_propose()` (free-form, no surface-aware prompting)
-- `core/types.py:23-33` — `AgentNodeType` (8 node types including guardrail, judge)
-- `core/types.py:64-73` — `EdgeType` (8 edge types)
+That endpoint exposes the current surface coverage inventory for the studio, APIs, and external coding agents.
 
----
+## Scope And Method
 
-## Q2: Does the mutation/optimization logic actually target those surfaces as first-class candidates?
+This audit traced the current loop from entrypoint to mutation/eval/deploy and then compared that path against the broader agent surfaces present elsewhere in the repo.
 
-### The proposer gap
+Primary evidence paths:
 
-The `Proposer` class has two paths:
+- Optimization loop: `api/routes/optimize.py`, `optimizer/loop.py`, `optimizer/search.py`, `optimizer/proposer.py`
+- Mutation surfaces: `optimizer/mutations.py`, `optimizer/mutations_topology.py`
+- Failure-to-operator mapping: `observer/opportunities.py`
+- Autofix and NL editing: `optimizer/autofix.py`, `optimizer/autofix_proposers.py`, `optimizer/nl_editor.py`
+- Canonical config: `agent/config/schema.py`
+- ADK parsing/mapping/export: `adk/types.py`, `adk/parser.py`, `adk/mapper.py`, `adk/importer.py`, `adk/exporter.py`
+- Runtime primitives not fully integrated into optimization: `adk/callbacks.py`, `adk/memory_bank.py`, `core/handoff.py`, `core/guardrails.py`
+- External-agent seams: `api/routes/traces.py`, `api/routes/context.py`, `api/routes/diagnose.py`, `api/routes/adk.py`, `api/routes/connect.py`, `mcp_server/resources.py`, `mcp_server/tools.py`
+- Studio merge points: `web/src/components/builder/Inspector.tsx`, `web/src/components/builder/inspector/CodingAgentConfigTab.tsx`, `web/src/pages/AgentStudio.tsx`, `web/src/pages/Improvements.tsx`
 
-1. **Mock proposer** (`_mock_propose`): Deterministic, failure-bucket-driven. Only targets:
-   - `routing` (routing_error bucket)
-   - `prompts` (unhelpful_response, safety_violation, default)
-   - `thresholds` (timeout bucket)
-   - `tools` (tool_failure bucket)
+## Current Loop Findings
 
-   **11 of 14 surfaces are unreachable from the mock proposer.**
+### 1. The live loop is narrower than the declared mutation model
 
-2. **LLM proposer** (`_llm_propose`): Sends current config + failure data to an LLM. The system prompt is generic ("propose one high-leverage, safe config improvement") with no enumeration of available surfaces, operators, or constraints. The LLM has to _guess_ what config keys exist.
+`optimizer.mutations.MutationSurface` declares these surfaces:
 
-### The search engine gap
+- instruction
+- few_shot
+- tool_description
+- model
+- generation_settings
+- callback
+- context_caching
+- memory_policy
+- routing
+- workflow
+- skill
+- policy
+- tool_contract
+- handoff_schema
 
-The `HybridSearchOrchestrator` in `optimizer/search.py` does use the full `MutationRegistry`, but:
-- The `_OPERATOR_TO_FAMILY` mapping (lines 77-87) only maps 9 of 13 operators. Missing: `skill_rewrite`, `policy_edit`, `tool_contract_edit`, `handoff_schema_edit`.
-- These 4 "registry-aware" operators will never be selected by the bandit in adaptive/full mode.
+But the live loop reaches only a subset:
 
-### The skill engine path
+- `optimizer.proposer.Proposer._mock_propose()` proposes only `prompts`, `routing`, `thresholds`, and `tools`.
+- `optimizer.search._OPERATOR_TO_FAMILY` only wires `routing_edit`, `model_swap`, `callback_patch`, `generation_settings`, `tool_description_edit`, `context_caching`, `memory_policy`, `instruction_rewrite`, and `few_shot_edit` into adaptive search.
+- `observer.opportunities._BUCKET_TO_OPERATORS` is narrower again, with only:
+  - `tool_description_edit`
+  - `routing_edit`
+  - `instruction_rewrite`
+  - `callback_patch`
+  - `generation_settings`
+  - `model_swap`
+  - `few_shot_edit`
+  - `context_caching`
+- `optimizer.mutations_topology` keeps workflow/topology operators as experimental `ready=False` stubs.
 
-The `SkillEngine` (referenced in `optimizer/loop.py:86-91`) provides an alternative optimization path that can compose skills. This is architecturally sound but orthogonal to component-level mutation.
+### 2. The canonical config is narrower than both of those
 
-### Verdict
+`agent.config.schema.AgentConfig` includes:
 
-**The mutation registry is well-designed but under-utilized.** The search engine's bandit policy can only select from 9/13 operators. The proposer's mock path only targets 3-4 surfaces. The LLM path is surface-unaware. In practice, **most optimization cycles will only touch instructions, routing, and tool timeouts**.
+- routing
+- prompts
+- tools
+- thresholds
+- context_caching
+- compaction
+- memory_policy
+- optimizer settings
+- model
+- quality_boost
 
-**References**:
-- `optimizer/search.py:77-87` — `_OPERATOR_TO_FAMILY` (9 operators mapped, 4 missing)
-- `optimizer/loop.py:223-279` — `_optimize_simple()` flow
-- `optimizer/loop.py:357-439` — `_optimize_hybrid()` flow
+It does **not** include:
 
----
+- few-shot examples
+- generation settings
+- callbacks
+- policies / guardrails
+- tool contracts
+- handoff schemas / artifacts
+- explicit workflow / topology
+- explicit sub-agent structure
 
-## Q3: Are there clear integration seams for external coding agents?
+That means several declared mutation surfaces are not truly end-to-end optimization surfaces, because the optimizer validates through `AgentConfig` before evaluating/deploying.
 
-### What exists
+### 3. ADK support is real but only partially connected to optimization
 
-| Integration point | Mechanism | Surfaces exposed | Gap |
-|-------------------|-----------|------------------|-----|
-| **MCP Server** | JSON-RPC 2.0 over stdio | Status, explain, diagnose, failures, suggest_fix, edit, eval, compare, replay, diff, scaffold, generate_evals, sandbox, inspect_trace, sync_adk | ✅ Good breadth for observe+edit. ❌ No tool to list/select mutation surfaces, no tool to propose+evaluate a candidate config, no tool to read the agent graph IR |
-| **CLI connectors** | `cli/mcp_setup.py` | Registers MCP server in Claude Code, Codex, Cursor, Windsurf | ✅ Multi-client support |
-| **Multi-agent adapters** | `adapters/*.py` | OpenAI Agents, Anthropic, CX Studio, HTTP webhook | ✅ Import agents. ❌ No "export optimization proposal" adapter |
-| **Resources (MCP)** | `mcp_server/resources.py` | Agent configs, traces, eval results, skills, datasets | ✅ Read access. ❌ No agent graph IR resource |
-| **Prompts (MCP)** | `mcp_server/prompts.py` | Guided workflows for common tasks | ✅ Good UX layer |
+The ADK layer knows about more than the optimizer can currently mutate end to end:
 
-### What's missing for coding-agent integration
+- `adk.types.AdkAgent` includes model, instruction, tools, sub_agents, generate_config, and multiple callback hooks.
+- `adk.mapper.AdkMapper` only maps prompts, tools, routing derived from sub-agents, generation settings, and model into AgentLab config.
+- `adk.exporter.AdkExporter` only writes back instructions, model/generation config, and tool descriptions.
 
-1. **No structured "optimization brief" endpoint** — an external agent can call `agentlab_diagnose` and `agentlab_get_failures` separately, but there's no single tool that returns: current config + failure analysis + available mutation surfaces + past attempts + eval scores. This is what a coding agent needs to make an informed proposal.
+So the repo understands richer ADK structure, but the optimization loop does not yet optimize that richer structure in a canonical, round-trippable way.
 
-2. **No "propose and evaluate" tool** — `agentlab_edit` applies a NL edit, but there's no tool that takes a structured config patch, runs it through the eval pipeline, and returns pass/fail with statistical significance. The coding agent has to orchestrate `agentlab_edit` → `agentlab_eval` → `agentlab_diff` manually.
+### 4. Observability is stronger than mutation coverage
 
-3. **No agent graph IR access** — the `AgentGraphVersion` (`core/types.py`) is a rich representation of the agent topology, but it's not exposed via MCP. A coding agent can't inspect which sub-agents exist, how they're connected, or what guardrails guard which paths.
+The repo already has meaningful evidence pipelines:
 
-4. **No mutation surface catalog** — the `MutationRegistry` lists all available operators with risk classes, preconditions, and descriptions, but this isn't exposed via any API. A coding agent can't discover what changes are _possible_.
+- trace events and search
+- blame maps
+- trace grading
+- context analysis
+- diagnose sessions
+- opportunity clustering
+- eval history
 
-**References**:
-- `mcp_server/tools.py:729-820` — `TOOL_REGISTRY` (22 tools registered)
-- `mcp_server/server.py:1-131` — MCP protocol handler
-- `mcp_server/resources.py` — Resource provider
-- `cli/mcp_setup.py` — Multi-client MCP registration
+This is important because it means the main gap is **not** lack of evidence. The gap is lack of a **component-aware mutation contract** that connects evidence to real agent components and then back to source/config safely.
 
----
+## Coverage Matrix
 
-## Q4: What is the best path to make the optimizer component-aware and coding-agent-friendly?
+Legend:
 
-### Target Architecture
+- These support levels now match the `support_level` returned by `optimizer.surface_inventory.build_surface_inventory()`.
+- `Full`: represented in canonical config and genuinely usable through the current loop
+- `Partial`: real support exists, but one or more of config representation, opportunity generation, adaptive reachability, or writeback is missing
+- `Nominal`: component exists in the repo and may even have operators, but is not meaningfully end to end in the current loop
+- `None`: essentially absent from optimization coverage
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    External Coding Agents                    │
-│         (Claude Code, Codex, Cursor, Windsurf)              │
-│                                                             │
-│  1. agentlab_optimization_brief  ← NEW: full context dump   │
-│  2. agentlab_list_surfaces       ← NEW: mutation catalog     │
-│  3. agentlab_propose_candidate   ← NEW: structured proposal  │
-│  4. agentlab_evaluate_candidate  ← NEW: eval + significance  │
-│  5. agentlab_agent_graph         ← NEW: topology inspector   │
-└──────────────┬──────────────────────────────────────────────┘
-               │ MCP (JSON-RPC 2.0)
-               ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    AgentLab Core                             │
-│                                                             │
-│  MutationRegistry ← add workflow operator, fix bandit map   │
-│  Proposer         ← surface-aware prompting for LLM path    │
-│  SearchEngine     ← map all 13+ operators to families       │
-│  EvalRunner       ← expose candidate eval as atomic op      │
-│  AgentGraphVersion ← expose via MCP resource                │
-└─────────────────────────────────────────────────────────────┘
-```
+| Surface | Current support | Evidence | Missing gap |
+|---|---|---|---|
+| Instructions | Full | Canonical in `AgentConfig.prompts`; live in simple proposer, adaptive search, NL editor, AutoFix; round-trips through ADK import/export | Still mostly flat-text prompt optimization rather than structured instruction section optimization |
+| Routing | Full | Canonical in `AgentConfig.routing`; live in simple proposer, adaptive search, opportunities, NL editor; imported from ADK/connect | ADK export does not write routing changes back into sub-agent topology |
+| Tool runtime config | Partial | Canonical in `AgentConfig.tools`; simple proposer and NL editor adjust tool timeouts; adaptive loop can use `tool_description_edit` | Tool operator naming and opportunity mapping are description-oriented, not explicitly runtime-config-oriented |
+| Tool descriptions / params | Partial | ADK/connect import and ADK export preserve descriptions; mutation operator can edit tool config | Canonical `AgentConfig` does not preserve descriptions, so this surface is not durable through validation |
+| Model selection | Partial | Canonical `model` exists; adaptive search and AutoFix can propose `model_swap`; ADK round-trip supports model | High-risk only, not used by simple proposer, and not linked to richer component evidence |
+| Few-shot examples | Partial | Mutation operator exists; adaptive search, opportunities, NL editor, AutoFix can target it | Not in canonical `AgentConfig`; not in ADK round-trip; not durable end to end |
+| Generation settings | Partial | Mutation operator exists; adaptive search, opportunities, NL editor, AutoFix target it; ADK mapper/exporter mention generation config | Not in canonical `AgentConfig`; naming is inconsistent between `generation`, `generation_settings`, and `generate_config` |
+| Context caching | Partial | Canonical config field exists; adaptive search and opportunity generation can target it | Not represented in ADK/connect flows; not surfaced as a richer context-engineering component |
+| Memory policy | Partial | Canonical config field exists; adaptive search can target it | No opportunity mapping, no NL/autofix path, and not connected to runtime memory-bank hooks |
+| Thresholds | Partial | Canonical config field exists; simple proposer and NL editor use it | Not a first-class mutation surface; not in adaptive search/operator system |
+| Compaction | None | Canonical config field and context workbench exist | No mutation surface, no opportunity generation, no writeback path |
+| Callbacks | Nominal | Runtime callback registry exists; `callback_patch` operator exists; safety opportunity can recommend it; ADK types know callback hooks | Not in canonical config, not mapped by ADK importer/exporter, no NL/autofix path, no clear writeback contract |
+| Guardrails / policies | Nominal | Guardrail registry and policy registry exist; connect adapters can import guardrails; `policy_edit` operator exists | Not in canonical config, not in opportunity generation, not mapped by ADK round-trip, not component-aware in live loop |
+| Tool contracts | Nominal | `tool_contract_edit` operator exists; registry has related concepts | No canonical config field, no opportunity mapping, no external round-trip path |
+| Handoffs / transfer artifacts | Nominal | `HandoffArtifact`, trace grading, handoff-quality grading, connect adapters import handoffs, `handoff_schema_edit` operator exists | Not in canonical config, not in adaptive search/opportunities, no ADK export path, no live mutation contract |
+| Workflow / topology | Nominal | Workflow/topology operators exist in `optimizer.mutations_topology`; ADK types know orchestration types and sub-agents | Operators are experimental `ready=False`; no canonical config representation; no live loop reachability |
+| Skills | Nominal | Skill engine, autolearner, and `skill_rewrite` operator exist | Skills are applied around the loop, but not optimized as first-class canonical components in the main config/eval/deploy path |
+| Sub-agents / component graph | Nominal | ADK parser/importer can discover sub-agents; connect adapters discover handoffs/agents; studio has an ADK graph tab | Canonical optimization model collapses structure into prompts/routing instead of preserving a real component graph |
 
-### Staged Implementation Plan
+## Goal-by-Goal Answers
 
-#### Stage 1: Fix internal gaps (low risk, high leverage)
-1. **Add `workflow` mutation operator** to `create_default_registry()` — the enum value exists but no operator is registered.
-2. **Map all 13 operators to families** in `_OPERATOR_TO_FAMILY` (`optimizer/search.py:77-87`) — add `skill_rewrite`, `policy_edit`, `tool_contract_edit`, `handoff_schema_edit`.
-3. **Add `guardrail_edit` mutation surface and operator** — the guardrail system (`core/guardrails.py`) is rich but invisible to the optimizer.
-4. **Add `sub_agent_topology` mutation surface** — enable adding/removing specialists, not just editing routing keywords.
+### Goal 1: Does the current loop look across all normal ADK / agent components?
 
-#### Stage 2: Make the proposer surface-aware (medium risk)
-5. **Enhance `_llm_propose` system prompt** to enumerate available surfaces, their risk classes, and which ones have been recently changed. Currently it's a generic "propose one improvement" prompt.
-6. **Expand `_mock_propose` failure-bucket mapping** to cover more surfaces (e.g., memory_policy for context-related failures, callback for lifecycle issues).
+No.
 
-#### Stage 3: MCP integration seams for coding agents (low risk, high value)
-7. **`agentlab_optimization_brief` tool** — returns current config + health metrics + failure clusters + available mutation surfaces + past 10 attempts + eval baseline. One call gives a coding agent everything it needs.
-8. **`agentlab_list_surfaces` tool** — returns the `MutationRegistry` catalog: operator names, surfaces, risk classes, descriptions, preconditions.
-9. **`agentlab_propose_candidate` tool** — accepts a structured config patch + change description, validates it, and returns a preview (diff, risk assessment, estimated eval cost).
-10. **`agentlab_evaluate_candidate` tool** — accepts a candidate config, runs eval, compares to baseline with statistical significance, returns pass/fail verdict.
-11. **`agentlab_agent_graph` tool** — returns the `AgentGraphVersion` serialized as JSON: all nodes, edges, and their types.
+It looks across a meaningful but incomplete subset:
 
-#### Stage 4: Advanced coding-agent patterns (future)
-12. **Batch proposal API** — let coding agents submit multiple candidate configs for parallel evaluation.
-13. **Structured feedback loop** — after eval, return per-case results so the coding agent can iterate on specific failures.
-14. **Git-aware proposals** — coding agents working in a worktree can propose changes that include both config mutations and code changes (e.g., new tool implementations).
+- instructions
+- routing
+- some tool config
+- model
+- context caching
+- memory policy
+- a few prompt-optimization surfaces
 
----
+It does **not** fully look across:
 
-## Gap Matrix
+- callbacks
+- guardrails / policies
+- tool descriptions as durable config
+- tool contracts
+- handoff schemas / artifacts
+- workflow / topology / sub-agents
+- richer context hooks and runtime memory systems
 
-| # | Gap | Severity | Stage | Files to change |
-|---|-----|----------|-------|-----------------|
-| G1 | ~~`workflow` MutationSurface has no operator~~ **FIXED** | Medium | 1 | `optimizer/mutations.py` |
-| G2 | ~~4 operators unmapped in bandit family selector~~ **FIXED** | High | 1 | `optimizer/search.py` |
-| G3 | No guardrail mutation surface/operator | High | 1 | `optimizer/mutations.py` |
-| G4 | No sub-agent topology mutation | Medium | 1 | `optimizer/mutations.py` |
-| G5 | Mock proposer only targets 3-4 surfaces | Medium | 2 | `optimizer/proposer.py` |
-| G6 | LLM proposer has no surface awareness | High | 2 | `optimizer/proposer.py` |
-| G7 | No optimization brief MCP tool | High | 3 | `mcp_server/tools.py` |
-| G8 | No mutation catalog MCP tool | High | 3 | `mcp_server/tools.py` |
-| G9 | No propose/evaluate MCP tools | High | 3 | `mcp_server/tools.py` |
-| G10 | No agent graph MCP tool | Medium | 3 | `mcp_server/tools.py` |
-| G11 | Judge config not optimizable | Low | 4 | `optimizer/mutations.py` |
-| G12 | No batch proposal API | Low | 4 | `mcp_server/tools.py`, `optimizer/loop.py` |
+### Goal 2: Are those components actually candidate mutation/fix surfaces in the live logic?
 
----
+Only partially.
 
-## Key Risks
+There are three concentric circles:
 
-1. **Silent surface blindness** — The optimizer runs successfully but never touches guardrails, memory, handoffs, callbacks, or sub-agent topology. Users may believe these are being optimized when they aren't.
-2. **Bandit starvation** — 4 of 13 operators can never be selected in adaptive/full mode due to missing family mappings. These are the newest and most sophisticated operators (skill, policy, tool_contract, handoff_schema).
-3. **LLM proposer drift** — Without surface-aware prompting, the LLM proposer will converge on instruction rewrites (the easiest, most familiar change) and ignore structural changes.
-4. **MCP surface gap** — External coding agents have observe+edit capabilities but no propose+evaluate workflow. They can't participate in the optimization loop as first-class actors.
+1. **Declared mutation surfaces** in the registry
+2. **Reachable search/proposer surfaces** in the live loop
+3. **Canonical config surfaces** that survive validation and can be deployed
 
----
+The system is currently strongest only where all three overlap.
 
-## Appendix: File Reference Index
+### Goal 3: Are there clear integration points for Claude Code, Codex, or Google Antigravity?
 
-| File | Lines | Role in optimization |
-|------|-------|---------------------|
-| `optimizer/mutations.py` | 587 | Mutation surfaces, operators, registry factory |
-| `optimizer/proposer.py` | 319 | Mock + LLM proposal generation |
-| `optimizer/search.py` | ~800 | Multi-hypothesis search, bandit selection |
-| `optimizer/loop.py` | ~600+ | Optimization cycle orchestrator |
-| `core/types.py` | ~250 | Agent graph IR (nodes, edges, versions) |
-| `core/guardrails.py` | ~130 | Guardrail primitives |
-| `core/guardrail_library.py` | large | Pre-built guardrail implementations |
-| `core/handoff.py` | — | Handoff schema |
-| `mcp_server/tools.py` | ~820 | MCP tool implementations + registry |
-| `mcp_server/server.py` | ~165 | MCP protocol handler |
-| `mcp_server/resources.py` | — | MCP resource provider |
-| `agent/config/base_config.yaml` | — | Agent config template |
-| `adk/callbacks.py` | — | Callback lifecycle hooks |
-| `adk/parser.py` | — | ADK agent JSON parser |
-| `multi_agent/patterns.py` | — | Multi-agent topology patterns |
+Yes on the **read/evidence** side.
+
+Partially on the **writeback** side.
+
+The repo already exposes enough evidence for an external coding agent to inspect:
+
+- traces
+- trace grades
+- blame clusters
+- context analysis
+- diagnosis sessions
+- optimization history
+- ADK import/export previews
+- external runtime connect/import
+- MCP resources and helper tools
+
+But the repo does **not** yet provide a first-class, component-aware contract for:
+
+- enumerating the canonical optimization surfaces
+- binding eval/trace evidence to those exact components
+- letting an external coding agent propose a typed patch bundle against those components
+- validating that bundle against schema, evals, and round-trip writeback rules
+
+### Goal 4: Strongest implementation direction
+
+Introduce a **component-aware canonical representation** and make everything else adapt to it.
+
+Do **not** keep growing the current system by:
+
+- adding more one-off optimizer operators without canonical config support
+- adding more UI tabs without backend component contracts
+- adding more framework-specific import/export logic that bypasses a shared representation
+
+## Current Integration Map For External Coding Agents
+
+### Read / inspect seams
+
+| Seam | What an external coding agent can read today | Current quality |
+|---|---|---|
+| REST: `/api/traces/*` | recent traces, trace search, error traces, trace grades, trace graph, trace promotion | Strong |
+| REST: `/api/context/*` | context analysis and simulation | Medium |
+| REST: `/api/diagnose*` | clustered diagnosis and conversational diagnose workflow | Medium |
+| REST: `/api/optimize/history` | recent optimization attempts and significance stats | Medium |
+| REST: `/api/optimize/surfaces` | structured component/surface coverage inventory, including support tiers and live path flags | New, strong as a starting seam |
+| REST: `/api/adk/*` | ADK import, export, diff preview, status, deploy | Strong for file-based ADK workflows |
+| REST: `/api/connect/*` | import OpenAI Agents, Anthropic, HTTP, or transcript runtimes into a workspace | Strong for ingest, not yet full fidelity |
+| MCP resources | configs, traces, evals, skills, dataset stats | Good read-only entrypoint |
+| MCP tools | status, explain, diagnose, edit, eval, eval_compare, scaffold_agent, generate_evals | Useful helpers, but not component-aware |
+
+### Write / actuation seams
+
+| Seam | What it can do | Current quality |
+|---|---|---|
+| `/api/optimize/run` | run the built-in loop | Strong for current narrow surfaces |
+| `/api/autofix/*` | generate, apply, reject heuristic proposals | Medium |
+| `/api/adk/export` | write optimized changes back to ADK snapshot/output | Medium, narrow surface coverage |
+| `/api/reviews/*` | request and submit review decisions | Medium |
+| MCP `agentlab_edit` / `agentlab_suggest_fix` | NL-driven config suggestions | Medium-low, narrow surfaces |
+
+### What is still missing for external coding agents
+
+1. A stable **component graph** endpoint, not just configs and traces.
+2. A stable **evidence-to-component map**.
+3. A **typed patch bundle** contract for external agents.
+4. A **round-trip validator** that confirms whether a proposed change survives canonical config validation and framework export.
+5. A component-aware review object that combines:
+   - touched components
+   - evidence references
+   - risk
+   - eval deltas
+   - writeback feasibility
+
+## Proposed Target Architecture
+
+### Design goals
+
+- One canonical representation of the agent that is richer than today’s `AgentConfig`
+- Framework adapters that map into and out of that canonical representation
+- Evidence linked to components, not only to free-form failure buckets
+- One reviewable patch contract usable by internal optimizer logic and external coding agents
+
+### Non-goals
+
+- Do not make raw AST mutation the primary control plane
+- Do not add a separate studio-only component model
+- Do not replace the current eval, trace, or deploy subsystems
+
+### Options considered
+
+| Option | Description | Pros | Cons |
+|---|---|---|---|
+| A. Keep extending `AgentConfig` ad hoc | Add missing fields directly to the current schema | Fastest local changes | Grows a leaky config object with inconsistent framework mapping and no clear component graph |
+| B. Add a canonical `AgentComponentGraph` / `AgentIR` above `AgentConfig` | Represent instructions, tools, callbacks, policies, handoffs, routing, memory, and topology as typed components | Strongest long-term design, clear external-agent seam, preserves framework adapters | More upfront design work |
+| C. Skip canonical IR and mutate framework code directly | Push optimization into ADK/OpenAI/Anthropic code patchers | High theoretical fidelity | High risk, hard to reason about, fragmented, difficult for eval/deploy/review workflows |
+
+### Recommendation
+
+Choose **Option B: canonical component-aware IR**.
+
+Why:
+
+- It matches the repo’s actual breadth: ADK, connect adapters, MCP, studio, trace grading, and review workflows all want richer components than `AgentConfig` can currently express.
+- It allows the current loop to stay intact while gradually moving mutation planning and review onto a better substrate.
+- It gives Claude Code, Codex, and Antigravity a stable contract that is not tied to one framework’s source layout.
+
+### Recommended architecture
+
+#### 1. Canonical component graph
+
+Introduce a typed representation with component kinds such as:
+
+- `instruction_block`
+- `few_shot_set`
+- `tool_runtime_config`
+- `tool_description`
+- `tool_contract`
+- `callback_hook`
+- `policy_guardrail`
+- `routing_rule`
+- `handoff_schema`
+- `memory_policy`
+- `context_policy`
+- `generation_settings`
+- `model_binding`
+- `sub_agent`
+- `workflow_edge`
+
+Each component should carry:
+
+- stable `component_id`
+- `kind`
+- source of truth
+- canonical payload
+- framework mapping metadata
+- writeback support level
+
+#### 2. Evidence linker
+
+Map traces, blame clusters, eval failures, and diagnose output onto component IDs.
+
+That turns today’s generic failure clustering into component-aware opportunities:
+
+- this routing edge is failing
+- this callback blocks correct tool use
+- this handoff artifact drops key fields
+- this policy causes false-positive refusals
+
+#### 3. Mutation planner
+
+Replace today’s operator selection logic with planners that target component kinds explicitly.
+
+A mutation proposal should say:
+
+- touched component IDs
+- touched component kinds
+- planned patch
+- risk class
+- required eval slices
+- writeback feasibility
+- human review requirements
+
+#### 4. Adapters
+
+Framework-specific adapters should only do translation:
+
+- ADK import/export
+- OpenAI Agents import/export
+- Anthropic runtime import/export
+- connected-runtime import
+
+The optimizer should operate on the canonical graph, not on framework-specific structures.
+
+#### 5. External coding-agent contract
+
+Add a first-class API/MCP contract that lets an external coding agent:
+
+- fetch the component graph
+- fetch evidence linked to components
+- fetch current coverage gaps
+- submit a patch bundle
+- request eval preview
+- receive round-trip/writeback diagnostics
+
+## Prioritized Implementation Plan
+
+### MVP
+
+1. Make surface coverage explicit everywhere.
+   - Done in scaffold form with `optimizer/surface_inventory.py` and `GET /api/optimize/surfaces`.
+   - Next step: expose the same inventory through MCP resources/tools and the studio inspector.
+
+2. Normalize the canonical config for already-declared surfaces.
+   - Add first-class schema support for:
+     - few-shot examples
+     - generation settings
+     - callbacks
+     - policies / guardrails
+     - handoff schemas
+     - tool contracts
+   - If that feels too large for one pass, introduce a small `AgentIR` alongside `AgentConfig` and start migrating there.
+
+3. Align import/export naming and round-trip behavior.
+   - Resolve `generation` vs `generation_settings` vs `generate_config`.
+   - Preserve imported tool descriptions instead of dropping them at validation.
+   - Make routing export either real or clearly unsupported.
+
+4. Turn component coverage into a supported backend artifact.
+   - Keep one source of truth for surface inventory, component kinds, and writeback support.
+
+### P1
+
+1. Build the canonical component graph.
+2. Link opportunities and trace evidence to component IDs.
+3. Replace failure-family-only operator selection with component-aware planning.
+4. Introduce typed patch bundles and review cards.
+5. Add an external-agent patch/eval/review API.
+
+### Later
+
+1. Safe topology optimization for sub-agents and workflow edges.
+2. Richer callback and memory-hook optimization.
+3. Cross-runtime patch export beyond ADK.
+4. Multi-agent system optimization with first-class handoff contracts and topology constraints.
+
+## Merge Recommendations For Ongoing Studio Work
+
+### 1. Use the new surface inventory as the backend truth source
+
+Do not let the studio invent its own notion of “components supported by optimization.”
+
+Instead:
+
+- feed `GET /api/optimize/surfaces` into the builder/inspector and improvement surfaces
+- let the UI render:
+  - supported surfaces
+  - partial surfaces
+  - nominal / none surfaces
+  - writeback gaps
+
+### 2. Upgrade `CodingAgentConfigTab` into a real component coverage pane
+
+Today it renders only `AGENTS.md` and `CLAUDE.md` text.
+
+It should become the place where studio users and coding agents can see:
+
+- workspace instructions
+- optimization surface coverage
+- framework import/export fidelity
+- missing canonical support
+- writeback status
+
+### 3. Reuse the same backend model in `AgentStudio`
+
+`AgentStudio` already frames changes as prompt, policy, routing, and handoff edits.
+That is the right product direction, but it is currently largely draft/scaffold logic.
+
+Do not build a separate studio-only draft representation.
+
+Instead:
+
+- make `AgentStudio` generate typed component patch bundles
+- run those bundles through the same review/eval/writeback pipeline as optimize/autofix
+
+### 4. Merge Improvements and Studio around one review object
+
+The `Improvements` workflow already has the right high-level stages:
+
+- opportunities
+- experiments
+- review
+- history
+
+The merge should happen around a shared review object that carries:
+
+- touched component IDs
+- evidence refs
+- diff
+- eval deltas
+- governance notes
+- export/writeback readiness
+
+### 5. Treat traces and context as first-class inputs to studio authoring
+
+The studio should not only author changes. It should also show:
+
+- which traces support the change
+- which graders blame the touched component
+- whether the component is even canonical/writeback-safe today
+
+That keeps the studio grounded in the same operational truth as the optimize loop.
+
+## Small Improvement Added In This Workstream
+
+To support this direction without risky churn, this audit adds:
+
+- `optimizer/surface_inventory.py`
+- `GET /api/optimize/surfaces`
+- focused tests in `tests/test_optimize_surface_inventory.py`
+
+The inventory payload now includes:
+
+- per-surface `support_level`
+- explicit `optimization_paths`
+- explicit `representation_paths`
+- summary counts by support tier
+
+This is intentionally small, but it creates a real seam for:
+
+- studio UI integration
+- external coding-agent inspection
+- future MCP exposure
+- audit automation
+
+## Strongest Critique Of Current Coverage
+
+The current system **looks** broader than it really is because the repo contains:
+
+- broad mutation enums
+- rich ADK/runtime primitives
+- strong observability
+- studio/builder scaffolding
+
+But the actual end-to-end optimization contract is still mostly a **prompt-and-basic-config tuner** wrapped in a much larger platform shell.
+
+Until the repo has a canonical component-aware representation that connects:
+
+- evidence
+- mutation planning
+- schema validation
+- framework writeback
+- review
+
+it will continue to overstate its optimization coverage relative to what it can actually improve safely and durably.

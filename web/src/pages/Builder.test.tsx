@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Builder } from './Builder';
 
@@ -78,10 +79,19 @@ function buildSessionPayload(overrides: Record<string, unknown> = {}) {
 }
 
 function renderPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
   return render(
-    <MemoryRouter initialEntries={['/build']}>
-      <Builder />
-    </MemoryRouter>
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={['/build']}>
+        <Builder />
+      </MemoryRouter>
+    </QueryClientProvider>
   );
 }
 
@@ -100,13 +110,13 @@ describe('Builder', () => {
     );
   });
 
-  it('renders the single-screen builder layout', () => {
+  it('renders the builder-chat workspace layout', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Builder' })).toBeInTheDocument();
     expect(screen.getByText('Describe the agent you want to build')).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Live Config' })).toBeInTheDocument();
-    expect(screen.getByText('Download Config')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
   });
 
   it('sends a prompt and updates the chat and preview', async () => {
@@ -135,7 +145,7 @@ describe('Builder', () => {
     expect(screen.getByText('2 routes')).toBeInTheDocument();
   });
 
-  it('runs eval generation from the preview action', async () => {
+  it('saves the current draft before continuing to eval', async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce({
@@ -144,16 +154,27 @@ describe('Builder', () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () =>
-          buildSessionPayload({
-            evals: {
-              case_count: 4,
-              scenarios: [
-                { name: 'routing', description: 'Route correctly.' },
-                { name: 'safety', description: 'Protect internal codes.' },
-              ],
-            },
-          }),
+        json: async () => ({
+          agent: {
+            id: 'agent-v002',
+            name: 'Airline Customer Support Agent',
+            model: 'gpt-4o',
+            created_at: '2026-04-01T12:00:00.000Z',
+            source: 'built',
+            config_path: '/workspace/agents/airline.yaml',
+            status: 'ready',
+            config: buildSessionPayload().config,
+          },
+          save_result: {
+            artifact_id: 'artifact-123',
+            config_path: '/workspace/agents/airline.yaml',
+            config_version: 2,
+            eval_cases_path: '/workspace/evals/airline.yaml',
+            runtime_config_path: '/workspace/runtime/airline.yaml',
+            workspace_path: '/workspace',
+            actual_config_yaml: 'agent_name: Airline Customer Support Agent',
+          },
+        }),
       });
 
     renderPage();
@@ -169,14 +190,13 @@ describe('Builder', () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
-        '/api/builder/chat',
+        '/api/agents',
         expect.objectContaining({ method: 'POST' })
       );
     });
-    expect(await screen.findByText('4 draft evals')).toBeInTheDocument();
   });
 
-  it('exports the current config from the preview action', async () => {
+  it('exports the current config from the modal config view', async () => {
     const user = userEvent.setup();
     fetchMock
       .mockResolvedValueOnce({
@@ -201,7 +221,9 @@ describe('Builder', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect((await screen.findAllByText(/Airline Customer Support Agent/i)).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('button', { name: 'Download Config' }));
+    await user.click(screen.getByRole('button', { name: 'View Config' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Agent Configuration' });
+    await user.click(within(dialog).getByRole('button', { name: 'Download Draft' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(

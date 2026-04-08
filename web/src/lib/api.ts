@@ -1141,7 +1141,7 @@ export function useSaveAgent() {
       source: 'built' | 'imported' | 'connected';
       build_source?: 'prompt' | 'transcript' | 'builder_chat';
       name?: string;
-      config?: Record<string, unknown>;
+      config?: object;
       session_id?: string;
       config_path?: string;
       prompt_used?: string;

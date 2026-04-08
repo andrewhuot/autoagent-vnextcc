@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { IntelligenceStudio } from './IntelligenceStudio';
 
@@ -14,6 +14,7 @@ const fetchMock = vi.fn();
 
 function buildGeneratedConfig(createdFrom: 'prompt' | 'transcript') {
   return {
+    model: 'gpt-5.4',
     system_prompt:
       'You are an order operations assistant.\nVerify identity before any order change.\nEscalate when the user requests a human.',
     tools: [
@@ -174,7 +175,7 @@ describe('IntelligenceStudio', () => {
     });
   });
 
-  it('defaults to prompt mode and switches into a YAML-first refinement workspace after generation', async () => {
+  it('defaults to prompt mode and switches into the test-first refinement workspace after generation', async () => {
     const user = userEvent.setup();
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -196,11 +197,17 @@ describe('IntelligenceStudio', () => {
     await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
 
     expect(await screen.findByRole('heading', { name: 'Conversational Refinement' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Live YAML Config' })).toBeInTheDocument();
-    expect(screen.getByTestId('yaml-preview')).toHaveTextContent('system_prompt:');
+    expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Generate Evals' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Run Eval' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'View Config' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Agent Configuration' });
+    expect(within(dialog).getByTestId('yaml-preview')).toHaveTextContent('system_prompt:');
+    expect(within(dialog).getByRole('button', { name: 'Copy YAML' })).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Download Draft' })).toBeInTheDocument();
   });
 
   it('accepts transcript JSON uploads, shows extracted insights, and generates an agent from them', async () => {
@@ -244,7 +251,9 @@ describe('IntelligenceStudio', () => {
 
     await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
 
-    expect(await screen.findByRole('heading', { name: 'Live YAML Config' })).toBeInTheDocument();
-    expect(screen.getByTestId('yaml-preview')).toHaveTextContent('created_from: transcript');
+    expect(await screen.findByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'View Config' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Agent Configuration' });
+    expect(within(dialog).getByTestId('yaml-preview')).toHaveTextContent('created_from: transcript');
   });
 });
