@@ -180,7 +180,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/compare': { title: 'Compare', breadcrumbs: ['Eval'] },
   '/studio': { title: 'Optimize Studio', breadcrumbs: ['Optimize'] },
   '/optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
-  '/live-optimize': { title: 'Optimize', breadcrumbs: ['Optimize'] },
+  '/live-optimize': { title: 'Live Optimize', breadcrumbs: ['Optimize'] },
   '/improvements': { title: 'Improvements', breadcrumbs: ['Review'] },
   '/experiments': {
     title: 'Improvements',

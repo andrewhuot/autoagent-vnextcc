@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 import { MockModeBanner } from './MockModeBanner';
 
@@ -37,6 +38,66 @@ describe('MockModeBanner', () => {
 
     const exitLink = screen.getByRole('link', { name: 'Exit Mock Mode' });
     expect(exitLink).toHaveAttribute('href', '/setup');
+  });
+
+  it('shows dismiss button only when real_provider_configured is true', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['Mock mode explicitly enabled by optimizer.use_mock.'],
+          real_provider_configured: true,
+        }),
+      })
+    );
+
+    renderBanner();
+
+    const dismissButton = await screen.findByRole('button', { name: 'Dismiss mock mode warning' });
+    expect(dismissButton).toBeInTheDocument();
+  });
+
+  it('does not show dismiss button when real_provider_configured is false', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['Mock mode explicitly enabled by optimizer.use_mock.'],
+          real_provider_configured: false,
+        }),
+      })
+    );
+
+    renderBanner();
+
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: 'Dismiss mock mode warning' })).not.toBeInTheDocument();
+  });
+
+  it('hides the banner when dismiss is clicked', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: [],
+          real_provider_configured: true,
+        }),
+      })
+    );
+
+    const user = userEvent.setup();
+    renderBanner();
+
+    const dismissButton = await screen.findByRole('button', { name: 'Dismiss mock mode warning' });
+    await user.click(dismissButton);
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('does not render when the health endpoint reports live mode', async () => {

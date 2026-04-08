@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 const BASE_URL = 'http://localhost:5173';
 
 const pages = [
-  { name: 'Dashboard', path: '/' },
+  { name: 'Dashboard', path: '/dashboard' },
   { name: 'EvalRuns', path: '/evals' },
   { name: 'Optimize', path: '/optimize' },
   { name: 'Configs', path: '/configs' },
@@ -64,7 +64,7 @@ test.describe('Visual QA - Special States', () => {
 
   test('Mobile viewport', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(BASE_URL, { waitUntil: 'networkidle' });
+    await page.goto(`${BASE_URL}/dashboard`, { waitUntil: 'networkidle' });
     await page.waitForTimeout(300);
     await page.screenshot({
       path: 'screenshots/Mobile-Dashboard.png',

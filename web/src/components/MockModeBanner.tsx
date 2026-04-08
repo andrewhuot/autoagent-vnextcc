@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 
 const BANNER_COPY = 'Running in mock mode — add API keys for live optimization';
 const OPTIMIZATION_ROUTE_PREFIXES = ['/dashboard', '/evals', '/optimize', '/live-optimize', '/improvements'];
+const DISMISS_STORAGE_KEY = 'agentlab-mock-banner-dismissed';
 
 interface MockModeHealthPayload {
   mock_mode?: boolean;
@@ -15,9 +16,19 @@ function isOptimizationRoute(pathname: string): boolean {
   return OPTIMIZATION_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
+function isDismissed(): boolean {
+  try {
+    return window.localStorage.getItem(DISMISS_STORAGE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
 export function MockModeBanner() {
   const location = useLocation();
   const [mockMode, setMockMode] = useState(false);
+  const [realProviderConfigured, setRealProviderConfigured] = useState(false);
+  const [dismissed, setDismissed] = useState(isDismissed);
   const [detail, setDetail] = useState<string | null>(null);
   const [refreshToken, setRefreshToken] = useState(0);
 
@@ -53,11 +64,13 @@ export function MockModeBanner() {
           : [];
 
         setMockMode(data?.mock_mode === true || reasons.length > 0);
+        setRealProviderConfigured(data?.real_provider_configured === true);
         setDetail(reasons.find((value) => value !== BANNER_COPY) ?? null);
       })
       .catch(() => {
         if (!cancelled) {
           setMockMode(false);
+          setRealProviderConfigured(false);
           setDetail(null);
         }
       });
@@ -67,7 +80,16 @@ export function MockModeBanner() {
     };
   }, [refreshToken, shouldRenderOnRoute]);
 
-  if (!shouldRenderOnRoute || !mockMode) {
+  const handleDismiss = useCallback(() => {
+    setDismissed(true);
+    try {
+      window.localStorage.setItem(DISMISS_STORAGE_KEY, '1');
+    } catch {
+      // ignore storage access failures
+    }
+  }, []);
+
+  if (!shouldRenderOnRoute || !mockMode || dismissed) {
     return null;
   }
 
@@ -86,12 +108,24 @@ export function MockModeBanner() {
         </div>
       </div>
 
-      <Link
-        to="/setup"
-        className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
-      >
-        Exit Mock Mode
-      </Link>
+      <div className="flex shrink-0 items-center gap-2">
+        <Link
+          to="/setup"
+          className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+        >
+          Exit Mock Mode
+        </Link>
+        {realProviderConfigured ? (
+          <button
+            type="button"
+            aria-label="Dismiss mock mode warning"
+            onClick={handleDismiss}
+            className="rounded-md p-1.5 text-amber-700 transition hover:bg-amber-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

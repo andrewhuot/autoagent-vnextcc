@@ -52,7 +52,7 @@ describe('navigation schema', () => {
     expect(getRouteTitle('/build')).toBe('Build');
     expect(getRouteTitle('/intelligence')).toBe('Build');
     expect(getRouteTitle('/optimize')).toBe('Optimize');
-    expect(getRouteTitle('/live-optimize')).toBe('Optimize');
+    expect(getRouteTitle('/live-optimize')).toBe('Live Optimize');
     expect(getRouteTitle('/improvements')).toBe('Improvements');
   });
 
