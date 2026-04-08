@@ -558,6 +558,11 @@ export function BuilderChatWorkspace({
             {session?.mock_mode && session.mock_reason ? (
               <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
             ) : null}
+            {session?.mock_mode ? (
+              <p className="mt-2 text-xs text-amber-800" data-testid="builder-preview-notice">
+                Responses are simulated in preview mode. Configure API keys in Setup for live results.
+              </p>
+            ) : null}
           </div>
 
           <div
