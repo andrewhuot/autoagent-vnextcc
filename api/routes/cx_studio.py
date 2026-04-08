@@ -69,13 +69,47 @@ class CxDiffRequest(CxAgentRefPayload):
 class CxSyncRequest(CxDiffRequest):
     conflict_strategy: str = "detect"
 
+class CxPreflightRequest(BaseModel):
+    config: dict
+    export_matrix: dict | None = None
+
+
+class CxPreflightResponse(BaseModel):
+    passed: bool
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    safe_surfaces: list[str] = Field(default_factory=list)
+    lossy_surfaces: list[str] = Field(default_factory=list)
+    blocked_surfaces: list[str] = Field(default_factory=list)
+
+
 class CxDeployRequest(CxAgentRefPayload):
     environment: str = "production"
+    strategy: str = "immediate"
+    traffic_pct: int = 100
+
 
 class CxDeployResponse(BaseModel):
     environment: str
     status: str
     version_info: dict = Field(default_factory=dict)
+    phase: str = ""
+    canary: dict = Field(default_factory=dict)
+
+
+class CxPromoteRequest(CxAgentRefPayload):
+    canary: dict
+
+
+class CxRollbackRequest(CxAgentRefPayload):
+    canary: dict
+
+
+class CxDeployStatusResponse(BaseModel):
+    app: str = ""
+    agent: str = ""
+    deployments: list[dict] = Field(default_factory=list)
+    canary: dict = Field(default_factory=dict)
 
 class CxWidgetRequest(BaseModel):
     project_id: str
@@ -246,9 +280,40 @@ async def sync_cx_agent(body: CxSyncRequest) -> CxExportResponse:
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@router.post("/preflight", response_model=CxPreflightResponse)
+async def preflight_cx(body: CxPreflightRequest) -> CxPreflightResponse:
+    """Run preflight validation before export or deploy."""
+    from cx_studio import CxDeployer, CxAuth, CxClient
+
+    auth = CxAuth.__new__(CxAuth)
+    auth._token = None
+    auth._token_expiry = 0.0
+    auth._project_id = None
+    auth._credentials_path = None
+    client = CxClient.__new__(CxClient)
+    client._auth = auth
+    client._timeout = 30.0
+    client._max_retries = 3
+    deployer = CxDeployer(client)
+    result = deployer.run_preflight(body.config, body.export_matrix)
+    return CxPreflightResponse(
+        passed=result.passed,
+        errors=result.errors,
+        warnings=result.warnings,
+        safe_surfaces=result.safe_surfaces,
+        lossy_surfaces=result.lossy_surfaces,
+        blocked_surfaces=result.blocked_surfaces,
+    )
+
+
 @router.post("/deploy", response_model=CxDeployResponse)
 async def deploy_cx_agent(body: CxDeployRequest) -> CxDeployResponse:
-    """Deploy agent to a CX environment."""
+    """Deploy agent to a CX environment.
+
+    Supports two strategies:
+    - ``immediate``: full deploy to the environment (default)
+    - ``canary``: deploy to a canary slice with ``traffic_pct`` traffic
+    """
     from cx_studio import CxAuth, CxClient, CxDeployer
     from cx_studio.types import CxAgentRef
     try:
@@ -256,11 +321,71 @@ async def deploy_cx_agent(body: CxDeployRequest) -> CxDeployResponse:
         client = CxClient(auth)
         deployer = CxDeployer(client)
         ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+
+        if body.strategy == "canary":
+            result, canary = deployer.deploy_canary(
+                ref, body.environment, body.traffic_pct,
+            )
+            return CxDeployResponse(
+                environment=result.environment,
+                status=result.status,
+                version_info=result.version_info,
+                phase=canary.phase.value,
+                canary=canary.model_dump(),
+            )
+
         result = deployer.deploy_to_environment(ref, body.environment)
         return CxDeployResponse(
             environment=result.environment,
             status=result.status,
             version_info=result.version_info,
+            phase="promoted",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/promote", response_model=CxDeployResponse)
+async def promote_cx_canary(body: CxPromoteRequest) -> CxDeployResponse:
+    """Promote a canary deployment to full traffic."""
+    from cx_studio import CxAuth, CxClient, CxDeployer
+    from cx_studio.types import CanaryState, CxAgentRef
+    try:
+        auth = CxAuth(credentials_path=body.credentials_path)
+        client = CxClient(auth)
+        deployer = CxDeployer(client)
+        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        canary = CanaryState.model_validate(body.canary)
+        result, updated_canary = deployer.promote_canary(ref, canary)
+        return CxDeployResponse(
+            environment=result.environment,
+            status=result.status,
+            version_info=result.version_info,
+            phase=updated_canary.phase.value,
+            canary=updated_canary.model_dump(),
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+
+@router.post("/rollback", response_model=CxDeployResponse)
+async def rollback_cx_deploy(body: CxRollbackRequest) -> CxDeployResponse:
+    """Rollback a canary or promoted deployment."""
+    from cx_studio import CxAuth, CxClient, CxDeployer
+    from cx_studio.types import CanaryState, CxAgentRef
+    try:
+        auth = CxAuth(credentials_path=body.credentials_path)
+        client = CxClient(auth)
+        deployer = CxDeployer(client)
+        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        canary = CanaryState.model_validate(body.canary)
+        result, updated_canary = deployer.rollback(ref, canary)
+        return CxDeployResponse(
+            environment=result.environment,
+            status=result.status,
+            version_info=result.version_info,
+            phase=updated_canary.phase.value,
+            canary=updated_canary.model_dump(),
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -294,14 +419,14 @@ async def generate_cx_widget(body: CxWidgetRequest) -> CxWidgetResponse:
     return CxWidgetResponse(html=html)
 
 
-@router.get("/status")
+@router.get("/status", response_model=CxDeployStatusResponse)
 async def get_cx_status(
     project: str,
     location: str = "global",
     agent_id: str = "",
     credentials_path: str | None = None,
-) -> dict[str, Any]:
-    """Get CX agent deployment status."""
+) -> CxDeployStatusResponse:
+    """Get CX agent deployment status with environment versions."""
     if not agent_id:
         raise HTTPException(status_code=400, detail="agent_id is required")
     from cx_studio import CxAuth, CxClient, CxDeployer
@@ -311,7 +436,12 @@ async def get_cx_status(
         client = CxClient(auth)
         deployer = CxDeployer(client)
         ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
-        return deployer.get_deploy_status(ref)
+        status = deployer.get_deploy_status(ref)
+        return CxDeployStatusResponse(
+            app=status.get("app", ""),
+            agent=status.get("agent", ""),
+            deployments=status.get("deployments", []),
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
 

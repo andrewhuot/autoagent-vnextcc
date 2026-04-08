@@ -37,9 +37,12 @@ import type {
   ConversationTurn,
   CxAuthResult,
   CxAgentSummary,
+  CxCanaryState,
   CxImportResult,
   CxExportResult,
   CxDeployResult,
+  CxDeployStatusResult,
+  CxPreflightResult,
   CxWidgetResult,
   CurriculumBatchSummary,
   CurriculumDifficultyPoint,
@@ -2846,15 +2849,61 @@ export function useCxSync() {
   });
 }
 
+export function useCxPreflight() {
+  return useMutation<CxPreflightResult, ApiRequestError, {
+    config: Record<string, unknown>;
+    export_matrix?: Record<string, unknown> | null;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/preflight', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
 export function useCxDeploy() {
   return useMutation<CxDeployResult, ApiRequestError, {
     project: string;
     location: string;
     agent_id: string;
     environment?: string;
+    strategy?: string;
+    traffic_pct?: number;
     credentials_path?: string;
   }>({
     mutationFn: (body) => fetchApi('/cx/deploy', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxPromote() {
+  return useMutation<CxDeployResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    canary: CxCanaryState;
+    credentials_path?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/promote', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxRollback() {
+  return useMutation<CxDeployResult, ApiRequestError, {
+    project: string;
+    location: string;
+    agent_id: string;
+    canary: CxCanaryState;
+    credentials_path?: string;
+  }>({
+    mutationFn: (body) => fetchApi('/cx/rollback', { method: 'POST', body: JSON.stringify(body) }),
+  });
+}
+
+export function useCxDeployStatus(project: string, location: string, agentId: string) {
+  return useQuery<CxDeployStatusResult>({
+    queryKey: ['cx-deploy-status', project, location, agentId],
+    queryFn: () => {
+      const params = new URLSearchParams({ project, location, agent_id: agentId });
+      return fetchApi<CxDeployStatusResult>(`/cx/status?${params}`);
+    },
+    enabled: !!project && !!agentId,
   });
 }
 

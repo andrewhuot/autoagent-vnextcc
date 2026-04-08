@@ -322,6 +322,48 @@ class CxTransferRule(BaseModel):
     description: str = ""
 
 
+class DeployPhase(str, Enum):
+    """Phase in the CX deploy lifecycle."""
+
+    PREFLIGHT = "preflight"
+    CANARY = "canary"
+    PROMOTED = "promoted"
+    ROLLED_BACK = "rolled_back"
+    FAILED = "failed"
+
+
+class ChangeSafety(str, Enum):
+    """Safety classification for an individual export change."""
+
+    SAFE = "safe"
+    LOSSY = "lossy"
+    BLOCKED = "blocked"
+
+
+class PreflightResult(BaseModel):
+    """Result of pre-deploy validation."""
+
+    passed: bool = False
+    errors: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    blocked_surfaces: list[str] = Field(default_factory=list)
+    safe_surfaces: list[str] = Field(default_factory=list)
+    lossy_surfaces: list[str] = Field(default_factory=list)
+
+
+class CanaryState(BaseModel):
+    """Current canary deployment state for a CX agent."""
+
+    phase: DeployPhase = DeployPhase.PREFLIGHT
+    traffic_pct: int = 0
+    deployed_version: str = ""
+    previous_version: str = ""
+    environment: str = ""
+    promoted_at: str = ""
+    rolled_back_at: str = ""
+    deploy_metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class CxDeployment(BaseModel):
     """Deployment configuration for a specific target channel."""
 

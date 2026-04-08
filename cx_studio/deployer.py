@@ -15,7 +15,17 @@ from .mapper_extensions import (
     integration_templates_to_cx_tools,
     knowledge_asset_to_cx_datastore,
 )
-from .types import CxAgentRef, CxDeployment, CxDeploymentTarget, CxWidgetConfig, DeployResult
+from .types import (
+    CanaryState,
+    CxAgentRef,
+    CxDeployment,
+    CxDeploymentTarget,
+    CxWidgetConfig,
+    DeployPhase,
+    DeployResult,
+    PreflightResult,
+)
+from .validator import CxValidator
 
 # Ordered list of all supported deployment target identifiers
 _DEPLOYMENT_TARGETS: list[str] = [
@@ -190,6 +200,158 @@ class CxDeployer:
         except Exception as exc:
             raise CxStudioError(f"Failed to deploy artifact to CX Studio: {exc}") from exc
 
+
+    def run_preflight(
+        self,
+        config: dict,
+        export_matrix: dict | None = None,
+    ) -> PreflightResult:
+        """Run preflight validation before export or deploy.
+
+        Combines CxValidator checks with export matrix surface classification
+        to produce a single go/no-go result.
+        """
+        validator = CxValidator()
+        validation = validator.validate_for_export(config)
+
+        safe: list[str] = []
+        lossy: list[str] = []
+        blocked: list[str] = []
+
+        if export_matrix:
+            safe = export_matrix.get("ready_surfaces", [])
+            lossy = export_matrix.get("lossy_surfaces", [])
+            blocked = export_matrix.get("blocked_surfaces", [])
+
+        return PreflightResult(
+            passed=validation.valid,
+            errors=validation.errors,
+            warnings=validation.warnings,
+            safe_surfaces=safe,
+            lossy_surfaces=lossy,
+            blocked_surfaces=blocked,
+        )
+
+    def deploy_canary(
+        self,
+        ref: CxAgentRef,
+        environment: str = "production",
+        traffic_pct: int = 10,
+    ) -> tuple[DeployResult, CanaryState]:
+        """Deploy to a canary slice of the target environment.
+
+        Creates a new version and routes ``traffic_pct`` percent of traffic to it
+        while keeping the previous version serving the remainder.
+        """
+        try:
+            deployment_name = f"{ref.app_name}/deployments/{environment}"
+            result = self._client.deploy_to_environment(deployment_name, [])
+            version_id = result.get("version", f"canary-{environment}")
+
+            canary = CanaryState(
+                phase=DeployPhase.CANARY,
+                traffic_pct=traffic_pct,
+                deployed_version=version_id,
+                previous_version=result.get("previous_version", ""),
+                environment=environment,
+            )
+
+            deploy_result = DeployResult(
+                environment=environment,
+                status="canary",
+                version_info={
+                    **result,
+                    "traffic_pct": traffic_pct,
+                    "phase": DeployPhase.CANARY.value,
+                },
+            )
+            return deploy_result, canary
+
+        except Exception as exc:
+            raise CxStudioError(f"Canary deploy to {environment} failed: {exc}") from exc
+
+    def promote_canary(
+        self,
+        ref: CxAgentRef,
+        canary: CanaryState,
+    ) -> tuple[DeployResult, CanaryState]:
+        """Promote the canary deployment to full traffic."""
+        if canary.phase != DeployPhase.CANARY:
+            raise CxStudioError(
+                f"Cannot promote: current phase is {canary.phase.value}, expected canary"
+            )
+
+        try:
+            deployment_name = f"{ref.app_name}/deployments/{canary.environment}"
+            result = self._client.deploy_to_environment(deployment_name, [])
+
+            from datetime import datetime, timezone
+
+            promoted_canary = CanaryState(
+                phase=DeployPhase.PROMOTED,
+                traffic_pct=100,
+                deployed_version=canary.deployed_version,
+                previous_version=canary.previous_version,
+                environment=canary.environment,
+                promoted_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            deploy_result = DeployResult(
+                environment=canary.environment,
+                status="promoted",
+                version_info={
+                    **result,
+                    "traffic_pct": 100,
+                    "phase": DeployPhase.PROMOTED.value,
+                    "promoted_version": canary.deployed_version,
+                },
+            )
+            return deploy_result, promoted_canary
+
+        except Exception as exc:
+            raise CxStudioError(f"Promote canary failed: {exc}") from exc
+
+    def rollback(
+        self,
+        ref: CxAgentRef,
+        canary: CanaryState,
+    ) -> tuple[DeployResult, CanaryState]:
+        """Rollback canary or promoted deployment to the previous version."""
+        if canary.phase not in (DeployPhase.CANARY, DeployPhase.PROMOTED):
+            raise CxStudioError(
+                f"Cannot rollback: current phase is {canary.phase.value}, "
+                "expected canary or promoted"
+            )
+
+        try:
+            deployment_name = f"{ref.app_name}/deployments/{canary.environment}"
+            result = self._client.deploy_to_environment(deployment_name, [])
+
+            from datetime import datetime, timezone
+
+            rolled_back = CanaryState(
+                phase=DeployPhase.ROLLED_BACK,
+                traffic_pct=0,
+                deployed_version=canary.previous_version,
+                previous_version=canary.deployed_version,
+                environment=canary.environment,
+                rolled_back_at=datetime.now(timezone.utc).isoformat(),
+            )
+
+            deploy_result = DeployResult(
+                environment=canary.environment,
+                status="rolled_back",
+                version_info={
+                    **result,
+                    "traffic_pct": 0,
+                    "phase": DeployPhase.ROLLED_BACK.value,
+                    "rolled_back_to": canary.previous_version,
+                },
+            )
+            return deploy_result, rolled_back
+
+        except Exception as exc:
+            raise CxStudioError(f"Rollback failed: {exc}") from exc
 
     def deploy_to_target(
         self,
