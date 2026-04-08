@@ -46,6 +46,7 @@ import {
 } from '../lib/builder-chat-api';
 import { PageHeader } from '../components/PageHeader';
 import { useActiveAgent } from '../lib/active-agent';
+import { getBuildWorkspaceContext } from '../lib/navigation';
 import { toastError, toastSuccess } from '../lib/toast';
 import type {
   AgentLibraryItem,
@@ -224,6 +225,7 @@ export function Build() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [savedArtifacts, setSavedArtifacts] = useState<BuildArtifact[]>(loadStoredBuildArtifacts);
   const activeTab = parseBuildTab(searchParams.get('tab')) ?? 'prompt';
+  const workspaceHeader = getBuildWorkspaceContext(activeTab);
 
   useEffect(() => {
     try {
@@ -250,8 +252,8 @@ export function Build() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Build"
-        description="Prompt, transcript, builder chat, and saved artifacts in one workspace."
+        title={workspaceHeader.title}
+        description={workspaceHeader.description}
       />
 
       <BuildTabBar activeTab={activeTab} onChange={handleTabChange} />
@@ -315,6 +317,12 @@ export function BuilderChatWorkspace({
   const artifactCreatedAtRef = useRef<string | null>(null);
   const busy = pending || previewPending || savePending;
   const builderYamlPreview = session?.config ? builderConfigToYaml(session.config) : '';
+  const builderEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
+  const builderEvalHelperText = !session?.session_id
+    ? 'Create a draft first, then continue into Eval Runs.'
+    : savedAgent
+      ? 'Open Eval Runs with the saved draft already selected.'
+      : 'Saves the current draft before opening Eval Runs.';
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -782,9 +790,10 @@ export function BuilderChatWorkspace({
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Play className="h-4 w-4" />
-                Run Eval
+                {builderEvalLabel}
               </button>
             </div>
+            <p className="mt-2 text-xs text-gray-500">{builderEvalHelperText}</p>
           </div>
         </aside>
       </div>
@@ -871,6 +880,11 @@ export function StudioWorkspace({
   const transcriptIntents = transcriptReport ? buildIntentSummaries(transcriptReport) : [];
   const patternSignals = transcriptReport ? buildPatternSignals(transcriptReport) : [];
   const refinementBusy = refineMutation.isPending || previewPending || savePending;
+  const studioGenerateEvalLabel = savedAgent ? 'Generate Evals' : 'Save & Generate Evals';
+  const studioRunEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
+  const studioEvalHelperText = savedAgent
+    ? 'Use the saved draft to generate suites or jump straight into Eval Runs.'
+    : 'These actions save the current draft first so Eval Runs uses the exact config you just refined.';
 
   useEffect(() => {
     if (!agentConfig || previewComposer.trim()) {
@@ -1649,7 +1663,7 @@ export function StudioWorkspace({
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                 >
                   <Sparkles className="h-4 w-4" />
-                  Generate Evals
+                  {studioGenerateEvalLabel}
                 </button>
                 <button
                   type="button"
@@ -1657,9 +1671,10 @@ export function StudioWorkspace({
                   className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
                 >
                   <Play className="h-4 w-4" />
-                  Run Eval
+                  {studioRunEvalLabel}
                 </button>
               </div>
+              <p className="mt-2 text-xs text-gray-500">{studioEvalHelperText}</p>
             </div>
           )}
         </section>

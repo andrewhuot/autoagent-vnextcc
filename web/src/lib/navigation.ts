@@ -25,6 +25,11 @@ export interface RouteMetadata {
   redirectTo?: string;
 }
 
+export interface BuildWorkspaceContext {
+  title: string;
+  description: string;
+}
+
 export type SidebarMode = 'simple' | 'pro';
 
 export const SIDEBAR_MODE_STORAGE_KEY = 'agentlab-sidebar-mode';
@@ -232,6 +237,36 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   },
   '/settings': { title: 'Settings', breadcrumbs: ['Settings'] },
 };
+
+const DEFAULT_BUILD_WORKSPACE_CONTEXT: BuildWorkspaceContext = {
+  title: 'Build',
+  description: 'Start from a prompt, transcript, or builder chat and keep every draft and artifact in one workspace.',
+};
+
+export function getBuildWorkspaceContext(tab: string | null | undefined): BuildWorkspaceContext {
+  switch (tab) {
+    case 'transcript':
+      return {
+        title: 'Intelligence Studio',
+        description:
+          'Analyze transcripts, extract the patterns that matter, and turn them into a draft you can refine and evaluate.',
+      };
+    case 'builder-chat':
+      return {
+        title: 'Builder',
+        description:
+          'Describe the agent you want to build, preview the runtime behavior, and carry the saved draft straight into evals.',
+      };
+    case 'saved-artifacts':
+      return {
+        title: 'Saved Artifacts',
+        description:
+          'Return to saved drafts, transcript reports, and exports without leaving the build workspace.',
+      };
+    default:
+      return DEFAULT_BUILD_WORKSPACE_CONTEXT;
+  }
+}
 
 function normalizePathname(pathname: string): string {
   return pathname.split('?')[0]?.split('#')[0] ?? pathname;

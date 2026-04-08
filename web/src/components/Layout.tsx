@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { ToastViewport } from './ToastViewport';
 import { MockModeBanner } from './MockModeBanner';
-import { getBreadcrumbForPath, getRouteTitle } from '../lib/navigation';
+import { getBreadcrumbForPath, getBuildWorkspaceContext, getRouteTitle } from '../lib/navigation';
 import { wsClient } from '../lib/websocket';
 
 export interface BreadcrumbItem {
@@ -28,7 +28,7 @@ function toBreadcrumbItems(labels: string[]): BreadcrumbItem[] {
   });
 }
 
-export function getRouteContext(pathname: string): RouteContext {
+export function getRouteContext(pathname: string, search = ''): RouteContext {
   const normalizedPathname = pathname.split('?')[0]?.split('#')[0] ?? pathname;
 
   if (normalizedPathname.startsWith('/evals/')) {
@@ -40,6 +40,14 @@ export function getRouteContext(pathname: string): RouteContext {
         { label: 'Eval Runs', href: '/evals' },
         { label: `Run ${runId.slice(0, 8)}` },
       ],
+    };
+  }
+
+  if (normalizedPathname === '/build') {
+    const tab = new URLSearchParams(search).get('tab');
+    return {
+      title: getBuildWorkspaceContext(tab).title,
+      breadcrumbs: toBreadcrumbItems(getBreadcrumbForPath(normalizedPathname)),
     };
   }
 
@@ -85,7 +93,10 @@ function useGlobalShortcuts() {
 
 export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation();
-  const routeContext = useMemo(() => getRouteContext(location.pathname), [location.pathname]);
+  const routeContext = useMemo(
+    () => getRouteContext(location.pathname, location.search),
+    [location.pathname, location.search]
+  );
   const title = routeContext.title;
   const crumbItems = routeContext.breadcrumbs;
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);

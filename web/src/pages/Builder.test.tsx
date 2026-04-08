@@ -186,7 +186,7 @@ describe('Builder', () => {
     await user.click(screen.getByRole('button', { name: 'Send' }));
     expect((await screen.findAllByText(/Airline Customer Support Agent/i)).length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('button', { name: 'Run Eval' }));
+    await user.click(screen.getByRole('button', { name: 'Save & Run Eval' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
