@@ -228,13 +228,24 @@ class CxExporter:
         # Safe: surfaces with full round-trip support
         _SAFE_CHANGES: dict[str, set[str]] = {
             "agent": {"description", "generative_settings"},
-            "playbook": {"instruction"},
+            "playbook": {
+                "instruction",
+                "goal",
+                "input_parameter_definitions",
+                "output_parameter_definitions",
+                "handlers",
+            },
+            "intent": {"training_phrases", "parameters"},
+            "entity_type": {"kind", "auto_expansion_mode", "entities", "excluded_phrases"},
             "webhook": {"generic_web_service", "timeout_seconds", "disabled"},
+            "generator": {"prompt_text", "placeholders", "llm_model_settings"},
+            "transition_route_group": {"transition_routes"},
         }
 
         # Lossy: surfaces where writes work but may lose fidelity
         _LOSSY_CHANGES: dict[str, set[str]] = {
-            "flow": {"description", "transition_routes"},
+            "flow": {"description", "transition_routes", "event_handlers", "transition_route_groups"},
+            "page": {"entry_fulfillment", "form", "transition_routes", "event_handlers", "transition_route_groups"},
         }
 
         safe_fields = _SAFE_CHANGES.get(resource, set())

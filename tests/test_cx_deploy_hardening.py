@@ -156,7 +156,7 @@ class TestDiffClassification:
 
     def test_blocked_change_classification(self):
         """Verify _classify_change_safety returns blocked for unknown resources."""
-        safety, rationale = CxExporter._classify_change_safety("intent", "training_phrases", "update")
+        safety, rationale = CxExporter._classify_change_safety("test_case", "conversation_turns", "update")
         assert safety == ChangeSafety.BLOCKED
         assert "read-only" in rationale
 
