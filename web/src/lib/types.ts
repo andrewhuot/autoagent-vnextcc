@@ -1555,6 +1555,7 @@ export interface CxImportResult {
   surfaces_mapped: string[];
   test_cases_imported: number;
   workspace_path?: string | null;
+  portability?: PortabilityReport;
 }
 
 export interface CxExportResult {
@@ -1830,6 +1831,7 @@ export interface AdkImportResult {
   agent_name: string;
   surfaces_mapped: string[];
   tools_imported: number;
+  portability?: PortabilityReport;
 }
 
 export interface AdkExportResult {
@@ -1843,6 +1845,48 @@ export interface AdkDeployResult {
   url: string;
   status: string;
   deployment_info: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Portability / Readiness Report
+// ---------------------------------------------------------------------------
+
+export type PortabilityVerdict = 'ready' | 'partial' | 'needs_work' | 'unsupported';
+
+export type SurfaceStatus = 'full' | 'partial' | 'read_only' | 'unsupported';
+
+export interface PortabilitySurface {
+  name: string;
+  status: SurfaceStatus;
+  detail: string;
+  item_count?: number;
+  optimizable_count?: number;
+}
+
+export type PortabilityWarningSeverity = 'info' | 'warning' | 'critical';
+
+export interface PortabilityWarning {
+  severity: PortabilityWarningSeverity;
+  category: string;
+  message: string;
+  recommendation: string;
+}
+
+export interface TopologySummary {
+  node_count: number;
+  edge_count: number;
+  max_depth: number;
+  has_cycles: boolean;
+  callback_count: number;
+  code_tool_count: number;
+}
+
+export interface PortabilityReport {
+  overall_score: number;
+  verdict: PortabilityVerdict;
+  surfaces: PortabilitySurface[];
+  warnings: PortabilityWarning[];
+  topology?: TopologySummary;
 }
 
 // Diagnosis Chat types

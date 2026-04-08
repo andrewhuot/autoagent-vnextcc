@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Rocket, Cloud, Brain, ExternalLink, AlertCircle, Check } from 'lucide-react';
 import { useAdkDeploy, useAdkDiff } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
+import { ExportReadiness } from '../components/ExportReadiness';
 import { toastError, toastSuccess } from '../lib/toast';
 
 export function AdkDeploy() {
@@ -168,6 +169,13 @@ export function AdkDeploy() {
           </div>
         )}
       </div>
+
+      {/* Export readiness */}
+      <ExportReadiness
+        adapter="ADK"
+        changeCount={showPreview && diffData ? diffData.changes.length : undefined}
+        exportAttempted={showPreview && !!diffData}
+      />
 
       {/* Deploy button */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">

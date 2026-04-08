@@ -4,6 +4,7 @@ import { ArrowRight, Check, AlertCircle } from 'lucide-react';
 import { useCxAgents, useCxImport } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
+import { ReadinessReport } from '../components/ReadinessReport';
 import { toastError, toastSuccess } from '../lib/toast';
 import type { CxAgentSummary } from '../lib/types';
 
@@ -179,26 +180,31 @@ export function CxImport() {
 
       {/* Step 4: Done */}
       {step === 4 && importMutation.data && (
-        <div className="bg-white rounded-lg border border-green-200 p-4 space-y-2">
-          <div className="flex items-center gap-2 text-green-400">
-            <Check className="w-5 h-5" />
-            <h3 className="text-sm font-medium">Import Complete</h3>
+        <div className="space-y-4">
+          {/* Import summary */}
+          <div className="bg-white rounded-lg border border-green-200 p-4 space-y-2">
+            <div className="flex items-center gap-2 text-green-700">
+              <Check className="w-5 h-5" />
+              <h3 className="text-sm font-medium">Import Complete</h3>
+            </div>
+            <div className="text-sm text-gray-700 space-y-1">
+              <p><span className="text-gray-500">Agent:</span> {importMutation.data.agent_name}</p>
+              <p><span className="text-gray-500">Config:</span> {importMutation.data.config_path}</p>
+              {importMutation.data.eval_path && (
+                <p><span className="text-gray-500">Eval cases:</span> {importMutation.data.eval_path} ({importMutation.data.test_cases_imported} cases)</p>
+              )}
+              <p><span className="text-gray-500">Snapshot:</span> {importMutation.data.snapshot_path}</p>
+              <p><span className="text-gray-500">Surfaces:</span> {importMutation.data.surfaces_mapped.join(', ')}</p>
+            </div>
           </div>
-          <div className="text-sm text-gray-700 space-y-1">
-            <p><span className="text-gray-500">Agent:</span> {importMutation.data.agent_name}</p>
-            <p><span className="text-gray-500">Config:</span> {importMutation.data.config_path}</p>
-            {importMutation.data.eval_path && (
-              <p><span className="text-gray-500">Eval cases:</span> {importMutation.data.eval_path} ({importMutation.data.test_cases_imported} cases)</p>
-            )}
-            <p><span className="text-gray-500">Snapshot:</span> {importMutation.data.snapshot_path}</p>
-            <p><span className="text-gray-500">Surfaces:</span> {importMutation.data.surfaces_mapped.join(', ')}</p>
-          </div>
-          <div className="rounded-lg border border-green-100 bg-green-50 p-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-green-700">Next steps</p>
-            <p className="mt-1 text-sm text-green-900">
-              Run an eval to validate the imported behavior, then review the generated config before optimization.
-            </p>
-          </div>
+
+          {/* Readiness report */}
+          <ReadinessReport
+            report={importMutation.data.portability ?? null}
+            fallbackSurfaces={importMutation.data.surfaces_mapped}
+            adapter="CX"
+          />
+
           <div className="flex flex-wrap gap-2 pt-1">
             <button
               onClick={handleReset}
@@ -206,18 +212,22 @@ export function CxImport() {
             >
               Import another agent
             </button>
-            <Link
-              to="/evals"
-              className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
-            >
-              Run evaluations
-            </Link>
-            <Link
-              to="/configs"
-              className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
-            >
-              Review configs
-            </Link>
+            {!importMutation.data.portability && (
+              <>
+                <Link
+                  to="/evals"
+                  className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
+                >
+                  Run evaluations
+                </Link>
+                <Link
+                  to="/configs"
+                  className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
+                >
+                  Review configs
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}
