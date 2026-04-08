@@ -39,11 +39,43 @@ describe('Studio shell', () => {
     expect(headerPara.textContent).toContain('Customer Support Agent');
   });
 
-  it('renders three tab buttons: Spec, Observe, Optimize', () => {
+  it('shows the Build → Eval → Studio breadcrumb trail', () => {
     renderStudio();
-    expect(screen.getByRole('button', { name: /Spec/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Observe/ })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Optimize/ })).toBeInTheDocument();
+    expect(screen.getByText(/Refine, observe, and optimize your agent/)).toBeInTheDocument();
+    // The breadcrumb contains Build, Eval, Studio as separate spans
+    expect(screen.getByText('Studio')).toBeInTheDocument();
+  });
+
+  it('renders three tab buttons with step numbers: Spec, Observe, Optimize', () => {
+    renderStudio();
+    // Tab buttons contain step numbers; find them by step + label combo
+    const tabButtons = screen.getAllByRole('button').filter(
+      (btn) => btn.textContent?.match(/^[123]/)
+    );
+    expect(tabButtons).toHaveLength(3);
+    expect(tabButtons[0].textContent).toContain('Spec');
+    expect(tabButtons[1].textContent).toContain('Observe');
+    expect(tabButtons[2].textContent).toContain('Optimize');
+  });
+
+  it('shows step-aware description strip with action hint', () => {
+    renderStudio('/studio?tab=spec');
+    expect(screen.getByText(/Step 1:/)).toBeInTheDocument();
+    expect(screen.getByText(/Review and refine the agent specification/)).toBeInTheDocument();
+  });
+
+  it('shows a "Next" button in the description strip to advance tabs', async () => {
+    const user = userEvent.setup();
+    renderStudio('/studio?tab=spec');
+    const nextBtn = screen.getByRole('button', { name: /Next: Observe/ });
+    expect(nextBtn).toBeInTheDocument();
+    await user.click(nextBtn);
+    expect(screen.getByText('Active Issues')).toBeInTheDocument();
+  });
+
+  it('does not show Next button on the last tab (Optimize)', () => {
+    renderStudio('/studio?tab=optimize');
+    expect(screen.queryByRole('button', { name: /^Next:/ })).not.toBeInTheDocument();
   });
 
   it('defaults to the Spec tab when no ?tab param is present', () => {
@@ -70,14 +102,19 @@ describe('Studio shell', () => {
   it('switches tabs when the user clicks Observe', async () => {
     const user = userEvent.setup();
     renderStudio('/studio');
-    await user.click(screen.getByRole('button', { name: /Observe/ }));
+    // Use the tab button (contains step number "2"), not the "Next: Observe" button
+    const observeTab = screen.getAllByRole('button', { name: /Observe/ })
+      .find((el) => el.textContent?.includes('2'));
+    await user.click(observeTab!);
     expect(screen.getByText('Active Issues')).toBeInTheDocument();
   });
 
   it('switches tabs when the user clicks Optimize', async () => {
     const user = userEvent.setup();
     renderStudio('/studio');
-    await user.click(screen.getByRole('button', { name: /Optimize/ }));
+    const optimizeTab = screen.getAllByRole('button', { name: /Optimize/ })
+      .find((el) => el.textContent?.includes('3'));
+    await user.click(optimizeTab!);
     expect(screen.getByText('Optimization Mode')).toBeInTheDocument();
   });
 

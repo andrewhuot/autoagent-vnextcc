@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import {
   Activity,
+  ArrowRight,
   Bot,
   FileText,
   Sparkles,
@@ -17,7 +18,9 @@ import type { StudioTab } from './studio-types';
 interface TabConfig {
   id: StudioTab;
   label: string;
+  step: number;
   description: string;
+  actionHint: string;
   icon: React.ComponentType<{ className?: string }>;
   badge?: string;
 }
@@ -26,20 +29,26 @@ const TABS: TabConfig[] = [
   {
     id: 'spec',
     label: 'Spec',
-    description: 'Edit and version the agent specification',
+    step: 1,
+    description: 'Review and refine the agent specification before optimizing.',
+    actionHint: 'Edit the spec, then move to Observe to see production issues.',
     icon: FileText,
   },
   {
     id: 'observe',
     label: 'Observe',
-    description: 'Production metrics and issue evidence',
+    step: 2,
+    description: 'See how the agent is performing and where it struggles.',
+    actionHint: 'Review issues, then move to Optimize to generate fixes.',
     icon: Activity,
     badge: '5 issues',
   },
   {
     id: 'optimize',
     label: 'Optimize',
-    description: 'Generate and review improvement candidates',
+    step: 3,
+    description: 'Generate, compare, and promote improved agent candidates.',
+    actionHint: 'Run optimization, review candidates, and promote the best one.',
     icon: Sparkles,
     badge: '2 ready',
   },
@@ -59,6 +68,9 @@ export function Studio() {
   const setTab = (tab: StudioTab) => {
     setSearchParams({ tab }, { replace: true });
   };
+
+  const activeTabConfig = TABS.find((t) => t.id === activeTab)!;
+  const nextTab = TABS.find((t) => t.step === activeTabConfig.step + 1);
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -96,8 +108,18 @@ export function Studio() {
           </div>
         </div>
 
+        {/* Step progress indicator */}
+        <div className="mt-3 flex items-center gap-1.5 text-[10px] text-white/50">
+          <span>Build</span>
+          <ArrowRight className="h-2.5 w-2.5" />
+          <span>Eval</span>
+          <ArrowRight className="h-2.5 w-2.5" />
+          <span className="font-semibold text-white/90">Studio</span>
+          <span className="ml-1 text-white/40">— Refine, observe, and optimize your agent</span>
+        </div>
+
         {/* Tab nav */}
-        <div className="mt-4 flex gap-1">
+        <div className="mt-3 flex gap-1">
           {TABS.map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.id;
@@ -112,6 +134,12 @@ export function Studio() {
                     : 'text-white/70 hover:bg-white/10 hover:text-white'
                 )}
               >
+                <span className={classNames(
+                  'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold',
+                  isActive ? 'bg-indigo-600 text-white' : 'bg-white/20 text-white/80'
+                )}>
+                  {tab.step}
+                </span>
                 <Icon className={classNames('h-4 w-4', isActive ? 'text-indigo-600' : '')} />
                 <span>{tab.label}</span>
                 {tab.badge && (
@@ -134,11 +162,23 @@ export function Studio() {
         </div>
       </div>
 
-      {/* Tab description strip */}
-      <div className="border-b border-gray-100 bg-gray-50 px-6 py-1.5">
-        <p className="text-[12px] text-gray-500">
-          {TABS.find((t) => t.id === activeTab)?.description}
-        </p>
+      {/* Tab description strip with action hint */}
+      <div className="border-b border-gray-100 bg-gray-50 px-6 py-2">
+        <div className="flex items-center justify-between">
+          <p className="text-[12px] text-gray-600">
+            <span className="font-medium text-gray-800">Step {activeTabConfig.step}:</span>{' '}
+            {activeTabConfig.description}
+          </p>
+          {nextTab && (
+            <button
+              onClick={() => setTab(nextTab.id)}
+              className="flex items-center gap-1 text-[11px] font-medium text-indigo-600 hover:text-indigo-800 transition-colors"
+            >
+              Next: {nextTab.label}
+              <ArrowRight className="h-3 w-3" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Tab content — fills remaining height */}
