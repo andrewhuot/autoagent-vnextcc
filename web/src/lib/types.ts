@@ -1684,6 +1684,7 @@ export interface CxImportResult {
   test_cases_imported: number;
   workspace_path?: string | null;
   portability_report?: PortabilityReport | null;
+  portability?: PortabilityReport | null;
 }
 
 export interface CxExportResult {
@@ -1961,6 +1962,7 @@ export interface AdkImportResult {
   surfaces_mapped: string[];
   tools_imported: number;
   portability_report?: PortabilityReport | null;
+  portability?: PortabilityReport | null;
 }
 
 export interface AdkExportResult {

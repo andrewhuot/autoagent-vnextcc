@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Code2, Copy, Check } from 'lucide-react';
 import { useConfigShow, useConfigs, useCxDeploy, useCxExport, useCxWidget } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
+import { ExportReadiness } from '../components/ExportReadiness';
 import { toastError, toastSuccess } from '../lib/toast';
 
 export function CxDeploy() {
@@ -190,6 +191,15 @@ export function CxDeploy() {
           </div>
         )}
       </div>
+
+      {/* Export readiness */}
+      <ExportReadiness
+        adapter="CX"
+        exportMatrix={exportMutation.data?.export_matrix ?? null}
+        changeCount={exportMutation.data ? exportMutation.data.changes.length : undefined}
+        conflictCount={exportMutation.data ? exportMutation.data.conflicts.length : undefined}
+        exportAttempted={!!exportMutation.data}
+      />
 
       {/* Deploy section */}
       <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 space-y-3">
