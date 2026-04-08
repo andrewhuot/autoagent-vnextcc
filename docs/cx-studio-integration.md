@@ -19,6 +19,10 @@ The integration covers:
 - Workspace snapshot persistence for round-trip fidelity
 - Three-way sync with conflict detection
 
+For the current docs-driven support checklist, see:
+
+- [CXAS Surface Matrix](cxas-surface-matrix.md)
+
 ## API Surface
 
 The implementation uses the Dialogflow CX REST `v3` API as the primary source of truth for agent resources:

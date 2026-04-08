@@ -1,6 +1,7 @@
 """Tests for ADK API routes."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import pytest
@@ -36,24 +37,42 @@ def mock_adk_tree():
 @pytest.fixture
 def mock_import_result():
     """Mock ImportResult for testing."""
-    from adk.types import ImportResult
-    return ImportResult(
+    return SimpleNamespace(
         config_path="/tmp/config.yaml",
         snapshot_path="/tmp/snapshot",
         agent_name="test_agent",
         surfaces_mapped=["prompts", "tools", "routing"],
         tools_imported=3,
+        portability_report={
+            "platform": "adk",
+            "summary": {"imported_surfaces": 5},
+            "optimization_eligibility": {"score": 72},
+            "callbacks": [],
+            "topology": {"summary": {"agent_count": 2}},
+            "export_matrix": {
+                "status": "lossy",
+                "ready_surfaces": ["instructions"],
+                "blocked_surfaces": ["routing"],
+                "surfaces": [],
+            },
+            "surfaces": [],
+        },
     )
 
 
 @pytest.fixture
 def mock_export_result():
     """Mock ExportResult for testing."""
-    from adk.types import ExportResult
-    return ExportResult(
+    return SimpleNamespace(
         output_path="/tmp/output",
         changes=[{"file": "agent.py", "field": "instruction", "action": "update"}],
         files_modified=2,
+        export_matrix={
+            "status": "lossy",
+            "ready_surfaces": ["instructions"],
+            "blocked_surfaces": ["routing"],
+            "surfaces": [],
+        },
     )
 
 
@@ -86,6 +105,8 @@ def test_import_endpoint(mock_import_result):
         assert data["agent_name"] == "test_agent"
         assert data["tools_imported"] == 3
         assert "prompts" in data["surfaces_mapped"]
+        assert data["portability_report"]["optimization_eligibility"]["score"] == 72
+        assert data["portability_report"]["export_matrix"]["status"] == "lossy"
 
 
 def test_import_invalid_path_returns_400(mock_import_result):
@@ -119,6 +140,7 @@ def test_export_endpoint(mock_export_result):
         assert response.status_code == 200
         data = response.json()
         assert data["files_modified"] == 2
+        assert data["export_matrix"]["blocked_surfaces"] == ["routing"]
 
 
 def test_deploy_endpoint(mock_deploy_result):

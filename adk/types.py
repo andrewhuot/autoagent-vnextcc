@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, Field
+
+from portability.types import ExportCapabilityMatrix, PortabilityReport
 
 
 class AdkAgentType(str, Enum):
@@ -37,6 +40,8 @@ class AdkCallbackSpec(BaseModel):
     callback_type: str
     function_name: str
     description: str = ""
+    signature: str = ""
+    function_body: str = ""
 
 
 class AdkSessionConfig(BaseModel):
@@ -101,8 +106,9 @@ class AdkAgentTree(BaseModel):
 
     agent: AdkAgent = Field(default_factory=AdkAgent)
     tools: list[AdkTool] = Field(default_factory=list)
+    callbacks: list[AdkCallbackSpec] = Field(default_factory=list)
     sub_agents: list[AdkAgentTree] = Field(default_factory=list)  # Recursive structure
-    config: dict = Field(default_factory=dict)  # Merged from config.json if present
+    config: dict[str, Any] = Field(default_factory=dict)  # Merged from config.json if present
     source_path: Path = Path(".")  # Directory path where this agent was parsed from
 
 
@@ -114,14 +120,16 @@ class ImportResult(BaseModel):
     agent_name: str
     surfaces_mapped: list[str] = Field(default_factory=list)
     tools_imported: int = 0
+    portability_report: PortabilityReport | None = None
 
 
 class ExportResult(BaseModel):
     """Result of exporting an optimized config back to ADK source."""
 
     output_path: str
-    changes: list[dict] = Field(default_factory=list)
+    changes: list[dict[str, Any]] = Field(default_factory=list)
     files_modified: int = 0
+    export_matrix: ExportCapabilityMatrix | None = None
 
 
 class DeployResult(BaseModel):

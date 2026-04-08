@@ -14,6 +14,7 @@ from pathlib import Path
 from adk.errors import AdkExportError
 from adk.mapper import AdkMapper
 from adk.parser import parse_agent_directory
+from adk.portability import build_adk_export_matrix
 from adk.types import AdkAgentTree, ExportResult
 
 
@@ -61,12 +62,14 @@ class AdkExporter:
 
             # 2. Compute diff
             changes = self._compute_changes(base_tree, config)
+            export_matrix = build_adk_export_matrix(base_tree)
 
             if dry_run or not changes:
                 return ExportResult(
                     output_path=str(output_dir or snapshot_path),
                     changes=changes,
                     files_modified=0,
+                    export_matrix=export_matrix,
                 )
 
             # 3. Apply patches
@@ -79,6 +82,7 @@ class AdkExporter:
                 output_path=str(output_path),
                 changes=changes,
                 files_modified=files_modified,
+                export_matrix=export_matrix,
             )
 
         except AdkExportError:
@@ -112,8 +116,11 @@ class AdkExporter:
         changes = []
 
         # Check instruction changes
-        if "instructions" in config:
-            for agent_name, new_instruction in config["instructions"].items():
+        prompts = config.get("prompts", {})
+        if not prompts and "instructions" in config:
+            prompts = config["instructions"]
+        if prompts:
+            for agent_name, new_instruction in prompts.items():
                 if agent_name == base_tree.agent.name or agent_name == "root":
                     if base_tree.agent.instruction != new_instruction:
                         changes.append({
@@ -126,48 +133,61 @@ class AdkExporter:
                         })
 
         # Check model changes
-        if "generation_settings" in config:
-            gen_settings = config["generation_settings"]
-            if "model" in gen_settings:
-                new_model = gen_settings["model"]
-                if base_tree.agent.model != new_model:
+        model_override = config.get("model")
+        legacy_generation_settings = config.get("generation_settings", {})
+        if not model_override and isinstance(legacy_generation_settings, dict):
+            model_override = legacy_generation_settings.get("model")
+        if model_override and base_tree.agent.model != model_override:
+            changes.append({
+                "resource": "agent",
+                "field": "model",
+                "action": "update",
+                "old": base_tree.agent.model,
+                "new": model_override,
+            })
+
+        gen_settings = config.get("generation", {})
+        if not gen_settings:
+            gen_settings = config.get("generation_settings", {})
+
+        for external_key, config_key in {
+            "temperature": "temperature",
+            "max_tokens": "max_output_tokens",
+            "max_output_tokens": "max_output_tokens",
+            "top_p": "top_p",
+            "top_k": "top_k",
+        }.items():
+            if external_key in gen_settings:
+                old_val = base_tree.agent.generate_config.get(config_key, base_tree.config.get(config_key))
+                new_val = gen_settings[external_key]
+                if old_val != new_val:
                     changes.append({
-                        "resource": "agent",
-                        "field": "model",
+                        "resource": "config",
+                        "field": config_key,
                         "action": "update",
-                        "old": base_tree.agent.model,
-                        "new": new_model,
+                        "old": old_val,
+                        "new": new_val,
                     })
 
-            # Check temperature and other generation config changes
-            for key in ["temperature", "max_output_tokens", "top_p", "top_k"]:
-                if key in gen_settings:
-                    old_val = base_tree.agent.generate_config.get(key)
-                    new_val = gen_settings[key]
-                    if old_val != new_val:
-                        changes.append({
-                            "resource": "config",
-                            "field": key,
-                            "action": "update",
-                            "old": old_val,
-                            "new": new_val,
-                        })
-
         # Check tool description changes
-        if "tool_descriptions" in config:
-            base_tools = {t.name: t for t in base_tree.tools}
-            for tool_name, new_desc in config["tool_descriptions"].items():
-                if tool_name in base_tools:
-                    old_desc = base_tools[tool_name].description
-                    if old_desc != new_desc:
-                        changes.append({
-                            "resource": "tool",
-                            "field": "description",
-                            "action": "update",
-                            "tool_name": tool_name,
-                            "old": old_desc,
-                            "new": new_desc,
-                        })
+        base_tools = {t.name: t for t in base_tree.tools}
+        tool_descriptions = config.get("tool_descriptions", {})
+        tools_config = config.get("tools", {})
+        for tool_name, tool_cfg in tools_config.items():
+            if isinstance(tool_cfg, dict) and "description" in tool_cfg:
+                tool_descriptions[tool_name] = tool_cfg["description"]
+        for tool_name, new_desc in tool_descriptions.items():
+            if tool_name in base_tools:
+                old_desc = base_tools[tool_name].description
+                if old_desc != new_desc:
+                    changes.append({
+                        "resource": "tool",
+                        "field": "description",
+                        "action": "update",
+                        "tool_name": tool_name,
+                        "old": old_desc,
+                        "new": new_desc,
+                    })
 
         return changes
 

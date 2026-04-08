@@ -1,85 +1,46 @@
 # Findings & Decisions
 
 ## Requirements
-
-- Review the in-progress diff before editing and preserve the branch intent.
-- Finish the structured optimization surface coverage inventory.
-- Expose the inventory from `GET /api/optimize/surfaces`.
-- Make the inventory reflect real optimizer/component coverage, not placeholder filler.
-- Align the audit artifact and findings with the implemented inventory.
-- Run targeted verification for the touched area and commit only if those checks pass.
+- Build a shared, typed portability/readiness model for ADK and CXAS imports.
+- Report imported, optimizable, read-only, unsupported, and exportable surfaces explicitly.
+- Surface callbacks, graph topology, tool-code boundaries, and round-trip/export readiness.
+- Preserve backward compatibility where practical.
+- Add high-signal backend and API tests using realistic imported agents.
 
 ## Research Findings
-
-- The worktree was already in progress when this pass began: `api/routes/optimize.py` and `findings.md` were modified, and `OPTIMIZATION_COMPONENTS_AUDIT.md`, `optimizer/surface_inventory.py`, and `tests/test_optimize_surface_inventory.py` were untracked. `uv.lock` was also untracked but appears unrelated to this audit slice.
-- `GET /api/optimize/surfaces` is intentionally a read-only seam. The route in `api/routes/optimize.py` simply returns `build_surface_inventory()`, which keeps the API contract lightweight and deterministic.
-- `optimizer/surface_inventory.py` is now the backend source of truth for this audit surface map. Each row carries:
-  - `support_level`
-  - declared mutation surfaces
-  - default and experimental operator names
-  - `optimization_paths`
-  - `representation_paths`
-  - explicit booleans for each live loop / import / export seam
-  - notes for the important caveat on that surface
-- The current inventory reports 18 surfaces in total:
-  - 2 `full`
-  - 8 `partial`
-  - 7 `nominal`
-  - 1 `none`
-- Live coverage is computed from real codepaths instead of doc-only claims:
-  - adaptive loop reachability comes from `optimizer.search._OPERATOR_TO_FAMILY`
-  - opportunity reachability comes from `observer.opportunities._BUCKET_TO_OPERATORS`
-  - NL-edit reachability comes from `optimizer.nl_editor.KEYWORD_SURFACE_MAP`
-  - simple proposer and AutoFix reachability are normalized through the inventory metadata
-- Tool runtime config needed a factual correction. ADK import and connected-runtime import both create tool config entries, but writeback is still incomplete, so that surface is `partial`, not absent.
-- The biggest structural mismatch remains the same as the audit doc concludes: the mutation registry is broader than the live loop, and the live loop is broader than the canonical config and writeback contracts.
+- `adk/types.py` and `cx_studio/types.py` each define narrow `ImportResult` and `ExportResult` models today; neither carries a structured portability/readiness report.
+- `adk/types.py` already models callback references on `AdkAgent`, but only as raw string fields and not as first-class import result metadata.
+- `cx_studio/types.py` carries richer raw resource snapshots than ADK, which suggests a shared readiness model should allow per-platform evidence while staying generic.
+- `api/models.py` is the central Pydantic contract file and will likely need additive models if route responses are upgraded.
+- `adk/exporter.py` still operates on legacy keys like `instructions` and `generation_settings`, while `adk/importer.py` writes config with `prompts`, `generation`, `model`, and `tools`; the new reporting work should align these surfaces instead of hiding the mismatch.
+- `cx_studio/exporter.py` has a concrete writable-field inventory in `_field_entries()` and `_apply_*()` methods, which can drive a truthful export capability matrix.
+- `optimizer/surface_inventory.py` already defines which optimization surfaces are reachable, so importer-side readiness scoring can align to that vocabulary without inventing a separate surface taxonomy.
+- `core/types.py` has a framework-neutral graph IR, but its node taxonomy is broader agent-system IR rather than import topology; a dedicated import topology model is likely cleaner than forcing flow/page/callback resources into unrelated node types.
+- The shared portability package can stay framework-neutral and sit below API routes, which keeps ADK/CX layer boundaries intact while letting the API reuse the same report types directly.
+- ADK import/export parity improves materially when exporter change detection accepts both the legacy keys (`instructions`, `generation_settings`) and the current importer keys (`prompts`, `generation`, `model`, `tools.*.description`).
 
 ## Technical Decisions
-
 | Decision | Rationale |
 |----------|-----------|
-| Keep one curated inventory module as the truth source for support tiers and notes | Support level is an editorial synthesis and should not be inferred from booleans alone |
-| Compute operator/reachability evidence dynamically from live code | This keeps the inventory honest when search, opportunity mapping, or editor coverage changes |
-| Preserve the route as a thin read-only wrapper over `build_surface_inventory()` | The endpoint should stay easy for UI, docs, and external coding agents to consume |
-| Leave unrelated worktree changes out of scope | The request was specifically to button up the audit/inventory slice, not to churn dependencies or adjacent features |
+| Favor a shared portability/readiness schema with source-specific evidence fields | The user requested a generic model reusable for ADK and CXAS. |
+| Keep changes additive on import/export result types where possible | This preserves existing callers while allowing richer readiness reporting. |
+| Treat export readiness as a first-class report derived from exporter reality | Customers need to know what can actually round-trip today, not what the platform might support eventually. |
+| Use dedicated ADK and CX portability builder modules on top of shared report helpers | This keeps platform-specific topology and surface rules explicit while reusing scoring and matrix logic. |
 
 ## Issues Encountered
-
 | Issue | Resolution |
 |-------|------------|
-| The existing `findings.md` content was from a different verification pass and no longer matched this branch | Replaced it with branch-specific findings for the surface inventory work |
-| Inventory facts were split across registry code, proposer/autofix heuristics, ADK mapper/exporter code, and connect adapters | Consolidated the branch conclusion in `optimizer/surface_inventory.py`, while still computing live path evidence from current code |
-| `uv.lock` appeared in the worktree but is unrelated to this audit scope | Left it untouched and excluded from the commit scope |
+| No prior session catchup data was emitted | Continued with a clean worktree and fresh discovery. |
+| API route tests are environment-gated by `pytest.importorskip("fastapi")` | Ran them anyway as part of the focused suite; they were reported as skipped rather than silently omitted. |
 
 ## Resources
+- `adk/types.py`
+- `cx_studio/types.py`
+- `api/models.py`
+- `tests/test_adk_importer.py`
+- `tests/test_adk_api.py`
+- `tests/test_cx_studio.py`
+- `tests/test_cx_studio_api.py`
 
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/api/routes/optimize.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/surface_inventory.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/search.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/proposer.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/autofix_proposers.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/mutations.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/optimizer/mutations_topology.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/observer/opportunities.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/agent/config/schema.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/adk/mapper.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/adk/exporter.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/adapters/base.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/adapters/openai_agents.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/adapters/anthropic_claude.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/tests/test_optimize_surface_inventory.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/tests/test_adk_mapper.py`
-- `/Users/andrew/Desktop/AutoAgent-OptimizeAudit-Codex/tests/test_adk_exporter.py`
-
-## Verification Summary
-
-- Ran `./.venv/bin/python -m pytest tests/test_optimize_surface_inventory.py`
-  - Result: 2 tests passed
-- Ran `./.venv/bin/python -m pytest tests/test_optimize_surface_inventory.py tests/test_adk_mapper.py tests/test_adk_exporter.py`
-  - Result: 25 tests passed
-
-## Remaining Gaps
-
-- The inventory is now a reliable audit surface, but support tiers and notes are still curated judgments rather than a future component-graph-derived model.
-- `GET /api/optimize/surfaces` is available for the backend, but the Studio / Inspector UI is not yet wired to consume it.
-- Naming is still inconsistent across some existing codepaths, especially `generation`, `generation_settings`, and ADK `generate_config`.
+## Visual/Browser Findings
+- No browser or image inspection used for this task.

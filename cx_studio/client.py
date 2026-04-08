@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from adapters.cx_studio_client import CxStudioClient, build_dialogflow_cx_base_url
-from .types import CxDataStore
+from .types import CxDataStore, CxTool
 
 
 def _build_base_url(location: str) -> str:
@@ -22,10 +22,10 @@ class CxClient(CxStudioClient):
 
         return super().fetch_snapshot(agent_name)
 
-    def list_tools(self, agent_name: str) -> list[dict[str, Any]]:
-        """Return an empty tool list when the agent does not use the v3 tools surface."""
+    def list_tools(self, agent_name: str) -> list[CxTool]:
+        """Return typed Dialogflow CX tools for the given agent."""
 
-        return []
+        return super().list_tools(agent_name)
 
     def create_data_store(
         self,
