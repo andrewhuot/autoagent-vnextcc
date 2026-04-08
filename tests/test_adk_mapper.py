@@ -208,3 +208,27 @@ def test_apply_generation_settings(mapper, sample_tree):
 
     assert updated_tree.agent.generate_config["temperature"] == 0.7
     assert updated_tree.agent.generate_config["max_output_tokens"] == 2048
+
+
+def test_to_agentlab_projects_cx_native_contract(mapper, sample_tree):
+    """ADK imports should produce a best-effort CX-native editable contract."""
+    config = mapper.to_agentlab(sample_tree)
+
+    assert "cx" in config
+
+    cx = config["cx"]
+    assert cx["source_platform"] == "adk"
+    assert cx["target_platform"] == "cx_agent_studio"
+    assert cx["projection_summary"]["faithful_count"] >= 2
+    assert cx["projection_summary"]["approximated_count"] >= 2
+
+    assert "support_agent" in cx["playbooks"]
+    assert cx["playbooks"]["support_agent"]["projection"]["quality"] == "faithful"
+
+    assert "support_agent_router" in cx["flows"]
+    assert cx["flows"]["support_agent_router"]["projection"]["quality"] == "approximated"
+
+    assert "billing_agent" in cx["intents"]
+    assert cx["intents"]["billing_agent"]["projection"]["quality"] == "approximated"
+
+    assert cx["preserved"]["tools"][0]["name"] == "lookup_order"

@@ -12,7 +12,11 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from portability.types import ExportCapabilityMatrix, PortabilityReport
+from portability.types import (
+    ExportCapabilityMatrix,
+    PortabilityReport,
+    ProjectionQualityStatus,
+)
 
 
 class CxAgentRef(BaseModel):
@@ -138,6 +142,15 @@ class CxWebhook(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CxTransitionRouteGroup(BaseModel):
+    """Dialogflow CX transition route group resource subset."""
+
+    name: str = ""
+    display_name: str = ""
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class CxPlaybook(BaseModel):
     """Dialogflow CX playbook resource subset."""
 
@@ -188,6 +201,148 @@ class CxGenerator(BaseModel):
     raw: dict[str, Any] = Field(default_factory=dict)
 
 
+class CxProjectionMetadata(BaseModel):
+    """Projection metadata for an editable CX-native structure."""
+
+    quality: ProjectionQualityStatus = ProjectionQualityStatus.FAITHFUL
+    source_platform: str = "cx_studio"
+    source_refs: list[str] = Field(default_factory=list)
+    rationale: list[str] = Field(default_factory=list)
+
+
+class CxProjectionSummary(BaseModel):
+    """Aggregate counts over projected CX-native editable records."""
+
+    editable_surface_count: int = 0
+    faithful_count: int = 0
+    approximated_count: int = 0
+    preserved_only_count: int = 0
+
+
+class CxEditablePlaybook(BaseModel):
+    """Editable CX-native playbook contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    goal: str = ""
+    instructions: list[str] = Field(default_factory=list)
+    input_parameters: list[dict[str, Any]] = Field(default_factory=list)
+    output_parameters: list[dict[str, Any]] = Field(default_factory=list)
+    handlers: list[dict[str, Any]] = Field(default_factory=list)
+    referenced_tools: list[str] = Field(default_factory=list)
+    referenced_playbooks: list[str] = Field(default_factory=list)
+    referenced_flows: list[str] = Field(default_factory=list)
+    code_block: dict[str, Any] = Field(default_factory=dict)
+    llm_model_settings: dict[str, Any] = Field(default_factory=dict)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditablePage(BaseModel):
+    """Editable CX-native page contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    entry_fulfillment: dict[str, Any] = Field(default_factory=dict)
+    form: dict[str, Any] = Field(default_factory=dict)
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    event_handlers: list[dict[str, Any]] = Field(default_factory=list)
+    route_group_ids: list[str] = Field(default_factory=list)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableFlow(BaseModel):
+    """Editable CX-native flow contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    description: str = ""
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    event_handlers: list[dict[str, Any]] = Field(default_factory=list)
+    route_group_ids: list[str] = Field(default_factory=list)
+    pages: dict[str, CxEditablePage] = Field(default_factory=dict)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableTransitionRouteGroup(BaseModel):
+    """Editable CX-native transition route group contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    transition_routes: list[dict[str, Any]] = Field(default_factory=list)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableIntent(BaseModel):
+    """Editable CX-native intent contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    description: str = ""
+    training_phrases: list[dict[str, Any]] = Field(default_factory=list)
+    parameters: list[dict[str, Any]] = Field(default_factory=list)
+    labels: dict[str, str] = Field(default_factory=dict)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableEntityType(BaseModel):
+    """Editable CX-native entity-type contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    kind: str = ""
+    auto_expansion_mode: str = ""
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    excluded_phrases: list[str] = Field(default_factory=list)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableGenerator(BaseModel):
+    """Editable CX-native generator contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    prompt_text: str = ""
+    placeholders: list[dict[str, Any]] = Field(default_factory=list)
+    llm_model_settings: dict[str, Any] = Field(default_factory=dict)
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableWebhook(BaseModel):
+    """Editable CX-native webhook contract."""
+
+    id: str
+    resource_name: str = ""
+    display_name: str = ""
+    url: str = ""
+    headers: dict[str, str] = Field(default_factory=dict)
+    timeout_ms: int = 30000
+    disabled: bool = False
+    projection: CxProjectionMetadata = Field(default_factory=CxProjectionMetadata)
+
+
+class CxEditableWorkspace(BaseModel):
+    """Top-level editable CX-native contract stored in imported workspaces."""
+
+    source_platform: str = "cx_studio"
+    target_platform: str = "cx_agent_studio"
+    projection_summary: CxProjectionSummary = Field(default_factory=CxProjectionSummary)
+    playbooks: dict[str, CxEditablePlaybook] = Field(default_factory=dict)
+    flows: dict[str, CxEditableFlow] = Field(default_factory=dict)
+    transition_route_groups: dict[str, CxEditableTransitionRouteGroup] = Field(default_factory=dict)
+    intents: dict[str, CxEditableIntent] = Field(default_factory=dict)
+    entity_types: dict[str, CxEditableEntityType] = Field(default_factory=dict)
+    generators: dict[str, CxEditableGenerator] = Field(default_factory=dict)
+    webhooks: dict[str, CxEditableWebhook] = Field(default_factory=dict)
+    preserved: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
+
+
 class CxTestCase(BaseModel):
     """Dialogflow CX test case subset."""
 
@@ -224,6 +379,7 @@ class CxAgentSnapshot(BaseModel):
 
     agent: CxAgent = Field(default_factory=CxAgent)
     flows: list[CxFlow] = Field(default_factory=list)
+    transition_route_groups: list[CxTransitionRouteGroup] = Field(default_factory=list)
     intents: list[CxIntent] = Field(default_factory=list)
     entity_types: list[CxEntityType] = Field(default_factory=list)
     webhooks: list[CxWebhook] = Field(default_factory=list)

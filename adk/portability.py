@@ -16,6 +16,7 @@ from portability.types import (
     PortabilityReport,
     PortabilityStatus,
     PortabilitySurface,
+    ProjectionQualityStatus,
 )
 
 
@@ -64,6 +65,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.OPTIMIZABLE,
             export_status=ExportReadinessStatus.READY,
             optimization_surface_id="instructions",
+            projection_quality=ProjectionQualityStatus.FAITHFUL,
             rationale=["Root and specialist instructions are parsed and can be written back to ADK source."],
         ),
         PortabilitySurface(
@@ -73,6 +75,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.OPTIMIZABLE,
             export_status=ExportReadinessStatus.READY,
             optimization_surface_id="model_selection",
+            projection_quality=ProjectionQualityStatus.FAITHFUL,
             rationale=["Model overrides are preserved through import and exporter write-back."],
         ),
         PortabilitySurface(
@@ -82,6 +85,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.OPTIMIZABLE,
             export_status=ExportReadinessStatus.READY,
             optimization_surface_id="generation_settings",
+            projection_quality=ProjectionQualityStatus.FAITHFUL,
             rationale=["Temperature and token limits are imported and exporter-managed via config.json."],
         ),
         PortabilitySurface(
@@ -91,6 +95,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.OPTIMIZABLE if tool_count else PortabilityStatus.UNSUPPORTED,
             export_status=ExportReadinessStatus.READY if tool_count else ExportReadinessStatus.BLOCKED,
             optimization_surface_id="tool_runtime_config",
+            projection_quality=ProjectionQualityStatus.APPROXIMATED if tool_count else None,
             rationale=["Tool descriptions and signatures are visible, and ADK docstrings can be patched on export."],
             metadata={"tool_count": tool_count},
         ),
@@ -100,6 +105,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             coverage_status=ImportCoverageStatus.IMPORTED if tool_count else ImportCoverageStatus.MISSING,
             portability_status=PortabilityStatus.READ_ONLY if tool_count else PortabilityStatus.UNSUPPORTED,
             export_status=ExportReadinessStatus.BLOCKED,
+            projection_quality=ProjectionQualityStatus.PRESERVED_ONLY if tool_count else None,
             rationale=["Tool function bodies are surfaced for review, but code edits are not pushed back automatically."],
             metadata={"tool_count": tool_count},
         ),
@@ -110,6 +116,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.OPTIMIZABLE if has_routing else PortabilityStatus.UNSUPPORTED,
             export_status=ExportReadinessStatus.BLOCKED if has_routing else ExportReadinessStatus.BLOCKED,
             optimization_surface_id="routing",
+            projection_quality=ProjectionQualityStatus.APPROXIMATED if has_routing else None,
             rationale=["Sub-agent routing is imported into AgentLab config, but exporter write-back for delegation changes is not implemented."],
             metadata={"agent_count": agent_count},
         ),
@@ -120,6 +127,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.READ_ONLY if callback_count else PortabilityStatus.UNSUPPORTED,
             export_status=ExportReadinessStatus.BLOCKED,
             optimization_surface_id="callbacks",
+            projection_quality=ProjectionQualityStatus.PRESERVED_ONLY if callback_count else None,
             rationale=["Callback bindings are first-class in the report, but they are not yet editable through safe round-trip flows."],
             metadata={"callback_count": callback_count},
         ),
@@ -130,6 +138,7 @@ def _build_surfaces(agent_tree: AdkAgentTree, callbacks: list[ImportedCallback])
             portability_status=PortabilityStatus.READ_ONLY,
             export_status=ExportReadinessStatus.BLOCKED,
             optimization_surface_id="workflow_topology",
+            projection_quality=ProjectionQualityStatus.APPROXIMATED if agent_count else None,
             rationale=["Agent hierarchy and orchestration type are surfaced for visibility, but topology edits are not written back today."],
             metadata={"agent_count": agent_count},
         ),

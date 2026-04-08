@@ -302,8 +302,11 @@ class CxExporter:
 
         updated_resources += self._apply_playbook_changes(source, target)
         updated_resources += self._apply_flow_changes(source, target)
+        updated_resources += self._apply_page_changes(source, target)
+        updated_resources += self._apply_transition_route_group_changes(source, target)
         updated_resources += self._apply_intent_changes(source, target)
         updated_resources += self._apply_entity_type_changes(source, target)
+        updated_resources += self._apply_generator_changes(source, target)
         updated_resources += self._apply_webhook_changes(source, target)
         return updated_resources
 
@@ -314,23 +317,34 @@ class CxExporter:
         source_map = {playbook.name: playbook for playbook in source.playbooks}
         for playbook in target.playbooks:
             original = source_map.get(playbook.name)
+            payload = {
+                "displayName": playbook.display_name,
+                "instruction": playbook.instruction_text,
+                "goal": playbook.goal,
+                "inputParameterDefinitions": playbook.input_parameter_definitions,
+                "outputParameterDefinitions": playbook.output_parameter_definitions,
+                "handlers": playbook.handlers,
+            }
             if original is None:
-                self._client.create_playbook(
-                    target.agent.name,
-                    {
-                        "displayName": playbook.display_name,
-                        "instruction": playbook.instruction_text,
-                    },
-                )
+                self._client.create_playbook(target.agent.name, payload)
                 updated += 1
-            elif original.instruction_text != playbook.instruction_text:
+            elif (
+                original.instruction_text != playbook.instruction_text
+                or original.goal != playbook.goal
+                or original.input_parameter_definitions != playbook.input_parameter_definitions
+                or original.output_parameter_definitions != playbook.output_parameter_definitions
+                or original.handlers != playbook.handlers
+            ):
                 self._client.update_playbook(
                     playbook.name,
-                    {
-                        "displayName": playbook.display_name,
-                        "instruction": playbook.instruction_text,
-                    },
-                    update_mask=["instruction"],
+                    payload,
+                    update_mask=[
+                        "instruction",
+                        "goal",
+                        "input_parameter_definitions",
+                        "output_parameter_definitions",
+                        "handlers",
+                    ],
                 )
                 updated += 1
         return updated
@@ -342,27 +356,101 @@ class CxExporter:
         source_map = {flow.name: flow for flow in source.flows}
         for flow in target.flows:
             original = source_map.get(flow.name)
+            payload = {
+                "displayName": flow.display_name,
+                "description": flow.description,
+                "transitionRoutes": flow.transition_routes,
+                "eventHandlers": flow.event_handlers,
+                "transitionRouteGroups": flow.transition_route_groups,
+            }
             if original is None:
-                self._client.create_flow(
-                    target.agent.name,
-                    {
-                        "displayName": flow.display_name,
-                        "description": flow.description,
-                        "transitionRoutes": flow.transition_routes,
-                        "eventHandlers": flow.event_handlers,
-                    },
-                )
+                self._client.create_flow(target.agent.name, payload)
                 updated += 1
-            elif original.description != flow.description or original.transition_routes != flow.transition_routes:
+            elif (
+                original.description != flow.description
+                or original.transition_routes != flow.transition_routes
+                or original.event_handlers != flow.event_handlers
+                or original.transition_route_groups != flow.transition_route_groups
+            ):
                 self._client.update_flow(
                     flow.name,
+                    payload,
+                    update_mask=[
+                        "description",
+                        "transition_routes",
+                        "event_handlers",
+                        "transition_route_groups",
+                    ],
+                )
+                updated += 1
+        return updated
+
+    def _apply_page_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push page updates for existing flows."""
+
+        updated = 0
+        source_pages = {
+            page.name: page
+            for flow in source.flows
+            for page in flow.pages
+        }
+
+        for flow in target.flows:
+            for page in flow.pages:
+                original = source_pages.get(page.name)
+                if original is None:
+                    continue
+                if (
+                    original.entry_fulfillment == page.entry_fulfillment
+                    and original.form == page.form
+                    and original.transition_routes == page.transition_routes
+                    and original.event_handlers == page.event_handlers
+                    and original.transition_route_groups == page.transition_route_groups
+                ):
+                    continue
+                self._client.update_page(
+                    page.name,
                     {
-                        "displayName": flow.display_name,
-                        "description": flow.description,
-                        "transitionRoutes": flow.transition_routes,
-                        "eventHandlers": flow.event_handlers,
+                        "displayName": page.display_name,
+                        "entryFulfillment": page.entry_fulfillment,
+                        "form": page.form,
+                        "transitionRoutes": page.transition_routes,
+                        "eventHandlers": page.event_handlers,
+                        "transitionRouteGroups": page.transition_route_groups,
                     },
-                    update_mask=["description", "transition_routes"],
+                    update_mask=[
+                        "entry_fulfillment",
+                        "form",
+                        "transition_routes",
+                        "event_handlers",
+                        "transition_route_groups",
+                    ],
+                )
+                updated += 1
+        return updated
+
+    def _apply_transition_route_group_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push transition route group adds/updates."""
+
+        updated = 0
+        source_map = {
+            route_group.name: route_group
+            for route_group in source.transition_route_groups
+        }
+        for route_group in target.transition_route_groups:
+            payload = {
+                "displayName": route_group.display_name,
+                "transitionRoutes": route_group.transition_routes,
+            }
+            original = source_map.get(route_group.name)
+            if original is None:
+                self._client.create_transition_route_group(target.agent.name, payload)
+                updated += 1
+            elif original.transition_routes != route_group.transition_routes:
+                self._client.update_transition_route_group(
+                    route_group.name,
+                    payload,
+                    update_mask=["transition_routes"],
                 )
                 updated += 1
         return updated
@@ -374,23 +462,22 @@ class CxExporter:
         source_map = {intent.name: intent for intent in source.intents}
         for intent in target.intents:
             original = source_map.get(intent.name)
+            payload = {
+                "displayName": intent.display_name,
+                "trainingPhrases": intent.training_phrases,
+                "parameters": intent.parameters,
+            }
             if original is None:
-                self._client.create_intent(
-                    target.agent.name,
-                    {
-                        "displayName": intent.display_name,
-                        "trainingPhrases": intent.training_phrases,
-                    },
-                )
+                self._client.create_intent(target.agent.name, payload)
                 updated += 1
-            elif original.training_phrases != intent.training_phrases:
+            elif (
+                original.training_phrases != intent.training_phrases
+                or original.parameters != intent.parameters
+            ):
                 self._client.update_intent(
                     intent.name,
-                    {
-                        "displayName": intent.display_name,
-                        "trainingPhrases": intent.training_phrases,
-                    },
-                    update_mask=["training_phrases"],
+                    payload,
+                    update_mask=["training_phrases", "parameters"],
                 )
                 updated += 1
         return updated
@@ -408,6 +495,7 @@ class CxExporter:
                     {
                         "displayName": entity_type.display_name,
                         "kind": entity_type.kind,
+                        "autoExpansionMode": entity_type.auto_expansion_mode,
                         "entities": entity_type.entities,
                         "excludedPhrases": entity_type.excluded_phrases,
                     },
@@ -417,16 +505,47 @@ class CxExporter:
                 original.entities != entity_type.entities
                 or original.excluded_phrases != entity_type.excluded_phrases
                 or original.kind != entity_type.kind
+                or original.auto_expansion_mode != entity_type.auto_expansion_mode
             ):
                 self._client.update_entity_type(
                     entity_type.name,
                     {
                         "displayName": entity_type.display_name,
                         "kind": entity_type.kind,
+                        "autoExpansionMode": entity_type.auto_expansion_mode,
                         "entities": entity_type.entities,
                         "excludedPhrases": entity_type.excluded_phrases,
                     },
-                    update_mask=["kind", "entities", "excluded_phrases"],
+                    update_mask=["kind", "auto_expansion_mode", "entities", "excluded_phrases"],
+                )
+                updated += 1
+        return updated
+
+    def _apply_generator_changes(self, source: CxAgentSnapshot, target: CxAgentSnapshot) -> int:
+        """Push generator adds/updates."""
+
+        updated = 0
+        source_map = {generator.name: generator for generator in source.generators}
+        for generator in target.generators:
+            payload = {
+                "displayName": generator.display_name,
+                "promptText": generator.prompt_text,
+                "placeholders": generator.placeholders,
+                "llmModelSettings": generator.llm_model_settings,
+            }
+            original = source_map.get(generator.name)
+            if original is None:
+                self._client.create_generator(target.agent.name, payload)
+                updated += 1
+            elif (
+                original.prompt_text != generator.prompt_text
+                or original.placeholders != generator.placeholders
+                or original.llm_model_settings != generator.llm_model_settings
+            ):
+                self._client.update_generator(
+                    generator.name,
+                    payload,
+                    update_mask=["prompt_text", "placeholders", "llm_model_settings"],
                 )
                 updated += 1
         return updated
@@ -480,6 +599,18 @@ class CxExporter:
                 "value": playbook.instruction_text,
                 "display_name": playbook.display_name or playbook.name.split("/")[-1],
             }
+            fields[("playbook", playbook.name, "input_parameter_definitions")] = {
+                "value": playbook.input_parameter_definitions,
+                "display_name": playbook.display_name or playbook.name.split("/")[-1],
+            }
+            fields[("playbook", playbook.name, "output_parameter_definitions")] = {
+                "value": playbook.output_parameter_definitions,
+                "display_name": playbook.display_name or playbook.name.split("/")[-1],
+            }
+            fields[("playbook", playbook.name, "handlers")] = {
+                "value": playbook.handlers,
+                "display_name": playbook.display_name or playbook.name.split("/")[-1],
+            }
 
         for flow in snapshot.flows:
             fields[("flow", flow.name, "description")] = {
@@ -490,10 +621,39 @@ class CxExporter:
                 "value": flow.transition_routes,
                 "display_name": flow.display_name or flow.name.split("/")[-1],
             }
+            fields[("flow", flow.name, "event_handlers")] = {
+                "value": flow.event_handlers,
+                "display_name": flow.display_name or flow.name.split("/")[-1],
+            }
+            fields[("flow", flow.name, "transition_route_groups")] = {
+                "value": flow.transition_route_groups,
+                "display_name": flow.display_name or flow.name.split("/")[-1],
+            }
+            for page in flow.pages:
+                fields[("page", page.name, "form")] = {
+                    "value": page.form,
+                    "display_name": page.display_name or page.name.split("/")[-1],
+                }
+                fields[("page", page.name, "transition_routes")] = {
+                    "value": page.transition_routes,
+                    "display_name": page.display_name or page.name.split("/")[-1],
+                }
+                fields[("page", page.name, "event_handlers")] = {
+                    "value": page.event_handlers,
+                    "display_name": page.display_name or page.name.split("/")[-1],
+                }
+                fields[("page", page.name, "transition_route_groups")] = {
+                    "value": page.transition_route_groups,
+                    "display_name": page.display_name or page.name.split("/")[-1],
+                }
 
         for intent in snapshot.intents:
             fields[("intent", intent.name, "training_phrases")] = {
                 "value": intent.training_phrases,
+                "display_name": intent.display_name or intent.name.split("/")[-1],
+            }
+            fields[("intent", intent.name, "parameters")] = {
+                "value": intent.parameters,
                 "display_name": intent.display_name or intent.name.split("/")[-1],
             }
 
@@ -525,6 +685,26 @@ class CxExporter:
                 "display_name": webhook.display_name or webhook.name.split("/")[-1],
             }
 
+        for route_group in snapshot.transition_route_groups:
+            fields[("transition_route_group", route_group.name, "transition_routes")] = {
+                "value": route_group.transition_routes,
+                "display_name": route_group.display_name or route_group.name.split("/")[-1],
+            }
+
+        for generator in snapshot.generators:
+            fields[("generator", generator.name, "prompt_text")] = {
+                "value": generator.prompt_text,
+                "display_name": generator.display_name or generator.name.split("/")[-1],
+            }
+            fields[("generator", generator.name, "placeholders")] = {
+                "value": generator.placeholders,
+                "display_name": generator.display_name or generator.name.split("/")[-1],
+            }
+            fields[("generator", generator.name, "llm_model_settings")] = {
+                "value": generator.llm_model_settings,
+                "display_name": generator.display_name or generator.name.split("/")[-1],
+            }
+
         return fields
 
     @staticmethod
@@ -546,6 +726,12 @@ class CxExporter:
                 if field == "instruction":
                     playbook.instruction = value
                     playbook.instructions = [line for line in str(value).splitlines() if line.strip()]
+                elif field == "input_parameter_definitions":
+                    playbook.input_parameter_definitions = value
+                elif field == "output_parameter_definitions":
+                    playbook.output_parameter_definitions = value
+                elif field == "handlers":
+                    playbook.handlers = value
                 return
 
         if resource_type == "flow":
@@ -556,13 +742,36 @@ class CxExporter:
                     flow.description = value
                 elif field == "transition_routes":
                     flow.transition_routes = value
+                elif field == "event_handlers":
+                    flow.event_handlers = value
+                elif field == "transition_route_groups":
+                    flow.transition_route_groups = value
                 return
+
+        if resource_type == "page":
+            for flow in snapshot.flows:
+                for page in flow.pages:
+                    if page.name != resource_name:
+                        continue
+                    if field == "form":
+                        page.form = value
+                    elif field == "transition_routes":
+                        page.transition_routes = value
+                    elif field == "event_handlers":
+                        page.event_handlers = value
+                    elif field == "transition_route_groups":
+                        page.transition_route_groups = value
+                    return
 
         if resource_type == "intent":
             for intent in snapshot.intents:
-                if intent.name == resource_name and field == "training_phrases":
+                if intent.name != resource_name:
+                    continue
+                if field == "training_phrases":
                     intent.training_phrases = value
-                    return
+                elif field == "parameters":
+                    intent.parameters = value
+                return
 
         if resource_type == "entity_type":
             for entity_type in snapshot.entity_types:
@@ -586,4 +795,22 @@ class CxExporter:
                     webhook.timeout_seconds = value
                 elif field == "disabled":
                     webhook.disabled = value
+                return
+
+        if resource_type == "transition_route_group":
+            for route_group in snapshot.transition_route_groups:
+                if route_group.name == resource_name and field == "transition_routes":
+                    route_group.transition_routes = value
+                    return
+
+        if resource_type == "generator":
+            for generator in snapshot.generators:
+                if generator.name != resource_name:
+                    continue
+                if field == "prompt_text":
+                    generator.prompt_text = value
+                elif field == "placeholders":
+                    generator.placeholders = value
+                elif field == "llm_model_settings":
+                    generator.llm_model_settings = value
                 return

@@ -12,6 +12,7 @@ from portability.types import (
     ParityStatus,
     PortabilityStatus,
     PortabilitySurface,
+    ProjectionQualityStatus,
 )
 
 from .types import CxAgentSnapshot
@@ -57,6 +58,7 @@ class CxSurfaceDefinition:
     code_refs: tuple[str, ...]
     notes: str
     detector: Callable[[CxAgentSnapshot], SurfaceEvidence]
+    projection_quality_when_present: ProjectionQualityStatus | None = None
 
     def build_surface(self, snapshot: CxAgentSnapshot) -> PortabilitySurface:
         """Materialize one runtime portability row for the given snapshot."""
@@ -81,6 +83,11 @@ class CxSurfaceDefinition:
             portability_status=portability_status,
             export_status=export_status,
             optimization_surface_id=self.optimization_surface_id,
+            projection_quality=(
+                self.projection_quality_when_present
+                if evidence.coverage_status != ImportCoverageStatus.MISSING
+                else None
+            ),
             rationale=[self.notes],
             source_refs=evidence.source_refs,
             documentation_refs=list(self.documentation_refs),
@@ -296,6 +303,13 @@ def _intent_parameters_evidence(snapshot: CxAgentSnapshot) -> SurfaceEvidence:
 
 
 def _transition_route_groups_evidence(snapshot: CxAgentSnapshot) -> SurfaceEvidence:
+    if snapshot.transition_route_groups:
+        return _evidence(
+            ImportCoverageStatus.IMPORTED,
+            [route_group.name for route_group in snapshot.transition_route_groups],
+            {"transition_route_group_count": len(snapshot.transition_route_groups)},
+        )
+
     refs = [
         route_group
         for flow in snapshot.flows
@@ -309,7 +323,7 @@ def _transition_route_groups_evidence(snapshot: CxAgentSnapshot) -> SurfaceEvide
     )
     if refs:
         return _evidence(
-            ImportCoverageStatus.REFERENCED,
+            ImportCoverageStatus.PARTIAL,
             list(dict.fromkeys(refs)),
             {"transition_route_group_count": len(set(refs))},
         )
@@ -359,6 +373,7 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         parity_status=ParityStatus.SUPPORTED,
         portability_when_present=PortabilityStatus.OPTIMIZABLE,
         export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="instructions",
         documentation_refs=(_PLAYBOOK_DOC, _AGENT_DOC),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_agent_mapper.py", "cx_studio/exporter.py"),
@@ -371,6 +386,7 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         parity_status=ParityStatus.SUPPORTED,
         portability_when_present=PortabilityStatus.OPTIMIZABLE,
         export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="model_selection",
         documentation_refs=(_AGENT_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_agent_mapper.py", "cx_studio/exporter.py"),
@@ -383,6 +399,7 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         parity_status=ParityStatus.SUPPORTED,
         portability_when_present=PortabilityStatus.OPTIMIZABLE,
         export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="tool_runtime_config",
         documentation_refs=(_WEBHOOK_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py", "adapters/cx_agent_mapper.py", "cx_studio/exporter.py"),
@@ -394,23 +411,25 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         label="Routing",
         parity_status=ParityStatus.PARTIAL,
         portability_when_present=PortabilityStatus.OPTIMIZABLE,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="routing",
         documentation_refs=(_FLOW_DOC, _PAGE_DOC, _INTENT_DOC),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_agent_mapper.py", "cx_studio/exporter.py"),
-        notes="Flow routes and intent cues become editable AgentLab routing rules, but mapper write-back for those edits is still blocked.",
+        notes="Flow routes, page routes, route-group references, and intent cues are now exposed as editable CX-native routing structures.",
         detector=_routing_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="flows",
         label="Flows and Pages",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.PARTIAL,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="workflow_topology",
         documentation_refs=(_FLOW_DOC, _PAGE_DOC),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py", "cx_studio/portability.py"),
-        notes="Flow and page resources are fetched and preserved, but the current config contract does not expose them as editable structures.",
+        notes="Flow and page resources are fetched into typed CX-native structures and the writable subset now round-trips through the exporter.",
         detector=_flows_evidence,
     ),
     CxSurfaceDefinition(
@@ -428,37 +447,40 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
     CxSurfaceDefinition(
         surface_id="intents",
         label="Intents",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.SUPPORTED,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="routing",
         documentation_refs=(_INTENT_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py", "adapters/cx_agent_mapper.py"),
-        notes="Training phrases are fetched and used to derive routing hints, but they are not directly editable in AgentLab config today.",
+        notes="Intent training phrases are now imported into typed CX-native records and written back through the exporter.",
         detector=_intents_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="intent_parameters",
         label="Intent Parameters",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.PARTIAL,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="routing",
         documentation_refs=(_INTENT_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Intent parameter schemas are imported for classification only; the editable workspace contract does not expose them.",
+        notes="Intent parameter schemas are now imported into editable CX-native records and exported with their parent intent.",
         detector=_intent_parameters_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="entity_types",
         label="Entity Types",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.SUPPORTED,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="tool_runtime_config",
         documentation_refs=(_ENTITY_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py", "cx_studio/exporter.py"),
-        notes="Entity types are fully fetched and preserved, but there is no editable AgentLab surface for them yet.",
+        notes="Entity types are now represented as editable CX-native records and round-trip through the exporter.",
         detector=_entity_types_evidence,
     ),
     CxSurfaceDefinition(
@@ -479,6 +501,7 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         parity_status=ParityStatus.UNSUPPORTED,
         portability_when_present=PortabilityStatus.UNSUPPORTED,
         export_when_present=ExportReadinessStatus.BLOCKED,
+        projection_quality_when_present=ProjectionQualityStatus.PRESERVED_ONLY,
         optimization_surface_id="callbacks",
         documentation_refs=(_GENERATOR_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "cx_studio/portability.py"),
@@ -491,6 +514,7 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
         parity_status=ParityStatus.READ_ONLY,
         portability_when_present=PortabilityStatus.READ_ONLY,
         export_when_present=ExportReadinessStatus.BLOCKED,
+        projection_quality_when_present=ProjectionQualityStatus.PRESERVED_ONLY,
         optimization_surface_id="model_selection",
         documentation_refs=(_AGENT_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
@@ -500,25 +524,27 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
     CxSurfaceDefinition(
         surface_id="playbook_parameters",
         label="Playbook Parameters",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.SUPPORTED,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="instructions",
         documentation_refs=(_PLAYBOOK_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Playbook input and output parameter definitions are imported for classification, but not surfaced in editable config.",
+        notes="Playbook parameter definitions are now surfaced in typed CX-native records and exported with playbook updates.",
         detector=_playbook_parameters_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="playbook_handlers",
         label="Playbook Handlers",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.PARTIAL,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="instructions",
         documentation_refs=(_PLAYBOOK_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Playbook handlers are fetched and reported, but the current AgentLab config cannot edit or round-trip them.",
+        notes="Playbook handlers are now editable in the CX-native contract and export with playbook updates.",
         detector=_playbook_handlers_evidence,
     ),
     CxSurfaceDefinition(
@@ -548,37 +574,40 @@ _DEFINITIONS: tuple[CxSurfaceDefinition, ...] = (
     CxSurfaceDefinition(
         surface_id="page_forms",
         label="Page Forms",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.PARTIAL,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="workflow_topology",
         documentation_refs=(_PAGE_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Page forms are preserved in the snapshot and surfaced for reporting, but not editable via the current workspace contract.",
+        notes="Page forms are now editable inside the CX-native page contract and exported through page updates.",
         detector=_page_forms_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="transition_route_groups",
         label="Transition Route Groups",
         parity_status=ParityStatus.PARTIAL,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="routing",
         documentation_refs=(_ROUTE_GROUP_DOC, _FLOW_DOC),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Current imports preserve only route-group references embedded in flows and pages; the group resources themselves are not fetched.",
+        notes="Transition route groups are now fetched as first-class resources, editable in the CX-native contract, and exportable through the CX client.",
         detector=_transition_route_groups_evidence,
     ),
     CxSurfaceDefinition(
         surface_id="generators",
         label="Generators",
-        parity_status=ParityStatus.READ_ONLY,
-        portability_when_present=PortabilityStatus.READ_ONLY,
-        export_when_present=ExportReadinessStatus.BLOCKED,
+        parity_status=ParityStatus.PARTIAL,
+        portability_when_present=PortabilityStatus.OPTIMIZABLE,
+        export_when_present=ExportReadinessStatus.READY,
+        projection_quality_when_present=ProjectionQualityStatus.FAITHFUL,
         optimization_surface_id="callbacks",
         documentation_refs=(_GENERATOR_DOC,),
         code_refs=("cx_studio/surface_inventory.py", "adapters/cx_studio_client.py"),
-        notes="Generator resources are now fetched and classified, but they are not editable or mapped back into the shared callback contract yet.",
+        notes="Generator resources are now surfaced as editable CX-native records and the prompt/model subset exports back through the CX client.",
         detector=_generator_evidence,
     ),
     CxSurfaceDefinition(

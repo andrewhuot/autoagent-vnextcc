@@ -12,8 +12,55 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from cx_studio.types import (
+    CxEditableFlow,
+    CxEditableGenerator,
+    CxEditableIntent,
+    CxEditablePage,
+    CxEditablePlaybook,
+    CxEditableWorkspace,
+    CxProjectionMetadata,
+    CxProjectionSummary,
+)
+from portability.types import ProjectionQualityStatus
+
 from .errors import AdkImportError
 from .types import AdkAgentTree
+
+
+def _cx_projection(
+    *,
+    source_refs: list[str],
+    quality: ProjectionQualityStatus,
+    rationale: list[str],
+) -> CxProjectionMetadata:
+    """Build projection metadata for ADK-to-CX mappings."""
+
+    return CxProjectionMetadata(
+        quality=quality,
+        source_platform="adk",
+        source_refs=source_refs,
+        rationale=rationale,
+    )
+
+
+def _projection_summary(*collections: dict[str, Any]) -> CxProjectionSummary:
+    """Aggregate projection quality counts for the projected CX contract."""
+
+    qualities: list[ProjectionQualityStatus] = []
+    for collection in collections:
+        for value in collection.values():
+            projection = getattr(value, "projection", None)
+            if projection is None:
+                continue
+            qualities.append(projection.quality)
+
+    return CxProjectionSummary(
+        editable_surface_count=len(qualities),
+        faithful_count=sum(1 for quality in qualities if quality == ProjectionQualityStatus.FAITHFUL),
+        approximated_count=sum(1 for quality in qualities if quality == ProjectionQualityStatus.APPROXIMATED),
+        preserved_only_count=sum(1 for quality in qualities if quality == ProjectionQualityStatus.PRESERVED_ONLY),
+    )
 
 
 class AdkMapper:
@@ -48,10 +95,12 @@ class AdkMapper:
             AdkImportError: if the agent tree is structurally invalid.
         """
         try:
+            cx_workspace = self.build_cx_workspace(agent_tree)
             config: dict[str, Any] = {
                 "prompts": self._map_agents_to_prompts(agent_tree),
                 "tools": self._map_tools(agent_tree.tools),
                 "routing": self._map_routing(agent_tree.sub_agents),
+                "cx": cx_workspace.model_dump(mode="json"),
                 "_adk_metadata": {
                     "agent_name": agent_tree.agent.name,
                     "source_path": str(agent_tree.source_path),
@@ -74,6 +123,116 @@ class AdkMapper:
             raise AdkImportError(f"Failed to map ADK tree to AgentLab config: {exc}") from exc
 
         return config
+
+    def build_cx_workspace(self, agent_tree: AdkAgentTree) -> CxEditableWorkspace:
+        """Project an ADK tree into best-effort CX-native editable structures."""
+
+        playbooks: dict[str, CxEditablePlaybook] = {}
+        intents: dict[str, CxEditableIntent] = {}
+        generators: dict[str, CxEditableGenerator] = {}
+        preserved_tools = [tool.model_dump(mode="json") for tool in self._collect_tools(agent_tree)]
+
+        def visit(tree: AdkAgentTree) -> None:
+            agent_name = tree.agent.name or tree.source_path.name
+            agent_key = agent_name
+            agent_ref = str(tree.source_path / "agent.py")
+            playbooks[agent_key] = CxEditablePlaybook(
+                id=agent_key,
+                resource_name=f"projected://cx/playbooks/{agent_key}",
+                display_name=agent_name,
+                instructions=[tree.agent.instruction] if tree.agent.instruction else [],
+                referenced_tools=list(tree.agent.tools),
+                llm_model_settings={"model": tree.agent.model} if tree.agent.model else {},
+                projection=_cx_projection(
+                    source_refs=[agent_ref],
+                    quality=ProjectionQualityStatus.FAITHFUL,
+                    rationale=["ADK agent instructions project directly into CX playbook instructions."],
+                ),
+            )
+
+            for callback in tree.callbacks:
+                generator_key = self._project_generator_key(callback.function_name, callback.callback_type)
+                generators[generator_key] = CxEditableGenerator(
+                    id=generator_key,
+                    resource_name=f"projected://cx/generators/{generator_key}",
+                    display_name=callback.function_name,
+                    prompt_text=callback.description or f"Projected from ADK callback `{callback.function_name}`.",
+                    llm_model_settings={},
+                    projection=_cx_projection(
+                        source_refs=[agent_ref],
+                        quality=ProjectionQualityStatus.APPROXIMATED,
+                        rationale=["ADK callbacks require semantic reshaping to become CX generators."],
+                    ),
+                )
+
+            for child in tree.sub_agents:
+                child_name = child.agent.name or child.source_path.name
+                intents[child_name] = CxEditableIntent(
+                    id=child_name,
+                    resource_name=f"projected://cx/intents/{child_name}",
+                    display_name=child_name,
+                    training_phrases=[
+                        {"parts": [{"text": keyword}]}
+                        for keyword in self._derive_keywords_from_name(child_name)
+                    ],
+                    projection=_cx_projection(
+                        source_refs=[str(child.source_path / "agent.py")],
+                        quality=ProjectionQualityStatus.APPROXIMATED,
+                        rationale=["ADK delegation routes are approximated into CX intent-style routing cues."],
+                    ),
+                )
+                visit(child)
+
+        visit(agent_tree)
+
+        root_name = agent_tree.agent.name or agent_tree.source_path.name
+        root_key = f"{root_name}_router"
+        pages = {
+            child.agent.name or child.source_path.name: CxEditablePage(
+                id=child.agent.name or child.source_path.name,
+                resource_name=f"projected://cx/pages/{child.agent.name or child.source_path.name}",
+                display_name=child.agent.name or child.source_path.name,
+                projection=_cx_projection(
+                    source_refs=[str(child.source_path / "agent.py")],
+                    quality=ProjectionQualityStatus.APPROXIMATED,
+                    rationale=["ADK specialists are projected into CX pages for editable routing."],
+                ),
+            )
+            for child in agent_tree.sub_agents
+        }
+        flows: dict[str, CxEditableFlow] = {}
+        if agent_tree.sub_agents:
+            flows[root_key] = CxEditableFlow(
+                id=root_key,
+                resource_name=f"projected://cx/flows/{root_key}",
+                display_name=f"{root_name} Router",
+                description=agent_tree.agent.instruction,
+                transition_routes=[
+                    {
+                        "intent": child.agent.name or child.source_path.name,
+                        "targetPage": f"projected://cx/pages/{child.agent.name or child.source_path.name}",
+                    }
+                    for child in agent_tree.sub_agents
+                ],
+                pages=pages,
+                projection=_cx_projection(
+                    source_refs=[str(agent_tree.source_path / "agent.py")],
+                    quality=ProjectionQualityStatus.APPROXIMATED,
+                    rationale=["ADK orchestration is flattened into a CX flow/page router for optimization."],
+                ),
+            )
+
+        workspace = CxEditableWorkspace(
+            source_platform="adk",
+            target_platform="cx_agent_studio",
+            playbooks=playbooks,
+            flows=flows,
+            intents=intents,
+            generators=generators,
+            preserved={"tools": preserved_tools},
+        )
+        workspace.projection_summary = _projection_summary(playbooks, flows, intents, generators, pages)
+        return workspace
 
     # ------------------------------------------------------------------
     # AgentLab → ADK
@@ -229,6 +388,22 @@ class AdkMapper:
             settings["max_tokens"] = merged["max_tokens"]
 
         return settings
+
+    def _collect_tools(self, agent_tree: AdkAgentTree) -> list[Any]:
+        """Collect tools recursively for preserved source evidence."""
+
+        return list(agent_tree.tools) + [
+            tool
+            for child in agent_tree.sub_agents
+            for tool in self._collect_tools(child)
+        ]
+
+    @staticmethod
+    def _project_generator_key(function_name: str, callback_type: str) -> str:
+        """Return a stable projected CX generator id for an ADK callback."""
+
+        base = function_name or callback_type or "callback"
+        return base.replace("-", "_")
 
     # ------------------------------------------------------------------
     # Private helpers — AgentLab → ADK direction

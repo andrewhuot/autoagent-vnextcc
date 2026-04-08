@@ -42,6 +42,14 @@ class ExportReadinessStatus(str, Enum):
     BLOCKED = "blocked"
 
 
+class ProjectionQualityStatus(str, Enum):
+    """How faithfully a source construct projects into a target editable surface."""
+
+    FAITHFUL = "faithful"
+    APPROXIMATED = "approximated"
+    PRESERVED_ONLY = "preserved_only"
+
+
 class PortabilitySurface(BaseModel):
     """One modeled source-runtime surface in the portability report."""
 
@@ -52,6 +60,7 @@ class PortabilitySurface(BaseModel):
     portability_status: PortabilityStatus = PortabilityStatus.UNSUPPORTED
     export_status: ExportReadinessStatus = ExportReadinessStatus.BLOCKED
     optimization_surface_id: str = ""
+    projection_quality: ProjectionQualityStatus | None = None
     rationale: list[str] = Field(default_factory=list)
     source_refs: list[str] = Field(default_factory=list)
     documentation_refs: list[str] = Field(default_factory=list)
@@ -164,6 +173,10 @@ class PortabilitySummary(BaseModel):
     ready_export_surfaces: int = 0
     lossy_export_surfaces: int = 0
     blocked_export_surfaces: int = 0
+    editable_cx_surfaces: int = 0
+    faithful_projection_surfaces: int = 0
+    approximated_projection_surfaces: int = 0
+    preserved_only_projection_surfaces: int = 0
 
 
 class PortabilityReport(BaseModel):

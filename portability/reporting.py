@@ -15,6 +15,7 @@ from portability.types import (
     PortabilityStatus,
     PortabilitySummary,
     PortabilitySurface,
+    ProjectionQualityStatus,
 )
 
 
@@ -179,6 +180,18 @@ def build_portability_report(
         ready_export_surfaces=len(export_matrix.ready_surfaces),
         lossy_export_surfaces=len(export_matrix.lossy_surfaces),
         blocked_export_surfaces=len(export_matrix.blocked_surfaces),
+        editable_cx_surfaces=sum(
+            1 for surface in surfaces if surface.portability_status == PortabilityStatus.OPTIMIZABLE
+        ),
+        faithful_projection_surfaces=sum(
+            1 for surface in surfaces if surface.projection_quality == ProjectionQualityStatus.FAITHFUL
+        ),
+        approximated_projection_surfaces=sum(
+            1 for surface in surfaces if surface.projection_quality == ProjectionQualityStatus.APPROXIMATED
+        ),
+        preserved_only_projection_surfaces=sum(
+            1 for surface in surfaces if surface.projection_quality == ProjectionQualityStatus.PRESERVED_ONLY
+        ),
     )
 
     return PortabilityReport(

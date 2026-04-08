@@ -23,6 +23,7 @@ from cx_studio.types import (
     CxPlaybook,
     CxTestCase,
     CxTool,
+    CxTransitionRouteGroup,
     CxWebhook,
 )
 
@@ -334,6 +335,52 @@ class CxStudioClient:
         )
         return self._parse_page(response)
 
+    def list_transition_route_groups(self, agent_name: str) -> list[CxTransitionRouteGroup]:
+        """List transition route groups for an agent."""
+
+        items = self._iterate_pages(
+            f"{agent_name}/transitionRouteGroups",
+            item_key="transitionRouteGroups",
+            location=self._location_from_name(agent_name),
+        )
+        return [self._parse_transition_route_group(item) for item in items]
+
+    def create_transition_route_group(
+        self,
+        parent: str,
+        payload: dict[str, object],
+        route_group_id: str | None = None,
+    ) -> CxTransitionRouteGroup:
+        """Create a transition route group under an agent."""
+
+        response = self._request_json(
+            "POST",
+            f"{parent}/transitionRouteGroups",
+            location=self._location_from_name(parent),
+            params={"transitionRouteGroupId": route_group_id} if route_group_id else None,
+            json_body=payload,
+        )
+        return self._parse_transition_route_group(response)
+
+    def update_transition_route_group(
+        self,
+        route_group_name: str,
+        updates: dict[str, object],
+        update_mask: list[str] | None = None,
+    ) -> CxTransitionRouteGroup:
+        """Patch a transition route group."""
+
+        payload = dict(updates)
+        payload.setdefault("name", route_group_name)
+        response = self._request_json(
+            "PATCH",
+            route_group_name,
+            location=self._location_from_name(route_group_name),
+            params={"updateMask": ",".join(update_mask)} if update_mask else None,
+            json_body=payload,
+        )
+        return self._parse_transition_route_group(response)
+
     def list_intents(self, agent_name: str) -> list[CxIntent]:
         """List intents for an agent."""
 
@@ -502,6 +549,42 @@ class CxStudioClient:
         )
         return [self._parse_generator(item) for item in items]
 
+    def create_generator(
+        self,
+        parent: str,
+        payload: dict[str, object],
+        generator_id: str | None = None,
+    ) -> CxGenerator:
+        """Create a generator under an agent."""
+
+        response = self._request_json(
+            "POST",
+            f"{parent}/generators",
+            location=self._location_from_name(parent),
+            params={"generatorId": generator_id} if generator_id else None,
+            json_body=payload,
+        )
+        return self._parse_generator(response)
+
+    def update_generator(
+        self,
+        generator_name: str,
+        updates: dict[str, object],
+        update_mask: list[str] | None = None,
+    ) -> CxGenerator:
+        """Patch a generator."""
+
+        payload = dict(updates)
+        payload.setdefault("name", generator_name)
+        response = self._request_json(
+            "PATCH",
+            generator_name,
+            location=self._location_from_name(generator_name),
+            params={"updateMask": ",".join(update_mask)} if update_mask else None,
+            json_body=payload,
+        )
+        return self._parse_generator(response)
+
     def create_playbook(
         self,
         parent: str,
@@ -569,6 +652,7 @@ class CxStudioClient:
         return CxAgentSnapshot(
             agent=agent,
             flows=flows,
+            transition_route_groups=self.list_transition_route_groups(agent_name),
             intents=self.list_intents(agent_name),
             entity_types=self.list_entity_types(agent_name),
             webhooks=self.list_webhooks(agent_name),
@@ -636,6 +720,17 @@ class CxStudioClient:
             transition_route_groups=item.get("transitionRouteGroups", []),
             transition_routes=item.get("transitionRoutes", []),
             event_handlers=item.get("eventHandlers", []),
+            raw=dict(item),
+        )
+
+    @staticmethod
+    def _parse_transition_route_group(item: dict[str, Any]) -> CxTransitionRouteGroup:
+        """Parse a raw transition route group payload into a typed model."""
+
+        return CxTransitionRouteGroup(
+            name=item.get("name", ""),
+            display_name=item.get("displayName", ""),
+            transition_routes=item.get("transitionRoutes", []),
             raw=dict(item),
         )
 

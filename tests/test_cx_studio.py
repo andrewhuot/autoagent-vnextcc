@@ -13,11 +13,15 @@ from cx_studio.types import (
     CxAgent,
     CxAgentRef,
     CxAgentSnapshot,
+    CxEntityType,
     CxEnvironment,
     CxFlow,
+    CxGenerator,
     CxIntent,
+    CxPage,
     CxPlaybook,
     CxTestCase,
+    CxTransitionRouteGroup,
     CxTool,
     CxWidgetConfig,
     DeployResult,
@@ -45,24 +49,35 @@ def _make_ref() -> CxAgentRef:
 
 
 def _make_snapshot() -> CxAgentSnapshot:
+    agent_name = "projects/test-project/locations/us-central1/agents/agent-123"
+    flow_name = f"{agent_name}/flows/flow-1"
+    page_name = f"{flow_name}/pages/support-page"
+    intent_name = f"{agent_name}/intents/support_intent"
+    route_group_name = f"{agent_name}/transitionRouteGroups/shared-escalation"
+    generator_name = f"{agent_name}/generators/resolution-summary"
+    entity_name = f"{agent_name}/entityTypes/order-id"
+
     return CxAgentSnapshot(
         agent=CxAgent(
-            name="projects/test-project/locations/us-central1/agents/agent-123",
+            name=agent_name,
             display_name="Test Agent",
             default_language_code="en",
             description="A test agent",
-            generative_settings={"model": "gemini-2.0-flash"},
+            generative_settings={"llmModelSettings": {"model": "gemini-2.0-flash"}},
         ),
         playbooks=[
             CxPlaybook(
-                name="projects/test-project/locations/us-central1/agents/agent-123/playbooks/pb-1",
+                name=f"{agent_name}/playbooks/pb-1",
                 display_name="Main Playbook",
                 instructions=["You are a helpful assistant.", "Be concise and friendly."],
                 steps=[{"text": "Greet the user"}],
                 examples=[],
+                input_parameter_definitions=[{"name": "order_id", "type": "string"}],
+                output_parameter_definitions=[{"name": "resolution_status", "type": "string"}],
+                handlers=[{"event": "playbook-complete", "generator": generator_name}],
             ),
             CxPlaybook(
-                name="projects/test-project/locations/us-central1/agents/agent-123/playbooks/pb-2",
+                name=f"{agent_name}/playbooks/pb-2",
                 display_name="Support Playbook",
                 instructions=["Handle support requests.", "Escalate complex issues."],
                 steps=[],
@@ -79,28 +94,62 @@ def _make_snapshot() -> CxAgentSnapshot:
         ],
         flows=[
             CxFlow(
-                name="projects/test-project/locations/us-central1/agents/agent-123/flows/flow-1",
+                name=flow_name,
                 display_name="Default Start Flow",
-                pages=[],
+                transition_route_groups=[route_group_name],
+                pages=[
+                    CxPage(
+                        name=page_name,
+                        display_name="Support Page",
+                        form={"parameters": [{"displayName": "order_id", "required": True}]},
+                        transition_route_groups=[route_group_name],
+                        transition_routes=[],
+                        event_handlers=[],
+                    ),
+                ],
                 transition_routes=[
-                    {"condition": "true", "target_page": "support_page", "intent": "support_intent"}
+                    {"condition": "true", "targetPage": page_name, "intent": intent_name}
                 ],
                 event_handlers=[],
             ),
         ],
         intents=[
             CxIntent(
-                name="projects/test-project/locations/us-central1/agents/agent-123/intents/intent-1",
+                name=intent_name,
                 display_name="support_intent",
                 training_phrases=[
                     {"parts": [{"text": "I need help"}]},
                     {"parts": [{"text": "something is broken"}]},
                 ],
+                parameters=[{"id": "order_id", "entityType": "@sys.any"}],
             ),
+        ],
+        entity_types=[
+            CxEntityType(
+                name=entity_name,
+                display_name="order-id",
+                kind="KIND_MAP",
+                entities=[{"value": "1234", "synonyms": ["1234", "order 1234"]}],
+            ),
+        ],
+        transition_route_groups=[
+            CxTransitionRouteGroup(
+                name=route_group_name,
+                display_name="Shared Escalation",
+                transition_routes=[{"condition": "$session.params.escalate == true", "targetFlow": flow_name}],
+            )
+        ],
+        generators=[
+            CxGenerator(
+                name=generator_name,
+                display_name="Resolution Summary",
+                prompt_text="Summarize the resolution for the user.",
+                placeholders=[{"name": "resolution_status"}],
+            )
         ],
         test_cases=[
             CxTestCase(
-                name="projects/test-project/locations/us-central1/agents/agent-123/testCases/tc-1",
+                name=f"{agent_name}/testCases/tc-1",
                 display_name="Basic greeting test",
                 tags=["smoke"],
                 conversation_turns=[
@@ -208,6 +257,45 @@ class TestCxMapper:
         rules = config.get("routing", {}).get("rules", [])
         assert len(rules) >= 0  # May have rules from intents
 
+    def test_to_agentlab_builds_editable_cx_contract(self):
+        mapper = CxMapper()
+        snapshot = _make_snapshot()
+        config = mapper.to_agentlab(snapshot)
+
+        assert "cx" in config
+
+        cx = config["cx"]
+        assert cx["source_platform"] == "cx_studio"
+        assert cx["target_platform"] == "cx_agent_studio"
+        assert cx["projection_summary"]["faithful_count"] >= 6
+
+        playbook = cx["playbooks"]["main_playbook"]
+        assert playbook["projection"]["quality"] == "faithful"
+        assert playbook["input_parameters"][0]["name"] == "order_id"
+        assert playbook["handlers"][0]["event"] == "playbook-complete"
+
+        flow = cx["flows"]["default_start_flow"]
+        assert flow["projection"]["quality"] == "faithful"
+        assert flow["route_group_ids"] == ["shared_escalation"]
+        assert "support_page" in flow["pages"]
+        assert flow["pages"]["support_page"]["form"]["parameters"][0]["displayName"] == "order_id"
+
+        intent = cx["intents"]["support_intent"]
+        assert intent["projection"]["quality"] == "faithful"
+        assert intent["parameters"][0]["id"] == "order_id"
+
+        entity_type = cx["entity_types"]["order_id"]
+        assert entity_type["projection"]["quality"] == "faithful"
+        assert entity_type["entities"][0]["value"] == "1234"
+
+        generator = cx["generators"]["resolution_summary"]
+        assert generator["projection"]["quality"] == "faithful"
+        assert generator["prompt_text"] == "Summarize the resolution for the user."
+
+        route_group = cx["transition_route_groups"]["shared_escalation"]
+        assert route_group["projection"]["quality"] == "faithful"
+        assert route_group["transition_routes"][0]["condition"] == "$session.params.escalate == true"
+
     def test_extract_test_cases(self):
         mapper = CxMapper()
         snapshot = _make_snapshot()
@@ -246,6 +334,58 @@ class TestCxMapper:
         # Should preserve tools and environments from base
         assert len(updated.tools) == len(snapshot.tools)
         assert len(updated.environments) == len(snapshot.environments)
+
+    def test_to_cx_applies_edits_from_cx_native_contract(self):
+        mapper = CxMapper()
+        snapshot = _make_snapshot()
+        config = mapper.to_agentlab(snapshot)
+
+        config["cx"]["playbooks"]["main_playbook"]["instructions"] = [
+            "Gather the order ID first.",
+            "Summarize the final resolution.",
+        ]
+        config["cx"]["playbooks"]["main_playbook"]["input_parameters"] = [
+            {"name": "case_id", "type": "string"},
+        ]
+        config["cx"]["playbooks"]["main_playbook"]["handlers"] = [
+            {"event": "playbook-complete", "generator": snapshot.generators[0].name},
+            {"event": "playbook-failed", "generator": snapshot.generators[0].name},
+        ]
+        config["cx"]["flows"]["default_start_flow"]["transition_routes"] = [
+            {"condition": "$session.params.vip == true", "targetPage": snapshot.flows[0].pages[0].name}
+        ]
+        config["cx"]["flows"]["default_start_flow"]["pages"]["support_page"]["form"] = {
+            "parameters": [{"displayName": "case_id", "required": True}]
+        }
+        config["cx"]["intents"]["support_intent"]["training_phrases"] = [
+            {"parts": [{"text": "I need priority support"}]}
+        ]
+        config["cx"]["intents"]["support_intent"]["parameters"] = [
+            {"id": "case_id", "entityType": "@sys.any"}
+        ]
+        config["cx"]["entity_types"]["order_id"]["entities"] = [
+            {"value": "vip", "synonyms": ["vip customer"]}
+        ]
+        config["cx"]["generators"]["resolution_summary"]["prompt_text"] = "Summarize the resolution and next steps."
+        config["cx"]["transition_route_groups"]["shared_escalation"]["transition_routes"] = [
+            {"condition": "$session.params.needs_escalation == true", "targetFlow": snapshot.flows[0].name}
+        ]
+
+        updated = mapper.to_cx(config, snapshot)
+
+        assert updated.playbooks[0].instructions == [
+            "Gather the order ID first.",
+            "Summarize the final resolution.",
+        ]
+        assert updated.playbooks[0].input_parameter_definitions == [{"name": "case_id", "type": "string"}]
+        assert updated.playbooks[0].handlers[1]["event"] == "playbook-failed"
+        assert updated.flows[0].transition_routes[0]["condition"] == "$session.params.vip == true"
+        assert updated.flows[0].pages[0].form["parameters"][0]["displayName"] == "case_id"
+        assert updated.intents[0].training_phrases[0]["parts"][0]["text"] == "I need priority support"
+        assert updated.intents[0].parameters[0]["id"] == "case_id"
+        assert updated.entity_types[0].entities[0]["value"] == "vip"
+        assert updated.generators[0].prompt_text == "Summarize the resolution and next steps."
+        assert updated.transition_route_groups[0].transition_routes[0]["condition"] == "$session.params.needs_escalation == true"
 
 
 # ---------------------------------------------------------------------------

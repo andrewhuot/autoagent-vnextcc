@@ -16,6 +16,7 @@ from cx_studio.types import (
     CxAgent,
     CxAgentRef,
     CxAgentSnapshot,
+    CxEntityType,
     CxEnvironment,
     CxGenerator,
     CxFlow,
@@ -23,6 +24,7 @@ from cx_studio.types import (
     CxPage,
     CxPlaybook,
     CxTestCase,
+    CxTransitionRouteGroup,
     CxTool,
     CxWebhook,
 )
@@ -166,6 +168,7 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
     webhook_name = f"{agent_name}/webhooks/order-service"
     tool_name = f"{agent_name}/tools/faq-lookup"
     playbook_name = f"{agent_name}/playbooks/main"
+    route_group_name = f"{agent_name}/transitionRouteGroups/shared-escalation"
 
     return CxAgentSnapshot(
         agent=CxAgent(
@@ -193,7 +196,7 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                 name=start_flow_name,
                 display_name="Default Start Flow",
                 description="Handles incoming support requests.",
-                transition_route_groups=[f"{agent_name}/transitionRouteGroups/shared-escalation"],
+                transition_route_groups=[route_group_name],
                 transition_routes=[
                     {
                         "intent": intent_name,
@@ -206,12 +209,19 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                         name=order_page,
                         display_name="Order Status",
                         form={"parameters": [{"displayName": "order_id", "required": True}]},
-                        transition_route_groups=[f"{agent_name}/transitionRouteGroups/shared-escalation"],
+                        transition_route_groups=[route_group_name],
                         transition_routes=[],
                         event_handlers=[{"event": "sys.no-match-default", "targetFlow": start_flow_name}],
                     )
                 ],
                 event_handlers=[{"event": "sys.no-input-default", "targetPage": order_page}],
+            )
+        ],
+        transition_route_groups=[
+            CxTransitionRouteGroup(
+                name=route_group_name,
+                display_name="Shared Escalation",
+                transition_routes=[{"condition": "$session.params.needs_escalation == true", "targetFlow": start_flow_name}],
             )
         ],
         intents=[
@@ -220,6 +230,15 @@ def _make_cx_snapshot() -> CxAgentSnapshot:
                 display_name="Order Status",
                 training_phrases=[{"parts": [{"text": "where is my order"}]}],
                 parameters=[{"id": "order_id", "entityType": "@sys.any"}],
+            )
+        ],
+        entity_types=[
+            CxEntityType(
+                name=f"{agent_name}/entityTypes/order-id",
+                display_name="Order ID",
+                kind="KIND_MAP",
+                entities=[{"value": "A1234", "synonyms": ["order A1234", "A1234"]}],
+                auto_expansion_mode="AUTO_EXPANSION_MODE_DEFAULT",
             )
         ],
         webhooks=[
@@ -303,6 +322,18 @@ def test_adk_import_builds_portability_report_for_callback_rich_agent(tmp_path: 
     assert "routing" in report.export_matrix.blocked_surfaces
     assert "tool_code" in report.export_matrix.blocked_surfaces
     assert "callbacks" in report.export_matrix.blocked_surfaces
+    assert report.summary.faithful_projection_surfaces >= 2
+    assert report.summary.approximated_projection_surfaces >= 2
+    assert report.summary.preserved_only_projection_surfaces >= 1
+
+    instructions_surface = _surface(report, "instructions")
+    assert instructions_surface.projection_quality == "faithful"
+
+    routing_surface = _surface(report, "routing")
+    assert routing_surface.projection_quality == "approximated"
+
+    callbacks_surface = _surface(report, "callbacks")
+    assert callbacks_surface.projection_quality == "preserved_only"
 
 
 def test_adk_export_reports_round_trip_readiness_for_imported_agent(tmp_path: Path) -> None:
@@ -360,14 +391,15 @@ def test_cx_import_builds_portability_report_for_realistic_snapshot(tmp_path: Pa
     assert report.topology.summary.tool_count == 2
     assert report.summary.supported_parity_surfaces >= 3
     assert report.summary.partial_parity_surfaces >= 2
-    assert report.summary.read_only_parity_surfaces >= 6
-    assert report.summary.unsupported_parity_surfaces >= 2
+    assert report.summary.editable_cx_surfaces >= 8
+    assert report.summary.faithful_projection_surfaces >= 8
 
     instructions = _surface(report, "instructions")
     assert instructions.coverage_status == "imported"
     assert instructions.parity_status == "supported"
     assert instructions.portability_status == "optimizable"
     assert instructions.export_status == "ready"
+    assert instructions.projection_quality == "faithful"
     assert any("projects.locations.agents.playbooks" in ref for ref in instructions.documentation_refs)
     assert any("cx_studio/surface_inventory.py" in ref for ref in instructions.code_refs)
 
@@ -379,7 +411,9 @@ def test_cx_import_builds_portability_report_for_realistic_snapshot(tmp_path: Pa
 
     routing = _surface(report, "routing")
     assert routing.parity_status == "partial"
-    assert routing.export_status == "blocked"
+    assert routing.portability_status == "optimizable"
+    assert routing.export_status == "ready"
+    assert routing.projection_quality == "faithful"
 
     tools = _surface(report, "app_tools")
     assert tools.coverage_status == "imported"
@@ -392,27 +426,35 @@ def test_cx_import_builds_portability_report_for_realistic_snapshot(tmp_path: Pa
 
     playbook_parameters = _surface(report, "playbook_parameters")
     assert playbook_parameters.coverage_status == "imported"
-    assert playbook_parameters.parity_status == "read_only"
+    assert playbook_parameters.portability_status == "optimizable"
+    assert playbook_parameters.export_status == "ready"
 
     playbook_handlers = _surface(report, "playbook_handlers")
     assert playbook_handlers.coverage_status == "imported"
-    assert playbook_handlers.parity_status == "read_only"
+    assert playbook_handlers.portability_status == "optimizable"
+    assert playbook_handlers.export_status == "ready"
 
     page_forms = _surface(report, "page_forms")
     assert page_forms.coverage_status == "imported"
-    assert page_forms.parity_status == "read_only"
+    assert page_forms.portability_status == "optimizable"
 
     intent_parameters = _surface(report, "intent_parameters")
     assert intent_parameters.coverage_status == "imported"
-    assert intent_parameters.parity_status == "read_only"
+    assert intent_parameters.portability_status == "optimizable"
+    assert intent_parameters.export_status == "ready"
 
     route_groups = _surface(report, "transition_route_groups")
-    assert route_groups.coverage_status == "referenced"
-    assert route_groups.parity_status == "partial"
+    assert route_groups.coverage_status == "imported"
+    assert route_groups.portability_status == "optimizable"
 
     generators = _surface(report, "generators")
     assert generators.coverage_status == "imported"
-    assert generators.parity_status == "read_only"
+    assert generators.portability_status == "optimizable"
+    assert generators.export_status == "ready"
+
+    entity_types = _surface(report, "entity_types")
+    assert entity_types.portability_status == "optimizable"
+    assert entity_types.export_status == "ready"
 
     environments = _surface(report, "environments")
     assert environments.coverage_status == "imported"
@@ -463,5 +505,5 @@ def test_cx_export_reports_round_trip_readiness_for_workspace_config(tmp_path: P
     assert matrix.status == "lossy"
     assert "instructions" in matrix.ready_surfaces
     assert "webhooks" in matrix.ready_surfaces
-    assert "routing" in matrix.blocked_surfaces
+    assert "routing" in matrix.ready_surfaces
     assert "app_tools" in matrix.blocked_surfaces
