@@ -178,6 +178,7 @@ describe('Build', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Build' })).toBeInTheDocument();
+    expect(screen.getByText('Choose the workspace that fits this demo.')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Prompt' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Transcript' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Builder Chat' })).toBeInTheDocument();
@@ -202,6 +203,7 @@ describe('Build', () => {
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Conversational Builder')).toBeInTheDocument();
+    expect(screen.getByText('How this builder demo works')).toBeInTheDocument();
     expect(screen.getByTestId('builder-composer')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
@@ -233,7 +235,9 @@ describe('Build', () => {
     expect(screen.queryByRole('heading', { name: 'Live Config' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save to Workspace' })).toBeInTheDocument();
-    expect(screen.getByText('Saves the current draft before opening Eval Runs.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: save this draft, then open Eval Runs with the same config preselected.')
+    ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'View Config' }));
 
@@ -349,7 +353,7 @@ describe('Build', () => {
     expect(screen.getByRole('button', { name: 'Save & Run Eval' })).toBeInTheDocument();
     expect(
       screen.getByText(
-        'These actions save the current draft first so Eval Runs uses the exact config you just refined.'
+        'Save this draft first, then choose whether to generate evals or run them immediately from the same config.'
       )
     ).toBeInTheDocument();
 

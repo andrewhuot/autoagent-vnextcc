@@ -256,6 +256,8 @@ export function Build() {
         description={workspaceHeader.description}
       />
 
+      <BuildJourneyPanel activeTab={activeTab} />
+
       <BuildTabBar activeTab={activeTab} onChange={handleTabChange} />
 
       <div className="space-y-6">
@@ -320,10 +322,10 @@ export function BuilderChatWorkspace({
   const builderPreviewModeNotice = !session || session.mock_mode;
   const builderEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
   const builderEvalHelperText = !session?.session_id
-    ? 'Create a draft first, then continue into Eval Runs.'
+    ? 'Start with a draft on the left. Once the agent looks right, Save & Run Eval opens Eval Runs with this config already selected.'
     : savedAgent
-      ? 'Open Eval Runs with the saved draft already selected.'
-      : 'Saves the current draft before opening Eval Runs.';
+      ? 'Draft saved. Open Eval Runs with this exact config already selected.'
+      : 'Next: save this draft, then open Eval Runs with the same config preselected.';
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -582,6 +584,8 @@ export function BuilderChatWorkspace({
             data-testid="builder-message-list"
             className="flex-1 space-y-4 overflow-y-auto px-5 py-5"
           >
+            {!session?.session_id ? <BuilderWorkflowChecklist /> : null}
+
             {messages.map((message) => (
               <div
                 key={message.message_id}
@@ -772,8 +776,8 @@ export function BuilderChatWorkspace({
                   {savePending ? 'Saving...' : 'Save to Workspace'}
                 </button>
               </div>
-              <div className="mt-4 flex-1 overflow-y-auto">
-                <PreviewResultCard
+            <div className="mt-4 flex-1 overflow-y-auto">
+              <PreviewResultCard
                   result={previewResult}
                   emptyText="Run a sample conversation to verify the current builder draft against the runtime agent."
                 />
@@ -791,7 +795,10 @@ export function BuilderChatWorkspace({
               </div>
             </div>
 
-            <div className="mt-4 flex flex-wrap gap-2">
+            <JourneyActionPanel
+              title={savedAgent ? 'Saved draft ready for eval' : 'Next step'}
+              description={builderEvalHelperText}
+            >
               <button
                 data-testid="builder-run-eval"
                 onClick={() => void handleContinueToEval()}
@@ -801,8 +808,7 @@ export function BuilderChatWorkspace({
                 <Play className="h-4 w-4" />
                 {builderEvalLabel}
               </button>
-            </div>
-            <p className="mt-2 text-xs text-gray-500">{builderEvalHelperText}</p>
+            </JourneyActionPanel>
           </div>
         </aside>
       </div>
@@ -892,8 +898,8 @@ export function StudioWorkspace({
   const studioGenerateEvalLabel = savedAgent ? 'Generate Evals' : 'Save & Generate Evals';
   const studioRunEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
   const studioEvalHelperText = savedAgent
-    ? 'Use the saved draft to generate suites or jump straight into Eval Runs.'
-    : 'These actions save the current draft first so Eval Runs uses the exact config you just refined.';
+    ? 'The draft is saved. Generate suites or run evals immediately without reselecting the config.'
+    : 'Save this draft first, then choose whether to generate evals or run them immediately from the same config.';
 
   useEffect(() => {
     if (!agentConfig || previewComposer.trim()) {
@@ -1665,25 +1671,26 @@ export function StudioWorkspace({
                 </div>
               </div>
 
-              <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => void handleFlowToEvals('generate')}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
-                >
-                  <Sparkles className="h-4 w-4" />
-                  {studioGenerateEvalLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleFlowToEvals('run')}
-                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
-                >
-                  <Play className="h-4 w-4" />
-                  {studioRunEvalLabel}
-                </button>
-              </div>
-              <p className="mt-2 text-xs text-gray-500">{studioEvalHelperText}</p>
+              <JourneyActionPanel title="Next step" description={studioEvalHelperText}>
+                <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleFlowToEvals('generate')}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {studioGenerateEvalLabel}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handleFlowToEvals('run')}
+                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                  >
+                    <Play className="h-4 w-4" />
+                    {studioRunEvalLabel}
+                  </button>
+                </div>
+              </JourneyActionPanel>
             </div>
           )}
         </section>
@@ -1910,8 +1917,9 @@ function PreviewResultCard({
 }) {
   if (!result) {
     return (
-      <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-4 text-sm text-gray-500">
-        {emptyText}
+      <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-4">
+        <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">No preview yet</p>
+        <p className="mt-2 text-sm leading-6 text-gray-500">{emptyText}</p>
       </div>
     );
   }
@@ -1970,6 +1978,7 @@ function SaveResultCard({
       <p className="mt-2 text-sm font-medium text-emerald-900">{result.config_path}</p>
       <p className="mt-1 text-sm text-emerald-800">Config version: v{String(result.config_version).padStart(3, '0')}</p>
       <p className="mt-1 text-xs text-emerald-700">Eval cases: {result.eval_cases_path}</p>
+      <p className="mt-2 text-sm text-emerald-900">Next up: open Eval Runs with this saved draft already selected.</p>
     </div>
   );
 }
@@ -2271,6 +2280,43 @@ function BuildTabBar({
   );
 }
 
+function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
+  const tabLabels: Record<BuildTab, string> = {
+    prompt: 'Prompt draft',
+    transcript: 'Transcript draft',
+    'builder-chat': 'Builder chat draft',
+    'saved-artifacts': 'Saved artifacts',
+  };
+
+  return (
+    <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] px-5 py-5 shadow-sm shadow-sky-100/60">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+              Step 1 of 3
+            </span>
+            <span className="text-xs font-medium text-gray-500">Current workspace: {tabLabels[activeTab]}</span>
+          </div>
+          <h3 className="mt-3 text-lg font-semibold text-gray-900">Choose the workspace that fits this demo.</h3>
+          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-gray-600">
+            Prompt, transcript, and builder chat all end at the same handoff: save the draft once,
+            then open Eval Runs with that exact config already selected.
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-white bg-white/90 px-4 py-4 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">Next action</p>
+          <p className="mt-2 text-sm font-semibold text-gray-900">Save &amp; Run Eval</p>
+          <p className="mt-1 max-w-xs text-sm text-gray-600">
+            Use it when the draft looks right and AgentLab will carry the saved config straight into Eval Runs.
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function BuildTabPanel({
   id,
   active,
@@ -2284,6 +2330,54 @@ function BuildTabPanel({
     <section id={id} role="tabpanel" hidden={!active} aria-hidden={!active}>
       {children}
     </section>
+  );
+}
+
+function BuilderWorkflowChecklist() {
+  const steps = [
+    'Describe the job to be done and any must-have tools, policies, or routing.',
+    'Test the latest draft on the right with a realistic customer message.',
+    'Use Save & Run Eval to carry the same saved draft into Eval Runs.',
+  ];
+
+  return (
+    <div className="rounded-3xl border border-dashed border-sky-200 bg-sky-50/60 px-4 py-4">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+        How this builder demo works
+      </p>
+      <div className="mt-3 space-y-3">
+        {steps.map((step, index) => (
+          <div key={step} className="flex gap-3">
+            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-white text-xs font-semibold text-sky-700 shadow-sm">
+              {index + 1}
+            </span>
+            <p className="text-sm leading-6 text-sky-950">{step}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function JourneyActionPanel({
+  title,
+  description,
+  children,
+}: {
+  title: string;
+  description: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">{title}</p>
+          <p className="mt-2 text-sm leading-relaxed text-sky-950">{description}</p>
+        </div>
+        <div className="shrink-0">{children}</div>
+      </div>
+    </div>
   );
 }
 

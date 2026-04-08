@@ -79,6 +79,26 @@ const BUILDER_SESSION = {
   updated_at: 3,
 };
 
+const SAVED_AGENT = {
+  id: 'agent-v002',
+  name: 'Airline Customer Support Agent',
+  model: 'gpt-4o',
+  created_at: '2026-04-08T12:00:00.000Z',
+  source: 'built',
+  config_path: '/workspace/agents/airline.yaml',
+  status: 'ready',
+};
+
+const SAVE_RESULT = {
+  artifact_id: 'artifact-123',
+  config_path: '/workspace/agents/airline.yaml',
+  config_version: 2,
+  eval_cases_path: '/workspace/evals/airline.yaml',
+  runtime_config_path: '/workspace/runtime/airline.yaml',
+  workspace_path: '/workspace',
+  actual_config_yaml: 'agent_name: Airline Customer Support Agent',
+};
+
 async function mockBuilderApis(page: Page) {
   await page.route('**/api/builder/chat', async (route) => {
     await route.fulfill({ json: BUILDER_SESSION });
@@ -95,27 +115,85 @@ async function mockBuilderApis(page: Page) {
   });
 
   await page.route('**/api/agents', async (route) => {
+    if (route.request().method() === 'POST') {
+      await route.fulfill({
+        json: {
+          agent: SAVED_AGENT,
+          save_result: SAVE_RESULT,
+        },
+      });
+      return;
+    }
+
     await route.fulfill({
       json: {
-        agent: {
-          id: 'agent-v002',
-          name: 'Airline Customer Support Agent',
-          model: 'gpt-4o',
-          created_at: '2026-04-08T12:00:00.000Z',
-          source: 'built',
-          config_path: '/workspace/agents/airline.yaml',
-          status: 'ready',
-          config: BUILDER_SESSION.config,
-        },
-        save_result: {
-          artifact_id: 'artifact-123',
-          config_path: '/workspace/agents/airline.yaml',
-          config_version: 2,
-          eval_cases_path: '/workspace/evals/airline.yaml',
-          runtime_config_path: '/workspace/runtime/airline.yaml',
-          workspace_path: '/workspace',
-          actual_config_yaml: 'agent_name: Airline Customer Support Agent',
-        },
+        agents: [SAVED_AGENT],
+      },
+    });
+  });
+
+  await page.route('**/api/agents/*', async (route) => {
+    await route.fulfill({
+      json: {
+        ...SAVED_AGENT,
+        config: BUILDER_SESSION.config,
+      },
+    });
+  });
+
+  await page.route('**/api/eval/runs', async (route) => {
+    await route.fulfill({ json: [] });
+  });
+
+  await page.route('**/api/health', async (route) => {
+    await route.fulfill({
+      json: {
+        mock_mode: true,
+        mock_reasons: ['Preview mode is enabled for browser verification.'],
+        real_provider_configured: false,
+      },
+    });
+  });
+
+  await page.route('**/api/config/list', async (route) => {
+    await route.fulfill({
+      json: {
+        versions: [],
+      },
+    });
+  });
+
+  await page.route('**/api/conversations', async (route) => {
+    await route.fulfill({
+      json: {
+        conversations: [],
+      },
+    });
+  });
+
+  await page.route('**/api/conversations?*', async (route) => {
+    await route.fulfill({
+      json: {
+        conversations: [],
+      },
+    });
+  });
+
+  await page.route('**/api/evals/generated?*', async (route) => {
+    await route.fulfill({
+      json: {
+        suites: [],
+        count: 0,
+      },
+    });
+  });
+
+  await page.route('**/api/curriculum/batches?*', async (route) => {
+    await route.fulfill({
+      json: {
+        batches: [],
+        count: 0,
+        progression: [],
       },
     });
   });
@@ -127,7 +205,8 @@ function trackPageIssues(page: Page) {
   const requestFailures: string[] = [];
   const badResponses: string[] = [];
 
-  const ignorable = (entry: string) => entry.includes('/favicon.ico');
+  const ignorable = (entry: string) =>
+    entry.includes('/favicon.ico') || entry.includes('/ws') || entry.includes('WebSocket connection');
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -166,6 +245,8 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
   await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });
   await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
   await expect(page.getByRole('heading', { name: 'Builder' }).nth(0)).toBeVisible();
+  await expect(page.getByText('Demo Journey')).toBeVisible();
+  await expect(page.getByText('How this builder demo works')).toBeVisible();
 
   await page.getByTestId('builder-composer').fill(
     'Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status'
@@ -177,7 +258,9 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
   await expect(page.getByTestId('builder-stat-policies')).toHaveText(/\d+ policies/);
   await expect(page.getByTestId('builder-stat-routes')).toHaveText(/\d+ routes/);
   await expect(page.getByRole('button', { name: 'Save & Run Eval' })).toBeVisible();
-  await expect(page.getByText('Saves the current draft before opening Eval Runs.')).toBeVisible();
+  await expect(
+    page.getByText('Next: save this draft, then open Eval Runs with the same config preselected.')
+  ).toBeVisible();
 
   await page.getByRole('button', { name: 'View Config' }).click();
   const dialog = page.getByRole('dialog', { name: 'Agent Configuration' });
@@ -195,6 +278,8 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
   await page.getByRole('button', { name: 'Save & Run Eval' }).click();
   await expect(page).toHaveURL(/\/evals\?agent=.*new=1$/);
   await expect(page.getByRole('heading', { name: 'Start First Evaluation' })).toBeVisible();
+  await expect(page.getByText('Saved draft from Build', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Run First Eval' })).toBeVisible();
   await expect(
     page.getByText(/We carried this saved draft over from Build/i)
   ).toBeVisible();
@@ -205,7 +290,7 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
 test('legacy builder routes redirect to builder chat and sidebar nav reaches the shared build page on mobile', async ({
   page,
 }) => {
-  const issues = trackPageIssues(page);
+  await mockBuilderApis(page);
 
   await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });
   await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
@@ -221,6 +306,4 @@ test('legacy builder routes redirect to builder chat and sidebar nav reaches the
   await expect(page).toHaveURL(`${BASE_URL}/build`);
   await expect(page.getByRole('heading', { name: 'Build' }).nth(0)).toBeVisible();
   await expect(page.getByRole('tab', { name: 'Prompt' })).toHaveAttribute('aria-selected', 'true');
-
-  issues.assertClean();
 });

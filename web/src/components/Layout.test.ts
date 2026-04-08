@@ -160,6 +160,8 @@ describe('App', () => {
     render(createElement(App));
 
     expect(await screen.findByRole('heading', { name: 'Build', level: 2 })).toBeInTheDocument();
+    expect(screen.getByText('Demo Journey')).toBeInTheDocument();
+    expect(screen.getAllByText('Step 1 of 3').length).toBeGreaterThan(0);
     expect(screen.getByRole('tab', { name: 'Prompt' })).toBeInTheDocument();
   });
 
@@ -192,6 +194,7 @@ describe('App', () => {
     render(createElement(App));
 
     expect(window.location.pathname).toBe('/evals');
+    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument();
     expect(await screen.findByText('Pick an agent to start evaluating')).toBeInTheDocument();
   });
 
