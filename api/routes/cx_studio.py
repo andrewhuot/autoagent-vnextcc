@@ -7,6 +7,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
+from api.models import CxExportResponse, CxImportResponse
+
 router = APIRouter(prefix="/api/cx", tags=["cx-studio"])
 
 
@@ -42,25 +44,10 @@ class CxImportRequest(CxAgentRefPayload):
     output_dir: str = "."
     include_test_cases: bool = True
 
-class CxImportResponse(BaseModel):
-    config_path: str
-    eval_path: str | None = None
-    snapshot_path: str
-    agent_name: str
-    surfaces_mapped: list[str]
-    test_cases_imported: int
-    workspace_path: str | None = None
-
 class CxExportRequest(CxAgentRefPayload):
     config: dict
     snapshot_path: str
     dry_run: bool = False
-
-class CxExportResponse(BaseModel):
-    changes: list[dict]
-    pushed: bool
-    resources_updated: int
-    conflicts: list[dict] = Field(default_factory=list)
 
 
 class CxAuthRequest(BaseModel):
@@ -176,6 +163,7 @@ async def import_cx_agent(body: CxImportRequest) -> CxImportResponse:
             surfaces_mapped=result.surfaces_mapped,
             test_cases_imported=result.test_cases_imported,
             workspace_path=result.workspace_path,
+            portability_report=result.portability_report,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -199,6 +187,7 @@ async def export_cx_agent(body: CxExportRequest) -> CxExportResponse:
             pushed=result.pushed,
             resources_updated=result.resources_updated,
             conflicts=result.conflicts,
+            export_matrix=result.export_matrix,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -222,6 +211,7 @@ async def diff_cx_agent(body: CxDiffRequest) -> CxExportResponse:
             pushed=result.pushed,
             resources_updated=result.resources_updated,
             conflicts=result.conflicts,
+            export_matrix=result.export_matrix,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
@@ -250,6 +240,7 @@ async def sync_cx_agent(body: CxSyncRequest) -> CxExportResponse:
             pushed=result.pushed,
             resources_updated=result.resources_updated,
             conflicts=result.conflicts,
+            export_matrix=result.export_matrix,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))

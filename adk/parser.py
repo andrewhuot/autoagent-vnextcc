@@ -7,10 +7,10 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from adk.errors import AdkParseError
-from adk.types import AdkAgent, AdkAgentTree, AdkTool
+from adk.types import AdkAgent, AdkAgentTree, AdkAgentType, AdkCallbackSpec, AdkTool
 
 
 def parse_agent_directory(path: Path) -> AdkAgentTree:
@@ -32,7 +32,7 @@ def parse_agent_directory(path: Path) -> AdkAgentTree:
         raise AdkParseError(f"Path is not a directory: {path}")
 
     # Parse main agent definition
-    agent = _parse_agent_file(path / "agent.py")
+    agent, callbacks = _parse_agent_file(path / "agent.py")
 
     # Parse tools
     tools = _parse_tools_file(path / "tools.py") if (path / "tools.py").exists() else []
@@ -71,20 +71,30 @@ def parse_agent_directory(path: Path) -> AdkAgentTree:
     return AdkAgentTree(
         agent=agent,
         tools=tools,
+        callbacks=callbacks,
         sub_agents=sub_agents_list,
         config=config,
         source_path=path.resolve(),
     )
 
 
-def _parse_agent_file(agent_path: Path) -> AdkAgent:
+_AGENT_CLASS_TO_TYPE = {
+    "Agent": AdkAgentType.LLM_AGENT,
+    "LlmAgent": AdkAgentType.LLM_AGENT,
+    "SequentialAgent": AdkAgentType.SEQUENTIAL_AGENT,
+    "ParallelAgent": AdkAgentType.PARALLEL_AGENT,
+    "LoopAgent": AdkAgentType.LOOP_AGENT,
+}
+
+
+def _parse_agent_file(agent_path: Path) -> tuple[AdkAgent, list[AdkCallbackSpec]]:
     """Parse agent.py and extract Agent() constructor arguments.
 
     Args:
         agent_path: Path to agent.py file
 
     Returns:
-        AdkAgent with extracted fields
+        AdkAgent with extracted fields and callback specs
 
     Raises:
         AdkParseError: If file doesn't exist or parsing fails
@@ -108,12 +118,14 @@ def _parse_agent_file(agent_path: Path) -> AdkAgent:
         module_constants.update(prompts_constants)
 
     # Find Agent() constructor call
-    agent_call = _find_agent_call(tree)
+    agent_call, agent_type = _find_agent_call(tree)
     if not agent_call:
         raise AdkParseError(f"No Agent() constructor found in {agent_path}")
 
     # Extract keyword arguments
     agent = AdkAgent()
+    agent.agent_type = agent_type
+    callback_bindings: dict[str, str] = {}
     for keyword in agent_call.keywords:
         arg_name = keyword.arg
         if not arg_name:
@@ -136,10 +148,31 @@ def _parse_agent_file(agent_path: Path) -> AdkAgent:
                 agent.generate_config = value
         elif arg_name == "before_model_callback":
             agent.before_model_callback = str(value) if value else ""
+            if agent.before_model_callback:
+                callback_bindings[arg_name] = agent.before_model_callback
         elif arg_name == "after_model_callback":
             agent.after_model_callback = str(value) if value else ""
+            if agent.after_model_callback:
+                callback_bindings[arg_name] = agent.after_model_callback
+        elif arg_name == "before_agent_callback":
+            agent.before_agent_callback = str(value) if value else ""
+            if agent.before_agent_callback:
+                callback_bindings[arg_name] = agent.before_agent_callback
+        elif arg_name == "after_agent_callback":
+            agent.after_agent_callback = str(value) if value else ""
+            if agent.after_agent_callback:
+                callback_bindings[arg_name] = agent.after_agent_callback
+        elif arg_name == "before_tool_callback":
+            agent.before_tool_callback = str(value) if value else ""
+            if agent.before_tool_callback:
+                callback_bindings[arg_name] = agent.before_tool_callback
+        elif arg_name == "after_tool_callback":
+            agent.after_tool_callback = str(value) if value else ""
+            if agent.after_tool_callback:
+                callback_bindings[arg_name] = agent.after_tool_callback
 
-    return agent
+    callbacks = _extract_callback_specs(tree, callback_bindings)
+    return agent, callbacks
 
 
 def _parse_tools_file(tools_path: Path) -> list[AdkTool]:
@@ -229,23 +262,30 @@ def _parse_prompts_file_constants(prompts_path: Path) -> dict[str, any]:
     return _extract_module_constants(tree)
 
 
-def _find_agent_call(tree: ast.AST) -> Optional[ast.Call]:
+def _find_agent_call(tree: ast.AST) -> tuple[Optional[ast.Call], AdkAgentType]:
     """Find the first Agent() constructor call in the AST.
 
     Args:
         tree: Parsed AST
 
     Returns:
-        ast.Call node representing Agent() or None if not found
+        Tuple of the constructor call and detected ADK agent type
     """
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            func = node.func
-            # Handle both Agent() and google.adk.agents.Agent()
-            if isinstance(func, ast.Name) and func.id == "Agent":
-                return node
-            elif isinstance(func, ast.Attribute) and func.attr == "Agent":
-                return node
+            class_name = _agent_constructor_name(node.func)
+            if class_name:
+                return node, _AGENT_CLASS_TO_TYPE[class_name]
+    return None, AdkAgentType.LLM_AGENT
+
+
+def _agent_constructor_name(func: ast.AST) -> str | None:
+    """Return a supported ADK constructor name for a call target."""
+
+    if isinstance(func, ast.Name) and func.id in _AGENT_CLASS_TO_TYPE:
+        return func.id
+    if isinstance(func, ast.Attribute) and func.attr in _AGENT_CLASS_TO_TYPE:
+        return func.attr
     return None
 
 
@@ -301,7 +341,37 @@ def _get_function_signature(func_node: ast.FunctionDef) -> str:
     return f"{func_node.name}({', '.join(args_list)})"
 
 
-def _extract_module_constants(tree: ast.AST) -> dict[str, any]:
+def _extract_callback_specs(
+    tree: ast.AST,
+    callback_bindings: dict[str, str],
+) -> list[AdkCallbackSpec]:
+    """Extract callback function specs for bound callback names."""
+
+    if not callback_bindings:
+        return []
+
+    function_defs = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+    }
+    callbacks: list[AdkCallbackSpec] = []
+    for binding, callback_name in callback_bindings.items():
+        node = function_defs.get(callback_name)
+        callbacks.append(
+            AdkCallbackSpec(
+                name=callback_name,
+                callback_type=binding,
+                function_name=callback_name,
+                description=ast.get_docstring(node) or "" if node else "",
+                signature=_get_function_signature(node) if node else callback_name,
+                function_body=ast.unparse(node) if node else "",
+            )
+        )
+    return callbacks
+
+
+def _extract_module_constants(tree: ast.AST) -> dict[str, Any]:
     """Extract module-level constant assignments from AST.
 
     Args:
@@ -325,7 +395,7 @@ def _extract_module_constants(tree: ast.AST) -> dict[str, any]:
     return constants
 
 
-def _extract_value(node: ast.AST, constants: dict[str, any] = None) -> any:
+def _extract_value(node: ast.AST, constants: dict[str, Any] | None = None) -> Any:
     """Extract a Python value from an AST node.
 
     Args:

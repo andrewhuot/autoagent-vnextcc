@@ -12,6 +12,7 @@ import yaml
 from .errors import AdkImportError
 from .mapper import AdkMapper
 from .parser import parse_agent_directory
+from .portability import build_adk_portability_report
 from .types import ImportResult
 
 
@@ -93,12 +94,15 @@ class AdkImporter:
             if config.get("model"):
                 surfaces.append("model")
 
+            portability_report = build_adk_portability_report(tree)
+
             return ImportResult(
                 config_path=config_path,
                 snapshot_path=snapshot_path,
                 agent_name=agent_name,
                 surfaces_mapped=surfaces,
                 tools_imported=len(tree.tools),
+                portability_report=portability_report,
             )
         except AdkImportError:
             raise

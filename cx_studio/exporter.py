@@ -9,6 +9,7 @@ from typing import Any
 
 from .errors import CxExportError
 from .mapper import CxMapper
+from .portability import build_cx_export_matrix
 from .types import CxAgentRef, CxAgentSnapshot, ExportResult
 
 _MISSING = object()
@@ -34,6 +35,7 @@ class CxExporter:
             base_snapshot = self._load_snapshot(snapshot_path)
             local_snapshot = self._mapper.to_cx(config, base_snapshot)
             changes = self._compute_changes(base_snapshot, local_snapshot)
+            export_matrix = build_cx_export_matrix(base_snapshot)
 
             if dry_run or not changes:
                 return ExportResult(
@@ -41,6 +43,7 @@ class CxExporter:
                     pushed=False,
                     resources_updated=0,
                     conflicts=[],
+                    export_matrix=export_matrix,
                 )
 
             resources_updated = self._apply_snapshot_changes(base_snapshot, local_snapshot)
@@ -50,6 +53,7 @@ class CxExporter:
                 pushed=True,
                 resources_updated=resources_updated,
                 conflicts=[],
+                export_matrix=export_matrix,
             )
         except CxExportError:
             raise
@@ -69,6 +73,7 @@ class CxExporter:
             base_snapshot = self._load_snapshot(snapshot_path)
             local_snapshot = self._mapper.to_cx(config, base_snapshot)
             remote_snapshot = self._client.fetch_snapshot(ref.name)
+            export_matrix = build_cx_export_matrix(base_snapshot)
 
             conflicts = self._detect_conflicts(base_snapshot, local_snapshot, remote_snapshot)
             if conflicts and conflict_strategy == "detect":
@@ -77,6 +82,7 @@ class CxExporter:
                     pushed=False,
                     resources_updated=0,
                     conflicts=conflicts,
+                    export_matrix=export_matrix,
                 )
 
             merged_snapshot = self._merge_local_changes(base_snapshot, local_snapshot, remote_snapshot, conflicts)
@@ -87,6 +93,7 @@ class CxExporter:
                     pushed=False,
                     resources_updated=0,
                     conflicts=conflicts,
+                    export_matrix=export_matrix,
                 )
 
             resources_updated = self._apply_snapshot_changes(remote_snapshot, merged_snapshot)
@@ -96,6 +103,7 @@ class CxExporter:
                 pushed=True,
                 resources_updated=resources_updated,
                 conflicts=conflicts,
+                export_matrix=export_matrix,
             )
         except CxExportError:
             raise
@@ -121,6 +129,7 @@ class CxExporter:
                 pushed=False,
                 resources_updated=0,
                 conflicts=conflicts,
+                export_matrix=build_cx_export_matrix(base_snapshot),
             )
         except CxExportError:
             raise

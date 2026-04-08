@@ -145,6 +145,12 @@ def test_diff_returns_changes_and_conflicts(
                 pushed = False
                 resources_updated = 0
                 conflicts = [{"resource": "playbook", "field": "instruction", "name": "Escalation"}]
+                export_matrix = {
+                    "status": "lossy",
+                    "ready_surfaces": ["instructions"],
+                    "blocked_surfaces": ["routing"],
+                    "surfaces": [],
+                }
 
             return _Result()
 
@@ -167,6 +173,7 @@ def test_diff_returns_changes_and_conflicts(
     payload = response.json()
     assert payload["changes"][0]["resource"] == "playbook"
     assert payload["conflicts"][0]["name"] == "Escalation"
+    assert payload["export_matrix"]["status"] == "lossy"
 
 
 def test_sync_returns_conflicts_without_pushing(
@@ -196,6 +203,12 @@ def test_sync_returns_conflicts_without_pushing(
                 pushed = False
                 resources_updated = 0
                 conflicts = [{"resource": "playbook", "field": "instruction", "name": "Escalation"}]
+                export_matrix = {
+                    "status": "lossy",
+                    "ready_surfaces": ["instructions"],
+                    "blocked_surfaces": ["routing"],
+                    "surfaces": [],
+                }
 
             return _Result()
 
@@ -218,3 +231,4 @@ def test_sync_returns_conflicts_without_pushing(
     assert response.status_code == 200
     assert response.json()["pushed"] is False
     assert response.json()["conflicts"][0]["field"] == "instruction"
+    assert response.json()["export_matrix"]["blocked_surfaces"] == ["routing"]

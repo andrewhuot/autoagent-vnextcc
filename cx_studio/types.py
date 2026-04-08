@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from portability.types import ExportCapabilityMatrix, PortabilityReport
+
 
 class CxAgentRef(BaseModel):
     """Reference identifying a CX agent by project, location, and ID.
@@ -233,6 +235,7 @@ class ImportResult(BaseModel):
     surfaces_mapped: list[str] = Field(default_factory=list)
     test_cases_imported: int = 0
     workspace_path: str | None = None
+    portability_report: PortabilityReport | None = None
 
 
 class ExportResult(BaseModel):
@@ -242,6 +245,7 @@ class ExportResult(BaseModel):
     pushed: bool = False
     resources_updated: int = 0
     conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    export_matrix: ExportCapabilityMatrix | None = None
 
 
 class DeployResult(BaseModel):

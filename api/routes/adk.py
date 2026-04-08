@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 from adk import AdkImporter, AdkExporter, AdkDeployer
 from adk.parser import parse_agent_directory
+from api.models import AdkExportResponse, AdkImportResponse
 
 router = APIRouter(prefix="/api/adk", tags=["adk"])
 
@@ -19,23 +20,11 @@ class AdkImportRequest(BaseModel):
     path: str
     output_dir: str = "."
 
-class AdkImportResponse(BaseModel):
-    config_path: str
-    snapshot_path: str
-    agent_name: str
-    surfaces_mapped: list[str]
-    tools_imported: int
-
 class AdkExportRequest(BaseModel):
     config: dict
     snapshot_path: str
     output_dir: str
     dry_run: bool = False
-
-class AdkExportResponse(BaseModel):
-    output_path: str | None
-    changes: list[dict]
-    files_modified: int
 
 class AdkDeployRequest(BaseModel):
     path: str
@@ -80,6 +69,7 @@ async def import_adk_agent(body: AdkImportRequest) -> AdkImportResponse:
             agent_name=result.agent_name,
             surfaces_mapped=result.surfaces_mapped,
             tools_imported=result.tools_imported,
+            portability_report=result.portability_report,
         )
     except HTTPException:
         raise
@@ -102,6 +92,7 @@ async def export_adk_agent(body: AdkExportRequest) -> AdkExportResponse:
             output_path=result.output_path,
             changes=result.changes,
             files_modified=result.files_modified,
+            export_matrix=result.export_matrix,
         )
     except HTTPException:
         raise

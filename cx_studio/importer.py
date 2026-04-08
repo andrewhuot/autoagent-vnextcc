@@ -8,6 +8,7 @@ from pathlib import Path
 from adapters.workspace_builder import create_connected_workspace
 from .errors import CxImportError
 from .mapper import CxMapper
+from .portability import build_cx_portability_report
 from .types import CxAgentRef, ImportResult
 
 
@@ -32,6 +33,8 @@ class CxImporter:
 
             if not include_test_cases:
                 workspace_spec.starter_evals = []
+
+            portability_report = build_cx_portability_report(snapshot)
 
             workspace_result = create_connected_workspace(
                 workspace_spec,
@@ -85,6 +88,7 @@ class CxImporter:
                 surfaces_mapped=self._surfaces(snapshot),
                 test_cases_imported=len(workspace_spec.starter_evals) if include_test_cases else 0,
                 workspace_path=workspace_result.workspace_path,
+                portability_report=portability_report,
             )
         except CxImportError:
             raise

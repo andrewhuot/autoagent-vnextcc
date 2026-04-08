@@ -8,6 +8,8 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from portability.types import ExportCapabilityMatrix, PortabilityReport
+
 
 # ---------------------------------------------------------------------------
 # Shared / common
@@ -257,6 +259,53 @@ class CompareRunAcceptedResponse(BaseModel):
     comparison_id: str = Field(..., description="Comparison identifier")
     message: str = Field("Pairwise comparison completed", description="Human-readable status")
     summary: CompareListItem
+
+
+# ---------------------------------------------------------------------------
+# Import / export portability models
+# ---------------------------------------------------------------------------
+
+class AdkImportResponse(BaseModel):
+    """Response returned after importing an ADK agent."""
+
+    config_path: str
+    snapshot_path: str
+    agent_name: str
+    surfaces_mapped: list[str] = Field(default_factory=list)
+    tools_imported: int = 0
+    portability_report: PortabilityReport | None = None
+
+
+class AdkExportResponse(BaseModel):
+    """Response returned after exporting an AgentLab config back to ADK."""
+
+    output_path: str | None
+    changes: list[dict[str, Any]] = Field(default_factory=list)
+    files_modified: int = 0
+    export_matrix: ExportCapabilityMatrix | None = None
+
+
+class CxImportResponse(BaseModel):
+    """Response returned after importing a CX agent."""
+
+    config_path: str
+    eval_path: str | None = None
+    snapshot_path: str
+    agent_name: str
+    surfaces_mapped: list[str] = Field(default_factory=list)
+    test_cases_imported: int = 0
+    workspace_path: str | None = None
+    portability_report: PortabilityReport | None = None
+
+
+class CxExportResponse(BaseModel):
+    """Response returned after diffing or exporting back to CX."""
+
+    changes: list[dict[str, Any]] = Field(default_factory=list)
+    pushed: bool = False
+    resources_updated: int = 0
+    conflicts: list[dict[str, Any]] = Field(default_factory=list)
+    export_matrix: ExportCapabilityMatrix | None = None
 
 
 class CompareResponse(BaseModel):
