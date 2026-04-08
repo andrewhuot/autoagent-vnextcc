@@ -317,6 +317,7 @@ export function BuilderChatWorkspace({
   const artifactCreatedAtRef = useRef<string | null>(null);
   const busy = pending || previewPending || savePending;
   const builderYamlPreview = session?.config ? builderConfigToYaml(session.config) : '';
+  const builderPreviewModeNotice = !session || session.mock_mode;
   const builderEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
   const builderEvalHelperText = !session?.session_id
     ? 'Create a draft first, then continue into Eval Runs.'
@@ -566,10 +567,13 @@ export function BuilderChatWorkspace({
             {session?.mock_mode && session.mock_reason ? (
               <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
             ) : null}
-            {session?.mock_mode ? (
-              <p className="mt-2 text-xs text-amber-800" data-testid="builder-preview-notice">
-                Responses are simulated in preview mode. Configure API keys in Setup for live results.
-              </p>
+            {builderPreviewModeNotice ? (
+              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                <p className="font-medium">Preview mode</p>
+                <p className="mt-1" data-testid="builder-preview-notice">
+                  Responses and actions are simulated in this build. Use Setup to configure live providers for production-like results.
+                </p>
+              </div>
             ) : null}
           </div>
 

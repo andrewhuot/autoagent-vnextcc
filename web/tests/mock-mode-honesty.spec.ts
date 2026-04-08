@@ -39,6 +39,21 @@ function collectBrowserIssues(page: Page) {
 
 test.describe('Mock Honesty', () => {
   test('dashboard quick fix clearly states preview-only behavior in mock mode', async ({ page }) => {
+    await page.route('**/api/quickfix', async (route) => {
+      await route.fulfill({
+        json: {
+          success: true,
+          applied: false,
+          runbook: 'fix-retrieval-grounding',
+          score_before: 0.72,
+          score_after: 0.78,
+          improvement: 0.06,
+          source: 'mock',
+          warning: 'Preview only: this quick fix is simulated and does not change the live config yet.',
+        },
+      });
+    });
+
     const assertHealthy = collectBrowserIssues(page);
 
     await page.goto(`${BASE_URL}/dashboard`, { waitUntil: 'networkidle' });

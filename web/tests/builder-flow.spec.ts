@@ -2,6 +2,125 @@ import { expect, test, type Page } from '@playwright/test';
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
 
+const BUILDER_SESSION = {
+  session_id: 'session-123',
+  mock_mode: true,
+  mock_reason: 'Preview mode is enabled for browser verification.',
+  messages: [
+    {
+      message_id: 'assistant-intro',
+      role: 'assistant',
+      content: 'Describe the agent you want to build.',
+      created_at: 1,
+    },
+    {
+      message_id: 'user-1',
+      role: 'user',
+      content:
+        'Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status',
+      created_at: 2,
+    },
+    {
+      message_id: 'assistant-1',
+      role: 'assistant',
+      content:
+        'I drafted `Airline Customer Support Agent` with routing for cancellations, changes, and flight status.',
+      created_at: 3,
+    },
+  ],
+  config: {
+    agent_name: 'Airline Customer Support Agent',
+    model: 'gpt-4o',
+    system_prompt: 'You are an airline support agent.',
+    tools: [
+      {
+        name: 'flight_status_lookup',
+        description: 'Fetch flight status.',
+        when_to_use: 'Use when a traveler asks for flight status.',
+      },
+    ],
+    routing_rules: [
+      {
+        name: 'booking_changes',
+        intent: 'booking_change',
+        description: 'Handle booking changes.',
+      },
+      {
+        name: 'cancellations',
+        intent: 'cancellation',
+        description: 'Handle cancellations.',
+      },
+      {
+        name: 'flight_status',
+        intent: 'flight_status',
+        description: 'Handle flight status requests.',
+      },
+    ],
+    policies: [
+      {
+        name: 'no_internal_codes',
+        description: 'Never reveal internal codes.',
+      },
+    ],
+    eval_criteria: [
+      {
+        name: 'correct_routing',
+        description: 'Route to the correct workflow.',
+      },
+    ],
+    metadata: {},
+  },
+  stats: {
+    tool_count: 1,
+    policy_count: 1,
+    routing_rule_count: 3,
+  },
+  evals: null,
+  updated_at: 3,
+};
+
+async function mockBuilderApis(page: Page) {
+  await page.route('**/api/builder/chat', async (route) => {
+    await route.fulfill({ json: BUILDER_SESSION });
+  });
+
+  await page.route('**/api/builder/export', async (route) => {
+    await route.fulfill({
+      json: {
+        filename: 'airline-customer-support-agent.yaml',
+        content: 'agent_name: Airline Customer Support Agent\nrouting_rules:\n  - name: booking_changes',
+        content_type: 'application/x-yaml',
+      },
+    });
+  });
+
+  await page.route('**/api/agents', async (route) => {
+    await route.fulfill({
+      json: {
+        agent: {
+          id: 'agent-v002',
+          name: 'Airline Customer Support Agent',
+          model: 'gpt-4o',
+          created_at: '2026-04-08T12:00:00.000Z',
+          source: 'built',
+          config_path: '/workspace/agents/airline.yaml',
+          status: 'ready',
+          config: BUILDER_SESSION.config,
+        },
+        save_result: {
+          artifact_id: 'artifact-123',
+          config_path: '/workspace/agents/airline.yaml',
+          config_version: 2,
+          eval_cases_path: '/workspace/evals/airline.yaml',
+          runtime_config_path: '/workspace/runtime/airline.yaml',
+          workspace_path: '/workspace',
+          actual_config_yaml: 'agent_name: Airline Customer Support Agent',
+        },
+      },
+    });
+  });
+}
+
 function trackPageIssues(page: Page) {
   const consoleErrors: string[] = [];
   const pageErrors: string[] = [];
@@ -41,6 +160,7 @@ function trackPageIssues(page: Page) {
 }
 
 test('builder flow clarifies the save-to-eval handoff and downloads config', async ({ page }) => {
+  await mockBuilderApis(page);
   const issues = trackPageIssues(page);
 
   await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });

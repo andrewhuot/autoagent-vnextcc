@@ -60,12 +60,14 @@ test.describe('Route Contracts', () => {
     await page.route('**/api/runbooks/tighten-safety-policy', async (route) => {
       await route.fulfill({
         json: {
-          name: 'tighten-safety-policy',
-          description: 'Guardrail updates for safety-sensitive routes.',
-          tags: ['safety'],
-          skills: ['guardrail-audit'],
-          policies: ['tighten-safety-policy'],
-          tool_contracts: ['refund_tool'],
+          runbook: {
+            name: 'tighten-safety-policy',
+            description: 'Guardrail updates for safety-sensitive routes.',
+            tags: ['safety'],
+            skills: ['guardrail-audit'],
+            policies: ['tighten-safety-policy'],
+            tool_contracts: ['refund_tool'],
+          },
         },
       });
     });
