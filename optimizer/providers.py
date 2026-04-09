@@ -366,7 +366,7 @@ class LLMRouter:
     def generate(self, request: LLMRequest) -> LLMResponse:
         """Generate one model response based on routing strategy."""
         if self.strategy == "single":
-            return self._run_model(self.models[0], request)
+            return self._run_models_in_order(self.models, request)
 
         if self.strategy == "round_robin":
             model = self.models[self._round_robin_index % len(self.models)]
@@ -400,6 +400,20 @@ class LLMRouter:
         response = self._call_with_retry(provider, request)
         self._track_cost(model, response)
         return response
+
+    def _run_models_in_order(self, models: list[ModelConfig], request: LLMRequest) -> LLMResponse:
+        """Try models in order until one succeeds, then surface the last real error."""
+        last_error: Exception | None = None
+        for model in models:
+            try:
+                return self._run_model(model, request)
+            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, RuntimeError, ValueError) as exc:
+                last_error = exc
+                continue
+
+        if last_error is None:
+            raise RuntimeError("No models were available to satisfy the request")
+        raise last_error
 
     def _call_with_retry(self, provider: LLMProvider, request: LLMRequest) -> LLMResponse:
         last_error: Exception | None = None

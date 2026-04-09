@@ -109,6 +109,32 @@ def test_router_applies_retry_policy_to_transient_failures() -> None:
     assert flaky.calls == 3
 
 
+def test_single_strategy_falls_back_to_next_model_when_primary_exhausts_retries() -> None:
+    """Single strategy should try the next configured model after a primary failure."""
+    failing_primary = _FakeProvider("openai", "gpt-4o", score=0.6, failures_before_success=99)
+    healthy_secondary = _FakeProvider("google", "gemini-2.5-pro", score=0.8)
+
+    router = LLMRouter(
+        strategy="single",
+        models=[
+            ModelConfig(provider="openai", model="gpt-4o"),
+            ModelConfig(provider="google", model="gemini-2.5-pro"),
+        ],
+        providers={
+            ("openai", "gpt-4o"): failing_primary,
+            ("google", "gemini-2.5-pro"): healthy_secondary,
+        },
+        retry_policy=RetryPolicy(max_attempts=2, base_delay_seconds=0.0, max_delay_seconds=0.0, jitter_seconds=0.0),
+    )
+
+    response = router.generate(LLMRequest(prompt="propose a fix"))
+
+    assert response.provider == "google"
+    assert response.model == "gemini-2.5-pro"
+    assert failing_primary.calls == 2
+    assert healthy_secondary.calls == 1
+
+
 def test_router_tracks_provider_costs() -> None:
     """Router should accumulate token-based costs per provider/model."""
     fake = _FakeProvider("openai", "gpt-4o", score=0.8)

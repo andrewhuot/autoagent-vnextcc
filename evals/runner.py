@@ -139,6 +139,7 @@ class EvalRunner:
     def _load_cases_from_dir(self, directory: Path) -> list[TestCase]:
         """Load all test cases from a specific YAML directory."""
         cases: list[TestCase] = []
+        seen_case_ids: dict[str, int] = {}
         if not directory.exists():
             return cases
 
@@ -148,9 +149,14 @@ class EvalRunner:
             if not data or "cases" not in data:
                 continue
             for entry in data["cases"]:
+                case_id = self._make_unique_case_id(
+                    str(entry["id"]),
+                    seen_case_ids,
+                    source_label=yaml_file.stem,
+                )
                 cases.append(
                     TestCase(
-                        id=entry["id"],
+                        id=case_id,
                         category=entry.get("category", "unknown"),
                         user_message=entry["user_message"],
                         expected_specialist=entry.get("expected_specialist", "support"),
@@ -184,13 +190,34 @@ class EvalRunner:
 
         normalized_split = split.lower().strip()
         cases: list[TestCase] = []
+        seen_case_ids: dict[str, int] = {}
         for index, row in enumerate(rows):
             case = self._row_to_case(row, index=index, train_ratio=train_ratio)
+            case.id = self._make_unique_case_id(case.id, seen_case_ids, source_label=path.stem)
             if normalized_split != "all" and (case.split or "").lower() != normalized_split:
                 continue
             cases.append(case)
 
         return cases
+
+    @staticmethod
+    def _make_unique_case_id(
+        case_id: str,
+        seen_case_ids: dict[str, int],
+        *,
+        source_label: str,
+    ) -> str:
+        """Disambiguate case IDs so merged eval corpora do not collide in result storage."""
+        occurrence = seen_case_ids.get(case_id, 0)
+        seen_case_ids[case_id] = occurrence + 1
+        if occurrence == 0:
+            return case_id
+
+        source_slug = "".join(
+            character.lower() if character.isalnum() else "_"
+            for character in source_label.strip()
+        ).strip("_") or "source"
+        return f"{case_id}__{source_slug}_{occurrence + 1}"
 
     @staticmethod
     def _row_to_case(row: dict[str, Any], *, index: int, train_ratio: float) -> TestCase:

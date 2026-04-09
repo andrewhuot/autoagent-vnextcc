@@ -9,6 +9,36 @@ from dataclasses import dataclass
 
 from .providers import LLMRequest, LLMRouter
 
+_ROUTING_STOP_WORDS = {
+    "and",
+    "about",
+    "actual",
+    "agent",
+    "behavior",
+    "check",
+    "details",
+    "evals",
+    "expected",
+    "failed",
+    "flag",
+    "for",
+    "generate",
+    "got",
+    "keywords",
+    "missing",
+    "probe",
+    "recommendations",
+    "response",
+    "routing",
+    "safety",
+    "should",
+    "support",
+    "tool",
+    "this",
+    "use",
+    "orders",
+}
+
 
 @dataclass
 class Proposal:
@@ -45,7 +75,13 @@ class Proposer:
         project_memory_context: dict[str, list[str]] | None = None,
     ) -> Proposal | None:
         if self.use_mock:
-            return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+            return self._mock_propose(
+                current_config,
+                health_metrics,
+                failure_buckets,
+                past_attempts,
+                failure_samples=failure_samples,
+            )
         return self._llm_propose(
             current_config, health_metrics, failure_samples, failure_buckets, past_attempts,
             optimization_mode=optimization_mode,
@@ -79,6 +115,8 @@ class Proposer:
         health_metrics: dict,
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        *,
+        failure_samples: list[dict] | None = None,
     ) -> Proposal:
         """Deterministic mock proposer that makes targeted changes based on failure patterns."""
         new_config = copy.deepcopy(current_config)
@@ -95,6 +133,27 @@ class Proposer:
             # Add more keywords to routing rules to improve routing accuracy
             routing = new_config.setdefault("routing", {})
             rules = routing.setdefault("rules", [])
+            dynamic_additions = self._add_keywords_from_routing_failures(
+                rules,
+                failure_samples or [],
+            )
+            if dynamic_additions:
+                specialist_summaries = [
+                    f"{specialist}: {', '.join(keywords)}"
+                    for specialist, keywords in dynamic_additions.items()
+                ]
+                return Proposal(
+                    change_description=(
+                        "Added routing keywords from scoped eval failures: "
+                        + "; ".join(specialist_summaries)
+                    ),
+                    config_section="routing",
+                    new_config=new_config,
+                    reasoning=(
+                        "Dominant failure bucket is routing_error. "
+                        "Expanded runtime routing keywords using the selected eval failure messages."
+                    ),
+                )
             if rules:
                 # Enhance existing rules with extra keywords
                 for rule in rules:
@@ -261,7 +320,13 @@ class Proposer:
             )
             parsed = self._extract_json_payload(response.text)
             if parsed is None:
-                return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+                return self._mock_propose(
+                    current_config,
+                    health_metrics,
+                    failure_buckets,
+                    past_attempts,
+                    failure_samples=failure_samples,
+                )
 
             new_config = parsed.get("new_config")
             if not isinstance(new_config, dict):
@@ -279,7 +344,79 @@ class Proposer:
             )
         except Exception:
             # Production-safe fallback keeps loop alive during provider outages.
-            return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
+            return self._mock_propose(
+                current_config,
+                health_metrics,
+                failure_buckets,
+                past_attempts,
+                failure_samples=failure_samples,
+            )
+
+    @classmethod
+    def _add_keywords_from_routing_failures(
+        cls,
+        rules: list[dict],
+        failure_samples: list[dict],
+    ) -> dict[str, list[str]]:
+        """Extract routing repair keywords from scoped failures and apply them in place."""
+        if not rules or not failure_samples:
+            return {}
+
+        rules_by_specialist: dict[str, dict] = {}
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            specialist = str(rule.get("specialist") or "").strip()
+            if not specialist:
+                continue
+            rule.setdefault("keywords", [])
+            rules_by_specialist[specialist] = rule
+
+        additions: dict[str, list[str]] = {}
+        for sample in failure_samples:
+            error_text = str(sample.get("error_message") or "")
+            specialist_match = re.search(r"expected=([a-zA-Z0-9_-]+)", error_text)
+            if specialist_match is None:
+                continue
+            specialist = specialist_match.group(1)
+            rule = rules_by_specialist.get(specialist)
+            if rule is None:
+                continue
+
+            existing = [str(item) for item in rule.get("keywords", []) if str(item).strip()]
+            existing_lower = {item.lower() for item in existing}
+            candidate_terms = cls._extract_candidate_keywords(
+                " ".join(
+                    [
+                        str(sample.get("user_message") or ""),
+                        error_text,
+                    ]
+                )
+            )
+            new_terms = [
+                term for term in candidate_terms
+                if term not in existing_lower
+            ][:4]
+            if not new_terms:
+                continue
+
+            rule["keywords"] = cls._append_unique_keywords(existing, new_terms)
+            additions.setdefault(specialist, []).extend(new_terms)
+
+        return additions
+
+    @staticmethod
+    def _extract_candidate_keywords(text: str) -> list[str]:
+        """Return stable routing-keyword candidates from failure text."""
+        keywords: list[str] = []
+        seen: set[str] = set()
+        for raw in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]+", text.lower()):
+            token = raw.strip("_-")
+            if len(token) < 3 or token in _ROUTING_STOP_WORDS or token in seen:
+                continue
+            seen.add(token)
+            keywords.append(token.replace("_", " "))
+        return sorted(keywords, key=len, reverse=True)
 
     @staticmethod
     def _extract_json_payload(text: str) -> dict | None:

@@ -1096,6 +1096,7 @@ export function useStartOptimize() {
       force: boolean;
       require_human_approval: boolean;
       config_path?: string;
+      eval_run_id?: string;
       mode: 'standard' | 'advanced' | 'research';
       objective: string;
       guardrails: string[];
@@ -2263,26 +2264,133 @@ interface CurriculumBatchesResponse {
   progression: CurriculumDifficultyPoint[];
 }
 
+interface RawCurriculumBatchSummary {
+  batch_id: string;
+  created_at?: number | null;
+  generated_at?: number | null;
+  prompt_count?: number | null;
+  num_prompts?: number | null;
+  applied_count?: number | null;
+  difficulty_distribution?: Record<string, unknown> | null;
+  tier_distribution?: Record<string, unknown> | null;
+}
+
+interface RawCurriculumDifficultyPoint {
+  batch_id: string;
+  created_at?: number | null;
+  generated_at?: number | null;
+  average_difficulty?: number | null;
+}
+
+interface RawCurriculumBatchesResponse {
+  batches?: RawCurriculumBatchSummary[];
+  count?: number;
+  progression?: RawCurriculumDifficultyPoint[];
+}
+
+interface RawGenerateCurriculumResponse {
+  batch_id: string;
+  prompt_count?: number | null;
+  num_prompts?: number | null;
+}
+
+interface RawApplyCurriculumResponse {
+  batch_id: string;
+  applied_count?: number | null;
+  num_prompts?: number | null;
+}
+
+const CURRICULUM_DIFFICULTY_WEIGHTS: Record<string, number> = {
+  easy: 0.25,
+  medium: 0.5,
+  hard: 0.75,
+  adversarial: 1,
+};
+
+function averageCurriculumDifficulty(distribution: Record<string, number>): number {
+  let total = 0;
+  let weighted = 0;
+
+  for (const [tier, count] of Object.entries(distribution)) {
+    const numericCount = numberValue(count);
+    total += numericCount;
+    weighted += (CURRICULUM_DIFFICULTY_WEIGHTS[tier] ?? 0) * numericCount;
+  }
+
+  return total > 0 ? weighted / total : 0;
+}
+
+function mapCurriculumBatchSummary(raw: RawCurriculumBatchSummary): CurriculumBatchSummary {
+  return {
+    batch_id: raw.batch_id,
+    created_at: numberValue(raw.created_at ?? raw.generated_at),
+    prompt_count: numberValue(raw.prompt_count ?? raw.num_prompts),
+    applied_count: numberValue(raw.applied_count),
+    difficulty_distribution: numberRecord(raw.difficulty_distribution ?? raw.tier_distribution),
+  };
+}
+
+function mapCurriculumDifficultyPoint(raw: RawCurriculumDifficultyPoint): CurriculumDifficultyPoint {
+  return {
+    batch_id: raw.batch_id,
+    created_at: numberValue(raw.created_at ?? raw.generated_at),
+    average_difficulty: numberValue(raw.average_difficulty),
+  };
+}
+
+function normalizeCurriculumBatchesResponse(
+  raw: RawCurriculumBatchesResponse
+): CurriculumBatchesResponse {
+  const batches = Array.isArray(raw.batches) ? raw.batches.map(mapCurriculumBatchSummary) : [];
+  const progression = Array.isArray(raw.progression)
+    ? raw.progression.map(mapCurriculumDifficultyPoint)
+    : batches.map((batch) => ({
+        batch_id: batch.batch_id,
+        created_at: batch.created_at,
+        average_difficulty: averageCurriculumDifficulty(batch.difficulty_distribution),
+      }));
+
+  return {
+    batches,
+    count: numberValue(raw.count, batches.length),
+    progression,
+  };
+}
+
 export function useCurriculumBatches(limit = 20) {
   return useQuery<CurriculumBatchesResponse>({
     queryKey: ['curriculum', 'batches', limit],
-    queryFn: () => fetchApi(`/curriculum/batches?limit=${limit}`),
+    queryFn: async () => {
+      const payload = await fetchApi<RawCurriculumBatchesResponse>(`/curriculum/batches?limit=${limit}`);
+      return normalizeCurriculumBatchesResponse(payload);
+    },
     refetchInterval: 10000,
   });
 }
 
 export function useGenerateCurriculum() {
   const queryClient = useQueryClient();
-  return useMutation<{ batch: { batch_id: string; prompt_count: number } }, ApiRequestError, {
-    clusters?: Array<Record<string, unknown>>;
-    historical_pass_rates?: Record<string, number>;
-    prompts_per_cluster?: number;
-  }>({
-    mutationFn: (body) =>
-      fetchApi('/curriculum/generate', {
+  return useMutation<
+    { batch: { batch_id: string; prompt_count: number } },
+    ApiRequestError,
+    {
+      clusters?: Array<Record<string, unknown>>;
+      historical_pass_rates?: Record<string, number>;
+      prompts_per_cluster?: number;
+    }
+  >({
+    mutationFn: async (body) => {
+      const payload = await fetchApi<RawGenerateCurriculumResponse>('/curriculum/generate', {
         method: 'POST',
         body: JSON.stringify(body || {}),
-      }),
+      });
+      return {
+        batch: {
+          batch_id: payload.batch_id,
+          prompt_count: numberValue(payload.prompt_count ?? payload.num_prompts),
+        },
+      };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['curriculum', 'batches'] });
     },
@@ -2292,11 +2400,16 @@ export function useGenerateCurriculum() {
 export function useApplyCurriculum() {
   const queryClient = useQueryClient();
   return useMutation<{ batch_id: string; applied_count: number }, ApiRequestError, { batch_id: string }>({
-    mutationFn: (body) =>
-      fetchApi('/curriculum/apply', {
+    mutationFn: async (body) => {
+      const payload = await fetchApi<RawApplyCurriculumResponse>('/curriculum/apply', {
         method: 'POST',
         body: JSON.stringify(body),
-      }),
+      });
+      return {
+        batch_id: payload.batch_id,
+        applied_count: numberValue(payload.applied_count ?? payload.num_prompts),
+      };
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['curriculum', 'batches'] });
       queryClient.invalidateQueries({ queryKey: ['evalRuns'] });

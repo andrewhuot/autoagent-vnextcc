@@ -608,6 +608,10 @@ class OptimizeRequest(BaseModel):
         None,
         description="Optional config path for optimizing a selected agent instead of the active config",
     )
+    eval_run_id: Optional[str] = Field(
+        None,
+        description="Optional eval run ID used to scope optimization context to a specific run",
+    )
     mode: str = Field(
         "standard",
         pattern="^(standard|advanced|research)$",

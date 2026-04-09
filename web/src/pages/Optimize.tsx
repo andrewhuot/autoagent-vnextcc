@@ -827,6 +827,7 @@ function OptimizeRunSection({
         force: requestedForce,
         require_human_approval: requireHumanApproval,
         config_path: activeAgent.config_path,
+        eval_run_id: evalRunId ?? undefined,
         mode: optimizeMode,
         objective,
         guardrails,

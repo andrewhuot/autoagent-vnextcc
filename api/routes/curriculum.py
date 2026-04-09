@@ -64,7 +64,7 @@ async def generate_curriculum(request: Request) -> dict[str, Any]:
     conv_store = _get_conversation_store(request)
 
     # Load recent failures
-    recent_failures = conv_store.list_failed(limit=limit * 10)
+    recent_failures = conv_store.get_failures(limit=limit * 10)
 
     if not recent_failures:
         raise HTTPException(status_code=404, detail="No recent failures found")
@@ -80,7 +80,7 @@ async def generate_curriculum(request: Request) -> dict[str, Any]:
             clusters_map[cat].append({
                 "user_message": record.user_message,
                 "specialist_used": record.specialist_used,
-                "error": record.error_type or "",
+                "error": record.error_message or "",
             })
 
     # Convert to FailureCluster objects

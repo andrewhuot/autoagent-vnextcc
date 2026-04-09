@@ -264,13 +264,11 @@ def persist_generated_config(
 
     store = ConversationStore(db_path=str(workspace.conversation_db))
     deployer = Deployer(configs_dir=str(workspace.configs_dir), store=store)
-    active = workspace.resolve_active_config()
     actual_config = generated_config_to_runtime_config(
         generated_config,
         source_prompt=source_prompt,
         transcript_report_id=transcript_report_id,
         builder_session_id=builder_session_id,
-        base_config=(active.config if active is not None else None),
     )
 
     saved = deployer.version_manager.save_version(

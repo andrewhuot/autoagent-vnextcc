@@ -169,3 +169,106 @@ def test_save_agent_persists_generated_build_and_returns_library_record(
     assert payload["save_result"]["config_version"] == 3
     assert Path(payload["save_result"]["config_path"]).exists()
     assert Path(tmp_path / "evals" / "cases" / "generated_build.yaml").exists()
+
+
+def test_save_agent_does_not_inherit_previous_active_routing_shape(
+    client: TestClient,
+    tmp_path: Path,
+) -> None:
+    active_config_path = tmp_path / "configs" / "v001.yaml"
+    active_config_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "gpt-4o",
+                "routing": {
+                    "rules": [
+                        {
+                            "specialist": "orders",
+                            "keywords": ["flight", "booking", "airline"],
+                            "patterns": ["change booking", "cancel reservation"],
+                        }
+                    ]
+                },
+                "prompts": {
+                    "root": "You are an airline support router.",
+                },
+                "tools": {
+                    "catalog": {"enabled": False},
+                    "orders_db": {"enabled": True},
+                    "faq": {"enabled": True},
+                },
+                "thresholds": {"confidence_threshold": 0.6, "max_turns": 20},
+                "agent_library": {"name": "Legacy Airline Agent", "source": "connected"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    response = client.post(
+        "/api/agents",
+        json={
+            "source": "built",
+            "build_source": "prompt",
+            "config": {
+                "model": "gemini-2.5-pro",
+                "system_prompt": "Review PRDs, flag missing acceptance criteria, and propose harder regression evals.",
+                "tools": [
+                    {
+                        "name": "document_lookup",
+                        "description": "Inspect the PRD sections and references.",
+                        "parameters": ["document_id"],
+                    },
+                    {
+                        "name": "eval_case_generator",
+                        "description": "Draft stronger eval cases from detected gaps.",
+                        "parameters": ["prd_excerpt"],
+                    },
+                ],
+                "routing_rules": [
+                    {
+                        "condition": "acceptance_criteria_missing == true",
+                        "action": "review_prd",
+                        "priority": 5,
+                    }
+                ],
+                "policies": [
+                    {
+                        "name": "evidence_only",
+                        "description": "Ground every review comment in the supplied PRD evidence.",
+                        "enforcement": "strict",
+                    }
+                ],
+                "eval_criteria": [
+                    {
+                        "name": "coverage_gap_detection",
+                        "weight": 0.6,
+                        "description": "Find missing acceptance criteria and regression gaps.",
+                    }
+                ],
+                "metadata": {
+                    "agent_name": "PRD Review Agent",
+                    "version": "v1",
+                    "created_from": "prompt",
+                },
+            },
+            "prompt_used": "Build an agent that reviews product requirement documents.",
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    saved_config_path = Path(payload["save_result"]["config_path"])
+    saved_config = yaml.safe_load(saved_config_path.read_text(encoding="utf-8"))
+
+    assert saved_config["prompts"]["root"] == (
+        "Review PRDs, flag missing acceptance criteria, and propose harder regression evals."
+    )
+    keyword_pool = {
+        keyword
+        for rule in saved_config["routing"]["rules"]
+        for keyword in rule.get("keywords", [])
+    }
+    assert "flight" not in keyword_pool
+    assert "booking" not in keyword_pool
+    assert "airline" not in keyword_pool

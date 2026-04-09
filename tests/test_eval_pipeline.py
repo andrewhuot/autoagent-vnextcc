@@ -5,6 +5,8 @@ from __future__ import annotations
 import csv
 import json
 
+import yaml
+
 from evals.runner import EvalRunner
 from evals.statistics import paired_significance
 from evals.scorer import CompositeScorer, EvalResult
@@ -215,6 +217,61 @@ def test_eval_runner_rejects_contaminated_dataset_in_strict_mode(tmp_path) -> No
         assert "cross-split contamination" in str(exc).lower()
     else:  # pragma: no cover - explicit assertion path
         raise AssertionError("Expected strict integrity mode to reject contaminated dataset")
+
+
+def test_eval_runner_disambiguates_duplicate_yaml_case_ids_before_saving_results(tmp_path) -> None:
+    """Directory-based eval corpora should not crash when multiple files reuse case IDs."""
+    from evals.results_store import EvalResultsStore
+
+    cases_dir = tmp_path / "cases"
+    cases_dir.mkdir()
+
+    shared_case = {
+        "id": "shared_case",
+        "category": "routing",
+        "user_message": "Route me to support",
+        "expected_specialist": "support",
+        "expected_behavior": "answer",
+    }
+    (cases_dir / "suite_a.yaml").write_text(
+        yaml.safe_dump({"cases": [shared_case, shared_case]}, sort_keys=False),
+        encoding="utf-8",
+    )
+    (cases_dir / "suite_b.yaml").write_text(
+        yaml.safe_dump({"cases": [shared_case]}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    def agent(message: str, config: dict | None = None) -> dict:
+        del message, config
+        return {
+            "response": "Support can help.",
+            "specialist_used": "support",
+            "safety_violation": False,
+            "latency_ms": 12.0,
+            "token_count": 20,
+        }
+
+    results_store = EvalResultsStore(db_path=str(tmp_path / "results.db"))
+    runner = EvalRunner(
+        cases_dir=str(cases_dir),
+        agent_fn=agent,
+        cache_enabled=False,
+        results_store=results_store,
+    )
+
+    loaded_cases = runner.load_cases()
+
+    assert len(loaded_cases) == 3
+    assert len({case.id for case in loaded_cases}) == 3
+
+    runner.run()
+
+    assert runner.last_evaluation_run is not None
+    saved = results_store.get_run(runner.last_evaluation_run.run_id)
+    assert saved is not None
+    assert len(saved.examples) == 3
+    assert len({example.example_id for example in saved.examples}) == 3
 
 
 def test_composite_scorer_reports_confidence_intervals() -> None:

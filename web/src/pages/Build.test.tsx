@@ -41,6 +41,14 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
   });
 }
 
+function getRequestBody(body: Record<string, unknown> | null): Record<string, unknown> {
+  expect(body).not.toBeNull();
+  if (body === null) {
+    throw new Error('Expected generate-agent request body to be captured');
+  }
+  return body;
+}
+
 function mockBuilderSession() {
   return {
     session_id: 'builder-session-123',
@@ -366,6 +374,66 @@ describe('Build', () => {
 
     await user.click(within(dialog).getByRole('button', { name: 'JSON' }));
     expect(within(dialog).getByTestId('builder-config-preview')).toBeInTheDocument();
+  });
+
+  it('does not send the default XML support skeleton unless the operator customizes it', async () => {
+    const user = userEvent.setup();
+    const generatedConfig = mockGeneratedConfig();
+    let requestBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/intelligence/generate-agent') {
+          requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          return jsonResponse(generatedConfig);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.type(screen.getByLabelText('Agent description'), 'Build a PRD review agent');
+    await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
+
+    await screen.findByRole('heading', { name: 'Conversational Refinement' });
+
+    const capturedRequestBody = getRequestBody(requestBody);
+    expect(capturedRequestBody.prompt).toBe('Build a PRD review agent');
+    expect(capturedRequestBody).not.toHaveProperty('instruction_xml');
+  });
+
+  it('includes customized XML instructions when the operator edits the draft', async () => {
+    const user = userEvent.setup();
+    const generatedConfig = mockGeneratedConfig();
+    let requestBody: Record<string, unknown> | null = null;
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === '/api/intelligence/generate-agent') {
+          requestBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+          return jsonResponse(generatedConfig);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Raw XML' }));
+    const editor = screen.getByLabelText('XML instruction editor');
+    await user.type(editor, '\n<!-- custom-prd-marker -->');
+    await user.type(screen.getByLabelText('Agent description'), 'Build a PRD review agent');
+    await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
+
+    await screen.findByRole('heading', { name: 'Conversational Refinement' });
+
+    const capturedRequestBody = getRequestBody(requestBody);
+    expect(capturedRequestBody.instruction_xml).toEqual(expect.stringContaining('custom-prd-marker'));
   });
 
   it('saves a generated agent and exposes a continue-to-eval handoff', async () => {

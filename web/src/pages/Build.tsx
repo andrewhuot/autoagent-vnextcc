@@ -141,6 +141,8 @@ const DEFAULT_INSTRUCTION_FORM: InstructionFormState = {
     'EXAMPLE 1:\nBegin example\n[user]\nWhere is my order #1001?\n[model]\nI can help with that. I\'ll route this to the order specialist so we can check the latest shipping status.\nEnd example',
 };
 
+const DEFAULT_INSTRUCTION_XML = buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM);
+
 const WEATHER_ROUTING_GUIDE_XML = `CURRENT CUSTOMER: {username}
 
 <role>The main Weather Agent coordinating multiple agents.</role>
@@ -183,12 +185,12 @@ const XML_GUIDE_LIBRARY = [
   {
     label: 'Support Skeleton',
     description: 'A practical starter layout for customer support agents.',
-    xml: buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM),
+    xml: DEFAULT_INSTRUCTION_XML,
   },
   {
     label: 'Few-Shot Block',
     description: 'Drop in a compact example block when instructions alone are not enough.',
-    xml: `${buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM)}
+    xml: `${DEFAULT_INSTRUCTION_XML}
 
 <!-- Add examples sparingly and only for stubborn behavior gaps. -->`,
   },
@@ -868,7 +870,7 @@ export function StudioWorkspace({
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [composer, setComposer] = useState('');
   const [instructionMode, setInstructionMode] = useState<InstructionStudioMode>('form');
-  const [instructionXml, setInstructionXml] = useState(() => buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
+  const [instructionXml, setInstructionXml] = useState(() => DEFAULT_INSTRUCTION_XML);
   const [requestedAgentName, setRequestedAgentName] = useState('');
   const [requestedModel, setRequestedModel] = useState('');
   const [toolHintsInput, setToolHintsInput] = useState('');
@@ -947,7 +949,7 @@ export function StudioWorkspace({
     setMessages([]);
     setComposer('');
     setInstructionMode('form');
-    setInstructionXml(buildInstructionXmlFromForm(DEFAULT_INSTRUCTION_FORM));
+    setInstructionXml(DEFAULT_INSTRUCTION_XML);
     setRequestedAgentName('');
     setRequestedModel('');
     setToolHintsInput('');
@@ -985,7 +987,7 @@ export function StudioWorkspace({
     generateMutation.mutate(
       {
         prompt: nextPrompt,
-        instruction_xml: instructionXml,
+        instruction_xml: resolveInstructionXmlForGeneration(instructionXml),
         requested_model: requestedModel.trim() || undefined,
         requested_agent_name: requestedAgentName.trim() || undefined,
         tool_hints: toolHints,
@@ -1043,7 +1045,7 @@ export function StudioWorkspace({
       {
         prompt: `Generate an agent from transcript insights in ${transcriptReport.archive_name}`,
         transcript_report_id: transcriptReport.report_id,
-        instruction_xml: instructionXml,
+        instruction_xml: resolveInstructionXmlForGeneration(instructionXml),
         requested_model: requestedModel.trim() || undefined,
         requested_agent_name: requestedAgentName.trim() || undefined,
         tool_hints: toolHints,
@@ -3037,6 +3039,19 @@ function buildInstructionXmlFromForm(form: InstructionFormState): string {
   }
   lines.push('</examples>');
   return lines.join('\n');
+}
+
+function normalizeInstructionXmlDraft(xml: string): string {
+  return xml.replace(/\r\n/g, '\n').trim();
+}
+
+function resolveInstructionXmlForGeneration(xml: string): string | undefined {
+  const normalized = normalizeInstructionXmlDraft(xml);
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized === normalizeInstructionXmlDraft(DEFAULT_INSTRUCTION_XML) ? undefined : xml;
 }
 
 function validateInstructionXmlDraft(xml: string): InstructionValidationResult {
