@@ -138,8 +138,17 @@ async def test_provider_key(body: TestProviderKeyRequest) -> dict:
             RetryPolicy(max_attempts=1, base_delay_seconds=0.0, max_delay_seconds=0.0, jitter_seconds=0.0),
         )
     except urllib.error.HTTPError as exc:
-        if int(getattr(exc, "code", 0) or 0) in {401, 403}:
+        status_code = int(getattr(exc, "code", 0) or 0)
+        if status_code in {401, 403}:
             raise HTTPException(status_code=400, detail="Invalid API key.")
+        if status_code == 429:
+            return {
+                "provider": body.provider,
+                "model": model_name,
+                "valid": True,
+                "message": "Key accepted, but the provider is currently rate-limiting requests (HTTP 429).",
+                "masked_value": mask_secret(api_key),
+            }
         raise HTTPException(status_code=400, detail=f"Connection test failed: HTTP {exc.code}")
     except urllib.error.URLError as exc:
         raise HTTPException(status_code=400, detail=f"Connection test failed: {exc}")

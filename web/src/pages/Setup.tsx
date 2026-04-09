@@ -177,7 +177,7 @@ export function Setup() {
     }
 
     try {
-      await testProviderKey.mutateAsync({
+      const validation = await testProviderKey.mutateAsync({
         provider: field.provider,
         api_key: enteredKey,
       });
@@ -188,10 +188,14 @@ export function Setup() {
       const result = await setRuntimeMode.mutateAsync({ mode: nextMode });
       setModePreference(normalizeMode(result.preferred_mode));
       setDraftKeys((current) => ({ ...current, [field.envName]: '' }));
-      const message =
+      const baseMessage =
         nextMode === 'live'
           ? 'API key saved. Mode switched to live.'
           : `API key saved. Mode switched to ${nextMode}.`;
+      const message =
+        validation.message && validation.message !== 'Key valid.'
+          ? `${baseMessage} Provider warning: ${validation.message}`
+          : baseMessage;
       setFeedback({ tone: 'success', message });
       toastSuccess('Setup updated', message);
     } catch (error) {

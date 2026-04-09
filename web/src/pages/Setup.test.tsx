@@ -135,6 +135,40 @@ describe('Setup', () => {
     expect(screen.getByText('API key saved. Mode switched to live.')).toBeInTheDocument();
   });
 
+  it('still saves a key when provider validation is rate-limited', async () => {
+    const user = userEvent.setup();
+    const testKey = vi.fn().mockResolvedValue({
+      valid: true,
+      message: 'Key accepted, but the provider is currently rate-limiting requests (HTTP 429).',
+    });
+    const saveKeys = vi.fn().mockResolvedValue({ message: 'API keys saved.' });
+    const setMode = vi.fn().mockResolvedValue({
+      preferred_mode: 'live',
+      effective_mode: 'live',
+      message: 'Running in LIVE mode — CLI will use configured real providers.',
+    });
+
+    apiMocks.useTestProviderKey.mockReturnValue({ mutateAsync: testKey, isPending: false });
+    apiMocks.useSaveProviderKeys.mockReturnValue({ mutateAsync: saveKeys, isPending: false });
+    apiMocks.useSetRuntimeMode.mockReturnValue({ mutateAsync: setMode, isPending: false });
+
+    renderPage();
+
+    await user.type(screen.getByLabelText('Google API Key'), 'AIza-test-key-123456');
+    await user.click(screen.getByRole('button', { name: 'Save & Test Google API Key' }));
+
+    await waitFor(() => {
+      expect(saveKeys).toHaveBeenCalledWith({ google_api_key: 'AIza-test-key-123456' });
+    });
+
+    expect(setMode).toHaveBeenCalledWith({ mode: 'live' });
+    expect(
+      screen.getByText(
+        'API key saved. Mode switched to live. Provider warning: Key accepted, but the provider is currently rate-limiting requests (HTTP 429).'
+      )
+    ).toBeInTheDocument();
+  });
+
   it('blocks switching to live mode when no API keys are configured', async () => {
     const user = userEvent.setup();
     const setMode = vi.fn();

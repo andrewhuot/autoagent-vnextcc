@@ -265,6 +265,34 @@ def test_test_key_uses_the_provider_client_for_validation(
     assert captured_headers["Authorization"] == "Bearer sk-valid-abcdef"
 
 
+def test_test_key_treats_rate_limit_as_valid_but_degraded(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_rate_limit(request, timeout=0, context=None):  # noqa: ANN001, ARG001
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            hdrs=None,
+            fp=None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", _raise_rate_limit)
+
+    response = client.post(
+        "/api/settings/test-key",
+        json={"provider": "google", "api_key": "AIza-test-key-123456"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["valid"] is True
+    assert payload["provider"] == "google"
+    assert payload["message"] == "Key accepted, but the provider is currently rate-limiting requests (HTTP 429)."
+    assert payload["masked_value"] == "AIz...123456"
+
+
 def test_test_key_returns_connection_failure_for_url_errors(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
