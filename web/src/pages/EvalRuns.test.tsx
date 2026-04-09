@@ -265,4 +265,24 @@ describe('EvalRuns', () => {
     expect(screen.getByText('Saved draft from Build')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set Up First Eval' })).not.toBeInTheDocument();
   });
+
+  it('gives the inline eval setup form an accessible close label', async () => {
+    const user = userEvent.setup();
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    renderPage('/evals?agent=agent-v002');
+
+    await user.click(screen.getByRole('button', { name: 'Set Up Eval Run' }));
+
+    expect(screen.getByRole('button', { name: 'Close new evaluation form' })).toBeInTheDocument();
+  });
+
+  it('avoids rendering a redundant bottom empty state when eval sets are already visible', () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    renderPage('/evals');
+
+    expect(screen.getByText('Eval Sets')).toBeInTheDocument();
+    expect(screen.queryByText('Pick an agent to start evaluating')).not.toBeInTheDocument();
+  });
 });

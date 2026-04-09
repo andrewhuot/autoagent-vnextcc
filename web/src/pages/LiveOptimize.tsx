@@ -6,6 +6,11 @@ import { Confetti } from '../components/Confetti';
 
 type Phase = 'diagnose' | 'propose' | 'evaluate' | 'decide';
 
+interface LiveOptimizeProps {
+  activeAgentName?: string | null;
+  requireSelectedAgent?: boolean;
+}
+
 interface CycleResult {
   cycle: number;
   changeDescription: string;
@@ -19,7 +24,10 @@ interface ScorePoint {
   score: number;
 }
 
-export function LiveOptimize() {
+export function LiveOptimize({
+  activeAgentName = null,
+  requireSelectedAgent = false,
+}: LiveOptimizeProps) {
   const [isRunning, setIsRunning] = useState(false);
   const [currentPhase, setCurrentPhase] = useState<Phase | null>(null);
   const [completedPhases, setCompletedPhases] = useState<Set<string>>(new Set());
@@ -27,8 +35,18 @@ export function LiveOptimize() {
   const [scoreData, setScoreData] = useState<ScorePoint[]>([]);
   const [showConfetti, setShowConfetti] = useState(false);
   const [totalCycles, setTotalCycles] = useState(3);
+  const canStart = !requireSelectedAgent || Boolean(activeAgentName);
+  const subtitle = requireSelectedAgent
+    ? activeAgentName
+      ? `Preview the streaming optimization loop for ${activeAgentName}. This tab uses simulated events so you can understand the phases before running the real optimizer.`
+      : 'Select an agent above to start the live simulation.'
+    : 'Preview the optimization loop with a simulated streaming walkthrough.';
 
   const startOptimization = () => {
+    if (!canStart) {
+      return;
+    }
+
     // Reset state
     setIsRunning(true);
     setCurrentPhase(null);
@@ -105,13 +123,37 @@ export function LiveOptimize() {
     <div className="p-6 max-w-7xl mx-auto">
       <Confetti trigger={showConfetti} />
 
+      <section className="mb-6 rounded-2xl border border-sky-100 bg-sky-50/70 px-5 py-4 shadow-sm shadow-sky-100/60">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="max-w-3xl">
+            <span className="inline-flex rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+              Simulation preview
+            </span>
+            <p className="mt-3 text-sm leading-relaxed text-sky-950">{subtitle}</p>
+          </div>
+          {requireSelectedAgent ? (
+            <div className="rounded-2xl border border-white bg-white/90 px-4 py-4 shadow-sm">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">Selected agent</p>
+              <p className="mt-2 text-sm font-semibold text-gray-900">
+                {activeAgentName ?? 'Choose an agent above'}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                {activeAgentName
+                  ? 'Keep this same agent selected when you move back to the Run tab.'
+                  : 'The live simulation stays disabled until the main Optimize workflow has an active agent.'}
+              </p>
+            </div>
+          ) : null}
+        </div>
+      </section>
+
       {/* Header */}
       <div className="mb-8">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-3xl font-bold text-gray-900">Live Optimization</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Watch your agent improve in real-time
+              {requireSelectedAgent ? 'Watch the live demo without losing your main workflow context' : 'Watch the optimization loop play out in real-time'}
             </p>
           </div>
 
@@ -135,11 +177,11 @@ export function LiveOptimize() {
 
             <button
               onClick={startOptimization}
-              disabled={isRunning}
+              disabled={isRunning || !canStart}
               className={`
                 px-6 py-2 rounded-lg font-medium text-sm transition-colors
                 ${
-                  isRunning
+                  isRunning || !canStart
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                     : 'bg-blue-600 text-white hover:bg-blue-700'
                 }
@@ -196,9 +238,13 @@ export function LiveOptimize() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
             </svg>
           </div>
-          <h3 className="text-lg font-medium text-gray-900 mb-2">Ready to optimize</h3>
+          <h3 className="text-lg font-medium text-gray-900 mb-2">
+            {requireSelectedAgent && !activeAgentName ? 'Select an agent above to continue' : 'Ready to optimize'}
+          </h3>
           <p className="text-sm text-gray-500">
-            Click "Start Optimization" to begin improving your agent
+            {requireSelectedAgent && !activeAgentName
+              ? 'Select an agent above to start the live simulation.'
+              : 'Click "Start Optimization" to begin the simulated optimization walkthrough.'}
           </p>
         </div>
       )}

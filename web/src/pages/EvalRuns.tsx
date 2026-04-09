@@ -119,6 +119,12 @@ export function EvalRuns() {
     if (!runs || selectedRuns.length !== 2) return [];
     return runs.filter((run) => selectedRuns.includes(run.run_id));
   }, [runs, selectedRuns]);
+  const shouldShowStandaloneNoAgentEmptyState =
+    !activeAgent &&
+    !showCreateForm &&
+    generatedSuites.length === 0 &&
+    (curriculumData?.batches?.length ?? 0) === 0 &&
+    (runs?.length ?? 0) === 0;
 
   function syncAgentSearchParam(agent: AgentLibraryItem | null) {
     const next = new URLSearchParams(searchParams);
@@ -587,7 +593,12 @@ export function EvalRuns() {
                   : 'Launch an eval against the selected agent and optionally tag it with a category.'}
               </p>
             </div>
-            <button onClick={closeForm} className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700">
+            <button
+              type="button"
+              aria-label="Close new evaluation form"
+              onClick={closeForm}
+              className="rounded p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700"
+            >
               <X className="h-4 w-4" />
             </button>
           </div>
@@ -737,7 +748,7 @@ export function EvalRuns() {
             onAction={openCreateForm}
           />
         )
-      ) : (
+      ) : shouldShowStandaloneNoAgentEmptyState ? (
         <EmptyState
           icon={FlaskConical}
           title="Pick an agent to start evaluating"
@@ -745,7 +756,7 @@ export function EvalRuns() {
           actionLabel="Open Build"
           onAction={() => navigate('/build')}
         />
-      )}
+      ) : null}
     </div>
   );
 }

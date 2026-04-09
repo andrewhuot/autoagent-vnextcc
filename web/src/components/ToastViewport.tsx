@@ -18,6 +18,9 @@ export function ToastViewport() {
       {toasts.map((toast) => (
         <div
           key={toast.id}
+          role={toast.tone === 'error' ? 'alert' : 'status'}
+          aria-live={toast.tone === 'error' ? 'assertive' : 'polite'}
+          aria-atomic="true"
           className={classNames(
             'pointer-events-auto rounded-lg border px-4 py-3 shadow-sm backdrop-blur-sm transition-all duration-200',
             toneClasses[toast.tone]

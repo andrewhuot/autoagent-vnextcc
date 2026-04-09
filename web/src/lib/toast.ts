@@ -37,6 +37,7 @@ export const useToastStore = create<ToastStore>((set) => ({
       id,
       title: toast.title,
       description: toast.description,
+      action: toast.action,
       tone: toast.tone,
       createdAt: Date.now(),
     };

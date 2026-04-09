@@ -580,7 +580,10 @@ export function Optimize() {
       )}
       {visitedTabs.has('live') && (
         <section hidden={activeTab !== 'live'}>
-          <LiveOptimize />
+          <LiveOptimize
+            activeAgentName={activeAgent?.name ?? null}
+            requireSelectedAgent
+          />
         </section>
       )}
     </div>
