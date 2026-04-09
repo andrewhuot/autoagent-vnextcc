@@ -210,9 +210,12 @@ class CurriculumGenerator:
             user_message = self._synthesize_harder_variant(
                 cluster.failure_family, category, example
             )
+            prompt_fingerprint = (
+                f"{cluster.failure_family}:{category}:{i}:{user_message}"
+            )
 
             prompt = CurriculumPrompt(
-                id=f"curr_{hashlib.md5(user_message.encode()).hexdigest()[:12]}",
+                id=f"curr_{hashlib.md5(prompt_fingerprint.encode()).hexdigest()[:12]}",
                 tier=tier,
                 user_message=user_message,
                 category=category,

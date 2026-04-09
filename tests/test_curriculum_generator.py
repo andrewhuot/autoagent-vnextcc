@@ -181,3 +181,25 @@ def test_empty_clusters():
     assert batch.batch_id.startswith("curriculum_")
     assert len(batch.prompts) == 0
     assert len(batch.source_clusters) == 0
+
+
+def test_curriculum_generator_assigns_unique_prompt_ids_even_for_repeated_variants():
+    """Repeated synthesized prompts should still receive unique IDs within one batch."""
+    generator = CurriculumGenerator(prompts_per_cluster=3, adversarial_ratio=1.0)
+
+    cluster = FailureCluster(
+        failure_family="routing_error",
+        count=3,
+        examples=[
+            {"user_message": "route me"},
+            {"user_message": "route me"},
+            {"user_message": "route me"},
+        ],
+        categories=["routing_error"],
+        pass_rate=0.5,
+    )
+
+    batch = generator.generate_curriculum([cluster])
+    prompt_ids = [prompt.id for prompt in batch.prompts]
+
+    assert len(prompt_ids) == len(set(prompt_ids))

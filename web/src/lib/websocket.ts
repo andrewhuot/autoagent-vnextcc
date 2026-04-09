@@ -3,7 +3,12 @@ type ConnectionHandler = () => void;
 
 interface WebSocketMessage {
   type: string;
-  payload: unknown;
+  payload?: unknown;
+  [key: string]: unknown;
+}
+
+function isWebSocketMessage(value: unknown): value is WebSocketMessage {
+  return typeof value === 'object' && value !== null && typeof (value as { type?: unknown }).type === 'string';
 }
 
 class WebSocketClient {
@@ -41,18 +46,32 @@ class WebSocketClient {
       };
 
       this.ws.onmessage = (event) => {
+        let message: WebSocketMessage;
         try {
-          const message: WebSocketMessage = JSON.parse(event.data);
+          const parsed = JSON.parse(event.data);
+          if (!isWebSocketMessage(parsed)) {
+            console.warn('Ignoring malformed WebSocket message:', parsed);
+            return;
+          }
+          message = parsed;
+        } catch {
+          console.warn('Failed to parse WebSocket message:', event.data);
+          return;
+        }
+
+        const payload = Object.prototype.hasOwnProperty.call(message, 'payload') ? message.payload : message;
+
+        try {
           const handlers = this.messageHandlers.get(message.type);
           if (handlers) {
-            handlers.forEach((handler) => handler(message.payload));
+            handlers.forEach((handler) => handler(payload));
           }
           const allHandlers = this.messageHandlers.get('*');
           if (allHandlers) {
             allHandlers.forEach((handler) => handler(message));
           }
-        } catch {
-          console.warn('Failed to parse WebSocket message:', event.data);
+        } catch (error) {
+          console.error(`WebSocket handler for "${message.type}" failed:`, error);
         }
       };
 

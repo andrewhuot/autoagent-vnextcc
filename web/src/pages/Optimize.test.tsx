@@ -5,6 +5,16 @@ import userEvent from '@testing-library/user-event';
 import { Optimize } from './Optimize';
 import { useActiveAgentStore } from '../lib/active-agent';
 
+type InitialEntry =
+  | string
+  | {
+      pathname: string;
+      search?: string;
+      hash?: string;
+      state?: unknown;
+      key?: string;
+    };
+
 const wsHandlers = new Map<string, (payload: unknown) => void>();
 
 const apiMocks = vi.hoisted(() => ({
@@ -59,7 +69,7 @@ vi.mock('../lib/toast', () => ({
   toastSuccess: toastMocks.toastSuccess,
 }));
 
-function renderOptimize(initialEntry = '/optimize') {
+function renderOptimize(initialEntry: InitialEntry = '/optimize') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
@@ -157,6 +167,33 @@ describe('Optimize', () => {
       expect.objectContaining({
         config_path: '/workspace/configs/v002.yaml',
         require_human_approval: true,
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('passes the selected eval run id through to the optimize request when launched from Eval Runs', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'opt-eval-123', message: 'Optimization started' });
+    });
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate,
+      isPending: false,
+    });
+
+    renderOptimize({
+      pathname: '/optimize',
+      search: '?agent=agent-v002',
+      state: { evalRunId: 'eval-run-1234' },
+    });
+
+    await user.click(screen.getByRole('button', { name: 'Start Optimization' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config_path: '/workspace/configs/v002.yaml',
+        eval_run_id: 'eval-run-1234',
       }),
       expect.any(Object)
     );

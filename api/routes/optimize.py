@@ -17,6 +17,9 @@ from api.models import (
     OptimizeResponse,
 )
 from api.tasks import Task
+from evals.results_model import EvalResultSet
+from observer.classifier import FAILURE_BUCKETS
+from observer.metrics import HealthMetrics, HealthReport
 from optimizer.memory import OptimizationAttempt
 from optimizer.surface_inventory import build_surface_inventory
 
@@ -38,6 +41,183 @@ def _build_failure_samples(store: Any, limit: int = 25) -> list[dict]:
             "latency_ms": record.latency_ms,
         })
     return samples
+
+
+def _failure_buckets_from_samples(samples: list[dict[str, Any]]) -> dict[str, int]:
+    """Classify optimizer failure samples into coarse failure buckets."""
+    counts = {bucket: 0 for bucket in FAILURE_BUCKETS}
+
+    for sample in samples:
+        error_text = str(sample.get("error_message", "")).lower()
+        response_text = str(sample.get("agent_response", "")).strip()
+        latency_ms = float(sample.get("latency_ms") or 0.0)
+        safety_flags = sample.get("safety_flags") or []
+
+        if safety_flags:
+            counts["safety_violation"] += 1
+        if latency_ms > 3000:
+            counts["timeout"] += 1
+        if "routing" in error_text:
+            counts["routing_error"] += 1
+        if "tool" in error_text:
+            counts["tool_failure"] += 1
+        if "hallucination" in error_text:
+            counts["hallucination"] += 1
+        if len(response_text) < 20:
+            counts["unhelpful_response"] += 1
+
+    return counts
+
+
+def _build_failure_samples_from_eval_result_set(
+    result_set: EvalResultSet | None,
+    *,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Build optimizer failure samples from a scoped eval run result set."""
+    if result_set is None:
+        return []
+
+    samples: list[dict[str, Any]] = []
+    for example in result_set.examples:
+        if example.passed:
+            continue
+
+        actual = example.actual if isinstance(example.actual, dict) else {}
+        tool_calls = actual.get("tool_calls")
+        safety_score = example.scores.get("safety")
+        safety_failed = safety_score is not None and safety_score.value < 1.0
+
+        samples.append({
+            "user_message": str(example.input.get("user_message", "")),
+            "agent_response": str(actual.get("response") or actual.get("details") or ""),
+            "outcome": "fail",
+            "error_message": "; ".join(example.failure_reasons),
+            "safety_flags": ["eval_safety_failure"] if safety_failed else [],
+            "tool_calls": tool_calls if isinstance(tool_calls, list) else [],
+            "specialist_used": str(actual.get("specialist_used") or ""),
+            "latency_ms": float(actual.get("latency_ms") or 0.0),
+        })
+        if len(samples) >= limit:
+            break
+
+    return samples
+
+
+def _build_failure_samples_from_eval_payload(
+    eval_payload: dict[str, Any],
+    *,
+    limit: int = 25,
+) -> list[dict[str, Any]]:
+    """Build optimizer failure samples directly from task-level eval case payloads."""
+    samples: list[dict[str, Any]] = []
+    for case in list(eval_payload.get("cases", []) or []):
+        if not isinstance(case, dict) or bool(case.get("passed")):
+            continue
+
+        details = str(case.get("details") or "")
+        category = str(case.get("category") or "")
+        samples.append({
+            "user_message": str(case.get("user_message") or case.get("case_id") or ""),
+            "agent_response": str(case.get("response") or details),
+            "outcome": "fail",
+            "error_message": details or category,
+            "safety_flags": ["eval_safety_failure"] if case.get("safety_passed") is False else [],
+            "tool_calls": [],
+            "specialist_used": str(case.get("specialist_used") or ""),
+            "latency_ms": float(case.get("latency_ms") or 0.0),
+        })
+        if len(samples) >= limit:
+            break
+
+    return samples
+
+
+def _build_health_report_from_eval_task(
+    eval_payload: dict[str, Any],
+    *,
+    eval_run_id: str,
+    result_set: EvalResultSet | None,
+    failure_samples: list[dict[str, Any]],
+) -> HealthReport:
+    """Build a scoped optimization report from one completed eval run."""
+    total_cases = int(eval_payload.get("total_cases") or 0)
+    passed_cases = int(eval_payload.get("passed_cases") or 0)
+    safety_failures = int(eval_payload.get("safety_failures") or 0)
+
+    latencies: list[float] = []
+    token_counts: list[int] = []
+    if result_set is not None:
+        for example in result_set.examples:
+            actual = example.actual if isinstance(example.actual, dict) else {}
+            latencies.append(float(actual.get("latency_ms") or 0.0))
+            token_counts.append(int(actual.get("token_count") or 0))
+    else:
+        for case in list(eval_payload.get("cases", []) or []):
+            if not isinstance(case, dict):
+                continue
+            latencies.append(float(case.get("latency_ms") or 0.0))
+            token_counts.append(int(case.get("token_count") or 0))
+
+    avg_latency = sum(latencies) / len(latencies) if latencies else 0.0
+    avg_cost = ((sum(token_counts) / len(token_counts)) * 0.001) if token_counts else 0.0
+    success_rate = (passed_cases / total_cases) if total_cases > 0 else 0.0
+    error_rate = ((total_cases - passed_cases) / total_cases) if total_cases > 0 else 0.0
+    safety_violation_rate = (safety_failures / total_cases) if total_cases > 0 else 0.0
+    failure_buckets = _failure_buckets_from_samples(failure_samples)
+    needs_optimization = bool(failure_samples) or success_rate < 0.8 or safety_violation_rate > 0.02
+    reason = (
+        f"scoped_eval_run={eval_run_id}; "
+        f"passed_cases={passed_cases}/{total_cases}; "
+        f"safety_failures={safety_failures}"
+    )
+
+    return HealthReport(
+        metrics=HealthMetrics(
+            success_rate=success_rate,
+            avg_latency_ms=avg_latency,
+            error_rate=error_rate,
+            safety_violation_rate=safety_violation_rate,
+            avg_cost=avg_cost,
+            total_conversations=total_cases,
+        ),
+        failure_buckets=failure_buckets,
+        needs_optimization=needs_optimization,
+        reason=reason,
+    )
+
+
+def _build_scoped_optimization_context(
+    request: Request,
+    *,
+    eval_run_id: str,
+    limit: int,
+) -> tuple[HealthReport, list[dict[str, Any]]]:
+    """Build optimization context from a specific completed eval run."""
+    task_manager = request.app.state.task_manager
+    eval_task = task_manager.get_task(eval_run_id)
+    if eval_task is None or eval_task.task_type != "eval":
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {eval_run_id}")
+    if eval_task.status != "completed" or not isinstance(eval_task.result, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Eval run {eval_run_id} is {eval_task.status}; results not yet available",
+        )
+
+    eval_payload = eval_task.result
+    run_id = str(eval_payload.get("run_id") or eval_run_id)
+    results_store = getattr(request.app.state, "results_store", None)
+    result_set = results_store.get_run(run_id) if results_store is not None else None
+    failure_samples = _build_failure_samples_from_eval_result_set(result_set, limit=limit)
+    if not failure_samples:
+        failure_samples = _build_failure_samples_from_eval_payload(eval_payload, limit=limit)
+    report = _build_health_report_from_eval_task(
+        eval_payload,
+        eval_run_id=eval_run_id,
+        result_set=result_set,
+        failure_samples=failure_samples,
+    )
+    return report, failure_samples
 
 
 def _ensure_active_config(deployer: Any) -> dict:
@@ -141,7 +321,15 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
 
         task.progress = 10
         try:
-            report = observer.observe(window=window)
+            if body.eval_run_id:
+                report, failure_samples = _build_scoped_optimization_context(
+                    request,
+                    eval_run_id=body.eval_run_id,
+                    limit=window,
+                )
+            else:
+                report = observer.observe(window=window)
+                failure_samples = _build_failure_samples(store)
             task.progress = 20
 
             if not report.needs_optimization and not force:
@@ -169,7 +357,6 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                     current_config = yaml.safe_load(handle) or {}
             else:
                 current_config = _ensure_active_config(deployer)
-            failure_samples = _build_failure_samples(store)
 
             task.progress = 40
             new_config, status_msg = optimizer.optimize(

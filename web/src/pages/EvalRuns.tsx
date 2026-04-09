@@ -520,7 +520,8 @@ export function EvalRuns() {
                   </button>
                 </div>
                 <p className="mt-1 text-[11px] text-gray-600">
-                  prompts={batch.prompt_count} · active={batch.applied_count}
+                  prompts={batch.prompt_count}
+                  {batch.applied_count > 0 ? ` · active=${batch.applied_count}` : ''}
                 </p>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {Object.entries(batch.difficulty_distribution).map(([tier, count]) => (

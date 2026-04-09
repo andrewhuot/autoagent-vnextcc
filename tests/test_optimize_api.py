@@ -109,6 +109,28 @@ class _DummyMemory:
         return []
 
 
+class _ContextRecordingOptimizer(_DummyOptimizer):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_reports: list[object] = []
+        self.received_failure_samples: list[list[dict]] = []
+
+    def optimize(self, report, current_config, failure_samples=None):  # noqa: ANN001, ARG002
+        self.received_reports.append(report)
+        self.received_failure_samples.append(list(failure_samples or []))
+        return super().optimize(report, current_config, failure_samples=failure_samples)
+
+
+class _StaticResultsStore:
+    def __init__(self, result_set: object) -> None:
+        self.result_set = result_set
+
+    def get_run(self, run_id: str) -> object | None:
+        if run_id == "run-eval-1234":
+            return self.result_set
+        return None
+
+
 class _InMemoryPendingReviewStore:
     def __init__(self) -> None:
         self._reviews: dict[str, object] = {}
@@ -431,6 +453,205 @@ def test_start_optimization_uses_selected_agent_config_when_config_path_is_provi
     optimizer = app.state.optimizer
     assert optimizer.received_current_configs[-1]["model"] == "selected-model"
     assert optimizer.received_current_configs[-1]["prompts"]["root"] == "Selected config prompt"
+
+
+def test_start_optimization_uses_selected_eval_run_context_over_global_failures(
+    tmp_path: Path,
+) -> None:
+    optimizer = _ContextRecordingOptimizer()
+    task_manager = _RecordingTaskManager()
+
+    eval_task = Task(task_id="eval-run-1234", task_type="eval")
+    eval_task.status = "completed"
+    eval_task.result = {
+        "run_id": "run-eval-1234",
+        "total_cases": 2,
+        "passed_cases": 1,
+        "safety_failures": 1,
+        "cases": [
+            {
+                "case_id": "case-1",
+                "category": "safety",
+                "passed": False,
+                "quality_score": 0.2,
+                "safety_passed": False,
+                "latency_ms": 420.0,
+                "token_count": 150,
+                "details": "safety check failed",
+            },
+            {
+                "case_id": "case-2",
+                "category": "happy_path",
+                "passed": True,
+                "quality_score": 0.9,
+                "safety_passed": True,
+                "latency_ms": 120.0,
+                "token_count": 90,
+                "details": "",
+            },
+        ],
+    }
+    task_manager._tasks[eval_task.task_id] = eval_task
+
+    scoped_result_set = SimpleNamespace(
+        examples=[
+            SimpleNamespace(
+                passed=False,
+                input={"user_message": "Please review my PRD for unsafe gaps."},
+                actual={
+                    "response": "Here is unsafe advice.",
+                    "specialist_used": "writer",
+                    "tool_calls": [],
+                    "latency_ms": 420.0,
+                    "token_count": 150,
+                },
+                scores={"safety": SimpleNamespace(value=0.0)},
+                failure_reasons=["safety check failed"],
+            ),
+            SimpleNamespace(
+                passed=True,
+                input={"user_message": "Summarize this spec."},
+                actual={
+                    "response": "Summary complete.",
+                    "specialist_used": "writer",
+                    "tool_calls": [],
+                    "latency_ms": 120.0,
+                    "token_count": 90,
+                },
+                scores={"safety": SimpleNamespace(value=1.0)},
+                failure_reasons=[],
+            ),
+        ]
+    )
+
+    config_path = tmp_path / "selected-agent.yaml"
+    config_path.write_text("model: selected-model\nprompts:\n  root: Selected config prompt\n", encoding="utf-8")
+
+    test_app = FastAPI()
+    test_app.include_router(optimize_routes.router)
+    test_app.state.task_manager = task_manager
+    test_app.state.ws_manager = _DummyWsManager()
+    test_app.state.observer = _DummyObserver()
+    test_app.state.optimizer = optimizer
+    test_app.state.deployer = _DummyDeployer()
+    test_app.state.eval_runner = _DummyEvalRunner()
+    test_app.state.results_store = _StaticResultsStore(scoped_result_set)
+    test_app.state.conversation_store = _FailureStore()
+    test_app.state.optimization_memory = _DummyMemory()
+    test_app.state.pending_review_store = _InMemoryPendingReviewStore()
+
+    client = TestClient(test_app)
+
+    response = client.post(
+        "/api/optimize/run",
+        json={
+            "window": 25,
+            "force": True,
+            "mode": "standard",
+            "objective": "",
+            "guardrails": [],
+            "research_algorithm": "",
+            "budget_cycles": 5,
+            "budget_dollars": 3.0,
+            "config_path": str(config_path),
+            "eval_run_id": "eval-run-1234",
+        },
+    )
+
+    assert response.status_code == 202
+    time.sleep(0.2)
+
+    assert optimizer.received_failure_samples
+    assert optimizer.received_failure_samples[-1][0]["user_message"] == "Please review my PRD for unsafe gaps."
+
+    scoped_report = optimizer.received_reports[-1]
+    assert scoped_report.metrics.total_conversations == 2
+    assert scoped_report.failure_buckets["safety_violation"] == 1
+    assert scoped_report.reason.startswith("scoped_eval_run=eval-run-1234")
+
+
+def test_start_optimization_falls_back_to_eval_task_cases_when_structured_results_are_missing(
+    tmp_path: Path,
+) -> None:
+    optimizer = _ContextRecordingOptimizer()
+    task_manager = _RecordingTaskManager()
+
+    eval_task = Task(task_id="eval-run-5678", task_type="eval")
+    eval_task.status = "completed"
+    eval_task.result = {
+        "run_id": "run-eval-5678",
+        "total_cases": 2,
+        "passed_cases": 0,
+        "safety_failures": 1,
+        "cases": [
+            {
+                "case_id": "case-routing",
+                "category": "routing",
+                "passed": False,
+                "quality_score": 0.2,
+                "safety_passed": True,
+                "latency_ms": 210.0,
+                "token_count": 110,
+                "details": "routing: expected=prd_reviewer got=support; keywords: missing expected keywords",
+            },
+            {
+                "case_id": "case-safety",
+                "category": "safety",
+                "passed": False,
+                "quality_score": 0.1,
+                "safety_passed": False,
+                "latency_ms": 310.0,
+                "token_count": 140,
+                "details": "behavior: expected=refuse; safety check failed",
+            },
+        ],
+    }
+    task_manager._tasks[eval_task.task_id] = eval_task
+
+    config_path = tmp_path / "selected-agent.yaml"
+    config_path.write_text("model: selected-model\nprompts:\n  root: Selected config prompt\n", encoding="utf-8")
+
+    test_app = FastAPI()
+    test_app.include_router(optimize_routes.router)
+    test_app.state.task_manager = task_manager
+    test_app.state.ws_manager = _DummyWsManager()
+    test_app.state.observer = _DummyObserver()
+    test_app.state.optimizer = optimizer
+    test_app.state.deployer = _DummyDeployer()
+    test_app.state.eval_runner = _DummyEvalRunner()
+    test_app.state.results_store = _StaticResultsStore(None)
+    test_app.state.conversation_store = _FailureStore()
+    test_app.state.optimization_memory = _DummyMemory()
+    test_app.state.pending_review_store = _InMemoryPendingReviewStore()
+
+    client = TestClient(test_app)
+
+    response = client.post(
+        "/api/optimize/run",
+        json={
+            "window": 25,
+            "force": True,
+            "mode": "standard",
+            "objective": "",
+            "guardrails": [],
+            "research_algorithm": "",
+            "budget_cycles": 5,
+            "budget_dollars": 3.0,
+            "config_path": str(config_path),
+            "eval_run_id": "eval-run-5678",
+        },
+    )
+
+    assert response.status_code == 202
+    time.sleep(0.2)
+
+    assert optimizer.received_failure_samples
+    assert optimizer.received_failure_samples[-1][0]["user_message"] == "case-routing"
+
+    scoped_report = optimizer.received_reports[-1]
+    assert scoped_report.metrics.total_conversations == 2
+    assert scoped_report.failure_buckets["routing_error"] == 1
+    assert scoped_report.failure_buckets["safety_violation"] == 1
 
 
 def test_pending_review_store_persists_reviews_to_json(tmp_path: Path) -> None:

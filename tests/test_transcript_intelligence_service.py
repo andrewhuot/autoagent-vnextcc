@@ -8,6 +8,7 @@ import json
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 from optimizer.change_card import ChangeCardStore
 from optimizer.transcript_intelligence import TranscriptIntelligenceService
@@ -47,11 +48,13 @@ class _StubLLMRouter:
         *,
         mock_mode: bool = False,
         fail: bool = False,
+        models: list[object] | None = None,
     ) -> None:
         self.responses = list(responses)
         self.mock_mode = mock_mode
         self.fail = fail
         self.requests: list[object] = []
+        self.models = list(models or [])
 
     def generate(self, request: object) -> _StubLLMResponse:
         self.requests.append(request)
@@ -143,6 +146,29 @@ def test_import_archive_persists_report_for_a_fresh_service_instance(tmp_path: P
 
     generated = fresh_service.generate_agent_config("Build a support agent", transcript_report_id=report.report_id)
     assert generated["metadata"]["created_from"] == "transcript"
+
+
+def test_generate_agent_config_falls_back_to_prd_reviewer_shape_when_live_router_is_throttled(tmp_path: Path) -> None:
+    router = _StubLLMRouter(
+        responses=[],
+        fail=True,
+        models=[
+            SimpleNamespace(provider="openai", model="gpt-4o"),
+            SimpleNamespace(provider="google", model="gemini-2.5-pro"),
+        ],
+    )
+    service = _service(tmp_path, llm_router=router)
+
+    generated = service.generate_agent_config(
+        "Build an agent that reviews product requirement documents, flags missing acceptance criteria, and proposes stronger evaluation cases for regressions."
+    )
+
+    assert service.last_generation_used_llm is False
+    assert service.last_generation_failure_reason == "router unavailable"
+    assert generated["metadata"]["agent_name"] == "PRD Review Agent"
+    assert generated["model"] == "gemini-2.5-pro"
+    assert "acceptance criteria" in generated["system_prompt"].lower()
+    assert {tool["name"] for tool in generated["tools"]} >= {"document_lookup", "eval_case_generator"}
 
 
 def test_import_archive_uses_llm_intent_classification_when_real_router_available(tmp_path: Path) -> None:

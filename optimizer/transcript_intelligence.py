@@ -396,6 +396,21 @@ class TranscriptIntelligenceService:
             domain = "ecommerce"
         if any(kw in lower for kw in ("hr", "human resource", "employee", "onboard", "payroll")):
             domain = "hr"
+        if any(
+            kw in lower
+            for kw in (
+                "prd",
+                "product requirement",
+                "product requirements",
+                "requirements document",
+                "acceptance criteria",
+                "regression eval",
+                "regression test",
+                "review product",
+                "review requirement",
+            )
+        ):
+            domain = "product_review"
 
         # --- derive a short agent name from the prompt ---
         agent_name_words = [w.capitalize() for w in re.findall(r"[a-z]+", lower) if len(w) > 3][:3]
@@ -403,6 +418,8 @@ class TranscriptIntelligenceService:
             agent_name = requested_agent_name
         elif any(term in lower for term in ("airline", "flight", "travel", "booking", "reservation")):
             agent_name = "AirlineCustomerSupportAgent"
+        elif domain == "product_review":
+            agent_name = "PRD Review Agent"
         else:
             agent_name = "".join(agent_name_words) + "Agent" if agent_name_words else "AgentLab"
 
@@ -461,6 +478,16 @@ class TranscriptIntelligenceService:
                 "appropriate HR specialist for complex matters.\n\n"
                 "For sensitive issues such as workplace disputes or performance matters, "
                 "immediately escalate to an HR Business Partner."
+            ),
+            "product_review": (
+                "You are a PRD review and evaluation design assistant. "
+                "Your job is to inspect product requirement documents, identify missing or weak acceptance criteria, "
+                "and propose stronger regression-oriented evaluation cases.\n\n"
+                "Ground every review comment in the supplied PRD text or referenced evidence. "
+                "When information is missing, say exactly what is missing instead of inventing requirements. "
+                "Separate factual observations from recommendations.\n\n"
+                "When asked for stronger tests, produce concrete eval ideas that target likely regressions, edge cases, "
+                "and ambiguity in the document."
             ),
             "general": (
                 "You are a helpful, accurate, and professional AI assistant. "
@@ -591,6 +618,23 @@ class TranscriptIntelligenceService:
                     "parameters": {"policy_name": "string"},
                 },
             ],
+            "product_review": [
+                {
+                    "name": "document_lookup",
+                    "description": "Inspect a PRD section, referenced requirement, or evidence snippet before making a review comment.",
+                    "parameters": {"input": "string"},
+                },
+                {
+                    "name": "eval_case_generator",
+                    "description": "Draft stronger regression-oriented evaluation cases for the product document under review.",
+                    "parameters": {"input": "string"},
+                },
+                {
+                    "name": "escalate_to_human",
+                    "description": "Escalate unclear product decisions or missing business context to a human reviewer.",
+                    "parameters": {"reason": "string", "context_summary": "string"},
+                },
+            ],
             "general": [
                 {
                     "name": "search_knowledge_base",
@@ -643,6 +687,12 @@ class TranscriptIntelligenceService:
                 {"condition": "topic == 'payroll_discrepancy'", "action": "route_to_payroll_team", "priority": 3},
                 {"condition": "default", "action": "answer_policy_question", "priority": 99},
             ],
+            "product_review": [
+                {"condition": "request mentions missing acceptance criteria or unclear requirements", "action": "review_acceptance_criteria", "priority": 1},
+                {"condition": "request asks for evidence, cited sections, or referenced requirements", "action": "document_lookup", "priority": 2},
+                {"condition": "request asks for harder tests, regressions, or eval coverage", "action": "generate_regression_evals", "priority": 3},
+                {"condition": "default", "action": "review_and_summarize_prd", "priority": 99},
+            ],
             "general": [
                 {"condition": "confidence_score < 0.4", "action": "escalate_to_human", "priority": 1},
                 {"condition": "topic == 'sensitive'", "action": "apply_safety_guardrails", "priority": 2},
@@ -684,6 +734,11 @@ class TranscriptIntelligenceService:
                 {"name": "equal_treatment", "description": "Provide consistent policy information to all employees regardless of level.", "enforcement": "required"},
                 {"name": "escalate_sensitive_topics", "description": "Workplace disputes, harassment claims, and performance issues must be escalated to HR.", "enforcement": "hard_block"},
             ],
+            "product_review": [
+                {"name": "evidence_grounding", "description": "Every review comment must cite the supplied PRD text, section, or referenced evidence.", "enforcement": "hard_block"},
+                {"name": "no_fabricated_requirements", "description": "Never invent product requirements, acceptance criteria, owners, or timelines that are not in evidence.", "enforcement": "hard_block"},
+                {"name": "regression_focus", "description": "Favor concrete regression risks, edge cases, and measurable acceptance checks over generic feedback.", "enforcement": "required"},
+            ],
             "general": [
                 {"name": "safety_guardrails", "description": "Refuse requests for harmful, illegal, or unethical content.", "enforcement": "hard_block"},
                 {"name": "hallucination_prevention", "description": "Do not fabricate facts; acknowledge uncertainty when knowledge is incomplete.", "enforcement": "required"},
@@ -724,6 +779,12 @@ class TranscriptIntelligenceService:
                 {"name": "policy_accuracy", "weight": 0.40, "description": "Accuracy of HR policy information provided to employees."},
                 {"name": "confidentiality_compliance", "weight": 0.40, "description": "Zero tolerance for unauthorized disclosure of employee data."},
                 {"name": "employee_satisfaction", "weight": 0.20, "description": "Employee-reported satisfaction with HR assistant interactions."},
+            ],
+            "product_review": [
+                {"name": "acceptance_criteria_coverage", "weight": 0.35, "description": "How well the review identifies missing, vague, or untestable acceptance criteria."},
+                {"name": "evidence_grounding", "weight": 0.30, "description": "Whether findings and recommendations are grounded in the supplied PRD evidence."},
+                {"name": "regression_eval_quality", "weight": 0.20, "description": "Strength and specificity of proposed regression-focused eval cases."},
+                {"name": "review_clarity", "weight": 0.15, "description": "Clarity, actionability, and structure of the PRD review output."},
             ],
             "general": [
                 {"name": "response_accuracy", "weight": 0.40, "description": "Factual correctness of responses against knowledge base ground truth."},
@@ -1816,6 +1877,11 @@ class TranscriptIntelligenceService:
         """Return the first configured model name for Build defaults."""
         router = self._llm_router
         models = getattr(router, "models", []) if router is not None else []
+        for model in models:
+            provider = str(getattr(model, "provider", "")).strip().lower()
+            model_name = getattr(model, "model", "")
+            if provider == "google" and isinstance(model_name, str) and model_name.strip():
+                return model_name
         if models:
             first_model = getattr(models[0], "model", "")
             if isinstance(first_model, str) and first_model.strip():
