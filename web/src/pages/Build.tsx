@@ -101,6 +101,14 @@ interface InstructionValidationResult {
   form: InstructionFormState;
 }
 
+interface DraftInsightSummary {
+  systemPrompt: string;
+  tools: string[];
+  routing: string[];
+  policies: string[];
+  evals: string[];
+}
+
 const BUILD_ARTIFACT_STORAGE_KEY = 'agentlab.build-artifacts.v1';
 
 const PROMPT_EXAMPLES = [
@@ -539,8 +547,25 @@ export function BuilderChatWorkspace({
     setPreviewComposer(defaultPreviewMessageForBuilderConfig(session.config));
   }, [previewComposer, session?.config, session?.updated_at]);
 
+  const builderIterationCount = countUserTurns(messages);
+  const builderLastChange = getLastUserTurn(messages);
+  const builderHasDraft = Boolean(session?.session_id && session.config);
+  const builderHasPreview = Boolean(previewResult);
+  const builderHasSaved = Boolean(savedAgent || saveResult);
+
   const body = (
     <>
+      <BuildLoopPanel
+        iterationCount={builderIterationCount}
+        lastChange={builderLastChange}
+        hasDraft={builderHasDraft}
+        hasPreview={builderHasPreview}
+        hasSaved={builderHasSaved}
+        evalCaseCount={session?.evals?.case_count ?? 0}
+        previewResult={previewResult}
+        fallbackMode={builderPreviewModeNotice || Boolean(previewResult?.mock_mode)}
+      />
+
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-stretch">
         <section className="flex min-h-[560px] h-full flex-col overflow-hidden rounded-[28px] border border-gray-200 bg-white shadow-sm shadow-gray-100/70 lg:min-h-[640px] xl:min-h-[720px]">
           <div className="border-b border-gray-200 px-5 py-4">
@@ -719,6 +744,13 @@ export function BuilderChatWorkspace({
                 />
               </div>
             </div>
+
+            {session?.config ? (
+              <DraftInsightsPanel
+                testId="builder-draft-insights"
+                summary={summarizeBuilderConfig(session.config)}
+              />
+            ) : null}
 
             <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50/70 px-4 py-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1493,6 +1525,17 @@ export function StudioWorkspace({
 
   const refineBody = (
     <>
+      <BuildLoopPanel
+        iterationCount={agentConfig ? Math.max(1, countUserTurns(messages) + 1) : 0}
+        lastChange={getLastUserTurn(messages) ?? (currentMode === 'prompt' ? prompt.trim() : transcriptReport?.archive_name ?? null)}
+        hasDraft={Boolean(agentConfig)}
+        hasPreview={Boolean(previewResult)}
+        hasSaved={Boolean(savedAgent || saveResult)}
+        evalCaseCount={agentConfig?.eval_criteria.length ?? 0}
+        previewResult={previewResult}
+        fallbackMode={Boolean(previewResult?.mock_mode)}
+      />
+
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,0.9fr)] xl:items-stretch">
         <section className="flex min-h-[720px] h-full flex-col rounded-3xl border border-gray-200 bg-white shadow-sm">
           <div className="border-b border-gray-100 px-5 py-4">
@@ -1619,6 +1662,11 @@ export function StudioWorkspace({
                   <StatPill label={`${agentConfig.routing_rules.length} routes`} />
                 </div>
               </div>
+
+              <DraftInsightsPanel
+                testId="studio-draft-insights"
+                summary={summarizeGeneratedConfig(agentConfig)}
+              />
 
               <div className="mt-4 flex flex-1 min-h-0 flex-col rounded-2xl border border-gray-200 bg-gray-50/70 p-4">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
@@ -2139,7 +2187,7 @@ function PreviewResultCard({
               key={`${String(toolCall.name ?? 'tool')}-${index}`}
               className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-medium text-gray-600"
             >
-              Tool: {String(toolCall.name ?? toolCall.tool_name ?? `call_${index + 1}`)}
+              Tool: {String(toolCall.name ?? toolCall.tool_name ?? toolCall.tool ?? `call_${index + 1}`)}
             </span>
           ))}
         </div>
@@ -2641,6 +2689,224 @@ function BuilderWorkflowChecklist() {
   );
 }
 
+function BuildLoopPanel({
+  iterationCount,
+  lastChange,
+  hasDraft,
+  hasPreview,
+  hasSaved,
+  evalCaseCount,
+  previewResult,
+  fallbackMode,
+}: {
+  iterationCount: number;
+  lastChange: string | null;
+  hasDraft: boolean;
+  hasPreview: boolean;
+  hasSaved: boolean;
+  evalCaseCount: number;
+  previewResult: BuildPreviewResult | null;
+  fallbackMode: boolean;
+}) {
+  const loopLabel = iterationCount > 0 ? `Iteration ${iterationCount}` : 'No draft yet';
+  const signal = getLoopSignal({ hasDraft, hasPreview, hasSaved, evalCaseCount, previewResult, fallbackMode });
+  const nextAction = getLoopNextAction({ hasDraft, hasPreview, hasSaved });
+  const steps = [
+    { label: 'Draft', complete: hasDraft, current: !hasDraft },
+    { label: 'Inspect', complete: hasDraft, current: hasDraft && !hasPreview },
+    { label: 'Test', complete: hasPreview, current: hasDraft && !hasPreview },
+    { label: 'Save / Eval', complete: hasSaved, current: hasPreview && !hasSaved },
+  ];
+
+  return (
+    <section
+      data-testid="build-loop-panel"
+      aria-label="Build iteration loop"
+      className="rounded-lg border border-emerald-100 bg-[linear-gradient(180deg,rgba(236,253,245,0.9),rgba(255,255,255,1))] px-5 py-4 shadow-sm shadow-emerald-100/60"
+    >
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] xl:items-center">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex rounded-full border border-emerald-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-800">
+              Managed build loop
+            </span>
+            <span className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-500">
+              {loopLabel}
+            </span>
+          </div>
+          <h3 className="mt-3 text-base font-semibold text-gray-950">Iteration loop</h3>
+          <p className="mt-1 text-sm leading-relaxed text-gray-600">
+            {signal}
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+            <div className="rounded-lg border border-white/80 bg-white/85 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Last change
+              </p>
+              <p className="mt-1 text-sm font-medium leading-6 text-gray-900">
+                {lastChange || 'Start by describing the first version.'}
+              </p>
+            </div>
+            <div className="rounded-lg border border-white/80 bg-white/85 px-4 py-3">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+                Next action
+              </p>
+              <p className="mt-1 text-sm font-semibold leading-6 text-emerald-900">{nextAction}</p>
+            </div>
+          </div>
+        </div>
+
+        <ol className="grid gap-2 sm:grid-cols-4">
+          {steps.map((step, index) => {
+            const tone = step.complete
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : step.current
+                ? 'border-sky-200 bg-sky-50 text-sky-800'
+                : 'border-gray-200 bg-white text-gray-500';
+            return (
+              <li
+                key={step.label}
+                className={classNames('rounded-lg border px-3 py-3 text-sm shadow-sm', tone)}
+              >
+                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full border border-current/20 bg-white text-xs font-semibold">
+                  {index + 1}
+                </span>
+                <p className="mt-2 font-semibold">{step.label}</p>
+                <p className="mt-1 text-xs leading-5 opacity-80">
+                  {step.complete ? 'Ready' : step.current ? 'Now' : 'Next'}
+                </p>
+              </li>
+            );
+          })}
+        </ol>
+      </div>
+    </section>
+  );
+}
+
+function DraftInsightsPanel({
+  summary,
+  testId,
+}: {
+  summary: DraftInsightSummary;
+  testId: string;
+}) {
+  return (
+    <section
+      data-testid={testId}
+      className="mt-4 rounded-lg border border-gray-200 bg-white px-4 py-4 shadow-sm shadow-gray-100/60"
+    >
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">
+            Inspect
+          </p>
+          <h4 className="mt-1 text-sm font-semibold text-gray-900">Draft changes to inspect</h4>
+        </div>
+        <span className="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-gray-500">
+          Config summary
+        </span>
+      </div>
+
+      <p className="mt-3 text-sm leading-6 text-gray-600">
+        {summary.systemPrompt || 'The draft has no system prompt yet.'}
+      </p>
+
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <InsightList title="Tools" items={summary.tools} />
+        <InsightList title="Routes" items={summary.routing} />
+        <InsightList title="Policies" items={summary.policies} />
+        <InsightList title="Eval checks" items={summary.evals} />
+      </div>
+    </section>
+  );
+}
+
+function InsightList({ title, items }: { title: string; items: string[] }) {
+  const visibleItems = items.slice(0, 3);
+  const remaining = Math.max(0, items.length - visibleItems.length);
+
+  return (
+    <div className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-gray-400">{title}</p>
+      {visibleItems.length > 0 ? (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {visibleItems.map((item) => (
+            <span
+              key={`${title}-${item}`}
+              className="max-w-full truncate rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-700"
+            >
+              {item}
+            </span>
+          ))}
+          {remaining > 0 ? (
+            <span className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-500">
+              +{remaining} more
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-2 text-xs leading-5 text-gray-500">No entries yet.</p>
+      )}
+    </div>
+  );
+}
+
+function getLoopSignal({
+  hasDraft,
+  hasPreview,
+  hasSaved,
+  evalCaseCount,
+  previewResult,
+  fallbackMode,
+}: {
+  hasDraft: boolean;
+  hasPreview: boolean;
+  hasSaved: boolean;
+  evalCaseCount: number;
+  previewResult: BuildPreviewResult | null;
+  fallbackMode: boolean;
+}): string {
+  if (!hasDraft) {
+    return 'Start with a rough draft. The loop will track each adjustment, test result, and handoff.';
+  }
+  if (hasSaved) {
+    return 'This version is saved. Eval Runs can now measure whether the latest changes improved behavior.';
+  }
+  if (hasPreview && previewResult) {
+    const mode = previewResult.mock_mode ? 'mock' : 'live';
+    return `Latest ${mode} preview used the ${previewResult.specialist_used} specialist. Use that signal to refine or save.`;
+  }
+  if (evalCaseCount > 0) {
+    return `${evalCaseCount} draft evals are ready. Run a sample preview, then save the candidate for Eval Runs.`;
+  }
+  if (fallbackMode) {
+    return 'Draft is changing in fallback mode. Keep iterating, then validate live when provider access is ready.';
+  }
+  return 'Draft is ready to inspect. Run a realistic test before saving this version.';
+}
+
+function getLoopNextAction({
+  hasDraft,
+  hasPreview,
+  hasSaved,
+}: {
+  hasDraft: boolean;
+  hasPreview: boolean;
+  hasSaved: boolean;
+}): string {
+  if (!hasDraft) {
+    return 'Next: describe the first draft.';
+  }
+  if (!hasPreview) {
+    return 'Next: run a realistic test before saving.';
+  }
+  if (!hasSaved) {
+    return 'Next: refine the miss or save this version.';
+  }
+  return 'Next: run evals against the saved draft.';
+}
+
 function JourneyActionPanel({
   title,
   description,
@@ -3134,6 +3400,35 @@ function MetricCard({
       </p>
     </div>
   );
+}
+
+function countUserTurns(messages: Array<{ role: string }>): number {
+  return messages.filter((message) => message.role === 'user').length;
+}
+
+function getLastUserTurn(messages: Array<{ role: string; content: string }>): string | null {
+  const lastUserMessage = [...messages].reverse().find((message) => message.role === 'user');
+  return lastUserMessage?.content ?? null;
+}
+
+function summarizeBuilderConfig(config: BuilderConfig): DraftInsightSummary {
+  return {
+    systemPrompt: config.system_prompt,
+    tools: config.tools.map((tool) => tool.name).filter(Boolean),
+    routing: config.routing_rules.map((rule) => rule.name || rule.intent).filter(Boolean),
+    policies: config.policies.map((policy) => policy.name).filter(Boolean),
+    evals: config.eval_criteria.map((criterion) => criterion.name).filter(Boolean),
+  };
+}
+
+function summarizeGeneratedConfig(config: GeneratedAgentConfig): DraftInsightSummary {
+  return {
+    systemPrompt: config.system_prompt,
+    tools: config.tools.map((tool) => tool.name).filter(Boolean),
+    routing: config.routing_rules.map((rule) => rule.action || rule.condition).filter(Boolean),
+    policies: config.policies.map((policy) => policy.name).filter(Boolean),
+    evals: config.eval_criteria.map((criterion) => criterion.name).filter(Boolean),
+  };
 }
 
 function loadStoredBuildArtifacts(): BuildArtifact[] {

@@ -132,6 +132,92 @@ def _route_from_config(msg_lower: str, config: dict | None) -> str | None:
     return best_specialist if best_score > 0 else None
 
 
+def _journey_build_text(config: dict | None) -> str:
+    """Collect Build-workspace metadata that can make mock previews domain aware."""
+    if not isinstance(config, dict):
+        return ""
+
+    journey_build = config.get("journey_build")
+    if not isinstance(journey_build, dict):
+        return ""
+
+    fragments: list[str] = []
+    for key in ("agent_name", "system_prompt"):
+        value = journey_build.get(key)
+        if isinstance(value, str):
+            fragments.append(value)
+
+    for collection_name in ("tools", "routing_rules", "policies", "eval_criteria"):
+        collection = journey_build.get(collection_name)
+        if not isinstance(collection, list):
+            continue
+        for item in collection:
+            if not isinstance(item, dict):
+                continue
+            fragments.extend(str(value) for value in item.values() if isinstance(value, (str, int, float)))
+
+    return " ".join(fragments).lower()
+
+
+def _configured_tool_names(config: dict | None) -> list[str]:
+    """Return the custom Build tool names preserved on the runtime config."""
+    if not isinstance(config, dict):
+        return []
+    journey_build = config.get("journey_build")
+    if not isinstance(journey_build, dict):
+        return []
+
+    names: list[str] = []
+    for tool in journey_build.get("tools", []):
+        if not isinstance(tool, dict):
+            continue
+        name = str(tool.get("name") or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _has_airline_domain(config: dict | None, msg_lower: str) -> bool:
+    """Detect flight/booking agents so mock preview copy matches Build intent."""
+    text = f"{msg_lower} {_journey_build_text(config)}"
+    return any(
+        token in text
+        for token in (
+            "airline",
+            "flight",
+            "booking",
+            "reservation",
+            "fare",
+            "gate",
+            "departure",
+            "arrival",
+            "traveler",
+            "itinerary",
+        )
+    )
+
+
+def _select_configured_tool(config: dict | None, msg_lower: str, fallback: str) -> str:
+    """Pick the most relevant Build tool name, falling back to legacy tool IDs."""
+    names = _configured_tool_names(config)
+    if not names:
+        return fallback
+
+    preferred_keywords = []
+    if any(token in msg_lower for token in ("cancel", "refund", "credit")):
+        preferred_keywords.extend(["cancel", "refund"])
+    if any(token in msg_lower for token in ("change", "rebook", "later", "earlier")):
+        preferred_keywords.extend(["change", "booking"])
+    if any(token in msg_lower for token in ("delay", "status", "gate", "depart", "arriv")):
+        preferred_keywords.extend(["status", "flight"])
+
+    for keyword in preferred_keywords:
+        for name in names:
+            if keyword in name.lower():
+                return name
+    return names[0]
+
+
 def _deterministic_rng(user_message: str, config: dict | None) -> random.Random:
     """Create a deterministic RNG keyed by message and config content."""
     config_key = json.dumps(_semantic_config_view(config), sort_keys=True, separators=(",", ":"))
@@ -163,8 +249,29 @@ def mock_agent_response(user_message: str, config: dict | None = None) -> dict:
     else:
         specialist = "support"
 
+    airline_domain = _has_airline_domain(config, msg_lower)
+
     if specialist == "orders":
-        response_text = "I can help with your order. Let me look that up for you."
+        if airline_domain:
+            if any(token in msg_lower for token in ("change", "rebook", "later", "earlier")):
+                response_text = (
+                    "I can help with that booking change. I’ll verify the reservation, "
+                    "check the fare rules, and explain any fee or credit options plainly."
+                )
+            elif any(token in msg_lower for token in ("status", "delay", "gate", "arrival", "departure")):
+                response_text = (
+                    "I can check the flight status and explain the latest delay, gate, "
+                    "or arrival details before recommending the next step."
+                )
+            elif any(token in msg_lower for token in ("cancel", "refund", "credit")):
+                response_text = (
+                    "I can help with the cancellation path, confirm eligibility, and explain "
+                    "whether the reservation returns to cash, credit, or another option."
+                )
+            else:
+                response_text = "I can help with that reservation and walk through the next airline support step."
+        else:
+            response_text = "I can help with your order. Let me look that up for you."
     elif specialist == "recommendations":
         response_text = "Based on your preferences, here are some recommendations."
     else:
@@ -181,7 +288,12 @@ def mock_agent_response(user_message: str, config: dict | None = None) -> dict:
     # Build tool calls
     tool_calls: list[dict] = []
     if specialist == "orders":
-        tool_calls.append({"tool": "lookup_order", "args": {"query": user_message}})
+        tool_calls.append(
+            {
+                "tool": _select_configured_tool(config, msg_lower, "lookup_order"),
+                "args": {"query": user_message},
+            }
+        )
     elif specialist == "recommendations":
         tool_calls.append({"tool": "get_recommendations", "args": {"query": user_message}})
 
