@@ -265,7 +265,7 @@ export function EvalRuns() {
         <section className="rounded-2xl border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] p-5 shadow-sm shadow-sky-100/60">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
-              Step 3 of 3
+              Eval Workspace
             </span>
             <span className="text-xs font-medium text-gray-500">Preparing the eval workspace</span>
           </div>
@@ -573,7 +573,7 @@ export function EvalRuns() {
                 <span className="inline-flex rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
                   Saved draft from Build
                 </span>
-                <span className="text-xs font-medium text-sky-700">Step 3 of 3</span>
+                <span className="text-xs font-medium text-sky-700">Ready to evaluate</span>
               </div>
               <p className="mt-3 text-sm font-semibold text-sky-950">Run the first eval for {activeAgent.name}</p>
               <p className="mt-1 text-sm leading-relaxed text-sky-900">

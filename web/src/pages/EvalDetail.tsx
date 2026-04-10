@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { AlertTriangle } from 'lucide-react';
+import { Link, useParams } from 'react-router-dom';
+import { AlertTriangle, ArrowLeft } from 'lucide-react';
 import { useEvalDetail } from '../lib/api';
 import { ScoreBar } from '../components/ScoreBar';
 import { StatusBadge } from '../components/StatusBadge';
@@ -73,6 +73,14 @@ export function EvalDetail() {
 
   return (
     <div className="space-y-6">
+      <Link
+        to="/evals"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 transition hover:text-gray-900"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Eval Runs
+      </Link>
+
       {result.status !== 'completed' && (
         <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           Eval run is currently <strong>{result.status}</strong>. Progress: {result.progress}%.
@@ -88,7 +96,7 @@ export function EvalDetail() {
               {result.mode && <StatusBadge variant={statusVariant(result.mode)} label={result.mode} />}
             </div>
             <p className="mt-2 text-sm text-gray-600">
-              Completed {formatTimestamp(result.timestamp)} · {result.passed_cases}/{result.total_cases} passed
+              {result.status === 'completed' ? 'Completed' : 'Started'} {formatTimestamp(result.timestamp)} · {result.passed_cases}/{result.total_cases} passed
             </p>
             {result.safety_failures > 0 && (
               <p className="mt-2 inline-flex items-center gap-1 rounded-md bg-red-50 px-2 py-1 text-xs text-red-700">
