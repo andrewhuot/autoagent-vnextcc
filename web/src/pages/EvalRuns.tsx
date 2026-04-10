@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { FlaskConical, Plus, X, Wand2 } from 'lucide-react';
 import {
@@ -28,6 +28,9 @@ import type { AgentLibraryItem } from '../lib/types';
 interface EvalJourneyState {
   agent?: AgentLibraryItem;
   open?: 'run' | 'generate';
+  source?: string;
+  draftEvalCount?: number;
+  latestUserRequest?: string;
 }
 
 export function EvalRuns() {
@@ -56,27 +59,29 @@ export function EvalRuns() {
   const [runAgents, setRunAgents] = useState<Record<string, AgentLibraryItem>>({});
   const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
   const [completedRunId, setCompletedRunId] = useState<string | null>(null);
-  const [selectionHydrated, setSelectionHydrated] = useState(false);
+  const selectionHydratedRef = useRef(false);
 
   const navigationState = (location.state as EvalJourneyState | null) ?? null;
   const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
   const showGeneratorPanel =
     showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
+  const isAgentImproverHandoff =
+    navigationState?.source === 'agent-improver' || searchParams.get('from') === 'agent-improver';
   const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
 
   useEffect(() => {
-    if (selectionHydrated) {
+    if (selectionHydratedRef.current) {
       return;
     }
     if (navigationState?.agent) {
       setActiveAgent(navigationState.agent);
-      setSelectionHydrated(true);
+      selectionHydratedRef.current = true;
       return;
     }
 
     const agentId = searchParams.get('agent');
     if (!agentId) {
-      setSelectionHydrated(true);
+      selectionHydratedRef.current = true;
       return;
     }
     if (!agents?.length) {
@@ -86,8 +91,8 @@ export function EvalRuns() {
     if (matched) {
       setActiveAgent(matched);
     }
-    setSelectionHydrated(true);
-  }, [agents, navigationState?.agent, searchParams, selectionHydrated, setActiveAgent]);
+    selectionHydratedRef.current = true;
+  }, [agents, navigationState?.agent, searchParams, setActiveAgent]);
 
   useEffect(() => {
     const unsubscribe = wsClient.onMessage('eval_complete', (payload) => {
@@ -359,6 +364,21 @@ export function EvalRuns() {
               <X className="h-4 w-4" />
             </button>
           </div>
+          {isAgentImproverHandoff && (
+            <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+              <p className="font-semibold">Agent Improver handoff</p>
+              <p className="mt-1 leading-6">
+                {navigationState?.draftEvalCount
+                  ? `Agent Improver drafted ${navigationState.draftEvalCount} validation ideas. Generate a formal eval suite from the saved config, review the cases, then run it.`
+                  : 'Generate a formal eval suite from the saved Agent Improver config, review the cases, then run it.'}
+              </p>
+              {navigationState?.latestUserRequest ? (
+                <p className="mt-2 text-xs leading-5 text-sky-800">
+                  Latest improvement: {navigationState.latestUserRequest}
+                </p>
+              ) : null}
+            </div>
+          )}
           {activeAgent ? (
             <EvalGenerator
               defaultAgentName={activeAgent.name}

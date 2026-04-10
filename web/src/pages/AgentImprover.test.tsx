@@ -1,11 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToastViewport } from '../components/ToastViewport';
 import { AGENT_IMPROVER_STORAGE_KEY } from '../lib/agent-improver';
 import { AgentImprover } from './AgentImprover';
+
+function EvalRouteProbe() {
+  const location = useLocation();
+  const state = (location.state ?? {}) as Record<string, unknown>;
+
+  return (
+    <div>
+      <p>Eval route reached</p>
+      <p data-testid="eval-search">{location.search}</p>
+      <p data-testid="eval-open">{String(state.open ?? '')}</p>
+      <p data-testid="eval-source">{String(state.source ?? '')}</p>
+      <p data-testid="eval-draft-count">{String(state.draftEvalCount ?? '')}</p>
+    </div>
+  );
+}
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -18,7 +33,10 @@ function renderPage() {
   return render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/agent-improver']}>
-        <AgentImprover />
+        <Routes>
+          <Route path="/agent-improver" element={<AgentImprover />} />
+          <Route path="/evals" element={<EvalRouteProbe />} />
+        </Routes>
         <ToastViewport />
       </MemoryRouter>
     </QueryClientProvider>
@@ -576,6 +594,46 @@ describe('AgentImprover', () => {
     expect(await screen.findByRole('button', { name: 'Retry last request' })).toBeInTheDocument();
   });
 
+  it('retries the last rate-limited request against the live builder session', async () => {
+    const user = userEvent.setup();
+    const retrySession = mockBuilderSession({
+      updated_at: 1234567891,
+      mock_mode: false,
+      config: {
+        ...mockBuilderSession().config,
+        agent_name: 'Escalation Concierge Live',
+      },
+    });
+    const fetchMock = vi.fn(async (...args: [RequestInfo | URL, RequestInit?]) => {
+      const [input] = args;
+      if (String(input) === '/api/builder/chat') {
+        const callCount = fetchMock.mock.calls.filter(([url]) => String(url) === '/api/builder/chat').length;
+        return jsonResponse(callCount === 1 ? mockBuilderSessionWithRateLimit() : retrySession);
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    expect(await screen.findByRole('button', { name: 'Retry last request' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry last request' }));
+
+    expect(await screen.findByText('Escalation Concierge Live')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const retryBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(retryBody).toEqual({
+      message: 'Improve the handoff logic for escalations.',
+      session_id: 'builder-session-123',
+    });
+  });
+
   it('shows rate-limit-specific footer notice instead of raw error text', async () => {
     const user = userEvent.setup();
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
@@ -593,6 +651,53 @@ describe('AgentImprover', () => {
     expect(screen.getAllByText(/fallback data/i).length).toBeGreaterThanOrEqual(1);
   });
 
+  it('can ask the improver to generate an eval plan for the current draft', async () => {
+    const user = userEvent.setup();
+    const draftWithoutEvals = mockBuilderSession({ evals: null });
+    const draftWithEvals = mockBuilderSession({
+      updated_at: 1234567891,
+      evals: {
+        case_count: 2,
+        scenarios: [
+          {
+            name: 'Escalation context',
+            description: 'Verify human handoff includes recent customer actions.',
+          },
+          {
+            name: 'Policy guardrail',
+            description: 'Verify account changes are refused before verification.',
+          },
+        ],
+      },
+    });
+    const fetchMock = vi.fn(async (...args: [RequestInfo | URL, RequestInit?]) => {
+      const [input] = args;
+      if (String(input) === '/api/builder/chat') {
+        const callCount = fetchMock.mock.calls.filter(([url]) => String(url) === '/api/builder/chat').length;
+        return jsonResponse(callCount === 1 ? draftWithoutEvals : draftWithEvals);
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Generate eval plan' }));
+
+    expect(await screen.findByText('Escalation context')).toBeInTheDocument();
+    expect(screen.getByText(/Verify human handoff includes recent customer actions/)).toBeInTheDocument();
+    const evalRequestBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(evalRequestBody.session_id).toBe('builder-session-123');
+    expect(evalRequestBody.message).toMatch(/generate evals/i);
+  });
+
   it('shows "Rate limited" in summary pill for 429 sessions', async () => {
     const user = userEvent.setup();
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
@@ -607,6 +712,60 @@ describe('AgentImprover', () => {
 
     await screen.findByText('Escalation Concierge');
     expect(screen.getByText('Rate limited')).toBeInTheDocument();
+  });
+
+  it('saves and carries drafts with eval plans into the eval generator', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/builder/chat') {
+        return jsonResponse(mockBuilderSession());
+      }
+      if (url === '/api/agents') {
+        return jsonResponse({
+          agent: {
+            id: 'agent-v002',
+            config_version: 2,
+            name: 'Escalation Concierge',
+            model: 'gpt-5.4-mini',
+            created_at: '2026-04-10T12:00:00.000Z',
+            source: 'built',
+            config_path: '/workspace/configs/v002.yaml',
+            status: 'candidate',
+            config: mockBuilderSession().config,
+          },
+          save_result: {
+            artifact_id: 'artifact-123',
+            config_path: '/workspace/configs/v002.yaml',
+            config_version: 2,
+            eval_cases_path: '/workspace/evals/generated_build.yaml',
+            runtime_config_path: '/workspace/agentlab.yaml',
+            workspace_path: '/workspace',
+            actual_config_yaml: 'agent_name: Escalation Concierge',
+          },
+        });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Save and open Eval Generator' }));
+
+    expect(await screen.findByText('Eval route reached')).toBeInTheDocument();
+    expect(screen.getByTestId('eval-search')).toHaveTextContent('agent=agent-v002');
+    expect(screen.getByTestId('eval-search')).toHaveTextContent('generator=1');
+    expect(screen.getByTestId('eval-open')).toHaveTextContent('generate');
+    expect(screen.getByTestId('eval-source')).toHaveTextContent('agent-improver');
+    expect(screen.getByTestId('eval-draft-count')).toHaveTextContent('3');
   });
 
   it('shows generic fallback badge for non-429 mock reasons', async () => {

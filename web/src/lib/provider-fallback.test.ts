@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   normalizeProviderFallback,
   fallbackBadgeLabel,
-  type NormalizedFallback,
 } from './provider-fallback';
 
 describe('normalizeProviderFallback', () => {

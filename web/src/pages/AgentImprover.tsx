@@ -38,11 +38,18 @@ import {
 import { toastError, toastSuccess } from '../lib/toast';
 import type { AgentLibraryItem, BuildPreviewResult, BuildSaveResult } from '../lib/types';
 import { classNames } from '../lib/utils';
-import { normalizeProviderFallback, type NormalizedFallback } from '../lib/provider-fallback';
+import { normalizeProviderFallback } from '../lib/provider-fallback';
 
 type InspectorMode = 'summary' | 'config' | 'preview';
 type ConfigFormat = 'yaml' | 'json';
 type RestorationState = 'none' | 'live' | 'local';
+type EvalHandoffMode = 'run' | 'generate';
+
+interface EvalHandoffOptions {
+  draftEvalCount?: number;
+  latestUserRequest?: string;
+  mode?: EvalHandoffMode;
+}
 
 interface ImproverStep {
   label: string;
@@ -100,6 +107,7 @@ export function AgentImprover() {
   const checkpointMode = checkpoints.length > 0 && !viewingLatestCheckpoint;
   const recoveredLocalDraft = restorationState === 'local' && Boolean(session?.session_id);
   const liveActionsEnabled = Boolean(latestSession?.session_id) && viewingLatestCheckpoint && liveSessionAvailable;
+  const hasDraftEvalPlan = Boolean(session?.evals?.case_count);
   const hasUnsavedWork = Boolean(session?.session_id && !saveResult);
   const yamlPreview: string = session?.config ? serializeBuilderConfigToYaml(session.config) : '';
   const jsonPreview: string = session?.config ? JSON.stringify(session.config, null, 2) : '';
@@ -270,17 +278,24 @@ export function AgentImprover() {
     savedAgent,
   ]);
 
-  async function handleSendRequest(): Promise<void> {
-    const message = composer.trim();
-    if (!message || requestPending || composerDisabled) return;
+  async function submitImprovementRequest(
+    message: string,
+    options: {
+      sessionId?: string | null;
+      resetComposer?: boolean;
+      nextInspectorMode?: InspectorMode;
+    } = {},
+  ): Promise<void> {
+    const trimmedMessage = message.trim();
+    if (!trimmedMessage || requestPending) return;
 
     setRequestPending(true);
     setError(null);
 
     try {
       const nextSession = await sendBuilderMessage({
-        message,
-        session_id: latestSession?.session_id,
+        message: trimmedMessage,
+        session_id: options.sessionId ?? latestSession?.session_id,
       });
       const nextHistory = buildCheckpointHistory(checkpoints, nextSession);
       setCheckpoints(nextHistory);
@@ -288,11 +303,13 @@ export function AgentImprover() {
       setLiveSessionId(nextSession.session_id);
       setLiveSessionAvailable(true);
       setRestorationState('none');
-      setComposer('');
+      if (options.resetComposer ?? true) {
+        setComposer('');
+      }
       setPreviewResult(null);
       setSaveResult(null);
       setSavedAgent(null);
-      setInspectorMode('summary');
+      setInspectorMode(options.nextInspectorMode ?? 'summary');
     } catch (submitError) {
       const messageText =
         submitError instanceof Error ? submitError.message : 'The improver request failed. Check your connection and try again.';
@@ -301,6 +318,35 @@ export function AgentImprover() {
     } finally {
       setRequestPending(false);
     }
+  }
+
+  async function handleSendRequest(): Promise<void> {
+    if (composerDisabled) return;
+    await submitImprovementRequest(composer, { resetComposer: true });
+  }
+
+  async function handleRetryLastRequest(): Promise<void> {
+    if (!liveActionsEnabled || !latestSession?.session_id) return;
+    if (latestUserRequest === 'No request submitted yet.') return;
+
+    await submitImprovementRequest(latestUserRequest, {
+      sessionId: latestSession.session_id,
+      resetComposer: false,
+      nextInspectorMode: 'summary',
+    });
+  }
+
+  async function handleGenerateEvalPlan(): Promise<void> {
+    if (!liveActionsEnabled || !latestSession?.session_id) return;
+
+    await submitImprovementRequest(
+      'Generate evals for this draft. Focus on routing, policy compliance, safety, and regressions from the latest improvement request.',
+      {
+        sessionId: latestSession.session_id,
+        resetComposer: false,
+        nextInspectorMode: 'summary',
+      },
+    );
   }
 
   async function handleRunPreview(): Promise<void> {
@@ -360,14 +406,20 @@ export function AgentImprover() {
   }
 
   async function handleContinueToEval(): Promise<void> {
+    const handoffOptions: EvalHandoffOptions = {
+      draftEvalCount: session?.evals?.case_count,
+      latestUserRequest,
+      mode: hasDraftEvalPlan ? 'generate' : 'run',
+    };
+
     if (savedAgent) {
-      navigateToEvalWorkflow(navigate, savedAgent);
+      navigateToEvalWorkflow(navigate, savedAgent, handoffOptions);
       return;
     }
 
     const agent = await handleSaveDraft();
     if (agent) {
-      navigateToEvalWorkflow(navigate, agent);
+      navigateToEvalWorkflow(navigate, agent, handoffOptions);
     }
   }
 
@@ -776,12 +828,7 @@ export function AgentImprover() {
                   <FallbackNotice
                     mockMode={session.mock_mode}
                     mockReason={session.mock_reason}
-                    onRetry={session.session_id ? () => {
-                      const lastMsg = latestUserRequest;
-                      if (lastMsg && lastMsg !== 'No request submitted yet.') {
-                        setComposer(lastMsg);
-                      }
-                    } : undefined}
+                    onRetry={liveActionsEnabled ? () => void handleRetryLastRequest() : undefined}
                   />
                 ) : null}
 
@@ -827,7 +874,13 @@ export function AgentImprover() {
                       disabled={!liveActionsEnabled || busy}
                       className="inline-flex items-center gap-2 rounded-full border border-[#ecd8dc] bg-[#fbf3f4] px-3.5 py-2 text-sm font-medium text-[#7b5663] transition hover:bg-[#f8eaed] disabled:cursor-not-allowed disabled:opacity-60"
                     >
-                      Continue to Eval
+                      {savePending
+                        ? 'Saving...'
+                        : hasDraftEvalPlan
+                          ? savedAgent
+                            ? 'Open Eval Generator'
+                            : 'Save and open Eval Generator'
+                          : 'Continue to Eval'}
                       <ArrowRight className="h-4 w-4" />
                     </button>
                   </div>
@@ -848,6 +901,9 @@ export function AgentImprover() {
                   checkpointMode={checkpointMode}
                   restoredLocally={recoveredLocalDraft}
                   restoredLive={restorationState === 'live'}
+                  canGenerateEvalPlan={liveActionsEnabled && !busy && !hasDraftEvalPlan}
+                  evalPlanPending={requestPending}
+                  onGenerateEvalPlan={() => void handleGenerateEvalPlan()}
                 />
               ) : null}
 
@@ -908,12 +964,18 @@ function SummaryMode({
   checkpointMode,
   restoredLocally,
   restoredLive,
+  canGenerateEvalPlan,
+  evalPlanPending,
+  onGenerateEvalPlan,
 }: {
   session: BuilderSessionPayload | null;
   latestUserRequest: string;
   checkpointMode: boolean;
   restoredLocally: boolean;
   restoredLive: boolean;
+  canGenerateEvalPlan: boolean;
+  evalPlanPending: boolean;
+  onGenerateEvalPlan: () => void;
 }) {
   if (!session?.config) {
     return (
@@ -982,6 +1044,45 @@ function SummaryMode({
           </ul>
         </SummaryPanel>
       </div>
+
+      <SummaryPanel
+        eyebrow="Validation plan"
+        title={session.evals ? `${session.evals.case_count} draft evals ready` : 'Turn this draft into test cases'}
+      >
+        {session.evals ? (
+          <div className="space-y-3">
+            <p className="text-sm leading-6 text-[#554d59]">
+              Use these scenarios as a starting point in the Eval Generator. Review them there before running a formal suite.
+            </p>
+            <ul className="grid gap-2 md:grid-cols-2">
+              {session.evals.scenarios.map((scenario) => (
+                <li
+                  key={scenario.name}
+                  className="rounded-[18px] border border-[#eadfe4] bg-[#fbf7f8] px-3 py-3 text-sm leading-6 text-[#554d59]"
+                >
+                  <span className="font-semibold text-[#2d2730]">{scenario.name}</span>
+                  <span className="mt-1 block">{scenario.description}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <p className="max-w-2xl text-sm leading-6 text-[#554d59]">
+              Ask the improver to draft eval ideas before handoff. This checks whether the change is measurable, not just cosmetically different.
+            </p>
+            <button
+              type="button"
+              onClick={onGenerateEvalPlan}
+              disabled={!canGenerateEvalPlan || evalPlanPending}
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-[#2a242d] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#1f1a22] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Sparkles className="h-4 w-4" />
+              {evalPlanPending ? 'Generating eval plan...' : 'Generate eval plan'}
+            </button>
+          </div>
+        )}
+      </SummaryPanel>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <SummaryListPanel
@@ -1540,11 +1641,24 @@ function defaultPreviewMessageForBuilderConfig(config: BuilderConfig): string {
 function navigateToEvalWorkflow(
   navigate: ReturnType<typeof useNavigate>,
   agent: AgentLibraryItem,
+  options: EvalHandoffOptions = {},
 ) {
-  navigate(`/evals?agent=${encodeURIComponent(agent.id)}&new=1`, {
+  const mode = options.mode ?? 'run';
+  const params = new URLSearchParams({ agent: agent.id });
+  if (mode === 'generate') {
+    params.set('generator', '1');
+    params.set('from', 'agent-improver');
+  } else {
+    params.set('new', '1');
+  }
+
+  navigate(`/evals?${params.toString()}`, {
     state: {
       agent,
-      open: 'run',
+      open: mode,
+      source: 'agent-improver',
+      draftEvalCount: options.draftEvalCount,
+      latestUserRequest: options.latestUserRequest,
     },
   });
 }

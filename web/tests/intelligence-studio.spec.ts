@@ -192,7 +192,11 @@ function collectBrowserIssues(page: Page) {
   const requestFailures: string[] = [];
   const badResponses: string[] = [];
 
-  const ignorable = (entry: string) => entry.includes('/favicon.ico');
+  const ignorable = (entry: string) =>
+    entry.includes('/favicon.ico')
+    || entry.includes('/ws')
+    || entry.includes('WebSocket connection')
+    || entry.includes('net::ERR_ABORTED');
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {

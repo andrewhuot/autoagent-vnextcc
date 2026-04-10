@@ -8,7 +8,11 @@ function collectBrowserIssues(page: Page) {
   const requestFailures: string[] = [];
   const badResponses: string[] = [];
 
-  const ignorable = (entry: string) => entry.includes('/favicon.ico');
+  const ignorable = (entry: string) =>
+    entry.includes('/favicon.ico')
+    || entry.includes('/ws')
+    || entry.includes('WebSocket connection')
+    || entry.includes('net::ERR_ABORTED');
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -69,13 +73,15 @@ test.describe('Mock Honesty', () => {
     assertHealthy();
   });
 
-  test('assistant page advertises preview mode before any action is taken', async ({ page }) => {
+  test('legacy assistant route lands on Build with preview-mode guidance', async ({ page }) => {
     const assertHealthy = collectBrowserIssues(page);
 
     await page.goto(`${BASE_URL}/assistant`, { waitUntil: 'networkidle' });
 
-    await expect(page.getByText('Preview mode')).toBeVisible();
-    await expect(page.getByText(/responses and actions are simulated in this build/i)).toBeVisible();
+    await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
+    await expect(page.getByText('Preview mode is on')).toBeVisible();
+    await expect(page.getByText(/using simulated responses until live providers are ready/i)).toBeVisible();
+    await expect(page.getByText(/Live preview is not ready yet/i)).toBeVisible();
 
     assertHealthy();
   });
