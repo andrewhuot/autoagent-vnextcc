@@ -14,6 +14,7 @@ const apiMocks = vi.hoisted(() => ({
   useCurriculumBatches: vi.fn(),
   useEvalRuns: vi.fn(),
   useGenerateCurriculum: vi.fn(),
+  useGenerateEvals: vi.fn(),
   useGeneratedSuites: vi.fn(),
   useStartEval: vi.fn(),
 }));
@@ -25,6 +26,7 @@ vi.mock('../lib/api', () => ({
   useCurriculumBatches: apiMocks.useCurriculumBatches,
   useEvalRuns: apiMocks.useEvalRuns,
   useGenerateCurriculum: apiMocks.useGenerateCurriculum,
+  useGenerateEvals: apiMocks.useGenerateEvals,
   useGeneratedSuites: apiMocks.useGeneratedSuites,
   useStartEval: apiMocks.useStartEval,
 }));
@@ -117,6 +119,7 @@ describe('EvalRuns', () => {
       isLoading: false,
       isError: false,
     });
+    apiMocks.useGenerateEvals.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useGenerateCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useApplyCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
   });
@@ -264,6 +267,16 @@ describe('EvalRuns', () => {
     expect(screen.getByRole('heading', { name: 'Start First Evaluation' })).toBeInTheDocument();
     expect(screen.getByText('Saved draft from Build')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Set Up First Eval' })).not.toBeInTheDocument();
+  });
+
+  it('explains Agent Improver handoff when opening the eval generator', async () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    renderPage('/evals?agent=agent-v002&generator=1&from=agent-improver');
+
+    expect(await screen.findByText('AI Eval Generation')).toBeInTheDocument();
+    expect(screen.getByText('Agent Improver handoff')).toBeInTheDocument();
+    expect(screen.getByText(/Generate a formal eval suite from the saved Agent Improver config/)).toBeInTheDocument();
   });
 
   it('gives the inline eval setup form an accessible close label', async () => {
