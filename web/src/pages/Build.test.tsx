@@ -277,6 +277,84 @@ describe('Build', () => {
     });
   });
 
+  it('shows the current iteration loop and a lightweight draft summary in builder chat', async () => {
+    const user = userEvent.setup();
+    const builderSession = mockBuilderSession();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/builder/chat') {
+          return jsonResponse(builderSession);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Builder Chat' }));
+    await user.clear(screen.getByTestId('builder-composer'));
+    await user.type(screen.getByTestId('builder-composer'), 'Build a refund agent');
+    await user.click(screen.getByTestId('builder-send'));
+
+    const loop = await screen.findByTestId('build-loop-panel');
+    expect(within(loop).getByText('Iteration loop')).toBeInTheDocument();
+    expect(within(loop).getByText('Iteration 1')).toBeInTheDocument();
+    expect(within(loop).getByText('Last change')).toBeInTheDocument();
+    expect(within(loop).getByText('Build a refund agent')).toBeInTheDocument();
+    expect(within(loop).getByText('Next: run a realistic test before saving.')).toBeInTheDocument();
+
+    const insights = screen.getByTestId('builder-draft-insights');
+    expect(within(insights).getByText('Draft changes to inspect')).toBeInTheDocument();
+    expect(within(insights).getByText('refund_lookup')).toBeInTheDocument();
+    expect(within(insights).getByText('refund_request')).toBeInTheDocument();
+    expect(within(insights).getByText('No PII leakage')).toBeInTheDocument();
+  });
+
+  it('shows configured tool names from builder preview results', async () => {
+    const user = userEvent.setup();
+    const builderSession = mockBuilderSession();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/builder/chat') {
+          return jsonResponse(builderSession);
+        }
+        if (url === '/api/builder/preview') {
+          return jsonResponse({
+            response: 'I can check the refund status.',
+            tool_calls: [
+              {
+                tool: 'refund_lookup',
+                args: { query: 'refund status' },
+              },
+            ],
+            latency_ms: 42,
+            token_count: 90,
+            specialist_used: 'orders',
+            mock_mode: true,
+            mock_reasons: ['Mock mode explicitly enabled by optimizer.use_mock.'],
+          });
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Builder Chat' }));
+    await user.type(screen.getByTestId('builder-composer'), 'Build a refund agent');
+    await user.click(screen.getByTestId('builder-send'));
+
+    await screen.findByTestId('builder-draft-insights');
+    await user.type(screen.getByTestId('builder-preview-input'), 'Where is my refund?');
+    await user.click(screen.getByRole('button', { name: 'Test Agent' }));
+
+    expect(await screen.findByText('Tool: refund_lookup')).toBeInTheDocument();
+  });
+
   it('opens a deep-linked build tab from the route query string with intelligence framing', () => {
     renderPage('/build?tab=transcript');
 

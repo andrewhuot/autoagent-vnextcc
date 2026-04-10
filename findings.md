@@ -67,49 +67,51 @@
 
 ---
 
-# Previous Findings & Decisions
+## Build Live UX Campaign Findings
 
-## Requirements
-- Build a shared, typed portability/readiness model for ADK and CXAS imports.
-- Report imported, optimizable, read-only, unsupported, and exportable surfaces explicitly.
-- Surface callbacks, graph topology, tool-code boundaries, and round-trip/export readiness.
-- Preserve backward compatibility where practical.
-- Add high-signal backend and API tests using realistic imported agents.
+### Source Reconnaissance
 
-## Research Findings
-- `adk/types.py` and `cx_studio/types.py` each define narrow `ImportResult` and `ExportResult` models today; neither carries a structured portability/readiness report.
-- `adk/types.py` already models callback references on `AdkAgent`, but only as raw string fields and not as first-class import result metadata.
-- `cx_studio/types.py` carries richer raw resource snapshots than ADK, which suggests a shared readiness model should allow per-platform evidence while staying generic.
-- `api/models.py` is the central Pydantic contract file and will likely need additive models if route responses are upgraded.
-- `adk/exporter.py` still operates on legacy keys like `instructions` and `generation_settings`, while `adk/importer.py` writes config with `prompts`, `generation`, `model`, and `tools`; the new reporting work should align these surfaces instead of hiding the mismatch.
-- `cx_studio/exporter.py` has a concrete writable-field inventory in `_field_entries()` and `_apply_*()` methods, which can drive a truthful export capability matrix.
-- `optimizer/surface_inventory.py` already defines which optimization surfaces are reachable, so importer-side readiness scoring can align to that vocabulary without inventing a separate surface taxonomy.
-- `core/types.py` has a framework-neutral graph IR, but its node taxonomy is broader agent-system IR rather than import topology; a dedicated import topology model is likely cleaner than forcing flow/page/callback resources into unrelated node types.
-- The shared portability package can stay framework-neutral and sit below API routes, which keeps ADK/CX layer boundaries intact while letting the API reuse the same report types directly.
-- ADK import/export parity improves materially when exporter change detection accepts both the legacy keys (`instructions`, `generation_settings`) and the current importer keys (`prompts`, `generation`, `model`, `tools.*.description`).
+- `/build` is the canonical Build entry. Legacy `/builder`, `/builder/demo`, `/agent-studio`, `/assistant`, and `/intelligence` redirect into `/build` tab variants through `web/src/lib/navigation.ts` and `web/src/App.tsx`.
+- `web/src/pages/Build.tsx` contains four tabs: prompt, transcript, builder-chat, and saved-artifacts. The builder-chat path is the closest to the requested managed-agent workflow.
+- Builder chat state is held in `BuilderChatWorkspace`: messages, latest `BuilderSessionPayload`, preview result, save result, saved agent, and a config modal flag.
+- Builder chat flow calls `/api/builder/chat`, `/api/builder/preview`, `/api/builder/export`, and saves through the shared `/api/agents` hook with `source: built` and `build_source: builder_chat`.
+- Prompt/transcript flow calls intelligence generation/refinement APIs, then shared preview/save/eval handoff.
+- Eval handoff is already wired: Build navigates to `/evals?agent=<id>&new=1` or `/evals?agent=<id>&generator=1` with selected agent in router state; `EvalRuns` uses that state to preselect the agent and show a first-run panel.
+- Existing coverage includes `web/src/pages/Build.test.tsx`, `web/src/pages/Builder.test.tsx`, `web/tests/builder-flow.spec.ts`, and backend `tests/test_builder_chat_api.py`.
+- Prior docs explicitly flagged a trust gap around mock/live behavior and a previous builder rebuild plan that intentionally created a single conversational builder with mock-friendly APIs.
 
-## Technical Decisions
-| Decision | Rationale |
-|----------|-----------|
-| Favor a shared portability/readiness schema with source-specific evidence fields | The user requested a generic model reusable for ADK and CXAS. |
-| Keep changes additive on import/export result types where possible | This preserves existing callers while allowing richer readiness reporting. |
-| Treat export readiness as a first-class report derived from exporter reality | Customers need to know what can actually round-trip today, not what the platform might support eventually. |
-| Use dedicated ADK and CX portability builder modules on top of shared report helpers | This keeps platform-specific topology and surface rules explicit while reusing scoring and matrix logic. |
+### Runtime Journey Findings
 
-## Issues Encountered
-| Issue | Resolution |
-|-------|------------|
-| No prior session catchup data was emitted | Continued with a clean worktree and fresh discovery. |
-| API route tests are environment-gated by `pytest.importorskip("fastapi")` | Ran them anyway as part of the focused suite; they were reported as skipped rather than silently omitted. |
+- Setup had not been run in this clone. `./setup.sh` created `.venv`, `web/node_modules`, `.env`, and demo data successfully.
+- Runtime started with `./start.sh`; final browser verification used `http://localhost:5180` with backend `http://localhost:8000` because the default frontend port was already occupied during the campaign.
+- `/api/health` reports `mock_mode: true`, `real_provider_configured: false`, and mock reason `Mock mode explicitly enabled by optimizer.use_mock.` The repo-local `agentlab.yaml` has `optimizer.use_mock: true`, and `.env` has blank provider keys. Live mode was therefore blocked by local runtime config/provider setup.
+- Browser journey on `/build?tab=builder-chat` succeeded through initial draft, preview, save, and eval handoff.
+- The preview/test step exposed a trust problem: after building/refining an airline booking-change agent, the mock preview answered with generic order-support copy (`I can help with your order`) for a delayed-flight change request. The UI correctly labels mock mode, but the preview is too generic to help a user decide whether the agent improved.
+- Save-and-eval handoff worked: `Save & Run Eval` saved the draft and navigated to `/evals?agent=agent-v003&new=1`, where Eval Runs showed the saved draft selected and the first-run form ready.
 
-## Resources
-- `adk/types.py`
-- `cx_studio/types.py`
-- `api/models.py`
-- `tests/test_adk_importer.py`
-- `tests/test_adk_api.py`
-- `tests/test_cx_studio.py`
-- `tests/test_cx_studio_api.py`
+### Product/UX Failure Modes
 
-## Visual/Browser Findings
-- No browser or image inspection used for this task.
+- The original UI had pieces of an iteration loop, but the loop was not visually treated as the primary object. Users could chat, test, view config, save, and eval, yet there was no persistent sense of iteration count, last change, quality signal, or next best action after a preview/refinement.
+- Config visibility is binary: hidden behind a modal or full raw YAML/JSON. That protects the main panel from intimidation, but it also removes lightweight "what changed?" inspection from the core loop.
+- Preview results show the agent response and runtime metadata, but they do not turn that evidence into a decision: keep refining, save, generate evals, or validate live.
+- The fallback preview path is honest about being simulated, but not helpful enough. A simulated response should still reflect the built domain and selected tool/routing signals so iteration has momentum.
+
+### Implementation Decisions
+
+- Make the iteration loop visible above the Builder Chat workspace instead of relying on scattered controls. The loop now calls out the current iteration, last user change, latest preview signal, and next action across Draft, Inspect, Test, and Save/Eval.
+- Add a lightweight draft inspection panel next to the conversation/preview. It summarizes the system prompt, tools, routes, policies, and eval checks so users can inspect what changed without opening raw YAML first.
+- Keep raw config access available through the existing modal/download path for deeper review, but make the default Build posture more like an agent workbench than a static form.
+- Improve mock-preview usefulness without pretending it is live: airline Build drafts now return airline-specific preview copy, expose configured tool names, and pick the most relevant configured tool for booking changes, cancellations, and flight status.
+- Preserve the existing save/export/eval architecture. The high-leverage UX fix did not require new persistence contracts; it made the existing handoff clearer and easier to trust.
+
+### Verification Evidence
+
+- Frontend regression: `npm test -- src/pages/Build.test.tsx -t "shows the current iteration loop"` passed.
+- Frontend tool-call regression: `npm test -- src/pages/Build.test.tsx -t "shows configured tool names"` passed.
+- Frontend related suite: `npm test -- src/pages/Build.test.tsx src/pages/Builder.test.tsx src/lib/builder-chat-api.test.ts` passed with 24 tests.
+- Backend targeted regression: `.venv/bin/python -m pytest tests/test_builder_chat_api.py -k preview_uses_built_domain_in_mock_mode -q` passed.
+- Backend related suite: `.venv/bin/python -m pytest tests/test_builder_chat_api.py tests/test_builder_api.py tests/test_build_artifact_store.py -q` passed with 49 tests.
+- Syntax check: `.venv/bin/python -m py_compile evals/fixtures/mock_data.py` passed.
+- Playwright maintained flow: `PLAYWRIGHT_BASE_URL=http://localhost:5180 npx playwright test tests/builder-flow.spec.ts` passed with 2 tests.
+- Manual browser verification on `http://localhost:5180/build?tab=builder-chat` covered create, inspect, test, mock fallback, configured `Tool: change_booking`, save, and `/evals?agent=agent-v003&new=1` handoff to `Start First Evaluation`.
+- Full web build remains blocked outside this Build scope: `npm run build` fails on unused `NormalizedFallback` imports in `src/lib/provider-fallback.test.ts` and `src/pages/AgentImprover.tsx`.

@@ -208,6 +208,41 @@ def test_generate_evals_and_read_session_state(tmp_path: Path, monkeypatch) -> N
     assert session_payload["evals"]["case_count"] >= 3
 
 
+def test_preview_uses_built_domain_in_mock_mode(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    client = _make_client(tmp_path)
+
+    create = client.post(
+        "/api/builder/chat",
+        json={
+            "message": (
+                "Build me an airline support agent for booking changes, cancellations, "
+                "and live flight status"
+            )
+        },
+    )
+    session_id = create.json()["session_id"]
+
+    preview = client.post(
+        "/api/builder/preview",
+        json={
+            "session_id": session_id,
+            "message": "My flight was delayed and I need to change my booking without paying a fee.",
+        },
+    )
+
+    assert preview.status_code == 200
+    payload = preview.json()
+    response_text = payload["response"].lower()
+    assert "order" not in response_text
+    assert any(token in response_text for token in ("flight", "booking", "reservation"))
+    assert payload["specialist_used"] == "orders"
+    assert any(
+        call.get("tool") == "change_booking" or call.get("name") == "change_booking"
+        for call in payload["tool_calls"]
+    )
+
+
 def test_export_returns_serialized_config_for_download(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     client = _make_client(tmp_path)
