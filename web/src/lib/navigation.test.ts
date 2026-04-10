@@ -99,16 +99,13 @@ describe('navigation schema', () => {
       '/dashboard',
       '/setup',
       '/build',
-      '/connect',
-      '/cx/studio',
-      '/adk/import',
       '/evals',
       '/results',
       '/compare',
+      '/studio',
       '/optimize',
       '/improvements',
       '/deploy',
-      '/cli',
       '/docs',
     ]);
   });

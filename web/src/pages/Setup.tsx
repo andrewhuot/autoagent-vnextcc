@@ -8,6 +8,7 @@ import {
   Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import {
   useSaveProviderKeys,
@@ -21,8 +22,18 @@ import { classNames } from '../lib/utils';
 type RuntimeMode = 'mock' | 'auto' | 'live';
 
 interface FeedbackState {
-  tone: 'success' | 'error' | 'info';
+  tone: 'success' | 'error' | 'info' | 'warning';
+  title: string;
   message: string;
+  recoveryHint?: string;
+}
+
+interface SetupActionPlan {
+  title: string;
+  description: string;
+  bullets: string[];
+  ctaLabel: string;
+  ctaHref: string;
 }
 
 const KEY_FIELDS = [
@@ -56,6 +67,95 @@ function normalizeMode(value: string | null | undefined): RuntimeMode {
   return 'mock';
 }
 
+function isRateLimitedMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes('429') || normalized.includes('rate limit');
+}
+
+function buildFeedbackState(
+  tone: FeedbackState['tone'],
+  title: string,
+  message: string,
+  recoveryHint?: string
+): FeedbackState {
+  return { tone, title, message, recoveryHint };
+}
+
+function getSetupActionPlan({
+  workspaceFound,
+  hasWorkingProvider,
+  effectiveMode,
+  feedback,
+}: {
+  workspaceFound: boolean;
+  hasWorkingProvider: boolean;
+  effectiveMode: RuntimeMode;
+  feedback: FeedbackState | null;
+}): SetupActionPlan {
+  if (feedback?.tone === 'warning') {
+    return {
+      title: feedback.title,
+      description: feedback.recoveryHint ?? 'Keep working in Build with simulated previews while the limit clears.',
+      bullets: [
+        'The key is saved and live mode is selected; the provider just needs time to recover.',
+        'Retry the provider test later or switch to auto mode if you want AgentLab to fall back gracefully.',
+      ],
+      ctaLabel: 'Open Build',
+      ctaHref: '/build',
+    };
+  }
+
+  if (!workspaceFound) {
+    return {
+      title: 'Create the workspace first',
+      description: 'Initialize the workspace in the CLI, then return here to wire in your first live provider.',
+      bullets: [
+        'Run `agentlab init` in your project directory.',
+        'Once the workspace exists, save and test at least one provider key.',
+      ],
+      ctaLabel: 'Open CLI Guide',
+      ctaHref: '/cli',
+    };
+  }
+
+  if (!hasWorkingProvider) {
+    return {
+      title: 'Unlock live or mixed previews',
+      description: 'Add one provider key to enable live validation. You can still draft in Build while Setup is incomplete.',
+      bullets: [
+        'Save and test one provider key on this page.',
+        'Use Build in the meantime if you want to start shaping the agent with simulated previews.',
+      ],
+      ctaLabel: 'Open Build',
+      ctaHref: '/build',
+    };
+  }
+
+  if (effectiveMode !== 'live') {
+    return {
+      title: 'You are ready to keep moving',
+      description: 'A provider is available. Use Build to shape the draft, then switch between live and auto as needed while you validate behavior.',
+      bullets: [
+        'Generate the first draft in Build.',
+        'Use Save & Run Eval once the draft behavior looks right.',
+      ],
+      ctaLabel: 'Open Build',
+      ctaHref: '/build',
+    };
+  }
+
+  return {
+    title: 'Setup is ready',
+    description: 'Move into Build, create the first draft, and carry it directly into Eval Runs when it looks right.',
+    bullets: [
+      'Use Build to create or refine the draft.',
+      'Save the draft before you start running evals so the next step stays deterministic.',
+    ],
+    ctaLabel: 'Open Build',
+    ctaHref: '/build',
+  };
+}
+
 export function Setup() {
   const { data, isLoading, isError } = useSetupOverview();
   const saveProviderKeys = useSaveProviderKeys();
@@ -84,6 +184,14 @@ export function Setup() {
     [data?.doctor.api_keys]
   );
   const hasConfiguredKey = (data?.doctor.api_keys || []).some((item) => item.configured);
+  const hasWorkingProvider =
+    hasConfiguredKey || modePreference === 'live' || feedback?.tone === 'success' || feedback?.tone === 'warning';
+  const actionPlan = getSetupActionPlan({
+    workspaceFound: data?.workspace.found ?? false,
+    hasWorkingProvider,
+    effectiveMode: modePreference,
+    feedback,
+  });
   const isMutating =
     saveProviderKeys.isPending || testProviderKey.isPending || setRuntimeMode.isPending;
 
@@ -120,7 +228,7 @@ export function Setup() {
   async function handleModeChange(nextMode: RuntimeMode) {
     if (nextMode === 'live' && !hasConfiguredKey) {
       const message = 'Add an API key above to enable live mode';
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Live mode unavailable', message));
       toastError('Live mode unavailable', message);
       return;
     }
@@ -134,11 +242,11 @@ export function Setup() {
           : nextMode === 'auto'
             ? 'Mode switched to auto.'
             : 'Mode switched to mock.';
-      setFeedback({ tone: 'success', message });
+      setFeedback(buildFeedbackState('success', 'Mode updated', message));
       toastSuccess('Mode updated', message);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to switch mode right now.';
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Could not change modes', message));
       toastError('Mode update failed', message);
     }
   }
@@ -148,7 +256,7 @@ export function Setup() {
     const currentStatus = apiKeyStatusByName[envName];
     if (!enteredKey && !currentStatus?.configured) {
       const message = `Paste a ${label} or save one first.`;
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Missing API key', message));
       toastError('Missing API key', message);
       return;
     }
@@ -158,11 +266,19 @@ export function Setup() {
         provider,
         api_key: enteredKey || undefined,
       });
-      setFeedback({ tone: 'success', message: result.message });
+      const feedbackState = isRateLimitedMessage(result.message)
+        ? buildFeedbackState(
+            'warning',
+            'Provider is rate-limiting requests',
+            result.message,
+            'Keep working in Build with simulated previews while the limit clears.'
+          )
+        : buildFeedbackState('success', 'Connection verified', result.message);
+      setFeedback(feedbackState);
       toastSuccess('Connection verified', result.message);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid API key.';
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Could not verify provider', message));
       toastError('Invalid API key', message);
     }
   }
@@ -171,7 +287,7 @@ export function Setup() {
     const enteredKey = draftKeys[field.envName].trim();
     if (!enteredKey) {
       const message = `Paste a ${field.label} before saving.`;
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Missing API key', message));
       toastError('Missing API key', message);
       return;
     }
@@ -196,11 +312,19 @@ export function Setup() {
         validation.message && validation.message !== 'Key valid.'
           ? `${baseMessage} Provider warning: ${validation.message}`
           : baseMessage;
-      setFeedback({ tone: 'success', message });
+      const feedbackState = isRateLimitedMessage(validation.message)
+        ? buildFeedbackState(
+            'warning',
+            'Provider is rate-limiting requests',
+            message,
+            'Keep working in Build with simulated previews while the limit clears.'
+          )
+        : buildFeedbackState('success', 'Provider ready', message);
+      setFeedback(feedbackState);
       toastSuccess('Setup updated', message);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Invalid API key.';
-      setFeedback({ tone: 'error', message });
+      setFeedback(buildFeedbackState('error', 'Could not save provider key', message));
       toastError('Invalid API key', message);
     }
   }
@@ -222,7 +346,7 @@ export function Setup() {
         }
       />
 
-      {/* Getting started guidance — surface the most important next step */}
+      {/* Getting started guidance - surface the most important next step */}
       <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(240,249,255,0.9),rgba(255,255,255,1))] px-5 py-5 shadow-sm shadow-sky-100/60">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0">
@@ -230,16 +354,39 @@ export function Setup() {
             <p className="mt-2 text-sm leading-relaxed text-sky-950">
               {!data.workspace.found
                 ? 'Run `agentlab init` in your terminal to create a workspace, then add an API key below.'
-                : !hasConfiguredKey
+                : !hasWorkingProvider
                   ? 'Add at least one API key to unlock live mode, then head to Build.'
-                  : data.doctor.effective_mode === 'live'
+                  : modePreference === 'live'
                     ? 'You\'re all set. Head to Build to create your first agent.'
                     : 'API key saved. Switch to live mode below, then head to Build.'}
             </p>
           </div>
           <div className="shrink-0 rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-            {!data.workspace.found ? 'Step 1 of 3' : !hasConfiguredKey ? 'Step 2 of 3' : data.doctor.effective_mode === 'live' ? 'Complete' : 'Step 3 of 3'}
+            {!data.workspace.found ? 'Step 1 of 3' : !hasWorkingProvider ? 'Step 2 of 3' : modePreference === 'live' ? 'Complete' : 'Step 3 of 3'}
           </div>
+        </div>
+      </section>
+
+      <section className="rounded-[28px] border border-slate-200 bg-white px-5 py-5 shadow-sm shadow-slate-100/70">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">What to do next</p>
+            <h3 className="mt-2 text-lg font-semibold text-slate-900">{actionPlan.title}</h3>
+            <p className="mt-1 text-sm leading-relaxed text-slate-600">{actionPlan.description}</p>
+          </div>
+          <Link
+            to={actionPlan.ctaHref}
+            className="inline-flex shrink-0 items-center justify-center rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+          >
+            {actionPlan.ctaLabel}
+          </Link>
+        </div>
+        <div className="mt-4 grid gap-2 md:grid-cols-2">
+          {actionPlan.bullets.map((bullet) => (
+            <div key={bullet} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              {bullet}
+            </div>
+          ))}
         </div>
       </section>
 
@@ -273,8 +420,8 @@ export function Setup() {
         >
           <MetricPill
             label="Current Mode"
-            value={data.doctor.effective_mode.toUpperCase()}
-            tone={data.doctor.effective_mode === 'live' ? 'good' : 'warn'}
+            value={modePreference.toUpperCase()}
+            tone={modePreference === 'live' ? 'good' : 'warn'}
           />
           {feedback ? (
             <div
@@ -282,10 +429,15 @@ export function Setup() {
                 'rounded-2xl border px-4 py-3 text-sm',
                 feedback.tone === 'success' && 'border-emerald-200 bg-emerald-50 text-emerald-900',
                 feedback.tone === 'error' && 'border-red-200 bg-red-50 text-red-800',
-                feedback.tone === 'info' && 'border-sky-200 bg-sky-50 text-sky-800'
+                feedback.tone === 'info' && 'border-sky-200 bg-sky-50 text-sky-800',
+                feedback.tone === 'warning' && 'border-amber-200 bg-amber-50 text-amber-900'
               )}
             >
-              {feedback.message}
+              {feedback.tone === 'warning' ? null : <p className="font-semibold">{feedback.title}</p>}
+              <p className="mt-1">{feedback.message}</p>
+              {feedback.recoveryHint && feedback.tone !== 'warning' ? (
+                <p className="mt-2 text-xs leading-5">{feedback.recoveryHint}</p>
+              ) : null}
             </div>
           ) : null}
           <div className="grid gap-2 sm:grid-cols-3">

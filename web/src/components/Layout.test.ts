@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { getNavigationSections, getSimpleNavigationSections } from '../lib/navigation';
 import { CommandPalette } from './CommandPalette';
-import { getRouteContext } from './Layout';
+import { getDemoJourneyContext, getRouteContext } from './Layout';
 import { Sidebar } from './Sidebar';
 
 vi.mock('../lib/websocket', () => ({
@@ -109,20 +109,62 @@ describe('getRouteContext', () => {
   });
 });
 
+describe('getDemoJourneyContext', () => {
+  it('returns a 5-step journey for the build page', () => {
+    const ctx = getDemoJourneyContext('/build');
+    expect(ctx).not.toBeNull();
+    expect(ctx!.stepLabel).toBe('Step 1 of 5');
+    expect(ctx!.activeStep).toBe(0);
+  });
+
+  it('returns journey context for optimize pages', () => {
+    const optimizeCtx = getDemoJourneyContext('/optimize');
+    expect(optimizeCtx).not.toBeNull();
+    expect(optimizeCtx!.stepLabel).toBe('Step 3 of 5');
+    expect(optimizeCtx!.activeStep).toBe(2);
+
+    const studioCtx = getDemoJourneyContext('/studio');
+    expect(studioCtx).not.toBeNull();
+    expect(studioCtx!.stepLabel).toBe('Step 3 of 5');
+  });
+
+  it('returns journey context for improvements and deploy', () => {
+    const improvementsCtx = getDemoJourneyContext('/improvements');
+    expect(improvementsCtx).not.toBeNull();
+    expect(improvementsCtx!.stepLabel).toBe('Step 4 of 5');
+
+    const deployCtx = getDemoJourneyContext('/deploy');
+    expect(deployCtx).not.toBeNull();
+    expect(deployCtx!.stepLabel).toBe('Step 5 of 5');
+    expect(deployCtx!.activeStep).toBe(4);
+  });
+
+  it('returns null for pages not in the journey', () => {
+    expect(getDemoJourneyContext('/settings')).toBeNull();
+    expect(getDemoJourneyContext('/traces')).toBeNull();
+  });
+});
+
 describe('Sidebar', () => {
   it('renders the simple navigation by default', () => {
     installLocalStorageMock();
-    render(createElement(MemoryRouter, null, createElement(Sidebar, { mobileOpen: true, onClose: vi.fn() })));
+    render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ['/build'] },
+        createElement(Sidebar, { mobileOpen: true, onClose: vi.fn() })
+      )
+    );
 
     expect(
       screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)
     ).toEqual(getSimpleNavigationSections().map((section) => section.label));
-    expect(screen.getByRole('link', { name: 'Connect' })).toHaveAttribute('href', '/connect');
-    expect(screen.getByRole('link', { name: 'CX Studio' })).toHaveAttribute('href', '/cx/studio');
-    expect(screen.getByRole('link', { name: 'ADK Import' })).toHaveAttribute('href', '/adk/import');
-    expect(screen.getByRole('link', { name: 'CLI' })).toHaveAttribute('href', '/cli');
+    expect(screen.getByText('Guided flow')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Optimize Studio' })).toHaveAttribute('href', '/studio');
     expect(screen.getByRole('link', { name: 'Docs' })).toHaveAttribute('href', '/docs');
     expect(screen.queryByRole('link', { name: 'CX Import' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Connect' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'CLI' })).not.toBeInTheDocument();
   });
 
   it('toggles to the full navigation surface and persists pro mode', async () => {
@@ -160,8 +202,8 @@ describe('App', () => {
     render(createElement(App));
 
     expect(await screen.findByRole('heading', { name: 'Build', level: 2 })).toBeInTheDocument();
-    expect(screen.getByText('Demo Journey')).toBeInTheDocument();
-    expect(screen.getAllByText('Step 1 of 3').length).toBeGreaterThan(0);
+    expect(screen.getByText('Journey')).toBeInTheDocument();
+    expect(screen.getAllByText('Step 1 of 5').length).toBeGreaterThan(0);
     expect(screen.getByRole('tab', { name: 'Prompt' })).toBeInTheDocument();
   });
 
@@ -194,7 +236,7 @@ describe('App', () => {
     render(createElement(App));
 
     expect(window.location.pathname).toBe('/evals');
-    expect(screen.getByText('Step 3 of 3')).toBeInTheDocument();
+    expect(screen.getByText('Step 2 of 5')).toBeInTheDocument();
     expect(await screen.findByText('Pick an agent to start evaluating')).toBeInTheDocument();
   });
 

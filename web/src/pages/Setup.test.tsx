@@ -167,6 +167,10 @@ describe('Setup', () => {
         'API key saved. Mode switched to live. Provider warning: Key accepted, but the provider is currently rate-limiting requests (HTTP 429).'
       )
     ).toBeInTheDocument();
+    expect(screen.getByText('Provider is rate-limiting requests')).toBeInTheDocument();
+    expect(
+      screen.getByText('Keep working in Build with simulated previews while the limit clears.')
+    ).toBeInTheDocument();
   });
 
   it('blocks switching to live mode when no API keys are configured', async () => {

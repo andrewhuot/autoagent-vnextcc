@@ -307,21 +307,23 @@ export function setSidebarMode(mode: SidebarMode) {
   }
 }
 
-/** Essential pages shown in Simple mode. */
+/**
+ * Essential pages shown in Simple mode.
+ *
+ * Focuses on the core Build → Eval → Optimize → Deploy progression.
+ * Niche import paths (Connect, CX Studio, ADK Import) are available in Pro mode.
+ */
 const SIMPLE_MODE_PATHS = new Set([
   '/dashboard',
   '/setup',
   '/build',
-  '/connect',
-  '/cx/studio',
-  '/adk/import',
   '/evals',
   '/results',
   '/compare',
+  '/studio',
   '/optimize',
   '/improvements',
   '/deploy',
-  '/cli',
   '/docs',
 ]);
 

@@ -74,7 +74,7 @@ export function getDemoJourneyContext(pathname: string, search = ''): DemoJourne
 
   if (normalizedPathname === '/build') {
     return {
-      stepLabel: 'Step 1 of 3',
+      stepLabel: 'Step 1 of 5',
       summary: 'Build the draft',
       detail:
         'Shape the config in Build, then use Save & Run Eval to carry that exact saved draft into Eval Runs.',
@@ -87,12 +87,42 @@ export function getDemoJourneyContext(pathname: string, search = ''): DemoJourne
     const carriedFromBuild = params.get('new') === '1';
 
     return {
-      stepLabel: 'Step 3 of 3',
+      stepLabel: 'Step 2 of 5',
       summary: carriedFromBuild ? 'Run the saved draft from Build' : 'Launch and review evals',
       detail: carriedFromBuild
         ? 'The saved draft stays selected so you can launch the first run without re-choosing the config.'
         : 'Start a run, inspect the results, and compare follow-up iterations from the same page.',
+      activeStep: 1,
+    };
+  }
+
+  if (normalizedPathname === '/optimize' || normalizedPathname === '/studio') {
+    return {
+      stepLabel: 'Step 3 of 5',
+      summary: 'Optimize the agent',
+      detail:
+        'Use eval results to search for better configs. The optimizer proposes changes you can accept, reject, or tweak.',
       activeStep: 2,
+    };
+  }
+
+  if (normalizedPathname === '/improvements') {
+    return {
+      stepLabel: 'Step 4 of 5',
+      summary: 'Review improvements',
+      detail:
+        'Inspect proposed changes, compare before/after scores, and accept the improvements worth keeping.',
+      activeStep: 3,
+    };
+  }
+
+  if (normalizedPathname === '/deploy') {
+    return {
+      stepLabel: 'Step 5 of 5',
+      summary: 'Deploy to production',
+      detail:
+        'Ship the accepted config. Use canary deploys to test in production before promoting to 100%.',
+      activeStep: 4,
     };
   }
 
@@ -106,57 +136,47 @@ function DemoJourneyStrip({
 }) {
   const steps = [
     { label: 'Build', href: '/build' },
-    { label: 'Save & Run Eval' },
-    { label: 'Eval Runs', href: '/evals' },
+    { label: 'Eval', href: '/evals' },
+    { label: 'Optimize', href: '/optimize' },
+    { label: 'Review', href: '/improvements' },
+    { label: 'Deploy', href: '/deploy' },
   ];
 
   return (
     <div className="border-b border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,0.98))]">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-4 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-5 py-3 sm:px-6 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
-              Demo Journey
+              Journey
             </span>
             <span className="text-xs font-medium text-gray-500">{context.stepLabel}</span>
           </div>
-          <p className="mt-2 text-sm font-semibold text-gray-900">{context.summary}</p>
-          <p className="mt-1 max-w-2xl text-sm text-gray-600">{context.detail}</p>
+          <p className="mt-1.5 text-sm font-semibold text-gray-900">{context.summary}</p>
+          <p className="mt-0.5 max-w-2xl text-sm text-gray-600">{context.detail}</p>
         </div>
 
-        <ol className="grid gap-2 sm:grid-cols-3">
+        <ol className="flex flex-wrap gap-1.5">
           {steps.map((step, index) => {
             const isActive = context.activeStep === index;
             const isComplete = context.activeStep > index;
-            const className = isActive
+            const pillClass = isActive
               ? 'border-sky-200 bg-sky-50 text-sky-800'
               : isComplete
                 ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                : 'border-gray-200 bg-white text-gray-500';
-
-            const content = (
-              <>
-                <span className="flex h-6 w-6 items-center justify-center rounded-full border border-current/20 bg-white text-[11px] font-semibold">
-                  {index + 1}
-                </span>
-                <span className="text-sm font-medium">{step.label}</span>
-              </>
-            );
+                : 'border-gray-200 bg-white text-gray-400';
 
             return (
               <li key={step.label}>
-                {step.href ? (
-                  <Link
-                    to={step.href}
-                    className={`flex items-center gap-2 rounded-2xl border px-3 py-2.5 transition hover:border-gray-300 hover:text-gray-900 ${className}`}
-                  >
-                    {content}
-                  </Link>
-                ) : (
-                  <div className={`flex items-center gap-2 rounded-2xl border px-3 py-2.5 ${className}`}>
-                    {content}
-                  </div>
-                )}
+                <Link
+                  to={step.href}
+                  className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition hover:border-gray-300 hover:text-gray-700 ${pillClass}`}
+                >
+                  <span className="flex h-5 w-5 items-center justify-center rounded-full border border-current/20 bg-white text-[10px] font-semibold">
+                    {index + 1}
+                  </span>
+                  {step.label}
+                </Link>
               </li>
             );
           })}

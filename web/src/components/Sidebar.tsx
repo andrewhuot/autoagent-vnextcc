@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useState, useEffect } from 'react';
 import {
   type LucideIcon,
@@ -102,8 +102,52 @@ interface SidebarProps {
   onClose: () => void;
 }
 
+interface GuidedFlowStep {
+  label: string;
+  matcher: (pathname: string) => boolean;
+}
+
+const GUIDED_FLOW_STEPS: GuidedFlowStep[] = [
+  {
+    label: 'Setup',
+    matcher: (pathname) => pathname === '/setup' || pathname === '/dashboard',
+  },
+  {
+    label: 'Build',
+    matcher: (pathname) => pathname === '/build',
+  },
+  {
+    label: 'Eval',
+    matcher: (pathname) =>
+      pathname === '/evals' || pathname.startsWith('/evals/') || pathname === '/results' || pathname === '/compare',
+  },
+  {
+    label: 'Improve',
+    matcher: (pathname) => pathname === '/optimize' || pathname === '/studio' || pathname === '/improvements',
+  },
+  {
+    label: 'Deploy',
+    matcher: (pathname) => pathname === '/deploy',
+  },
+];
+
+function getGuidedFlowState(pathname: string) {
+  const activeIndex = GUIDED_FLOW_STEPS.findIndex((step) => step.matcher(pathname));
+  const boundedIndex = activeIndex === -1 ? 0 : activeIndex;
+  const currentStep = GUIDED_FLOW_STEPS[boundedIndex];
+  const nextStep = GUIDED_FLOW_STEPS[boundedIndex + 1] ?? null;
+
+  return {
+    activeIndex: boundedIndex,
+    currentLabel: currentStep.label,
+    nextLabel: nextStep?.label ?? 'Done',
+  };
+}
+
 export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
+  const location = useLocation();
   const [simpleMode, setSimpleMode] = useState(() => getSidebarMode() !== 'pro');
+  const guidedFlow = getGuidedFlowState(location.pathname);
 
   useEffect(() => {
     setSidebarMode(simpleMode ? 'simple' : 'pro');
@@ -151,6 +195,41 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
         </div>
 
         <nav className="flex-1 space-y-4 overflow-y-auto px-3 py-2">
+          {simpleMode ? (
+            <section className="rounded-2xl border border-sky-200 bg-[linear-gradient(180deg,rgba(240,249,255,0.92),rgba(255,255,255,1))] px-3.5 py-3 shadow-sm shadow-sky-100/70">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                Guided flow
+              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">
+                You're on {guidedFlow.currentLabel}. Next up: {guidedFlow.nextLabel}.
+              </p>
+              <p className="mt-1 text-xs leading-5 text-slate-600">
+                Move left to right to keep the product feeling predictable: Setup, Build, Eval, Improve, then Deploy.
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {GUIDED_FLOW_STEPS.map((step, index) => {
+                  const isActive = index === guidedFlow.activeIndex;
+                  const isComplete = index < guidedFlow.activeIndex;
+                  return (
+                    <span
+                      key={step.label}
+                      className={classNames(
+                        'rounded-full border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]',
+                        isActive
+                          ? 'border-sky-300 bg-sky-100 text-sky-800'
+                          : isComplete
+                            ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                            : 'border-slate-200 bg-white text-slate-500'
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
           {sections.map((section) => (
             <div key={section.title}>
               <h3 className="mb-1.5 px-2.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">

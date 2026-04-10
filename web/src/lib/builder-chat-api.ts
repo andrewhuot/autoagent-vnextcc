@@ -66,6 +66,16 @@ export interface BuilderExportPayload {
   content_type: string;
 }
 
+export class BuilderApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'BuilderApiError';
+    this.status = status;
+  }
+}
+
 async function fetchBuilderApi<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: {
@@ -77,7 +87,10 @@ async function fetchBuilderApi<T>(path: string, init?: RequestInit): Promise<T> 
 
   if (!response.ok) {
     const message = await response.text();
-    throw new Error(message || `Builder request failed: ${response.status}`);
+    throw new BuilderApiError(
+      message || `Builder request failed: ${response.status}`,
+      response.status,
+    );
   }
 
   return response.json() as Promise<T>;

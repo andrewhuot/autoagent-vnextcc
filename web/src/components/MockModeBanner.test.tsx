@@ -100,6 +100,24 @@ describe('MockModeBanner', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  it('renders on the /build route so users see mock mode warnings while building', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['Mock mode explicitly enabled.'],
+          real_provider_configured: false,
+        }),
+      })
+    );
+
+    renderBanner('/build');
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+  });
+
   it('does not render when the health endpoint reports live mode', async () => {
     vi.stubGlobal(
       'fetch',

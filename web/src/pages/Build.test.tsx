@@ -192,6 +192,10 @@ describe('Build', () => {
     expect(screen.getByRole('tab', { name: 'Builder Chat' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Saved Artifacts' })).toBeInTheDocument();
     expect(screen.getByLabelText('Agent description')).toBeInTheDocument();
+    expect(screen.getByTestId('build-details-toggle')).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Agent name')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Model')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Tool hints')).not.toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'XML Instruction Studio' })).toBeInTheDocument();
     // XML studio is collapsed by default — form fields hidden until expanded
     expect(screen.getByRole('button', { name: /XML Instruction Studio/i })).toHaveAttribute('aria-expanded', 'false');
@@ -215,6 +219,7 @@ describe('Build', () => {
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save & Run Eval' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Setup' })).toHaveAttribute('href', '/setup');
   });
 
   it('moves builder config into a modal and makes testing the main right-panel workflow', async () => {
@@ -492,6 +497,50 @@ describe('Build', () => {
 
     expect(await screen.findByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
     expect(screen.getAllByText('/tmp/workspace/configs/v002.yaml').length).toBeGreaterThan(0);
+  });
+
+  it('collapses agent details behind a disclosure toggle by default', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const toggle = screen.getByTestId('build-details-toggle');
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByLabelText('Agent name')).not.toBeInTheDocument();
+
+    await user.click(toggle);
+
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.getByLabelText('Agent name')).toBeInTheDocument();
+    expect(screen.getByLabelText('Model')).toBeInTheDocument();
+    expect(screen.getByLabelText('Tool hints')).toBeInTheDocument();
+  });
+
+  it('shows an error recovery banner with rate-limit guidance for 429 errors', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        return new Response('429 Too Many Requests — rate limit exceeded', {
+          status: 429,
+          headers: { 'Content-Type': 'text/plain' },
+        });
+      })
+    );
+
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Builder Chat' }));
+    await user.clear(screen.getByTestId('builder-composer'));
+    await user.type(screen.getByTestId('builder-composer'), 'Build a test agent');
+    await user.click(screen.getByTestId('builder-send'));
+
+    const banner = await screen.findByTestId('error-recovery-banner');
+    expect(banner).toBeInTheDocument();
+    expect(screen.getByText('Rate limited')).toBeInTheDocument();
+    expect(screen.getByText(/rate-limiting requests/i)).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText('Dismiss error'));
+    expect(screen.queryByTestId('error-recovery-banner')).not.toBeInTheDocument();
   });
 
   it('auto-saves the current draft before navigating into an eval run', async () => {

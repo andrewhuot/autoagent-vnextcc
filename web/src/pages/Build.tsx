@@ -6,7 +6,7 @@ import {
   type ChangeEvent,
   type ReactNode,
 } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   AlertTriangle,
@@ -571,12 +571,10 @@ export function BuilderChatWorkspace({
               <p className="mt-2 text-xs text-amber-700">{session.mock_reason}</p>
             ) : null}
             {builderPreviewModeNotice ? (
-              <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-                <p className="font-medium">Preview mode</p>
-                <p className="mt-1" data-testid="builder-preview-notice">
-                  Responses are simulated. Add an API key in Setup to use live providers.
-                </p>
-              </div>
+              <RecoveryCallout
+                className="mt-3"
+                detail={session?.mock_reason ?? 'Responses are simulated. Add an API key in Setup to use live providers.'}
+              />
             ) : null}
           </div>
 
@@ -605,9 +603,10 @@ export function BuilderChatWorkspace({
             ))}
 
             {error ? (
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-                {error}
-              </div>
+              <ErrorRecoveryBanner
+                error={error}
+                onDismiss={() => setError(null)}
+              />
             ) : null}
           </div>
 
@@ -1856,56 +1855,227 @@ function BuildDetailsFields({
   toolHints: string;
   onToolHintsChange: (value: string) => void;
 }) {
+  const hasValues = Boolean(agentName.trim() || model.trim() || toolHints.trim());
+  const [expanded, setExpanded] = useState(hasValues);
+
   return (
-    <section className="rounded-3xl border border-gray-200 bg-gray-50/80 p-4">
-      <div className="mb-4">
-        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
-          Agent Details
-        </p>
-        <p className="mt-1 text-sm text-gray-600">
-          These fields map directly into the generated config instead of being inferred from placeholder data.
-        </p>
-      </div>
+    <section className="overflow-hidden rounded-3xl border border-gray-200 bg-gray-50/80">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-4 px-4 py-3.5 text-left transition hover:bg-gray-100/60"
+        aria-expanded={expanded}
+        data-testid="build-details-toggle"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="inline-flex items-center gap-1.5 rounded-full border border-gray-300 bg-white/90 px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">
+            Optional
+          </span>
+          <span className="text-sm font-medium text-gray-700">Agent Details</span>
+          {!expanded && hasValues && (
+            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+              Customized
+            </span>
+          )}
+        </div>
+        <ArrowRight className={classNames('h-4 w-4 shrink-0 text-gray-400 transition', expanded && 'rotate-90')} />
+      </button>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <label className="space-y-2">
-          <span className="text-sm font-medium text-gray-700">Agent name</span>
-          <input
-            aria-label="Agent name"
-            value={agentName}
-            onChange={(event) => onAgentNameChange(event.target.value)}
-            placeholder="Airline Support Agent"
-            className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-          />
-        </label>
+      {expanded && (
+        <div className="border-t border-gray-200 px-4 py-4">
+          <p className="mb-4 text-sm text-gray-600">
+            Override the auto-inferred agent name, model, and tool list. Leave blank to let the generator decide.
+          </p>
 
-        <label className="space-y-2">
-          <span className="text-sm font-medium text-gray-700">Model</span>
-          <input
-            aria-label="Model"
-            value={model}
-            onChange={(event) => onModelChange(event.target.value)}
-            placeholder="gpt-4o"
-            className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-          />
-        </label>
-      </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-gray-700">Agent name</span>
+              <input
+                aria-label="Agent name"
+                value={agentName}
+                onChange={(event) => onAgentNameChange(event.target.value)}
+                placeholder="Airline Support Agent"
+                className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+              />
+            </label>
 
-      <label className="mt-4 block space-y-2">
-        <span className="text-sm font-medium text-gray-700">Tool hints</span>
-        <textarea
-          aria-label="Tool hints"
-          value={toolHints}
-          onChange={(event) => onToolHintsChange(event.target.value)}
-          placeholder="flight_status_lookup, knowledge_base_lookup"
-          rows={3}
-          className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
-        />
-        <p className="text-xs text-gray-500">
-          Separate multiple tools with commas or new lines.
-        </p>
-      </label>
+            <label className="space-y-2">
+              <span className="text-sm font-medium text-gray-700">Model</span>
+              <input
+                aria-label="Model"
+                value={model}
+                onChange={(event) => onModelChange(event.target.value)}
+                placeholder="gpt-4o"
+                className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+              />
+            </label>
+          </div>
+
+          <label className="mt-4 block space-y-2">
+            <span className="text-sm font-medium text-gray-700">Tool hints</span>
+            <textarea
+              aria-label="Tool hints"
+              value={toolHints}
+              onChange={(event) => onToolHintsChange(event.target.value)}
+              placeholder="flight_status_lookup, knowledge_base_lookup"
+              rows={3}
+              className="w-full rounded-2xl border border-gray-200 bg-white px-4 py-3 text-sm leading-6 text-gray-900 outline-none transition focus:border-sky-400 focus:ring-4 focus:ring-sky-100"
+            />
+            <p className="text-xs text-gray-500">
+              Separate multiple tools with commas or new lines.
+            </p>
+          </label>
+        </div>
+      )}
     </section>
+  );
+}
+
+function errorStatusFromMessage(message: string): number | null {
+  if (/429|rate.limit/i.test(message)) return 429;
+  if (/503|service unavailable/i.test(message)) return 503;
+  if (/timeout|timed out/i.test(message)) return 408;
+  return null;
+}
+
+function ErrorRecoveryBanner({
+  error,
+  onRetry,
+  onDismiss,
+}: {
+  error: string;
+  onRetry?: () => void;
+  onDismiss?: () => void;
+}) {
+  const inferredStatus = errorStatusFromMessage(error);
+  const isRateLimit = inferredStatus === 429;
+  const isTransient = isRateLimit || inferredStatus === 503 || inferredStatus === 408;
+
+  const guidance = isRateLimit
+    ? 'The provider is rate-limiting requests. Wait a moment, then try again.'
+    : isTransient
+      ? 'This looks like a temporary issue. Retrying usually resolves it.'
+      : 'Check your input and try again, or visit Setup to verify your provider keys.';
+
+  return (
+    <div
+      data-testid="error-recovery-banner"
+      className={classNames(
+        'rounded-2xl border px-4 py-3 text-sm',
+        isRateLimit
+          ? 'border-amber-200 bg-amber-50 text-amber-900'
+          : 'border-rose-200 bg-rose-50 text-rose-700'
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2 min-w-0">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <p className="font-medium">{isRateLimit ? 'Rate limited' : 'Something went wrong'}</p>
+            <p className="mt-1">{error}</p>
+            <p className="mt-1 text-xs opacity-80">{guidance}</p>
+          </div>
+        </div>
+        {onDismiss && (
+          <button
+            type="button"
+            aria-label="Dismiss error"
+            onClick={onDismiss}
+            className="shrink-0 rounded-lg p-1 transition hover:bg-black/5"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+      {onRetry && (
+        <button
+          type="button"
+          data-testid="error-retry-button"
+          onClick={onRetry}
+          className={classNames(
+            'mt-3 inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition',
+            isRateLimit
+              ? 'border border-amber-300 bg-white text-amber-900 hover:bg-amber-50'
+              : 'border border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
+          )}
+        >
+          Try Again
+        </button>
+      )}
+    </div>
+  );
+}
+
+interface RecoveryGuidance {
+  title: string;
+  detail: string;
+  hint: string;
+}
+
+function getRecoveryGuidance(detail: string | null | undefined): RecoveryGuidance {
+  const normalized = (detail ?? '').toLowerCase();
+
+  if (normalized.includes('429') || normalized.includes('rate limit')) {
+    return {
+      title: 'Provider is rate-limiting requests',
+      detail:
+        'Treat the current output as a draft for now. Wait a minute, then rerun a live preview when the provider quota recovers.',
+      hint: 'You can keep shaping the build here while the limit clears.',
+    };
+  }
+
+  if (
+    normalized.includes('mock') ||
+    normalized.includes('simulated') ||
+    normalized.includes('api key') ||
+    normalized.includes('provider')
+  ) {
+    return {
+      title: 'Live preview is not ready yet',
+      detail:
+        'AgentLab is using simulated responses until a live provider is configured or available again.',
+      hint: 'Keep drafting here, then open Setup when you are ready to validate live behavior.',
+    };
+  }
+
+  return {
+    title: 'Preview is running in a fallback path',
+    detail: 'Use the response to shape the draft, then validate it live before treating it as final.',
+    hint: 'If this keeps happening, check Setup or retry the preview later.',
+  };
+}
+
+function RecoveryCallout({
+  detail,
+  className,
+}: {
+  detail: string | null | undefined;
+  className?: string;
+}) {
+  const guidance = getRecoveryGuidance(detail);
+
+  return (
+    <div className={classNames('rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-amber-950', className)}>
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white text-amber-700 shadow-sm">
+          <AlertTriangle className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-amber-900">{guidance.title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-amber-900">{guidance.detail}</p>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <p className="text-xs text-amber-800">{guidance.hint}</p>
+            <Link
+              to="/setup"
+              className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100"
+            >
+              Open Setup
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1958,7 +2128,7 @@ function PreviewResultCard({
         </div>
       ) : null}
       {result.mock_mode && result.mock_reasons.length > 0 ? (
-        <p className="mt-3 text-xs text-amber-700">{result.mock_reasons.join(' ')}</p>
+        <RecoveryCallout className="mt-3" detail={result.mock_reasons.join(' ')} />
       ) : null}
     </div>
   );
@@ -2261,36 +2431,91 @@ function BuildTabBar({
   activeTab: BuildTab;
   onChange: (tab: BuildTab) => void;
 }) {
-  const tabs: Array<{ id: BuildTab; label: string; icon: ReactNode }> = [
-    { id: 'prompt', label: 'Prompt', icon: <Sparkles className="h-4 w-4" /> },
-    { id: 'transcript', label: 'Transcript', icon: <FileText className="h-4 w-4" /> },
-    { id: 'builder-chat', label: 'Builder Chat', icon: <MessageSquare className="h-4 w-4" /> },
-    { id: 'saved-artifacts', label: 'Saved Artifacts', icon: <Archive className="h-4 w-4" /> },
+  const tabs: Array<{
+    id: BuildTab;
+    label: string;
+    icon: ReactNode;
+    eyebrow: string;
+    description: string;
+  }> = [
+    {
+      id: 'prompt',
+      label: 'Prompt',
+      icon: <Sparkles className="h-4 w-4" />,
+      eyebrow: 'Fastest start',
+      description: 'Write one brief and generate the first draft.',
+    },
+    {
+      id: 'transcript',
+      label: 'Transcript',
+      icon: <FileText className="h-4 w-4" />,
+      eyebrow: 'Grounded in real data',
+      description: 'Use conversation history to seed the draft.',
+    },
+    {
+      id: 'builder-chat',
+      label: 'Builder Chat',
+      icon: <MessageSquare className="h-4 w-4" />,
+      eyebrow: 'Guided iteration',
+      description: 'Shape the draft through back-and-forth conversation.',
+    },
+    {
+      id: 'saved-artifacts',
+      label: 'Saved Artifacts',
+      icon: <Archive className="h-4 w-4" />,
+      eyebrow: 'Resume work',
+      description: 'Return to saved drafts and transcript outputs.',
+    },
   ];
 
   return (
-    <div
-      role="tablist"
-      aria-label="Build sections"
-      className="inline-flex flex-wrap gap-2 rounded-2xl border border-gray-200 bg-white p-1 shadow-sm"
-    >
+    <div role="tablist" aria-label="Build sections" className="grid gap-3 lg:grid-cols-4">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           type="button"
           role="tab"
+          aria-label={tab.label}
           aria-selected={activeTab === tab.id}
           aria-controls={`${tab.id}-panel`}
           onClick={() => onChange(tab.id)}
           className={classNames(
-            'inline-flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-semibold transition',
+            'rounded-[24px] border px-4 py-4 text-left transition',
             activeTab === tab.id
-              ? 'bg-gray-900 text-white'
-              : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+              : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 hover:text-gray-900'
           )}
         >
-          {tab.icon}
-          {tab.label}
+          <div className="flex items-start gap-3">
+            <span
+              className={classNames(
+                'mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl',
+                activeTab === tab.id ? 'bg-white/10 text-white' : 'bg-sky-50 text-sky-700'
+              )}
+            >
+              {tab.icon}
+            </span>
+            <div className="min-w-0">
+              <p
+                className={classNames(
+                  'text-[11px] font-semibold uppercase tracking-[0.18em]',
+                  activeTab === tab.id ? 'text-sky-100' : 'text-sky-700'
+                )}
+              >
+                {tab.eyebrow}
+              </p>
+              <p className="mt-1 text-sm font-semibold">{tab.label}</p>
+              <p
+                aria-hidden="true"
+                className={classNames(
+                  'mt-1 text-sm leading-relaxed',
+                  activeTab === tab.id ? 'text-slate-200' : 'text-gray-500'
+                )}
+              >
+                {tab.description}
+              </p>
+            </div>
+          </div>
         </button>
       ))}
     </div>
@@ -2298,22 +2523,30 @@ function BuildTabBar({
 }
 
 function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
-  const tabGuidance: Record<BuildTab, { hint: string; description: string }> = {
+  const tabGuidance: Record<BuildTab, { hint: string; description: string; nextStep: string }> = {
     prompt: {
       hint: 'Describe your agent',
-      description: 'Write a prompt, optionally customize the instruction XML, then generate. You can refine conversationally before saving.',
+      description:
+        'Start with the smallest possible brief. You can add structure later during refinement if the first draft needs it.',
+      nextStep: 'Generate the draft, then refine it conversationally before saving.',
     },
     transcript: {
       hint: 'Upload transcripts',
-      description: 'Upload real conversation files and AgentLab will extract intents, patterns, and FAQ signals to seed your agent config.',
+      description:
+        'Use transcript analysis when you want the first draft to reflect real customer language, gaps, and workflows.',
+      nextStep: 'Review the extracted patterns, then generate a draft from the report.',
     },
     'builder-chat': {
       hint: 'Chat to build',
-      description: 'Describe what you need in plain language. The builder drafts the config as you go and keeps the preview in sync.',
+      description:
+        'Describe what you need in plain language. Builder Chat is best when you want help scoping the config as you iterate.',
+      nextStep: 'Keep drafting on the left, then save the best version into Eval Runs.',
     },
     'saved-artifacts': {
       hint: 'Browse saved work',
-      description: 'Return to previously saved drafts, transcript reports, and exported configs.',
+      description:
+        'Resume work without starting over. Saved artifacts keep draft outputs and transcript reports in one place.',
+      nextStep: 'Pick the draft you want to continue refining or validating next.',
     },
   };
 
@@ -2321,13 +2554,19 @@ function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
 
   return (
     <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] px-5 py-4 shadow-sm shadow-sky-100/60">
-      <div className="flex items-start gap-3">
-        <span className="mt-0.5 inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
-          Tip
-        </span>
-        <div className="min-w-0">
-          <p className="text-sm font-semibold text-gray-900">{guidance.hint}</p>
-          <p className="mt-1 text-sm leading-relaxed text-gray-600">{guidance.description}</p>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="mt-0.5 inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+            Tip
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-gray-900">{guidance.hint}</p>
+            <p className="mt-1 text-sm leading-relaxed text-gray-600">{guidance.description}</p>
+          </div>
+        </div>
+        <div className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">What to do next</p>
+          <p className="mt-2 max-w-sm leading-relaxed">{guidance.nextStep}</p>
         </div>
       </div>
     </section>
