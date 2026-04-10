@@ -1,18 +1,17 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowRight,
   Bot,
-  Braces,
   CheckCircle2,
   Copy,
   Download,
-  LayoutPanelLeft,
   Play,
+  RotateCcw,
   Send,
-  ShieldCheck,
   Sparkles,
-  WandSparkles,
+  X,
 } from 'lucide-react';
 import { useSaveAgent } from '../lib/api';
 import { useActiveAgent } from '../lib/active-agent';
@@ -51,16 +50,9 @@ const INSPECTOR_MODES: Array<{ id: InspectorMode; label: string; description: st
   { id: 'preview', label: 'Preview', description: 'Behavior test harness' },
 ];
 
-const SHELL_RAIL_ITEMS: Array<{ label: string; icon: ReactNode }> = [
-  { label: 'Workspace', icon: <LayoutPanelLeft className="h-4 w-4" /> },
-  { label: 'Improve', icon: <WandSparkles className="h-4 w-4" /> },
-  { label: 'Inspect', icon: <Braces className="h-4 w-4" /> },
-  { label: 'Trust', icon: <ShieldCheck className="h-4 w-4" /> },
-];
-
 /**
- * Provides a focused, truthful improvement workspace on top of the existing builder session APIs.
- * This keeps the new surface real without refactoring the broader Build page.
+ * Provides a focused improvement workspace on top of the existing builder session APIs.
+ * Keeps the new surface real without refactoring the broader Build page.
  */
 export function AgentImprover() {
   const navigate = useNavigate();
@@ -80,8 +72,10 @@ export function AgentImprover() {
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
   const [savedAgent, setSavedAgent] = useState<AgentLibraryItem | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showResetConfirm, setShowResetConfirm] = useState<boolean>(false);
   const conversationRef = useRef<HTMLDivElement | null>(null);
 
+  const hasUnsavedWork = Boolean(session?.session_id && !saveResult);
   const busy: boolean = requestPending || savePending || previewPending;
   const latestUserRequest: string = useMemo(() => {
     const userMessage = [...(session?.messages ?? [])].reverse().find((message) => message.role === 'user');
@@ -134,6 +128,17 @@ export function AgentImprover() {
     document.title = 'Agent Improver • AgentLab';
   }, []);
 
+  // Unsaved-work protection: warn before browser close/refresh
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+
+    function onBeforeUnload(e: BeforeUnloadEvent) {
+      e.preventDefault();
+    }
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [hasUnsavedWork]);
+
   useEffect(() => {
     const storedSessionId = readStoredSessionId();
     if (!storedSessionId) {
@@ -146,9 +151,7 @@ export function AgentImprover() {
 
     void getBuilderSession(storedSessionId)
       .then((storedSession) => {
-        if (cancelled) {
-          return;
-        }
+        if (cancelled) return;
         setSession(storedSession);
         setPreviewMessage(defaultPreviewMessageForBuilderConfig(storedSession.config));
       })
@@ -156,43 +159,46 @@ export function AgentImprover() {
         clearStoredSessionId();
       })
       .finally(() => {
-        if (!cancelled) {
-          setSessionHydrating(false);
-        }
+        if (!cancelled) setSessionHydrating(false);
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
-    if (!session?.session_id) {
-      return;
-    }
+    if (!session?.session_id) return;
     persistSessionId(session.session_id);
   }, [session?.session_id]);
 
   useEffect(() => {
-    if (!session?.config || previewMessage.trim()) {
-      return;
-    }
+    if (!session?.config || previewMessage.trim()) return;
     setPreviewMessage(defaultPreviewMessageForBuilderConfig(session.config));
   }, [previewMessage, session?.config, session?.updated_at]);
 
   useEffect(() => {
     const container = conversationRef.current;
-    if (!container) {
-      return;
-    }
+    if (!container) return;
     container.scrollTop = container.scrollHeight;
   }, [session?.messages]);
 
+  // Global keyboard shortcuts: Cmd/Ctrl+S to save
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        if (session?.session_id && !busy) {
+          void handleSaveDraft();
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [session?.session_id, busy]);
+
   async function handleSendRequest(): Promise<void> {
     const message = composer.trim();
-    if (!message || requestPending) {
-      return;
-    }
+    if (!message || requestPending) return;
 
     setRequestPending(true);
     setError(null);
@@ -210,9 +216,9 @@ export function AgentImprover() {
       setInspectorMode('summary');
     } catch (submitError) {
       const messageText =
-        submitError instanceof Error ? submitError.message : 'The improver request failed.';
+        submitError instanceof Error ? submitError.message : 'The improver request failed. Check your connection and try again.';
       setError(messageText);
-      toastError('Agent improver request failed', messageText);
+      toastError('Request failed', messageText);
     } finally {
       setRequestPending(false);
     }
@@ -220,9 +226,7 @@ export function AgentImprover() {
 
   async function handleRunPreview(): Promise<void> {
     const message = previewMessage.trim();
-    if (!session?.session_id || !message || previewPending) {
-      return;
-    }
+    if (!session?.session_id || !message || previewPending) return;
 
     setPreviewPending(true);
     setError(null);
@@ -236,7 +240,7 @@ export function AgentImprover() {
       setInspectorMode('preview');
     } catch (previewError) {
       const messageText =
-        previewError instanceof Error ? previewError.message : 'The preview request failed.';
+        previewError instanceof Error ? previewError.message : 'Preview failed. The builder may be temporarily unavailable.';
       setError(messageText);
       toastError('Preview failed', messageText);
     } finally {
@@ -245,8 +249,48 @@ export function AgentImprover() {
   }
 
   async function handleSaveDraft(): Promise<void> {
-    if (!session?.session_id || savePending) {
+    if (!session?.session_id || savePending) return;
+
+    setSavePending(true);
+    setError(null);
+
+    try {
+      const payload = await saveAgent.mutateAsync({
+        source: 'built',
+        build_source: 'builder_chat',
+        session_id: session.session_id,
+      });
+
+      if (!payload.save_result) {
+        throw new Error('The save response did not include workspace metadata.');
+      }
+
+      setSaveResult(payload.save_result);
+      setSavedAgent(payload.agent);
+      setActiveAgent(payload.agent);
+      toastSuccess('Draft saved', payload.save_result.config_path);
+    } catch (saveError) {
+      const messageText = saveError instanceof Error ? saveError.message : 'Save failed. Your draft is still in the session — try again.';
+      setError(messageText);
+      toastError('Save failed', messageText);
+    } finally {
+      setSavePending(false);
+    }
+  }
+
+  async function handleContinueToEval(): Promise<void> {
+    if (savedAgent) {
+      navigateToEvalWorkflow(navigate, savedAgent);
       return;
+    }
+
+    if (!session?.session_id || savePending) return;
+
+    if (hasUnsavedWork) {
+      const confirmed = window.confirm(
+        'This will save your draft and navigate to the eval workflow. Continue?'
+      );
+      if (!confirmed) return;
     }
 
     setSavePending(true);
@@ -266,9 +310,9 @@ export function AgentImprover() {
       setSaveResult(payload.save_result);
       setSavedAgent(payload.agent);
       setActiveAgent(payload.agent);
-      toastSuccess('Saved to workspace', payload.save_result.config_path);
+      navigateToEvalWorkflow(navigate, payload.agent);
     } catch (saveError) {
-      const messageText = saveError instanceof Error ? saveError.message : 'Saving the draft failed.';
+      const messageText = saveError instanceof Error ? saveError.message : 'Save failed before navigating to eval.';
       setError(messageText);
       toastError('Save failed', messageText);
     } finally {
@@ -276,23 +320,26 @@ export function AgentImprover() {
     }
   }
 
-  async function handleContinueToEval(): Promise<void> {
-    if (savedAgent) {
-      navigateToEvalWorkflow(navigate, savedAgent);
-      return;
-    }
-
-    await handleSaveDraft();
+  function handleResetSession(): void {
+    setShowResetConfirm(false);
+    clearStoredSessionId();
+    setSession(null);
+    setComposer('');
+    setPreviewResult(null);
+    setSaveResult(null);
+    setSavedAgent(null);
+    setError(null);
+    setPreviewMessage('');
+    setInspectorMode('summary');
+    toastSuccess('Session reset', 'Started a fresh improvement session.');
   }
 
   async function handleCopyDraft(): Promise<void> {
-    if (!configPreview || !navigator.clipboard?.writeText) {
-      return;
-    }
+    if (!configPreview || !navigator.clipboard?.writeText) return;
 
     try {
       await navigator.clipboard.writeText(configPreview);
-      toastSuccess('Draft copied', `Copied the ${configFormat.toUpperCase()} draft to your clipboard.`);
+      toastSuccess('Copied', `${configFormat.toUpperCase()} draft copied to clipboard.`);
     } catch (copyError) {
       const messageText = copyError instanceof Error ? copyError.message : 'Copy failed.';
       setError(messageText);
@@ -301,9 +348,7 @@ export function AgentImprover() {
   }
 
   async function handleDownloadDraft(): Promise<void> {
-    if (!session?.session_id) {
-      return;
-    }
+    if (!session?.session_id) return;
 
     try {
       const payload = await exportBuilderConfig({
@@ -322,10 +367,10 @@ export function AgentImprover() {
         URL.revokeObjectURL(url);
         anchor.remove();
       }, 0);
-      toastSuccess('Draft exported', payload.filename);
+      toastSuccess('Exported', payload.filename);
     } catch (downloadError) {
       const messageText =
-        downloadError instanceof Error ? downloadError.message : 'Downloading the draft failed.';
+        downloadError instanceof Error ? downloadError.message : 'Download failed.';
       setError(messageText);
       toastError('Download failed', messageText);
     }
@@ -336,6 +381,48 @@ export function AgentImprover() {
       <div className="pointer-events-none absolute inset-x-0 top-0 h-40 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.78),transparent_70%)]" />
       <div className="pointer-events-none absolute -right-20 top-10 h-56 w-56 rounded-full bg-[rgba(220,197,205,0.24)] blur-3xl" />
       <div className="pointer-events-none absolute bottom-4 left-10 h-48 w-48 rounded-full bg-[rgba(214,208,228,0.26)] blur-3xl" />
+
+      {/* Reset confirmation dialog */}
+      {showResetConfirm ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Confirm reset"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setShowResetConfirm(false);
+          }}
+        >
+          <div className="mx-4 w-full max-w-md rounded-[24px] border border-[#e7dde2] bg-white p-6 shadow-xl">
+            <div className="flex items-start gap-3">
+              <AlertTriangle className="mt-0.5 h-5 w-5 flex-shrink-0 text-amber-500" />
+              <div>
+                <h3 className="text-base font-semibold text-[#1f1b23]">Start over?</h3>
+                <p className="mt-2 text-sm leading-6 text-[#625967]">
+                  This will discard your current draft and conversation. This cannot be undone.
+                </p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="rounded-full border border-[#ded5db] bg-white px-4 py-2 text-sm font-medium text-[#4d4550] transition hover:bg-[#faf7f8]"
+                autoFocus
+              >
+                Keep working
+              </button>
+              <button
+                type="button"
+                onClick={handleResetSession}
+                className="rounded-full bg-rose-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-700"
+              >
+                Discard and reset
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <div className="relative rounded-[34px] border border-white/70 bg-[#f8f3f0]/90 p-3 shadow-[0_24px_80px_rgba(74,54,82,0.16)] backdrop-blur-xl sm:p-4">
         <div className="rounded-[28px] border border-white/80 bg-white/70 px-4 py-4 shadow-[0_10px_30px_rgba(87,64,88,0.08)]">
@@ -350,87 +437,75 @@ export function AgentImprover() {
                 Agent Improver
               </h1>
               <p className="mt-1 max-w-2xl text-sm leading-6 text-[#615867]">
-                Improvement workspace for shaping a fresh builder session through natural-language edits,
-                inspecting the draft clearly, and validating behavior before you save it back into AgentLab.
+                Describe what your agent should do differently. Refine the draft, inspect the config, test it, then save.
               </p>
             </div>
 
-            <ol className="flex flex-wrap gap-2">
-              {steps.map((step) => (
-                <li key={step.label}>
-                  <span
-                    className={classNames(
-                      'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium',
-                      step.status === 'complete'
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        : step.status === 'current'
-                          ? 'border-[#d9c7cf] bg-[#fbf4f5] text-[#6f5060]'
-                          : 'border-[#e2d8de] bg-white/70 text-[#8a8089]'
-                    )}
-                  >
+            <nav aria-label="Improvement progress">
+              <ol className="flex flex-wrap gap-2" role="list">
+                {steps.map((step, index) => (
+                  <li key={step.label}>
                     <span
+                      aria-label={`Step ${index + 1}: ${step.label} — ${step.status}`}
+                      aria-current={step.status === 'current' ? 'step' : undefined}
                       className={classNames(
-                        'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold',
+                        'inline-flex items-center gap-2 rounded-full border px-3 py-2 text-xs font-medium',
                         step.status === 'complete'
-                          ? 'bg-white text-emerald-700'
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
                           : step.status === 'current'
-                            ? 'bg-white text-[#6f5060]'
-                            : 'bg-[#f3edf0] text-[#8a8089]'
+                            ? 'border-[#d9c7cf] bg-[#fbf4f5] text-[#6f5060]'
+                            : 'border-[#e2d8de] bg-white/70 text-[#8a8089]'
                       )}
                     >
-                      {step.label.slice(0, 1)}
+                      <span
+                        className={classNames(
+                          'flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-semibold',
+                          step.status === 'complete'
+                            ? 'bg-white text-emerald-700'
+                            : step.status === 'current'
+                              ? 'bg-white text-[#6f5060]'
+                              : 'bg-[#f3edf0] text-[#8a8089]'
+                        )}
+                      >
+                        {step.status === 'complete' ? <CheckCircle2 className="h-3 w-3" /> : step.label.slice(0, 1)}
+                      </span>
+                      {step.label}
                     </span>
-                    {step.label}
-                  </span>
-                </li>
-              ))}
-            </ol>
+                  </li>
+                ))}
+              </ol>
+            </nav>
 
             <div className="flex flex-wrap items-center gap-2">
+              {session?.session_id ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (hasUnsavedWork) {
+                      setShowResetConfirm(true);
+                    } else {
+                      handleResetSession();
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-full border border-[#ddd4da] bg-white/80 px-3.5 py-2 text-sm font-medium text-[#4d4550] transition hover:bg-white"
+                  aria-label="Start a new session"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  New session
+                </button>
+              ) : null}
               <Link
                 to="/build?tab=builder-chat"
                 className="inline-flex items-center gap-2 rounded-full border border-[#ddd4da] bg-white/80 px-3.5 py-2 text-sm font-medium text-[#4d4550] transition hover:bg-white"
               >
                 Open Build
               </Link>
-              <Link
-                to="/setup"
-                className="inline-flex items-center gap-2 rounded-full border border-[#ead3d7] bg-[#fbf1f2] px-3.5 py-2 text-sm font-medium text-[#7c5664] transition hover:bg-[#f9e8eb]"
-              >
-                Setup
-              </Link>
             </div>
           </div>
         </div>
 
-        <div className="mt-3 grid gap-3 xl:grid-cols-[54px_minmax(0,0.92fr)_minmax(0,1.08fr)]">
-          <aside className="hidden flex-col items-center gap-3 rounded-[28px] border border-white/70 bg-[#f3eeef]/85 px-2 py-4 xl:flex">
-            {SHELL_RAIL_ITEMS.map((item, index) => (
-              <div
-                key={item.label}
-                className={classNames(
-                  'flex w-full flex-col items-center gap-2 rounded-[20px] px-2 py-3 text-center text-[10px] font-medium tracking-[0.14em]',
-                  index === 1
-                    ? 'bg-white text-[#4a3944] shadow-sm'
-                    : 'text-[#8a8088]'
-                )}
-              >
-                <span
-                  className={classNames(
-                    'flex h-9 w-9 items-center justify-center rounded-2xl border',
-                    index === 1
-                      ? 'border-[#e4d5dc] bg-[#fbf5f6] text-[#7d5360]'
-                      : 'border-transparent bg-white/70 text-[#8a8088]'
-                  )}
-                >
-                  {item.icon}
-                </span>
-                <span className="leading-4">{item.label}</span>
-              </div>
-            ))}
-          </aside>
-
-          <section className="flex min-h-[760px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-[#fbf7f4]/90 shadow-[0_12px_30px_rgba(83,63,79,0.08)]">
+        <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+          <section className="flex min-h-[760px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-[#fbf7f4]/90 shadow-[0_12px_30px_rgba(83,63,79,0.08)]" aria-label="Improvement workspace">
             <div className="border-b border-[#e7dde2] px-5 py-5">
               <div className="flex items-start justify-between gap-4">
                 <div>
@@ -438,14 +513,20 @@ export function AgentImprover() {
                     Improvement workspace
                   </p>
                   <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[#1f1b23]">
-                    Describe the next improvement in plain language
+                    {session?.session_id ? 'Refine your agent' : 'Start with an improvement'}
                   </h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-[#625967]">
-                    The improver uses the live builder session contract. It keeps the draft on the
-                    right in sync with each request and makes any mock-backed behavior explicit.
+                    {session?.session_id
+                      ? 'Each message updates the draft on the right. Review it in Summary, Config, or Preview before saving.'
+                      : 'Describe what your agent needs — a new tool, a policy change, better routing, or a tone adjustment. Pick an example below or write your own.'}
                   </p>
                 </div>
                 <span
+                  aria-label={
+                    session?.session_id
+                      ? session.mock_mode ? 'Session running in fallback mode' : 'Session connected live'
+                      : 'No active session'
+                  }
                   className={classNames(
                     'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium',
                     session?.mock_mode
@@ -464,49 +545,52 @@ export function AgentImprover() {
                 </span>
               </div>
 
-              <div className="mt-4 space-y-3">
-                <div className="rounded-[24px] border border-[#e7dde2] bg-white/85 p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8087]">
-                    Seed the draft
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-[#5e5662]">
-                    Start with the smallest useful improvement request. The session grows from that
-                    brief and stays inspectable in summary, config, and preview modes.
-                  </p>
-                  <div className="mt-4 grid gap-2 sm:grid-cols-2">
-                    {IMPROVEMENT_EXAMPLES.map((example) => (
-                      <button
-                        key={example}
-                        type="button"
-                        onClick={() => setComposer(example)}
-                        className="rounded-[18px] border border-[#e4d8de] bg-[#fbf7f8] px-3 py-3 text-left text-xs leading-5 text-[#625967] transition hover:border-[#d4c4cc] hover:bg-white"
-                      >
-                        {example}
-                      </button>
-                    ))}
+              {!session?.session_id ? (
+                <div className="mt-4 space-y-3">
+                  <div className="rounded-[24px] border border-[#e7dde2] bg-white/85 p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#8a8087]">
+                      Try an example
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-[#5e5662]">
+                      Click any example to load it into the composer, then send it to create your first draft.
+                    </p>
+                    <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                      {IMPROVEMENT_EXAMPLES.map((example) => (
+                        <button
+                          key={example}
+                          type="button"
+                          onClick={() => setComposer(example)}
+                          className="rounded-[18px] border border-[#e4d8de] bg-[#fbf7f8] px-3 py-3 text-left text-xs leading-5 text-[#625967] transition hover:border-[#d4c4cc] hover:bg-white focus:outline-none focus:ring-2 focus:ring-[#d4c4cc] focus:ring-offset-1"
+                        >
+                          {example}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="rounded-[24px] border border-[#eadfce] bg-[#fffaf3] p-4">
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#93816d]">
+                      Good to know
+                    </p>
+                    <p className="mt-2 text-sm leading-6 text-[#685d50]">
+                      Each session starts fresh. To continue improving a previously saved agent, start a new session and describe the changes you want.
+                    </p>
                   </div>
                 </div>
-
-                <div className="rounded-[24px] border border-[#eadfce] bg-[#fffaf3] p-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[#93816d]">
-                    Truthful limits
-                  </p>
-                  <p className="mt-2 text-sm leading-6 text-[#685d50]">
-                    This surface starts a fresh builder-backed draft today. It does not yet reopen an
-                    already-saved workspace config directly into the improver session.
-                  </p>
-                </div>
-              </div>
+              ) : null}
             </div>
 
             <div
               ref={conversationRef}
               className="flex-1 space-y-4 overflow-y-auto px-5 py-5"
+              role="log"
+              aria-label="Conversation history"
+              aria-live="polite"
             >
               {sessionHydrating ? (
                 <EmptyWorkspaceCard
-                  title="Restoring your last improver draft"
-                  body="If a prior builder-backed improver session exists in this browser session, it will reappear here automatically."
+                  title="Restoring your session"
+                  body="Looking for your previous draft in this browser tab..."
                 />
               ) : null}
 
@@ -514,7 +598,7 @@ export function AgentImprover() {
                 <ConversationMessage
                   role="assistant"
                   title="Improver"
-                  body="Describe the update you want. I will evolve the draft, keep the config inspectable, and let you test the behavior before you save."
+                  body="Describe what you want to change. I'll create a draft you can inspect, test, and save."
                 />
               ) : null}
 
@@ -522,15 +606,16 @@ export function AgentImprover() {
                 <ConversationMessage
                   key={message.message_id}
                   role={message.role}
-                  title={message.role === 'user' ? 'Request' : 'Improver'}
+                  title={message.role === 'user' ? 'You' : 'Improver'}
                   body={message.content}
                 />
               ))}
 
               {error ? (
-                <InlineNotice tone="error" title="Something needs attention">
-                  {error}
-                </InlineNotice>
+                <DismissibleError
+                  message={error}
+                  onDismiss={() => setError(null)}
+                />
               ) : null}
             </div>
 
@@ -545,6 +630,7 @@ export function AgentImprover() {
                   onChange={(event) => setComposer(event.target.value)}
                   placeholder="Describe how the draft should improve next..."
                   rows={4}
+                  aria-describedby="composer-hint"
                   className="min-h-[110px] w-full resize-none bg-transparent px-3 py-3 text-sm leading-6 text-[#211d24] outline-none placeholder:text-[#9b929a]"
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' && !event.shiftKey) {
@@ -554,8 +640,9 @@ export function AgentImprover() {
                   }}
                 />
                 <div className="flex flex-col gap-3 border-t border-[#f0e8eb] px-3 pt-3 sm:flex-row sm:items-center sm:justify-between">
-                  <p className="text-xs leading-5 text-[#817781]">
-                    Ask for routing changes, new tools, policy refinements, tone updates, or safer behavior.
+                  <p id="composer-hint" className="text-xs leading-5 text-[#817781]">
+                    Press Enter to send, Shift+Enter for a new line.
+                    {session?.session_id ? <span className="hidden sm:inline"> {'\u00B7'} {isMac() ? '\u2318' : 'Ctrl+'}S to save.</span> : null}
                   </p>
                   <button
                     type="button"
@@ -571,7 +658,7 @@ export function AgentImprover() {
             </div>
           </section>
 
-          <section className="flex min-h-[760px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-[#fffdfb]/92 shadow-[0_12px_30px_rgba(83,63,79,0.08)]">
+          <section className="flex min-h-[760px] flex-col overflow-hidden rounded-[30px] border border-white/70 bg-[#fffdfb]/92 shadow-[0_12px_30px_rgba(83,63,79,0.08)]" aria-label="Draft inspector">
             <div className="border-b border-[#ede4e8] px-5 py-5">
               <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                 <div>
@@ -579,11 +666,12 @@ export function AgentImprover() {
                     Current draft
                   </p>
                   <h2 className="mt-2 text-xl font-semibold tracking-[-0.02em] text-[#1f1b23]">
-                    Inspect the draft from three angles
+                    {session?.config ? 'Review and validate' : 'Waiting for first draft'}
                   </h2>
                   <p className="mt-2 max-w-xl text-sm leading-6 text-[#625967]">
-                    Summary keeps the draft readable, Config keeps it trustworthy, and Preview
-                    validates the behavior against the same builder session.
+                    {session?.config
+                      ? 'Check the Summary for an overview, Config for the raw definition, and Preview to test behavior.'
+                      : 'Send your first message to generate a draft. It will appear here for inspection.'}
                   </p>
                 </div>
 
@@ -592,11 +680,12 @@ export function AgentImprover() {
                     <button
                       type="button"
                       onClick={() => void handleSaveDraft()}
-                      disabled={busy}
+                      disabled={busy || Boolean(saveResult)}
+                      aria-keyshortcuts={isMac() ? 'Meta+S' : 'Control+S'}
                       className="inline-flex items-center gap-2 rounded-full border border-[#ded5db] bg-white px-3.5 py-2 text-sm font-medium text-[#4d4550] transition hover:bg-[#faf7f8] disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       <CheckCircle2 className="h-4 w-4" />
-                      {savePending ? 'Saving...' : 'Save draft'}
+                      {savePending ? 'Saving...' : saveResult ? 'Saved' : 'Save draft'}
                     </button>
                   ) : null}
                   <button
@@ -611,16 +700,18 @@ export function AgentImprover() {
                 </div>
               </div>
 
-              <div className="mt-4 inline-flex rounded-full border border-[#e5dbe0] bg-[#f8f4f6] p-1">
+              <div className="mt-4 inline-flex rounded-full border border-[#e5dbe0] bg-[#f8f4f6] p-1" role="tablist" aria-label="Inspector views">
                 {INSPECTOR_MODES.map((mode) => (
                   <button
                     key={mode.id}
                     type="button"
                     role="tab"
+                    id={`tab-${mode.id}`}
                     aria-selected={inspectorMode === mode.id}
+                    aria-controls={`panel-${mode.id}`}
                     onClick={() => setInspectorMode(mode.id)}
                     className={classNames(
-                      'rounded-full px-4 py-2 text-sm font-medium transition',
+                      'rounded-full px-4 py-2 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-[#d4c4cc] focus:ring-offset-1',
                       inspectorMode === mode.id
                         ? 'bg-white text-[#1f1b23] shadow-sm'
                         : 'text-[#7f747f] hover:text-[#3a333d]'
@@ -632,7 +723,12 @@ export function AgentImprover() {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto px-5 py-5">
+            <div
+              className="flex-1 overflow-y-auto px-5 py-5"
+              role="tabpanel"
+              id={`panel-${inspectorMode}`}
+              aria-labelledby={`tab-${inspectorMode}`}
+            >
               {inspectorMode === 'summary' ? (
                 <SummaryMode
                   session={session}
@@ -665,17 +761,18 @@ export function AgentImprover() {
 
             <div className="border-t border-[#ede4e8] bg-[#fffaf7] px-5 py-4">
               {saveResult ? (
-                <InlineNotice tone="success" title="Saved to workspace">
-                  {saveResult.config_path}
+                <InlineNotice tone="success" title="Draft saved">
+                  Saved to {saveResult.config_path}. You can now continue to eval or keep refining.
                 </InlineNotice>
               ) : session?.mock_mode && session.mock_reason ? (
-                <InlineNotice tone="warning" title="Preview mode">
-                  {session.mock_reason}
+                <InlineNotice tone="warning" title="Running in fallback mode">
+                  {session.mock_reason}. Results may not reflect production behavior.
                 </InlineNotice>
               ) : (
                 <p className="text-xs leading-5 text-[#847986]">
-                  Save the draft when the summary feels right, the config looks trustworthy, and the
-                  preview behavior matches the intent.
+                  {session?.session_id
+                    ? 'Review the draft, then save when you\'re satisfied. Use Preview to test behavior first.'
+                    : 'Your draft will appear here after your first message.'}
                 </p>
               )}
             </div>
@@ -1018,6 +1115,33 @@ function SummaryPill({ label }: { label: string }) {
   );
 }
 
+function DismissibleError({
+  message,
+  onDismiss,
+}: {
+  message: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="rounded-[22px] border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900" role="alert">
+      <div className="flex items-start justify-between gap-2">
+        <div>
+          <p className="font-semibold">Something went wrong</p>
+          <p className="mt-1 leading-6">{message}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="flex-shrink-0 rounded-full p-1 text-rose-600 transition hover:bg-rose-100"
+          aria-label="Dismiss error"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function InlineNotice({
   tone,
   title,
@@ -1035,7 +1159,7 @@ function InlineNotice({
         : 'border-rose-200 bg-rose-50 text-rose-900';
 
   return (
-    <div className={classNames('rounded-[22px] border px-4 py-3 text-sm', toneClasses)}>
+    <div className={classNames('rounded-[22px] border px-4 py-3 text-sm', toneClasses)} role={tone === 'error' ? 'alert' : 'status'}>
       <p className="font-semibold">{title}</p>
       <div className="mt-1 leading-6">{children}</div>
     </div>
@@ -1224,4 +1348,8 @@ function clearStoredSessionId(): void {
   } catch {
     // Ignore storage availability failures.
   }
+}
+
+function isMac(): boolean {
+  return typeof navigator !== 'undefined' && /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
 }

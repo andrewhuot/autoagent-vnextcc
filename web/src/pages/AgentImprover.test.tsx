@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToastViewport } from '../components/ToastViewport';
 import { AgentImprover } from './AgentImprover';
@@ -293,5 +293,200 @@ describe('AgentImprover', () => {
     expect(await screen.findByText(/attach the last two customer actions/i)).toBeInTheDocument();
     expect(screen.getByText('Live preview')).toBeInTheDocument();
     expect(screen.getByText('Tool: ticket_lookup')).toBeInTheDocument();
+  });
+
+  // --- New tests for UX hardening ---
+
+  it('has proper tablist and tabpanel ARIA roles', () => {
+    renderPage();
+
+    expect(screen.getByRole('tablist', { name: 'Inspector views' })).toBeInTheDocument();
+    const summaryTab = screen.getByRole('tab', { name: 'Summary' });
+    expect(summaryTab).toHaveAttribute('aria-controls', 'panel-summary');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'panel-summary');
+  });
+
+  it('shows step progression with accessibility labels', () => {
+    renderPage();
+
+    const nav = screen.getByRole('navigation', { name: 'Improvement progress' });
+    expect(nav).toBeInTheDocument();
+    expect(within(nav).getByText('Brief').closest('span[aria-current="step"]')).toBeInTheDocument();
+  });
+
+  it('hides example buttons after a session is established', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    expect(screen.getByText('Try an example')).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.queryByText('Try an example')).not.toBeInTheDocument();
+  });
+
+  it('shows New session button after session is created', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    expect(screen.queryByRole('button', { name: 'Start a new session' })).not.toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByRole('button', { name: 'Start a new session' })).toBeInTheDocument();
+  });
+
+  it('shows reset confirmation dialog when New session clicked with unsaved work', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+
+    expect(screen.getByRole('dialog', { name: 'Confirm reset' })).toBeInTheDocument();
+    expect(screen.getByText('Start over?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep working' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard and reset' })).toBeInTheDocument();
+  });
+
+  it('dismisses reset dialog when Keep working is clicked', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+    await user.click(screen.getByRole('button', { name: 'Keep working' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('Escalation Concierge')).toBeInTheDocument();
+  });
+
+  it('resets session when Discard and reset is clicked', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+    await user.click(screen.getByRole('button', { name: 'Discard and reset' }));
+
+    expect(screen.queryByText('Escalation Concierge')).not.toBeInTheDocument();
+    expect(screen.getByText('Fresh session')).toBeInTheDocument();
+    expect(screen.getByText('No draft yet')).toBeInTheDocument();
+  });
+
+  it('allows dismissing error messages', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/builder/chat') {
+        return new Response('Service unavailable', { status: 503 });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const textarea = screen.getByPlaceholderText('Describe how the draft should improve next...');
+    await user.type(textarea, 'Test');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    // Wait for the async error to propagate and find by text instead
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss error' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+    });
+  });
+
+  it('labels user messages as "You" instead of "Request"', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByText('You')).toBeInTheDocument();
+  });
+
+  it('shows keyboard shortcut hints in the composer', () => {
+    renderPage();
+
+    expect(screen.getByText(/Press Enter to send/)).toBeInTheDocument();
+  });
+
+  it('shows conversation area with log role for screen readers', () => {
+    renderPage();
+
+    expect(screen.getByRole('log', { name: 'Conversation history' })).toBeInTheDocument();
+  });
+
+  it('shows clearer copy for first-run state vs active session state', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    // First-run copy
+    expect(screen.getByText('Start with an improvement')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for first draft')).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+
+    // Active session copy
+    expect(screen.getByText('Refine your agent')).toBeInTheDocument();
+    expect(screen.getByText('Review and validate')).toBeInTheDocument();
   });
 });
