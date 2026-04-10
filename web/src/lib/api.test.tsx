@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  humanizeHttpStatus,
   useApplyCurriculum,
   useCurriculumBatches,
   useGenerateCurriculum,
@@ -256,5 +257,37 @@ describe('eval API hooks', () => {
     await user.click(screen.getByRole('button', { name: 'Apply curriculum' }));
 
     expect(await screen.findByText('curriculum_live_001:12')).toBeInTheDocument();
+  });
+});
+
+describe('humanizeHttpStatus', () => {
+  it('returns auth guidance for 401', () => {
+    expect(humanizeHttpStatus(401)).toContain('Authentication');
+  });
+
+  it('returns auth guidance for 403', () => {
+    expect(humanizeHttpStatus(403)).toContain('Authentication');
+  });
+
+  it('returns not-found message for 404', () => {
+    expect(humanizeHttpStatus(404)).toContain('not found');
+  });
+
+  it('returns timeout message for 408', () => {
+    expect(humanizeHttpStatus(408)).toContain('timed out');
+  });
+
+  it('returns rate-limit message for 429', () => {
+    expect(humanizeHttpStatus(429)).toContain('Rate limited');
+  });
+
+  it('returns server-unavailable message for 500-range', () => {
+    expect(humanizeHttpStatus(500)).toContain('temporarily unavailable');
+    expect(humanizeHttpStatus(502)).toContain('temporarily unavailable');
+    expect(humanizeHttpStatus(503)).toContain('temporarily unavailable');
+  });
+
+  it('returns generic fallback for unknown codes', () => {
+    expect(humanizeHttpStatus(418)).toContain('Something went wrong');
   });
 });

@@ -1931,12 +1931,35 @@ function BuildDetailsFields({
   );
 }
 
-function errorStatusFromMessage(message: string): number | null {
-  if (/429|rate.limit/i.test(message)) return 429;
-  if (/503|service unavailable/i.test(message)) return 503;
-  if (/timeout|timed out/i.test(message)) return 408;
-  return null;
+type ErrorCategory = 'rate-limit' | 'transient' | 'offline' | 'generic';
+
+function categorizeError(message: string): ErrorCategory {
+  if (/429|rate.limit/i.test(message)) return 'rate-limit';
+  if (/503|service unavailable/i.test(message)) return 'transient';
+  if (/timeout|timed out/i.test(message)) return 'transient';
+  if (/server is temporarily unavailable/i.test(message)) return 'transient';
+  if (/Failed to fetch|network|ERR_CONNECTION|ECONNREFUSED/i.test(message)) return 'offline';
+  return 'generic';
 }
+
+const ERROR_GUIDANCE: Record<ErrorCategory, { title: string; guidance: string }> = {
+  'rate-limit': {
+    title: 'Rate limited',
+    guidance: 'The provider is rate-limiting requests. Wait a moment, then try again.',
+  },
+  transient: {
+    title: 'Temporarily unavailable',
+    guidance: 'This looks like a temporary issue. Retrying usually resolves it.',
+  },
+  offline: {
+    title: 'Cannot reach backend',
+    guidance: 'The server is not responding. Check that the backend is running, then retry.',
+  },
+  generic: {
+    title: 'Something went wrong',
+    guidance: 'Check your input and try again, or visit Setup to verify your provider keys.',
+  },
+};
 
 function ErrorRecoveryBanner({
   error,
@@ -1947,22 +1970,16 @@ function ErrorRecoveryBanner({
   onRetry?: () => void;
   onDismiss?: () => void;
 }) {
-  const inferredStatus = errorStatusFromMessage(error);
-  const isRateLimit = inferredStatus === 429;
-  const isTransient = isRateLimit || inferredStatus === 503 || inferredStatus === 408;
-
-  const guidance = isRateLimit
-    ? 'The provider is rate-limiting requests. Wait a moment, then try again.'
-    : isTransient
-      ? 'This looks like a temporary issue. Retrying usually resolves it.'
-      : 'Check your input and try again, or visit Setup to verify your provider keys.';
+  const category = categorizeError(error);
+  const isCalm = category === 'rate-limit' || category === 'transient' || category === 'offline';
+  const { title, guidance } = ERROR_GUIDANCE[category];
 
   return (
     <div
       data-testid="error-recovery-banner"
       className={classNames(
         'rounded-2xl border px-4 py-3 text-sm',
-        isRateLimit
+        isCalm
           ? 'border-amber-200 bg-amber-50 text-amber-900'
           : 'border-rose-200 bg-rose-50 text-rose-700'
       )}
@@ -1971,8 +1988,8 @@ function ErrorRecoveryBanner({
         <div className="flex items-start gap-2 min-w-0">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <div className="min-w-0">
-            <p className="font-medium">{isRateLimit ? 'Rate limited' : 'Something went wrong'}</p>
-            <p className="mt-1">{error}</p>
+            <p className="font-medium">{title}</p>
+            <p className="mt-1 text-xs break-words">{error}</p>
             <p className="mt-1 text-xs opacity-80">{guidance}</p>
           </div>
         </div>
@@ -1994,7 +2011,7 @@ function ErrorRecoveryBanner({
           onClick={onRetry}
           className={classNames(
             'mt-3 inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-semibold transition',
-            isRateLimit
+            isCalm
               ? 'border border-amber-300 bg-white text-amber-900 hover:bg-amber-50'
               : 'border border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
           )}
@@ -2527,8 +2544,8 @@ function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
     prompt: {
       hint: 'Describe your agent',
       description:
-        'Start with the smallest possible brief. You can add structure later during refinement if the first draft needs it.',
-      nextStep: 'Generate the draft, then refine it conversationally before saving.',
+        'Start with one sentence. You can add structure after the first draft appears.',
+      nextStep: 'Generate one draft, run eval on that saved draft, then optimize only if the eval exposes a real gap.',
     },
     transcript: {
       hint: 'Upload transcripts',
@@ -2565,8 +2582,17 @@ function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
           </div>
         </div>
         <div className="rounded-2xl border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">What to do next</p>
-          <p className="mt-2 max-w-sm leading-relaxed">{guidance.nextStep}</p>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+            {activeTab === 'prompt' ? 'Recommended path' : 'What to do next'}
+          </p>
+          {activeTab === 'prompt' ? (
+            <p className="mt-2 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              Build -&gt; Eval -&gt; Optimize -&gt; Ship
+            </p>
+          ) : null}
+          <p className={classNames('max-w-sm leading-relaxed', activeTab === 'prompt' ? 'mt-1.5' : 'mt-2')}>
+            {guidance.nextStep}
+          </p>
         </div>
       </div>
     </section>
@@ -2591,7 +2617,7 @@ function BuildTabPanel({
 
 function BuilderWorkflowChecklist() {
   const steps = [
-    'Describe the agent: what it does, must-have tools, policies, or routing.',
+    'Start with one sentence. You can add tools, policies, or constraints after the first draft appears.',
     'Test the draft on the right with a realistic message.',
     'Save & Run Eval to carry the config straight into evaluation.',
   ];

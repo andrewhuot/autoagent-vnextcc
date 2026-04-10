@@ -86,9 +86,9 @@ async function fetchBuilderApi<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (!response.ok) {
-    const message = await response.text();
+    const text = await response.text().catch(() => '');
     throw new BuilderApiError(
-      message || `Builder request failed: ${response.status}`,
+      (text && text.trim()) ? text : `The server is temporarily unavailable. Retrying usually resolves this.`,
       response.status,
     );
   }

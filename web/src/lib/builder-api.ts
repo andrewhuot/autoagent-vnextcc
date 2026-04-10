@@ -41,13 +41,16 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    const fallback = `Request failed with ${response.status}`;
+    const fallback = response.status >= 500
+      ? 'The server is temporarily unavailable. Retrying usually resolves this.'
+      : 'Something went wrong with the request. Try again or check Setup.';
     let message = fallback;
     try {
       const payload = (await response.json()) as { detail?: string; message?: string };
       message = payload.detail || payload.message || fallback;
     } catch {
-      message = (await response.text()) || fallback;
+      const text = await response.text().catch(() => '');
+      message = (text && text.trim()) ? text : fallback;
     }
     throw new BuilderApiError(response.status, message);
   }

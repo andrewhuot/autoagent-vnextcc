@@ -245,8 +245,8 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
   await page.goto(`${BASE_URL}/builder`, { waitUntil: 'networkidle' });
   await expect(page).toHaveURL(`${BASE_URL}/build?tab=builder-chat`);
   await expect(page.getByRole('heading', { name: 'Builder' }).nth(0)).toBeVisible();
-  await expect(page.getByText('Demo Journey')).toBeVisible();
-  await expect(page.getByText('How this builder demo works')).toBeVisible();
+  await expect(page.getByText('Journey')).toBeVisible();
+  await expect(page.getByText('How it works')).toBeVisible();
 
   await page.getByTestId('builder-composer').fill(
     'Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status'

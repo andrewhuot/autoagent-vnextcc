@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
-const BANNER_TEXT = 'Running in mock mode — add API keys for live optimization';
+const BANNER_TEXT = 'Preview mode is on';
+const BANNER_DETAIL = 'AgentLab is using simulated responses until live providers are ready.';
 
 async function stubMockModeApis(
   page: Page,
@@ -98,6 +99,16 @@ async function stubMockModeApis(
       return;
     }
 
+    if (path === '/api/evals/generated') {
+      await route.fulfill({
+        json: {
+          suites: [],
+          count: 0,
+        },
+      });
+      return;
+    }
+
     if (path === '/api/curriculum/batches') {
       await route.fulfill({
         json: {
@@ -162,6 +173,7 @@ test.describe('Mock Mode Banner', () => {
     for (const route of ['/dashboard', '/evals', '/optimize', '/live-optimize', '/experiments']) {
       await page.goto(`${BASE_URL}${route}`, { waitUntil: 'networkidle' });
       await expect(page.getByText(BANNER_TEXT)).toBeVisible();
+      await expect(page.getByText(BANNER_DETAIL)).toBeVisible();
     }
   });
 
@@ -185,5 +197,32 @@ test.describe('Mock Mode Banner', () => {
 
     await page.goto(`${BASE_URL}/experiments`, { waitUntil: 'networkidle' });
     await expect(page.getByText(BANNER_TEXT)).toHaveCount(0);
+  });
+
+  test('shows a frontend-only recovery banner when the backend health check fails', async ({ page }) => {
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+
+      if (path === '/api/health') {
+        await route.abort('failed');
+        return;
+      }
+
+      if (path === '/api/demo/status') {
+        await route.fulfill({ json: { has_demo_data: false } });
+        return;
+      }
+
+      await route.fulfill({ json: {} });
+    });
+
+    await page.goto(`${BASE_URL}/build`, { waitUntil: 'networkidle' });
+
+    await expect(page.getByText('Frontend-only mode')).toBeVisible();
+    await expect(
+      page.getByText('AgentLab cannot reach the backend right now, so live status and saved actions may be unavailable.')
+    ).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Retry connection' })).toBeVisible();
   });
 });

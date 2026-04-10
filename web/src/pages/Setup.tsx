@@ -218,9 +218,55 @@ export function Setup() {
           title="Setup"
           description="Connect your providers and get ready to build."
         />
-        <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          Unable to load setup status right now.
-        </div>
+        <section className="rounded-[28px] border border-amber-200 bg-[linear-gradient(180deg,rgba(255,251,235,0.95),rgba(255,255,255,1))] px-5 py-5 shadow-sm shadow-amber-100/80">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div className="min-w-0">
+              <span className="inline-flex rounded-full border border-amber-300 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-800">
+                Frontend-only mode
+              </span>
+              <h3 className="mt-3 text-lg font-semibold text-slate-900">Setup is waiting for the AgentLab backend</h3>
+              <p className="mt-2 max-w-3xl text-sm leading-relaxed text-slate-700">
+                You can still draft in Build while the backend reconnects, then return here for live checks and provider setup.
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="rounded-xl border border-amber-300 bg-white px-4 py-2.5 text-sm font-semibold text-amber-900 transition hover:bg-amber-50"
+              >
+                Retry Setup
+              </button>
+              <Link
+                to="/build"
+                className="rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+              >
+                Open Build
+              </Link>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-3 lg:grid-cols-[1.1fr_0.9fr]">
+            <div className="rounded-2xl border border-amber-200 bg-white/90 px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">Recovery plan</p>
+              <div className="mt-3 space-y-2 text-sm leading-6 text-slate-700">
+                <p>1. Start or restart the backend so Setup can reload workspace and provider status.</p>
+                <p>2. Keep moving in Build if you want to shape the first draft before live services return.</p>
+                <p>3. Come back here to validate keys, switch modes, and unlock live checks.</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-white/90 px-4 py-4">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Helpful command</p>
+              <code className="mt-3 block rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-sm text-slate-700">
+                agentlab server
+              </code>
+              <p className="mt-3 text-sm leading-6 text-slate-600">
+                Once the backend responds again, reload this page and continue with provider setup.
+              </p>
+            </div>
+          </div>
+        </section>
       </div>
     );
   }

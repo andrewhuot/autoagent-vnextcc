@@ -18,7 +18,7 @@ describe('MockModeBanner', () => {
     vi.unstubAllGlobals();
   });
 
-  it('shows an Exit Mock Mode link to setup when the app reports mock mode', async () => {
+  it('shows an Open Setup link when the app reports mock mode', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -34,9 +34,12 @@ describe('MockModeBanner', () => {
     renderBanner();
 
     expect(await screen.findByRole('alert')).toBeInTheDocument();
-    expect(screen.getByText('Running in mock mode — add API keys for live optimization')).toBeInTheDocument();
+    expect(screen.getByText('Preview mode is on')).toBeInTheDocument();
+    expect(
+      screen.getByText('AgentLab is using simulated responses until live providers are ready.')
+    ).toBeInTheDocument();
 
-    const exitLink = screen.getByRole('link', { name: 'Exit Mock Mode' });
+    const exitLink = screen.getByRole('link', { name: 'Open Setup' });
     expect(exitLink).toHaveAttribute('href', '/setup');
   });
 
@@ -132,6 +135,47 @@ describe('MockModeBanner', () => {
     );
 
     renderBanner();
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows a frontend-only banner when the backend health endpoint is unavailable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('backend offline')));
+
+    renderBanner('/build');
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Frontend-only mode')).toBeInTheDocument();
+    expect(
+      screen.getByText('AgentLab cannot reach the backend right now, so live status and saved actions may be unavailable.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry connection' })).toBeInTheDocument();
+  });
+
+  it('transitions from frontend-only to hidden when retry succeeds', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          mock_mode: false,
+          mock_reasons: [],
+          real_provider_configured: true,
+        }),
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBanner('/build');
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Frontend-only mode')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry connection' }));
 
     await waitFor(() => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();

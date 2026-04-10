@@ -45,6 +45,7 @@ import { Improvements } from './pages/Improvements';
 import { Connect } from './pages/Connect';
 import { CliLauncher } from './pages/CliLauncher';
 import { Docs } from './pages/Docs';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { getRouteRedirect } from './lib/navigation';
 
 const queryClient = new QueryClient({
@@ -65,6 +66,7 @@ function LegacyRouteRedirect() {
 
 export default function App() {
   return (
+    <ErrorBoundary>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Layout>
@@ -135,5 +137,6 @@ export default function App() {
         </Layout>
       </BrowserRouter>
     </QueryClientProvider>
+    </ErrorBoundary>
   );
 }

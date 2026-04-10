@@ -185,4 +185,23 @@ describe('Setup', () => {
     expect(setMode).not.toHaveBeenCalled();
     expect(screen.getByText('Add an API key above to enable live mode')).toBeInTheDocument();
   });
+
+  it('shows a calm frontend-only recovery plan when setup status cannot be loaded', () => {
+    apiMocks.useSetupOverview.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+      isError: true,
+    });
+
+    renderPage();
+
+    expect(screen.getByText('Frontend-only mode')).toBeInTheDocument();
+    expect(screen.getByText('Setup is waiting for the AgentLab backend')).toBeInTheDocument();
+    expect(
+      screen.getByText('You can still draft in Build while the backend reconnects, then return here for live checks and provider setup.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry Setup' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Build' })).toHaveAttribute('href', '/build');
+    expect(screen.getByText('agentlab server')).toBeInTheDocument();
+  });
 });

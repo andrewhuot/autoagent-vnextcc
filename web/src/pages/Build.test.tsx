@@ -201,6 +201,16 @@ describe('Build', () => {
     expect(screen.getByRole('button', { name: /XML Instruction Studio/i })).toHaveAttribute('aria-expanded', 'false');
   });
 
+  it('surfaces a single recommended core loop on the default build path', () => {
+    renderPage();
+
+    expect(screen.getByText('Recommended path')).toBeInTheDocument();
+    expect(screen.getByText('Build -> Eval -> Optimize -> Ship')).toBeInTheDocument();
+    expect(
+      screen.getByText('Start with one sentence. You can add structure after the first draft appears.')
+    ).toBeInTheDocument();
+  });
+
   it('switches to the builder chat workspace without losing the builder controls', async () => {
     const user = userEvent.setup();
     renderPage();

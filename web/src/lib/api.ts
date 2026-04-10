@@ -118,6 +118,32 @@ export class ApiRequestError extends Error {
 
 type RequestOptions = RequestInit;
 
+/**
+ * Convert a raw HTTP status code into a short, human-friendly description.
+ * Used as a last-resort fallback so users never see "Request failed: 502".
+ */
+export function humanizeHttpStatus(status: number): string {
+  if (status === 401 || status === 403) return 'Authentication required — check your API keys in Setup.';
+  if (status === 404) return 'The requested resource was not found.';
+  if (status === 408) return 'The request timed out. Try again in a moment.';
+  if (status === 429) return 'Rate limited — wait a moment, then try again.';
+  if (status >= 500 && status < 600) return 'The server is temporarily unavailable. Retrying usually resolves this.';
+  return 'Something went wrong with the request. Try again or check Setup.';
+}
+
+/**
+ * Extract a user-friendly error message from an API error response.
+ * Avoids leaking raw JSON payloads or cryptic status codes to the UI.
+ */
+function extractErrorMessage(payload: unknown, status: number): string {
+  if (payload && typeof payload === 'object') {
+    const p = payload as Record<string, unknown>;
+    if (typeof p.detail === 'string' && p.detail.trim()) return p.detail;
+    if (typeof p.message === 'string' && p.message.trim()) return p.message;
+  }
+  return humanizeHttpStatus(status);
+}
+
 async function fetchApi<T>(path: string, options?: RequestOptions): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -128,13 +154,15 @@ async function fetchApi<T>(path: string, options?: RequestOptions): Promise<T> {
   });
 
   if (!response.ok) {
-    let errorMessage = `Request failed: ${response.status}`;
+    let errorMessage = humanizeHttpStatus(response.status);
     try {
       const payload = await response.json();
-      errorMessage = payload?.detail || payload?.message || JSON.stringify(payload);
+      errorMessage = extractErrorMessage(payload, response.status);
     } catch {
-      const text = await response.text().catch(() => 'Unknown error');
-      errorMessage = text || errorMessage;
+      const text = await response.text().catch(() => '');
+      if (text && text.trim()) {
+        errorMessage = text;
+      }
     }
     throw new ApiRequestError(errorMessage, response.status);
   }
@@ -155,13 +183,15 @@ async function fetchApiText(path: string, options?: RequestOptions): Promise<str
   });
 
   if (!response.ok) {
-    let errorMessage = `Request failed: ${response.status}`;
+    let errorMessage = humanizeHttpStatus(response.status);
     try {
       const payload = await response.json();
-      errorMessage = payload?.detail || payload?.message || JSON.stringify(payload);
+      errorMessage = extractErrorMessage(payload, response.status);
     } catch {
-      const text = await response.text().catch(() => 'Unknown error');
-      errorMessage = text || errorMessage;
+      const text = await response.text().catch(() => '');
+      if (text && text.trim()) {
+        errorMessage = text;
+      }
     }
     throw new ApiRequestError(errorMessage, response.status);
   }
