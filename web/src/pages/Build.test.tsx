@@ -186,16 +186,15 @@ describe('Build', () => {
     renderPage();
 
     expect(screen.getByRole('heading', { name: 'Build' })).toBeInTheDocument();
-    expect(screen.getByText('Choose the workspace that fits this demo.')).toBeInTheDocument();
+    expect(screen.getByText('Describe your agent')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Prompt' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByRole('tab', { name: 'Transcript' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Builder Chat' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Saved Artifacts' })).toBeInTheDocument();
     expect(screen.getByLabelText('Agent description')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'XML Instruction Studio' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Form View' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByLabelText('Instruction role')).toBeInTheDocument();
-    expect(screen.getByLabelText('Primary goal')).toBeInTheDocument();
+    // XML studio is collapsed by default — form fields hidden until expanded
+    expect(screen.getByRole('button', { name: /XML Instruction Studio/i })).toHaveAttribute('aria-expanded', 'false');
   });
 
   it('switches to the builder chat workspace without losing the builder controls', async () => {
@@ -207,11 +206,11 @@ describe('Build', () => {
     expect(screen.getByRole('heading', { name: 'Builder' })).toBeInTheDocument();
     expect(
       screen.getByText(
-        /describe the agent you want to build, preview the runtime behavior, and carry the saved draft straight into evals/i
+        /describe what you need in plain language/i
       )
     ).toBeInTheDocument();
     expect(screen.getByText('Conversational Builder')).toBeInTheDocument();
-    expect(screen.getByText('How this builder demo works')).toBeInTheDocument();
+    expect(screen.getByText('How it works')).toBeInTheDocument();
     expect(screen.getByTestId('builder-composer')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
@@ -302,6 +301,8 @@ describe('Build', () => {
     const user = userEvent.setup();
     renderPage();
 
+    // Expand the collapsed instruction studio first
+    await user.click(screen.getByRole('button', { name: /XML Instruction Studio/i }));
     await user.click(screen.getByRole('button', { name: 'Form View' }));
 
     expect(screen.getByRole('button', { name: 'Form View' })).toHaveAttribute('aria-pressed', 'true');
@@ -313,6 +314,8 @@ describe('Build', () => {
     const user = userEvent.setup();
     renderPage();
 
+    // Expand the collapsed instruction studio first
+    await user.click(screen.getByRole('button', { name: /XML Instruction Studio/i }));
     await user.click(screen.getByRole('button', { name: 'Raw XML' }));
 
     const editor = screen.getByLabelText('XML instruction editor');
@@ -326,6 +329,8 @@ describe('Build', () => {
     const user = userEvent.setup();
     renderPage();
 
+    // Expand the collapsed instruction studio first
+    await user.click(screen.getByRole('button', { name: /XML Instruction Studio/i }));
     await user.click(screen.getByRole('button', { name: 'Raw XML' }));
     await user.click(screen.getByRole('button', { name: 'Weather Routing Guide' }));
 
@@ -424,6 +429,8 @@ describe('Build', () => {
 
     renderPage();
 
+    // Expand the collapsed instruction studio first
+    await user.click(screen.getByRole('button', { name: /XML Instruction Studio/i }));
     await user.click(screen.getByRole('button', { name: 'Raw XML' }));
     const editor = screen.getByLabelText('XML instruction editor');
     await user.type(editor, '\n<!-- custom-prd-marker -->');

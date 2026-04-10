@@ -117,10 +117,9 @@ const REFINEMENT_EXAMPLES = [
 ];
 
 const BUILDER_PROMPTS = [
-  'Build me a customer support agent for an airline that handles booking changes, cancellations, and flight status',
-  'Add a tool for checking flight status',
+  'Build an airline support agent for bookings and cancellations',
+  'Add a flight status tool',
   'Make it more empathetic',
-  'Add a policy that it should never reveal internal codes',
 ];
 
 const DEFAULT_INSTRUCTION_FORM: InstructionFormState = {
@@ -575,7 +574,7 @@ export function BuilderChatWorkspace({
               <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
                 <p className="font-medium">Preview mode</p>
                 <p className="mt-1" data-testid="builder-preview-notice">
-                  Responses and actions are simulated in this build. Use Setup to configure live providers for production-like results.
+                  Responses are simulated. Add an API key in Setup to use live providers.
                 </p>
               </div>
             ) : null}
@@ -632,8 +631,8 @@ export function BuilderChatWorkspace({
                 value={composer}
                 onChange={(event) => setComposer(event.target.value)}
                 placeholder="Describe the agent you want to build..."
-                rows={4}
-                className="min-h-[112px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-400"
+                rows={3}
+                className="min-h-[80px] w-full resize-none bg-transparent px-2 py-2 text-sm leading-6 text-gray-900 outline-none placeholder:text-gray-400"
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey) {
                     event.preventDefault();
@@ -1314,9 +1313,9 @@ export function StudioWorkspace({
             aria-label="Agent description"
             value={prompt}
             onChange={(event) => setPrompt(event.target.value)}
-            rows={7}
+            rows={5}
             placeholder="Describe the agent you want to build..."
-            className="min-h-[220px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
+            className="min-h-[140px] w-full rounded-2xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm leading-relaxed text-gray-900 outline-none transition focus:border-sky-400 focus:bg-white focus:ring-4 focus:ring-sky-100"
           />
 
           <div className="space-y-3">
@@ -1355,7 +1354,7 @@ export function StudioWorkspace({
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-sm text-gray-500">
-              Start with the job, channels, policies, and any must-have tools or routing rules. The validated XML draft is included when you generate the agent.
+              Describe what the agent should do. If you customized the XML above, it will be included automatically.
             </div>
             <button
               type="button"
@@ -1998,6 +1997,7 @@ function InstructionStudio({
 }) {
   const parsed = parseInstructionXmlDraft(xml);
   const [formState, setFormState] = useState<InstructionFormState>(parsed.form);
+  const [expanded, setExpanded] = useState(false);
 
   useEffect(() => {
     if (parsed.valid) {
@@ -2030,19 +2030,32 @@ function InstructionStudio({
 
   return (
     <section className="overflow-hidden rounded-[28px] border border-amber-200 bg-[linear-gradient(180deg,rgba(255,251,235,0.96),rgba(255,255,255,1))] shadow-sm shadow-amber-100/60">
-      <div className="border-b border-amber-200 px-6 py-5">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <div className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
-              <Code2 className="h-3.5 w-3.5" />
-              Google XML Default
-            </div>
-            <h3 className="mt-3 text-lg font-semibold text-gray-900">XML Instruction Studio</h3>
-            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-gray-600">
-              Draft the default instruction in the recommended XML shape, switch between raw and form editing, and borrow starter snippets from the guide without leaving the page.
-            </p>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between gap-4 px-6 py-4 text-left transition hover:bg-amber-50/40"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-amber-700">
+            <Code2 className="h-3.5 w-3.5" />
+            Optional
           </div>
+          <div className="min-w-0">
+            <h3 className="text-base font-semibold text-gray-900">XML Instruction Studio</h3>
+            <p className="mt-0.5 text-sm text-gray-500">Customize the structured instruction before generating.</p>
+          </div>
+        </div>
+        <ArrowRight className={classNames('h-4 w-4 shrink-0 text-gray-400 transition', expanded && 'rotate-90')} />
+      </button>
 
+      {expanded && (
+        <>
+      <div className="border-t border-amber-200 px-6 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <p className="text-sm text-gray-600">
+            Draft the instruction in XML, switch between raw and form editing, or use a starter snippet.
+          </p>
           <div className="inline-flex rounded-2xl border border-gray-200 bg-white p-1 shadow-sm">
             <button
               type="button"
@@ -2235,6 +2248,8 @@ function InstructionStudio({
           </div>
         )}
       </div>
+        </>
+      )}
     </section>
   );
 }
@@ -2283,36 +2298,36 @@ function BuildTabBar({
 }
 
 function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
-  const tabLabels: Record<BuildTab, string> = {
-    prompt: 'Prompt draft',
-    transcript: 'Transcript draft',
-    'builder-chat': 'Builder chat draft',
-    'saved-artifacts': 'Saved artifacts',
+  const tabGuidance: Record<BuildTab, { hint: string; description: string }> = {
+    prompt: {
+      hint: 'Describe your agent',
+      description: 'Write a prompt, optionally customize the instruction XML, then generate. You can refine conversationally before saving.',
+    },
+    transcript: {
+      hint: 'Upload transcripts',
+      description: 'Upload real conversation files and AgentLab will extract intents, patterns, and FAQ signals to seed your agent config.',
+    },
+    'builder-chat': {
+      hint: 'Chat to build',
+      description: 'Describe what you need in plain language. The builder drafts the config as you go and keeps the preview in sync.',
+    },
+    'saved-artifacts': {
+      hint: 'Browse saved work',
+      description: 'Return to previously saved drafts, transcript reports, and exported configs.',
+    },
   };
 
-  return (
-    <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] px-5 py-5 shadow-sm shadow-sky-100/60">
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
-              Step 1 of 3
-            </span>
-            <span className="text-xs font-medium text-gray-500">Current workspace: {tabLabels[activeTab]}</span>
-          </div>
-          <h3 className="mt-3 text-lg font-semibold text-gray-900">Choose the workspace that fits this demo.</h3>
-          <p className="mt-1 max-w-3xl text-sm leading-relaxed text-gray-600">
-            Prompt, transcript, and builder chat all end at the same handoff: save the draft once,
-            then open Eval Runs with that exact config already selected.
-          </p>
-        </div>
+  const guidance = tabGuidance[activeTab];
 
-        <div className="rounded-2xl border border-white bg-white/90 px-4 py-4 shadow-sm">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-400">Next action</p>
-          <p className="mt-2 text-sm font-semibold text-gray-900">Save &amp; Run Eval</p>
-          <p className="mt-1 max-w-xs text-sm text-gray-600">
-            Use it when the draft looks right and AgentLab will carry the saved config straight into Eval Runs.
-          </p>
+  return (
+    <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] px-5 py-4 shadow-sm shadow-sky-100/60">
+      <div className="flex items-start gap-3">
+        <span className="mt-0.5 inline-flex rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
+          Tip
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-gray-900">{guidance.hint}</p>
+          <p className="mt-1 text-sm leading-relaxed text-gray-600">{guidance.description}</p>
         </div>
       </div>
     </section>
@@ -2337,15 +2352,15 @@ function BuildTabPanel({
 
 function BuilderWorkflowChecklist() {
   const steps = [
-    'Describe the job to be done and any must-have tools, policies, or routing.',
-    'Test the latest draft on the right with a realistic customer message.',
-    'Use Save & Run Eval to carry the same saved draft into Eval Runs.',
+    'Describe the agent: what it does, must-have tools, policies, or routing.',
+    'Test the draft on the right with a realistic message.',
+    'Save & Run Eval to carry the config straight into evaluation.',
   ];
 
   return (
     <div className="rounded-3xl border border-dashed border-sky-200 bg-sky-50/60 px-4 py-4">
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-        How this builder demo works
+        How it works
       </p>
       <div className="mt-3 space-y-3">
         {steps.map((step, index) => (

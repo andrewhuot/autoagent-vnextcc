@@ -240,7 +240,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
 
 const DEFAULT_BUILD_WORKSPACE_CONTEXT: BuildWorkspaceContext = {
   title: 'Build',
-  description: 'Start from a prompt, transcript, or builder chat and keep every draft and artifact in one workspace.',
+  description: 'Create an agent from a prompt, transcript, or conversation and refine it until it\'s ready to evaluate.',
 };
 
 export function getBuildWorkspaceContext(tab: string | null | undefined): BuildWorkspaceContext {

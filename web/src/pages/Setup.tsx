@@ -92,7 +92,7 @@ export function Setup() {
       <div className="space-y-6">
         <PageHeader
           title="Setup"
-          description="Workspace initialization, doctor checks, mode readiness, and MCP client status."
+          description="Connect your providers and get ready to build."
         />
         <div className="grid gap-4 lg:grid-cols-2">
           {Array.from({ length: 4 }).map((_, index) => (
@@ -108,7 +108,7 @@ export function Setup() {
       <div className="space-y-6">
         <PageHeader
           title="Setup"
-          description="Workspace initialization, doctor checks, mode readiness, and MCP client status."
+          description="Connect your providers and get ready to build."
         />
         <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
           Unable to load setup status right now.
@@ -209,19 +209,45 @@ export function Setup() {
     <div className="space-y-6">
       <PageHeader
         title="Setup"
-        description="Workspace initialization, doctor checks, mode readiness, and MCP client status."
+        description="Connect your providers and get ready to build."
         actions={
-          <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-600">
-            {data.workspace.found ? 'Workspace Detected' : 'Initialization Required'}
+          <div className={classNames(
+            'rounded-full border px-3 py-1 text-xs font-medium',
+            data.workspace.found
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : 'border-amber-200 bg-amber-50 text-amber-700'
+          )}>
+            {data.workspace.found ? 'Workspace ready' : 'Workspace not initialized'}
           </div>
         }
       />
+
+      {/* Getting started guidance — surface the most important next step */}
+      <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(240,249,255,0.9),rgba(255,255,255,1))] px-5 py-5 shadow-sm shadow-sky-100/60">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">Getting started</p>
+            <p className="mt-2 text-sm leading-relaxed text-sky-950">
+              {!data.workspace.found
+                ? 'Run `agentlab init` in your terminal to create a workspace, then add an API key below.'
+                : !hasConfiguredKey
+                  ? 'Add at least one API key to unlock live mode, then head to Build.'
+                  : data.doctor.effective_mode === 'live'
+                    ? 'You\'re all set. Head to Build to create your first agent.'
+                    : 'API key saved. Switch to live mode below, then head to Build.'}
+            </p>
+          </div>
+          <div className="shrink-0 rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+            {!data.workspace.found ? 'Step 1 of 3' : !hasConfiguredKey ? 'Step 2 of 3' : data.doctor.effective_mode === 'live' ? 'Complete' : 'Step 3 of 3'}
+          </div>
+        </div>
+      </section>
 
       <section className="grid gap-4 xl:grid-cols-[1.1fr_0.9fr]">
         <Card
           icon={<FolderGit2 className="h-4 w-4 text-sky-700" />}
           title="Workspace"
-          description="Mirror the CLI init/status flow in the UI before any build or optimize work starts."
+          description="Your workspace stores agent configs, eval results, and runtime settings."
         >
           <KeyValue label="Detected" value={data.workspace.found ? 'Yes' : 'No'} />
           <KeyValue label="Label" value={data.workspace.label ?? 'Not initialized'} />
@@ -243,15 +269,13 @@ export function Setup() {
         <Card
           icon={<Bot className="h-4 w-4 text-emerald-700" />}
           title="API Keys & Mode"
-          description="Save provider credentials, validate them, and switch this workspace out of mock mode without restarting the server."
+          description="Add a provider key to unlock live agent generation. AgentLab works in mock mode until a valid key is saved."
         >
           <MetricPill
-            label="Effective Mode"
+            label="Current Mode"
             value={data.doctor.effective_mode.toUpperCase()}
             tone={data.doctor.effective_mode === 'live' ? 'good' : 'warn'}
           />
-          <MetricPill label="Preferred Mode" value={data.doctor.preferred_mode.toUpperCase()} tone="neutral" />
-          <MetricPill label="Mode Source" value={data.doctor.mode_source} tone="neutral" />
           {feedback ? (
             <div
               className={classNames(
@@ -292,7 +316,7 @@ export function Setup() {
               <div>
                 <h4 className="text-sm font-semibold text-slate-900">API Keys</h4>
                 <p className="mt-1 text-xs leading-5 text-slate-600">
-                  Save a valid provider key, then AgentLab will switch this workspace into live mode immediately.
+                  Paste a provider key and hit Save & Test. AgentLab will validate it and switch to live mode automatically.
                 </p>
               </div>
               <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -383,8 +407,8 @@ export function Setup() {
       <section className="grid gap-4 lg:grid-cols-2">
         <Card
           icon={<Wrench className="h-4 w-4 text-amber-700" />}
-          title="Doctor Findings"
-          description="The same readiness checks operators run in the CLI, condensed into one view."
+          title="Readiness Checks"
+          description="Issues that need attention before your workspace is fully operational."
         >
           {data.doctor.issues.length > 0 ? (
             <div className="space-y-2">
@@ -404,7 +428,7 @@ export function Setup() {
         <Card
           icon={<Database className="h-4 w-4 text-violet-700" />}
           title="Data Stores"
-          description="Confirm the local persistence layers the CLI and UI now share."
+          description="Local databases that store your eval results, configs, and agent history."
         >
           <div className="space-y-2">
             {data.doctor.data_stores.map((store) => (
@@ -433,8 +457,8 @@ export function Setup() {
       <section className="grid gap-4 xl:grid-cols-[1fr_0.9fr]">
         <Card
           icon={<PlugZap className="h-4 w-4 text-fuchsia-700" />}
-          title="MCP Clients"
-          description="Track whether AgentLab has been wired into the local MCP-aware tools."
+          title="Connected Tools"
+          description="External tools and editors that can interact with AgentLab."
         >
           <div className="space-y-2">
             {data.mcp_clients.map((client) => (
@@ -454,7 +478,7 @@ export function Setup() {
         <Card
           icon={<TerminalSquare className="h-4 w-4 text-slate-700" />}
           title="CLI Shortcuts"
-          description="Use the same commands from the alignment report without leaving the UI context."
+          description="Handy terminal commands you can run alongside the UI."
         >
           <div className="space-y-2">
             {data.recommended_commands.map((command) => (
@@ -466,9 +490,9 @@ export function Setup() {
           <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
             <div className="mb-2 flex items-center gap-2">
               <Activity className="h-4 w-4 text-slate-400" />
-              <span className="font-medium text-slate-900">Onboarding Rule</span>
+              <span className="font-medium text-slate-900">Recommended flow</span>
             </div>
-            Get to a clean `Setup` page first, then move into `Build`, `Eval`, and `Optimize`. This mirrors the CLI product model and keeps the UI honest.
+            Finish Setup first, then move to Build, Eval, and Optimize in order.
           </div>
         </Card>
       </section>
