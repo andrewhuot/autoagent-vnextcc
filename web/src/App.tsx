@@ -45,6 +45,7 @@ import { Improvements } from './pages/Improvements';
 import { Connect } from './pages/Connect';
 import { CliLauncher } from './pages/CliLauncher';
 import { Docs } from './pages/Docs';
+import { AgentImprover } from './pages/AgentImprover';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { getRouteRedirect } from './lib/navigation';
 
@@ -73,6 +74,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/build" replace />} />
             <Route path="/build" element={<Build />} />
+            <Route path="/agent-improver" element={<AgentImprover />} />
             <Route path="/intelligence" element={<LegacyRouteRedirect />} />
             <Route path="/builder" element={<LegacyRouteRedirect />} />
             <Route path="/builder/demo" element={<LegacyRouteRedirect />} />

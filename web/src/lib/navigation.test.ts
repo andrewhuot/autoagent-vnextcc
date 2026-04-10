@@ -50,6 +50,7 @@ describe('navigation schema', () => {
 
   it('maps build and optimize routes to the unified sections', () => {
     expect(getRouteTitle('/build')).toBe('Build');
+    expect(getRouteTitle('/agent-improver')).toBe('Agent Improver');
     expect(getRouteTitle('/intelligence')).toBe('Build');
     expect(getRouteTitle('/optimize')).toBe('Optimize');
     expect(getRouteTitle('/live-optimize')).toBe('Live Optimize');
@@ -71,6 +72,7 @@ describe('navigation schema', () => {
 
   it('returns breadcrumbs from the shared taxonomy', () => {
     expect(getBreadcrumbForPath('/build')).toEqual(['Build']);
+    expect(getBreadcrumbForPath('/agent-improver')).toEqual(['Build']);
     expect(getBreadcrumbForPath('/improvements')).toEqual(['Review']);
     expect(getBreadcrumbForPath('/setup')).toEqual(['Home']);
     expect(getBreadcrumbForPath('/connect')).toEqual(['Import']);
@@ -89,6 +91,14 @@ describe('navigation schema', () => {
       '/cx/import',
     ]);
     expect(getRouteTitle('/connect')).toBe('Connect');
+  });
+
+  it('adds Agent Improver to the build section without promoting it into simple mode', () => {
+    const buildSection = sections.find((section) => section.group === 'build');
+    const simpleSections = getSimpleNavigationSections();
+
+    expect(buildSection?.items.map((item) => item.path)).toEqual(['/build', '/agent-improver']);
+    expect(simpleSections.flatMap((section) => section.items.map((item) => item.path))).not.toContain('/agent-improver');
   });
 
   it('returns a smaller simple-mode navigation surface for the sidebar toggle', () => {

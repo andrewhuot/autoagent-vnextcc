@@ -49,6 +49,7 @@ import { classNames } from '../lib/utils';
 
 const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/build': Hammer,
+  '/agent-improver': BrainCircuit,
   '/intelligence': BrainCircuit,
   '/connect': Download,
   '/cx/studio': Cloud,

@@ -106,6 +106,10 @@ export function sendBuilderMessage(body: {
   });
 }
 
+export function getBuilderSession(sessionId: string): Promise<BuilderSessionPayload> {
+  return fetchBuilderApi(`/api/builder/session/${encodeURIComponent(sessionId)}`);
+}
+
 export function exportBuilderConfig(body: {
   session_id: string;
   format?: 'yaml' | 'json';

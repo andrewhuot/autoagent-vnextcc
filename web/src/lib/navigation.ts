@@ -49,7 +49,10 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     group: 'build',
     label: COMMAND_TAXONOMY.build.label,
     description: COMMAND_TAXONOMY.build.description,
-    items: [{ label: 'Build', path: '/build' }],
+    items: [
+      { label: 'Build', path: '/build' },
+      { label: 'Agent Improver', path: '/agent-improver' },
+    ],
   },
   {
     group: 'import',
@@ -159,6 +162,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
 const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build' },
   '/build': { title: 'Build', breadcrumbs: ['Build'] },
+  '/agent-improver': { title: 'Agent Improver', breadcrumbs: ['Build'] },
   '/intelligence': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=transcript' },
   '/builder': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=builder-chat' },
   '/builder/demo': {
