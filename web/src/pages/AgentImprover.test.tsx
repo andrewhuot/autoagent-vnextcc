@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToastViewport } from '../components/ToastViewport';
+import { AGENT_IMPROVER_STORAGE_KEY } from '../lib/agent-improver';
 import { AgentImprover } from './AgentImprover';
 
 function renderPage() {
@@ -34,7 +35,28 @@ function jsonResponse(body: unknown, init?: ResponseInit) {
   });
 }
 
-function mockBuilderSession() {
+function createStorageMock() {
+  const store = new Map<string, string>();
+
+  return {
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      store.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key);
+    }),
+    clear: vi.fn(() => {
+      store.clear();
+    }),
+    key: vi.fn(),
+    get length() {
+      return store.size;
+    },
+  };
+}
+
+function mockBuilderSession(overrides: Record<string, unknown> = {}) {
   return {
     session_id: 'builder-session-123',
     mock_mode: false,
@@ -102,6 +124,7 @@ function mockBuilderSession() {
       ],
     },
     updated_at: 1234567890,
+    ...overrides,
   };
 }
 
@@ -114,17 +137,22 @@ function mockBuilderSessionWithMockMode() {
 }
 
 describe('AgentImprover', () => {
+  let localStorageMock: ReturnType<typeof createStorageMock>;
+
   beforeEach(() => {
     vi.stubGlobal('fetch', vi.fn());
+    localStorageMock = createStorageMock();
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: localStorageMock,
+    });
     Object.defineProperty(window, 'sessionStorage', {
       configurable: true,
-      value: {
-        getItem: vi.fn(() => null),
-        setItem: vi.fn(),
-        removeItem: vi.fn(),
-      },
+      value: createStorageMock(),
     });
   });
+
+  // --- Core rendering and interaction tests ---
 
   it('renders the premium improver shell with synchronized workspace modes', () => {
     renderPage();
@@ -141,18 +169,10 @@ describe('AgentImprover', () => {
   it('shows improvement example buttons in initial state', () => {
     renderPage();
 
-    expect(
-      screen.getByText(/Improve the escalation path/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Tighten the refund workflow/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Add calmer tone guidance/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(/Strengthen the safety policy/),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Improve the escalation path/)).toBeInTheDocument();
+    expect(screen.getByText(/Tighten the refund workflow/)).toBeInTheDocument();
+    expect(screen.getByText(/Add calmer tone guidance/)).toBeInTheDocument();
+    expect(screen.getByText(/Strengthen the safety policy/)).toBeInTheDocument();
   });
 
   it('shows empty state on the Summary tab before any conversation', () => {
@@ -293,5 +313,318 @@ describe('AgentImprover', () => {
     expect(await screen.findByText(/attach the last two customer actions/i)).toBeInTheDocument();
     expect(screen.getByText('Live preview')).toBeInTheDocument();
     expect(screen.getByText('Tool: ticket_lookup')).toBeInTheDocument();
+  });
+
+  // --- Checkpoint persistence and recovery tests (from Codex) ---
+
+  it('restores a locally persisted draft when the live session is no longer available', async () => {
+    const persistedSession = mockBuilderSession({
+      session_id: 'restored-session',
+      updated_at: 200,
+    });
+
+    localStorageMock.setItem(
+      AGENT_IMPROVER_STORAGE_KEY,
+      JSON.stringify({
+        version: 2,
+        liveSessionId: 'restored-session',
+        checkpoints: [
+          {
+            id: 'restored-session:200',
+            createdAt: 200,
+            latestUserRequest: 'Improve the handoff logic for escalations.',
+            session: persistedSession,
+          },
+        ],
+        activeCheckpointIndex: 0,
+        previewMessage: 'A customer needs a human after two failed refund attempts.',
+        saveResult: null,
+        savedAgent: null,
+      })
+    );
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === '/api/builder/session/restored-session') {
+          return jsonResponse({ detail: 'Builder session not found' }, { status: 404 });
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage();
+
+    expect(await screen.findByText('Recovered local draft')).toBeInTheDocument();
+    expect(screen.getAllByText('Improve the handoff logic for escalations.').length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: 'Save to workspace' })).toBeDisabled();
+  });
+
+  it('supports undo and redo across locally stored draft checkpoints', async () => {
+    const user = userEvent.setup();
+    const firstSession = mockBuilderSession();
+    const secondSession = mockBuilderSession({
+      updated_at: 1234567891,
+      config: {
+        ...mockBuilderSession().config,
+        agent_name: 'Escalation Concierge v2',
+      },
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/builder/chat') {
+        const callCount = fetchMock.mock.calls.filter(([url]) => String(url) === '/api/builder/chat').length;
+        return jsonResponse(callCount === 1 ? firstSession : secondSession);
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const composer = screen.getByPlaceholderText('Describe how the draft should improve next...');
+
+    await user.type(composer, 'Improve the handoff logic for escalations.');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.type(composer, 'Add calmer tone guidance for high-friction conversations.');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge v2');
+
+    await user.click(screen.getByRole('button', { name: 'Undo checkpoint' }));
+    expect(screen.getByText('Viewing checkpoint 1 of 2')).toBeInTheDocument();
+    expect(screen.getByText('Escalation Concierge')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save to workspace' })).toBeDisabled();
+
+    await user.click(screen.getByRole('button', { name: 'Redo checkpoint' }));
+    expect(screen.getByText('Escalation Concierge v2')).toBeInTheDocument();
+  });
+
+  it('surfaces save failures with actionable messaging from the API response', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/builder/chat') {
+        return jsonResponse(mockBuilderSession());
+      }
+      if (url === '/api/agents') {
+        return jsonResponse({ detail: 'Workspace save failed: config directory is read-only.' }, { status: 500 });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve the handoff logic for escalations.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Save to workspace' }));
+
+    expect(
+      (await screen.findAllByText('Workspace save failed: config directory is read-only.')).length
+    ).toBeGreaterThan(0);
+  });
+
+  // --- Accessibility tests (from Claude) ---
+
+  it('has proper tablist and tabpanel ARIA roles', () => {
+    renderPage();
+
+    expect(screen.getByRole('tablist', { name: 'Inspector views' })).toBeInTheDocument();
+    const summaryTab = screen.getByRole('tab', { name: 'Summary' });
+    expect(summaryTab).toHaveAttribute('aria-controls', 'panel-summary');
+    expect(screen.getByRole('tabpanel')).toHaveAttribute('id', 'panel-summary');
+  });
+
+  it('shows step progression with accessibility labels', () => {
+    renderPage();
+
+    const nav = screen.getByRole('navigation', { name: 'Improvement progress' });
+    expect(nav).toBeInTheDocument();
+    expect(within(nav).getByText('Brief').closest('span[aria-current="step"]')).toBeInTheDocument();
+  });
+
+  it('shows conversation area with log role for screen readers', () => {
+    renderPage();
+
+    expect(screen.getByRole('log', { name: 'Conversation history' })).toBeInTheDocument();
+  });
+
+  // --- First-run vs active copy tests (from Claude) ---
+
+  it('hides example buttons after a session is established', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    expect(screen.getByText('Try an example')).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.queryByText('Try an example')).not.toBeInTheDocument();
+  });
+
+  it('shows clearer copy for first-run state vs active session state', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    expect(screen.getByText('Start with an improvement')).toBeInTheDocument();
+    expect(screen.getByText('Waiting for first draft')).toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+
+    expect(screen.getByText('Refine your agent')).toBeInTheDocument();
+    expect(screen.getByText('Review and validate')).toBeInTheDocument();
+  });
+
+  it('labels user messages as "You" instead of "Request"', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByText('You')).toBeInTheDocument();
+  });
+
+  it('shows keyboard shortcut hints in the composer', () => {
+    renderPage();
+
+    expect(screen.getByText(/Press Enter to send/)).toBeInTheDocument();
+  });
+
+  // --- New session / reset dialog tests (from Claude) ---
+
+  it('shows New session button after session is created', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    expect(screen.queryByRole('button', { name: 'Start a new session' })).not.toBeInTheDocument();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByRole('button', { name: 'Start a new session' })).toBeInTheDocument();
+  });
+
+  it('shows reset confirmation dialog when New session clicked with unsaved work', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test improvement'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+
+    expect(screen.getByRole('dialog', { name: 'Confirm reset' })).toBeInTheDocument();
+    expect(screen.getByText('Start over?')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Keep working' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Discard and reset' })).toBeInTheDocument();
+  });
+
+  it('dismisses reset dialog when Keep working is clicked', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+    await user.click(screen.getByRole('button', { name: 'Keep working' }));
+
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByText('Escalation Concierge')).toBeInTheDocument();
+  });
+
+  it('resets session when Discard and reset is clicked', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSession())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Test'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await screen.findByText('Escalation Concierge');
+
+    await user.click(screen.getByRole('button', { name: 'Start a new session' }));
+    await user.click(screen.getByRole('button', { name: 'Discard and reset' }));
+
+    expect(screen.queryByText('Escalation Concierge')).not.toBeInTheDocument();
+    expect(screen.getByText('Fresh session')).toBeInTheDocument();
+    expect(screen.getByText('No draft yet')).toBeInTheDocument();
+  });
+
+  // --- Dismissible error tests (from Claude) ---
+
+  it('allows dismissing error messages', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/builder/chat') {
+        return new Response('Service unavailable', { status: 503 });
+      }
+      return jsonResponse({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage();
+
+    const textarea = screen.getByPlaceholderText('Describe how the draft should improve next...');
+    await user.type(textarea, 'Test');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    expect(await screen.findByText('Something went wrong')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Dismiss error' }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Something went wrong')).not.toBeInTheDocument();
+    });
   });
 });

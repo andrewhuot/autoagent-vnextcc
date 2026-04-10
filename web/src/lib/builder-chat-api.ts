@@ -76,6 +76,28 @@ export class BuilderApiError extends Error {
   }
 }
 
+function humanizeBuilderHttpStatus(status: number): string {
+  if (status === 401 || status === 403) return 'Authentication required — check your API keys in Setup.';
+  if (status === 404) return 'The requested builder draft was not found.';
+  if (status === 408) return 'The builder request timed out. Try again in a moment.';
+  if (status === 429) return 'Rate limited — wait a moment, then try again.';
+  if (status >= 500 && status < 600) return 'The server is temporarily unavailable. Retrying usually resolves this.';
+  return 'Something went wrong with the builder request. Try again or check Setup.';
+}
+
+function extractBuilderErrorMessage(payload: unknown, status: number): string {
+  if (payload && typeof payload === 'object') {
+    const errorPayload = payload as Record<string, unknown>;
+    if (typeof errorPayload.detail === 'string' && errorPayload.detail.trim()) {
+      return errorPayload.detail;
+    }
+    if (typeof errorPayload.message === 'string' && errorPayload.message.trim()) {
+      return errorPayload.message;
+    }
+  }
+  return humanizeBuilderHttpStatus(status);
+}
+
 async function fetchBuilderApi<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: {
@@ -86,11 +108,17 @@ async function fetchBuilderApi<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new BuilderApiError(
-      (text && text.trim()) ? text : `The server is temporarily unavailable. Retrying usually resolves this.`,
-      response.status,
-    );
+    let errorMessage = humanizeBuilderHttpStatus(response.status);
+    try {
+      const payload = await response.json();
+      errorMessage = extractBuilderErrorMessage(payload, response.status);
+    } catch {
+      const text = await response.text().catch(() => '');
+      if (text && text.trim()) {
+        errorMessage = text;
+      }
+    }
+    throw new BuilderApiError(errorMessage, response.status);
   }
 
   return response.json() as Promise<T>;
