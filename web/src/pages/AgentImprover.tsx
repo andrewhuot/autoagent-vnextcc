@@ -38,6 +38,7 @@ import {
 import { toastError, toastSuccess } from '../lib/toast';
 import type { AgentLibraryItem, BuildPreviewResult, BuildSaveResult } from '../lib/types';
 import { classNames } from '../lib/utils';
+import { normalizeProviderFallback, type NormalizedFallback } from '../lib/provider-fallback';
 
 type InspectorMode = 'summary' | 'config' | 'preview';
 type ConfigFormat = 'yaml' | 'json';
@@ -606,28 +607,7 @@ export function AgentImprover() {
                       : 'Describe what your agent needs \u2014 a new tool, a policy change, better routing, or a tone adjustment. Pick an example below or write your own.'}
                   </p>
                 </div>
-                <span
-                  aria-label={
-                    session?.session_id
-                      ? session.mock_mode ? 'Session running in fallback mode' : 'Session connected live'
-                      : 'No active session'
-                  }
-                  className={classNames(
-                    'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium',
-                    session?.mock_mode
-                      ? 'border-amber-200 bg-amber-50 text-amber-800'
-                      : session?.session_id
-                        ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-                        : 'border-[#d9cfd6] bg-white/80 text-[#6c636d]'
-                  )}
-                >
-                  <Sparkles className="h-3.5 w-3.5" />
-                  {session?.session_id
-                    ? session.mock_mode
-                      ? 'Fallback session'
-                      : 'Live session'
-                    : 'Fresh session'}
-                </span>
+                <SessionBadge session={session} />
               </div>
 
               {!session?.session_id ? (
@@ -792,10 +772,17 @@ export function AgentImprover() {
                   </div>
                 </div>
 
-                {session?.mock_mode && session.mock_reason && viewingLatestCheckpoint ? (
-                  <InlineNotice tone="warning" title="Fallback mode">
-                    <p>{session.mock_reason}</p>
-                  </InlineNotice>
+                {session?.mock_mode && viewingLatestCheckpoint ? (
+                  <FallbackNotice
+                    mockMode={session.mock_mode}
+                    mockReason={session.mock_reason}
+                    onRetry={session.session_id ? () => {
+                      const lastMsg = latestUserRequest;
+                      if (lastMsg && lastMsg !== 'No request submitted yet.') {
+                        setComposer(lastMsg);
+                      }
+                    } : undefined}
+                  />
                 ) : null}
 
                 <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
@@ -898,10 +885,8 @@ export function AgentImprover() {
                 <InlineNotice tone="success" title="Draft saved">
                   Saved to {saveResult.config_path}. You can now continue to eval or keep refining.
                 </InlineNotice>
-              ) : session?.mock_mode && session.mock_reason ? (
-                <InlineNotice tone="warning" title="Running in fallback mode">
-                  {session.mock_reason}. Results may not reflect production behavior.
-                </InlineNotice>
+              ) : session?.mock_mode ? (
+                <FallbackFooterNotice mockMode={session.mock_mode} mockReason={session.mock_reason} />
               ) : (
                 <p className="text-xs leading-5 text-[#847986]">
                   {session?.session_id
@@ -940,14 +925,15 @@ function SummaryMode({
   }
 
   const { config } = session;
+  const fallback = normalizeProviderFallback(session.mock_mode, session.mock_reason);
   const sessionStateLabel = restoredLocally
     ? 'Recovered locally'
     : checkpointMode
       ? 'Checkpoint view'
       : restoredLive
         ? 'Restored live draft'
-        : session.mock_mode
-          ? 'Fallback mode'
+        : fallback
+          ? fallback.badge
           : 'Live session';
 
   return (
@@ -1158,7 +1144,9 @@ function PreviewMode({
           </div>
           <span className="inline-flex items-center gap-2 rounded-full border border-[#d8d1d5] bg-white px-3 py-1.5 text-xs font-medium text-[#645b67]">
             <Bot className="h-3.5 w-3.5" />
-            {session.mock_mode ? 'Builder fallback mode' : 'Builder live mode'}
+            {session.mock_mode
+              ? `Builder ${normalizeProviderFallback(session.mock_mode, session.mock_reason)?.badge.toLowerCase() ?? 'fallback'} mode`
+              : 'Builder live mode'}
           </span>
         </div>
       </div>
@@ -1335,6 +1323,118 @@ function InlineNotice({
       <p className="font-semibold">{title}</p>
       <div className="mt-1 leading-6">{children}</div>
     </div>
+  );
+}
+
+function SessionBadge({ session }: { session: BuilderSessionPayload | null }) {
+  const fallback = session?.mock_mode
+    ? normalizeProviderFallback(session.mock_mode, session.mock_reason)
+    : null;
+
+  const isRateLimit = fallback?.category === 'rate-limit';
+  const badgeText = session?.session_id
+    ? fallback
+      ? `${fallback.badge} session`
+      : 'Live session'
+    : 'Fresh session';
+  const ariaLabel = session?.session_id
+    ? fallback
+      ? `Session running in ${fallback.badge.toLowerCase()} mode`
+      : 'Session connected live'
+    : 'No active session';
+
+  return (
+    <span
+      aria-label={ariaLabel}
+      className={classNames(
+        'inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium',
+        isRateLimit
+          ? 'border-orange-200 bg-orange-50 text-orange-800'
+          : fallback
+            ? 'border-amber-200 bg-amber-50 text-amber-800'
+            : session?.session_id
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+              : 'border-[#d9cfd6] bg-white/80 text-[#6c636d]'
+      )}
+    >
+      <Sparkles className="h-3.5 w-3.5" />
+      {badgeText}
+    </span>
+  );
+}
+
+function FallbackNotice({
+  mockMode,
+  mockReason,
+  onRetry,
+}: {
+  mockMode: boolean;
+  mockReason?: string;
+  onRetry?: () => void;
+}) {
+  const fallback = normalizeProviderFallback(mockMode, mockReason);
+  if (!fallback) return null;
+
+  const isRateLimit = fallback.category === 'rate-limit';
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="fallback-notice"
+      className={classNames(
+        'rounded-[22px] border px-4 py-3 text-sm',
+        isRateLimit
+          ? 'border-orange-200 bg-orange-50 text-orange-900'
+          : 'border-amber-200 bg-amber-50 text-amber-900'
+      )}
+    >
+      <p className="font-semibold">{fallback.headline}</p>
+      <p className="mt-1 leading-6">{fallback.guidance}</p>
+      {fallback.retryable && onRetry ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={onRetry}
+            className={classNames(
+              'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition',
+              isRateLimit
+                ? 'border-orange-300 bg-white text-orange-900 hover:bg-orange-100'
+                : 'border-amber-300 bg-white text-amber-900 hover:bg-amber-100'
+            )}
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            Retry last request
+          </button>
+          <span className="text-xs opacity-75">
+            Rate limits usually clear within 1-2 minutes.
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FallbackFooterNotice({
+  mockMode,
+  mockReason,
+}: {
+  mockMode: boolean;
+  mockReason?: string;
+}) {
+  const fallback = normalizeProviderFallback(mockMode, mockReason);
+  if (!fallback) return null;
+
+  const isRateLimit = fallback.category === 'rate-limit';
+  const title = isRateLimit ? 'Provider rate limited' : 'Running in fallback mode';
+  const body = isRateLimit
+    ? 'This draft used fallback data. You can still export or save it, then retry when the rate limit clears.'
+    : `${fallback.headline} Results may not reflect production behavior.`;
+
+  return (
+    <InlineNotice tone="warning" title={title}>
+      {body}
+    </InlineNotice>
   );
 }
 

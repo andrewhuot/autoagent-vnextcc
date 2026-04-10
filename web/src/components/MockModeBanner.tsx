@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AlertTriangle, RotateCcw, X } from 'lucide-react';
+import { normalizeProviderFallback } from '../lib/provider-fallback';
 
 const PREVIEW_MODE_TITLE = 'Preview mode is on';
 const PREVIEW_MODE_DESCRIPTION = 'AgentLab is using simulated responses until live providers are ready.';
@@ -131,36 +132,56 @@ export function MockModeBanner() {
   }
 
   const isFrontendOnly = bannerState.kind === 'frontend-only';
-  const title = isFrontendOnly ? FRONTEND_ONLY_TITLE : PREVIEW_MODE_TITLE;
-  const description = isFrontendOnly ? FRONTEND_ONLY_DESCRIPTION : PREVIEW_MODE_DESCRIPTION;
   const detail = bannerState.kind === 'preview' ? bannerState.detail : null;
+  const fallback = bannerState.kind === 'preview'
+    ? normalizeProviderFallback(true, bannerState.detail)
+    : null;
+  const isRateLimit = fallback?.category === 'rate-limit';
+  const title = isFrontendOnly
+    ? FRONTEND_ONLY_TITLE
+    : isRateLimit
+      ? 'Provider rate limited'
+      : PREVIEW_MODE_TITLE;
+  const description = isFrontendOnly
+    ? FRONTEND_ONLY_DESCRIPTION
+    : isRateLimit
+      ? 'Your provider (e.g. Gemini) is temporarily rate-limiting requests. Drafts use fallback data until the limit clears. Retry in a minute or two.'
+      : PREVIEW_MODE_DESCRIPTION;
 
   return (
     <div
       role="alert"
-      className="sticky top-0 z-50 flex items-center justify-between gap-3 border-b border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 shadow-sm"
+      className={`sticky top-0 z-50 flex items-center justify-between gap-3 border-b px-4 py-3 text-sm shadow-sm ${
+        isRateLimit
+          ? 'border-orange-300 bg-orange-50 text-orange-950'
+          : 'border-amber-300 bg-amber-50 text-amber-950'
+      }`}
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+        <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${isRateLimit ? 'text-orange-700' : 'text-amber-700'}`} />
         <div className="min-w-0">
-          <p className="font-semibold text-amber-900">{title}</p>
-          <p className="mt-0.5 text-xs text-amber-800">{description}</p>
-          {detail ? (
+          <p className={`font-semibold ${isRateLimit ? 'text-orange-900' : 'text-amber-900'}`}>{title}</p>
+          <p className={`mt-0.5 text-xs ${isRateLimit ? 'text-orange-800' : 'text-amber-800'}`}>{description}</p>
+          {detail && !isRateLimit ? (
             <p className="mt-1 text-xs text-amber-800">{detail}</p>
           ) : null}
         </div>
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        {isFrontendOnly ? (
+        {isFrontendOnly || isRateLimit ? (
           <button
             type="button"
             onClick={handleRetry}
             disabled={retrying}
-            className="inline-flex items-center gap-1.5 rounded-md border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-900 transition hover:bg-amber-100 disabled:opacity-50"
+            className={`inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
+              isRateLimit
+                ? 'border-orange-300 text-orange-900 hover:bg-orange-100'
+                : 'border-amber-300 text-amber-900 hover:bg-amber-100'
+            }`}
           >
             <RotateCcw className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} />
-            {retrying ? 'Checking…' : 'Retry connection'}
+            {retrying ? 'Checking…' : isRateLimit ? 'Retry now' : 'Retry connection'}
           </button>
         ) : (
           <Link
@@ -175,7 +196,7 @@ export function MockModeBanner() {
             type="button"
             aria-label="Dismiss mock mode warning"
             onClick={handleDismiss}
-            className="rounded-md p-1.5 text-amber-700 transition hover:bg-amber-100"
+            className={`rounded-md p-1.5 transition ${isRateLimit ? 'text-orange-700 hover:bg-orange-100' : 'text-amber-700 hover:bg-amber-100'}`}
           >
             <X className="h-4 w-4" />
           </button>

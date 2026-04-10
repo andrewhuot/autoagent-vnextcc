@@ -136,6 +136,14 @@ function mockBuilderSessionWithMockMode() {
   };
 }
 
+function mockBuilderSessionWithRateLimit() {
+  return {
+    ...mockBuilderSession(),
+    mock_mode: true,
+    mock_reason: 'HTTP Error 429: Too Many Requests',
+  };
+}
+
 describe('AgentImprover', () => {
   let localStorageMock: ReturnType<typeof createStorageMock>;
 
@@ -516,6 +524,104 @@ describe('AgentImprover', () => {
     renderPage();
 
     expect(screen.getByText(/Press Enter to send/)).toBeInTheDocument();
+  });
+
+  // --- 429 / Rate-limit UX tests ---
+
+  it('shows "Rate limited session" badge when session has a 429 mock_reason', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    expect(await screen.findByText('Rate limited session')).toBeInTheDocument();
+  });
+
+  it('shows rate-limit fallback notice with actionable guidance for 429 errors', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    const notice = await screen.findByTestId('fallback-notice');
+    expect(notice).toBeInTheDocument();
+    expect(within(notice).getByText(/rate-limiting/i)).toBeInTheDocument();
+    expect(within(notice).getAllByText(/retry/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows a "Retry last request" button in rate-limit fallback notice', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    expect(await screen.findByRole('button', { name: 'Retry last request' })).toBeInTheDocument();
+  });
+
+  it('shows rate-limit-specific footer notice instead of raw error text', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByText('Provider rate limited')).toBeInTheDocument();
+    expect(screen.getAllByText(/fallback data/i).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows "Rate limited" in summary pill for 429 sessions', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithRateLimit())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    await screen.findByText('Escalation Concierge');
+    expect(screen.getByText('Rate limited')).toBeInTheDocument();
+  });
+
+  it('shows generic fallback badge for non-429 mock reasons', async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(mockBuilderSessionWithMockMode())));
+
+    renderPage();
+
+    await user.type(
+      screen.getByPlaceholderText('Describe how the draft should improve next...'),
+      'Improve escalation.'
+    );
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+
+    expect(await screen.findByText('Fallback session')).toBeInTheDocument();
   });
 
   // --- New session / reset dialog tests (from Claude) ---

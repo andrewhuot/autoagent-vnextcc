@@ -154,6 +154,81 @@ describe('MockModeBanner', () => {
     expect(screen.getByRole('button', { name: 'Retry connection' })).toBeInTheDocument();
   });
 
+  it('shows rate-limit-specific copy when mock_reason contains 429', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['HTTP Error 429: Too Many Requests'],
+          real_provider_configured: true,
+        }),
+      })
+    );
+
+    renderBanner();
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Provider rate limited')).toBeInTheDocument();
+    expect(screen.getByText(/rate-limiting requests/)).toBeInTheDocument();
+    expect(screen.queryByText('Preview mode is on')).not.toBeInTheDocument();
+  });
+
+  it('shows "Retry now" button instead of "Open Setup" for rate-limited state', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['HTTP Error 429: Too Many Requests'],
+          real_provider_configured: true,
+        }),
+      })
+    );
+
+    renderBanner();
+
+    await screen.findByRole('alert');
+    expect(screen.getByRole('button', { name: 'Retry now' })).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open Setup' })).not.toBeInTheDocument();
+  });
+
+  it('transitions from rate-limited to hidden when retry succeeds', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          mock_mode: true,
+          mock_reasons: ['HTTP Error 429: Too Many Requests'],
+          real_provider_configured: true,
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          mock_mode: false,
+          mock_reasons: [],
+          real_provider_configured: true,
+        }),
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBanner('/build');
+
+    expect(await screen.findByText('Provider rate limited')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry now' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
+
   it('transitions from frontend-only to hidden when retry succeeds', async () => {
     const user = userEvent.setup();
     const fetchMock = vi
