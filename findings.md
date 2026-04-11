@@ -1,5 +1,51 @@
 # Findings & Decisions
 
+## Agent Builder Workbench Planning Campaign
+
+### Requirements
+- Produce a concrete, ticketed implementation plan for Agent Builder Workbench / Workbench for Agents.
+- Ground the plan in the current AgentLab codebase, especially Build, Agent Improver, Eval Runs, Results Explorer, Compare, Optimize, Improvements, Trace, and Deploy.
+- Decide whether Workbench should be a new route/surface in addition to Build or a deeper Build evolution.
+- Define the canonical data model, reusable backend services/stores/APIs, reusable frontend surfaces/components, vertical slicing order, risks, and verification expectations.
+- Save the durable deliverable under `docs/plans/`.
+- Commit and push `feat/agent-builder-workbench-plan-codex`, then send the requested `openclaw system event`.
+
+### Initial Environment Findings
+- Branch is `feat/agent-builder-workbench-plan-codex`.
+- Worktree was clean before this campaign.
+- The current workspace already contains historical `findings.md` notes from prior Build and Agent Improver UX campaigns.
+
+### Research Findings
+- Repository has dedicated backend packages for `builder`, `adk`, `cx_studio`, `evals`, `observer`, `deployer`, `stores`, and API routes under `api/routes`.
+- Web surfaces already include `Build`, `AgentImprover`, `EvalRuns`, `ResultsExplorer`, `Compare`, `Optimize`, `Improvements`, `Traces`, `Deploy`, `AdkDeploy`, `CxDeploy`, `CXStudio`, and a lower-level builder component system.
+- Prior commit history confirms the branch starts from `f5c14c7 feat(journey): connect eval→optimize→improve→deploy journey with navigation and CTAs`.
+- Existing docs/plans already contain related plans for agent builder rebuild, seamless journey, ADK/CXAS portability, CX deploy hardening, and CX native expansion.
+- `working-docs/briefs/BUILDER_WORKSPACE_PRD.md` already defined a broader Builder Workspace with projects, sessions, tasks, proposals, artifacts, approvals, worktrees, eval bundles, trace bookmarks, release candidates, specialist roster, and event streaming.
+- The current backend has matching builder primitives in `builder/types.py`, SQLite persistence in `builder/store.py`, project inheritance helpers in `builder/projects.py`, task lifecycle/delegate simulation in `builder/execution.py`, event broker/SSE helpers in `builder/events.py`, and specialist routing in `builder/orchestrator.py`.
+- The current API already exposes `/api/builder/*` conversational builder endpoints plus projects/sessions/tasks/proposals/artifacts/approvals/permissions/events/metrics/specialists in `api/routes/builder.py`.
+- `api/server.py` wires builder store/project manager/orchestrator/events/permissions/execution/metrics/artifacts into `app.state`, but conversational `BuilderChatService` remains in-memory/lazy-created rather than persisted in `BuilderStore`.
+- `web/src/pages/Build.tsx` is the canonical `/build` surface and already includes prompt, transcript, builder-chat, and saved-artifacts tabs with config preview, runtime preview, save to Agent Library, and eval handoff.
+- `web/src/lib/builder-chat-api.ts` defines the current narrow `BuilderConfig` shape: name, model, system prompt, tools, routing rules, policies, eval criteria, and metadata. This is not yet the PRD's richer canonical agent-project model.
+- `web/src/lib/builder-types.ts` mirrors the broader Builder Workspace project/session/task/proposal/artifact/event model, separate from the narrow builder-chat config payload.
+- `web/src/App.tsx` redirects legacy builder/assistant/agent-studio routes to `/build?tab=builder-chat`; navigation simple mode centers the Setup → Build → Eval → Improve → Deploy flow.
+
+### Technical Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Use the existing root `findings.md` as campaign working memory | It already contains related Build/Agent Improver discoveries that are relevant to the Workbench plan. |
+| Recommend Workbench as a new Build-family route first, not an immediate `/build` replacement | The PRD's two-pane IDE scope is much larger than the current stable Build flow; a separate route can reuse the Builder Workspace substrate without destabilizing current Build -> Eval handoffs. |
+| Treat `AgentProjectSpec` as a new canonical model layered under `BuilderProject` | `BuilderProject` is a workspace shell, while the PRD needs a structured agent truth that compiles to AgentLab runtime config, ADK, and CX. |
+| Reuse Builder Workspace primitives for plan/apply/task/event history | `BuilderSession`, `BuilderTask`, `BuilderProposal`, `ArtifactRef`, `EvalBundle`, `TraceBookmark`, and `ReleaseCandidate` already match much of the PRD's harness architecture. |
+
+### Issues Encountered
+| Issue | Resolution |
+|-------|------------|
+
+### Verification Results
+- Plan written to `docs/plans/2026-04-10-agent-builder-workbench.md`.
+- `git diff --check`: passed.
+- `rg` heading check confirmed the plan includes executive recommendation, current architecture inventory, functional requirement coverage, route decision, canonical data model, backend/frontend architecture, risks, phase order, ticket backlog, and verification matrix.
+
 ## Agent Improver Live UX Campaign Findings
 
 ### Requirements
