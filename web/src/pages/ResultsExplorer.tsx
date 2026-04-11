@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { BarChart3, Download, Flag, ListFilter, Search, Sparkles } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, ArrowRight, BarChart3, Download, Flag, ListFilter, Search, Sparkles } from 'lucide-react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   useAddResultAnnotation,
   useExportEvalResults,
@@ -188,6 +188,8 @@ export function ResultsExplorer() {
         icon={BarChart3}
         title="No eval results yet"
         description="Run an evaluation first, then come back here to inspect examples, failure clusters, and run-to-run changes."
+        actionLabel="Go to Eval Runs"
+        onAction={() => navigate('/evals')}
       />
     );
   }
@@ -206,6 +208,14 @@ export function ResultsExplorer() {
 
   return (
     <div className="space-y-6">
+      <Link
+        to="/evals"
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-600 transition hover:text-gray-900"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Back to Eval Runs
+      </Link>
+
       <PageHeader
         title="Results Explorer"
         description="Filter failures, inspect grader reasoning, annotate edge cases, and compare one run against another."
@@ -387,6 +397,33 @@ export function ResultsExplorer() {
         </section>
 
         <RunDiff diff={compareRunId ? diff : undefined} isLoading={Boolean(compareRunId) && isDiffLoading} />
+      </section>
+
+      <section className="rounded-2xl border border-sky-100 bg-sky-50/60 p-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-sky-900">Next steps</h3>
+            <p className="mt-1 text-sm text-sky-800">
+              Use these results to compare configs head-to-head or run an optimization cycle to address failures.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to="/compare"
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              Compare Configs
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+            <Link
+              to={`/optimize${selectedRunId ? `?evalRunId=${selectedRunId}` : ''}`}
+              className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+            >
+              Optimize Agent
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
+        </div>
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">

@@ -211,4 +211,18 @@ describe('ResultsExplorer', () => {
     expect(screen.getByText('New failures')).toBeInTheDocument();
     expect(screen.getAllByText('case-routing').length).toBeGreaterThan(0);
   });
+
+  it('renders journey navigation: back to evals and forward to compare/optimize', () => {
+    renderPage();
+
+    const backLink = screen.getByRole('link', { name: /Back to Eval Runs/ });
+    expect(backLink).toBeInTheDocument();
+    expect(backLink).toHaveAttribute('href', '/evals');
+
+    expect(screen.getByRole('link', { name: /Compare Configs/ })).toHaveAttribute('href', '/compare');
+
+    const optimizeLink = screen.getByRole('link', { name: /Optimize Agent/ });
+    expect(optimizeLink).toBeInTheDocument();
+    expect(optimizeLink).toHaveAttribute('href', expect.stringContaining('/optimize'));
+  });
 });

@@ -1,3 +1,4 @@
+import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { OpportunityItem } from '../components/OpportunityItem';
 import { useOpportunities } from '../lib/api';
@@ -7,6 +8,7 @@ interface OpportunitiesProps {
 }
 
 export function Opportunities({ embedded = false }: OpportunitiesProps) {
+  const navigate = useNavigate();
   const { data: opportunities = [], isLoading, isError } = useOpportunities('open');
 
   const sorted = [...opportunities].sort((a, b) => b.priority_score - a.priority_score);
@@ -52,8 +54,14 @@ export function Opportunities({ embedded = false }: OpportunitiesProps) {
       {!isLoading && !isError && (
         <div className="space-y-2">
           {sorted.length === 0 ? (
-            <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-              No open opportunities.
+            <div className="flex flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-8 text-center text-sm text-gray-500">
+              <p>No open opportunities. Run an eval or optimization cycle to surface failure clusters.</p>
+              <button
+                onClick={() => navigate('/optimize')}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+              >
+                Run Optimization
+              </button>
             </div>
           ) : (
             sorted.map((opportunity) => (

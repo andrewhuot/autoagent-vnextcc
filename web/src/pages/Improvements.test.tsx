@@ -10,6 +10,11 @@ vi.mock('../lib/api', () => ({
     isLoading: false,
     isError: false,
   }),
+  useChanges: () => ({
+    data: [],
+    isLoading: false,
+    isError: false,
+  }),
 }));
 
 vi.mock('./Experiments', () => ({
@@ -59,5 +64,17 @@ describe('Improvements', () => {
     renderImprovements('/improvements?tab=review');
 
     expect(screen.getByText('Review Content')).toBeInTheDocument();
+  });
+
+  it('renders journey navigation links to Optimize and Deploy', () => {
+    renderImprovements();
+
+    const optimizeLink = screen.getByRole('link', { name: 'Back to Optimize' });
+    expect(optimizeLink).toBeInTheDocument();
+    expect(optimizeLink).toHaveAttribute('href', '/optimize');
+
+    const deployLink = screen.getByRole('link', { name: /Deploy/ });
+    expect(deployLink).toBeInTheDocument();
+    expect(deployLink).toHaveAttribute('href', '/deploy');
   });
 });

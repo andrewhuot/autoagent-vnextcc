@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { ArrowLeftRight, Filter, FlaskConical, Sigma, Trophy } from 'lucide-react';
+import { ArrowLeftRight, ArrowRight, Filter, FlaskConical, Sigma, Trophy } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import {
   useConfigs,
   usePairwiseComparison,
@@ -434,6 +435,35 @@ export function Compare() {
                   })}
                 </tbody>
               </table>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-sky-100 bg-sky-50/60 p-5">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-sky-900">Act on these results</h3>
+                <p className="mt-1 text-sm text-sky-800">
+                  {comparison.analysis.is_significant
+                    ? 'The comparison is statistically significant. Optimize the weaker config or review pending improvements.'
+                    : 'Results are inconclusive. Run more evals for stronger signal, or optimize to generate better candidates.'}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  to="/optimize"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  Optimize
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+                <Link
+                  to="/improvements"
+                  className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+                >
+                  Review Improvements
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+              </div>
             </div>
           </section>
         </>

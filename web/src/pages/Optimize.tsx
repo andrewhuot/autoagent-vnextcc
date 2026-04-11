@@ -892,13 +892,21 @@ function OptimizeRunSection({
             </div>
             <div className="flex flex-wrap gap-2">
               {completedRun.pendingReview ? (
-                <button
-                  type="button"
-                  onClick={scrollToPendingReviews}
-                  className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
-                >
-                  Review pending change
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={scrollToPendingReviews}
+                    className="rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+                  >
+                    Review pending change
+                  </button>
+                  <Link
+                    to="/improvements?tab=review"
+                    className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                  >
+                    Open Improvements
+                  </Link>
+                </>
               ) : completedRun.accepted ? (
                 <>
                   <button
@@ -909,10 +917,10 @@ function OptimizeRunSection({
                     Re-run Eval to verify
                   </button>
                   <Link
-                    to="/configs"
+                    to="/deploy"
                     className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
                   >
-                    View deployed config
+                    Deploy
                   </Link>
                 </>
               ) : (
@@ -924,6 +932,12 @@ function OptimizeRunSection({
                   >
                     Try again with different settings
                   </button>
+                  <Link
+                    to="/improvements?tab=opportunities"
+                    className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                  >
+                    View Opportunities
+                  </Link>
                   <button
                     type="button"
                     onClick={() => handleStart(true)}
@@ -1137,14 +1151,23 @@ function OptimizeRunSection({
 
           <div className="mt-6 flex flex-wrap gap-3">
             {latestResult.result.pending_review ? (
-              <button
-                type="button"
-                onClick={scrollToPendingReviews}
-                className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
-              >
-                <Clock3 className="h-4 w-4" />
-                Review pending change
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={scrollToPendingReviews}
+                  className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+                >
+                  <Clock3 className="h-4 w-4" />
+                  Review pending change
+                </button>
+                <Link
+                  to="/improvements?tab=review"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  Open Improvements
+                  <ArrowUpRight className="h-4 w-4" />
+                </Link>
+              </>
             ) : latestResult.result.accepted ? (
               <>
                 <button
@@ -1156,11 +1179,17 @@ function OptimizeRunSection({
                   Re-run Eval to verify
                 </button>
                 <Link
-                  to="/configs"
+                  to="/improvements?tab=history"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  View in Improvements
+                </Link>
+                <Link
+                  to="/deploy"
                   className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
                 >
                   <ArrowUpRight className="h-4 w-4" />
-                  View deployed config
+                  Deploy
                 </Link>
               </>
             ) : (
@@ -1173,6 +1202,12 @@ function OptimizeRunSection({
                   <SlidersHorizontal className="h-4 w-4" />
                   Try again with different settings
                 </button>
+                <Link
+                  to="/improvements?tab=opportunities"
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                >
+                  View Opportunities
+                </Link>
                 <button
                   type="button"
                   onClick={() => handleStart(true)}

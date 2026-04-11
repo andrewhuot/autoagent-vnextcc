@@ -1,11 +1,11 @@
-import { useSearchParams } from 'react-router-dom';
-import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { ChangeReview } from './ChangeReview';
 import { Experiments } from './Experiments';
 import { Opportunities } from './Opportunities';
-import { useExperiments } from '../lib/api';
+import { useExperiments, useChanges } from '../lib/api';
 import { formatTimestamp, statusVariant, classNames } from '../lib/utils';
 
 type ImprovementsTab = 'opportunities' | 'experiments' | 'review' | 'history';
@@ -171,6 +171,8 @@ function ImprovementHistoryPanel() {
 export function Improvements() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = normalizeTab(searchParams.get('tab'));
+  const { data: changes = [] } = useChanges();
+  const appliedCount = changes.filter((c) => c.status === 'applied').length;
 
   function selectTab(tab: ImprovementsTab) {
     const next = new URLSearchParams(searchParams);
@@ -183,7 +185,50 @@ export function Improvements() {
       <PageHeader
         title="Improvements"
         description="One workflow for opportunities, experiments, approval decisions, and outcome history."
+        actions={
+          <div className="flex items-center gap-2">
+            <Link
+              to="/optimize"
+              className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              Back to Optimize
+            </Link>
+            <Link
+              to="/deploy"
+              className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+            >
+              <Rocket className="h-4 w-4" />
+              Deploy
+            </Link>
+          </div>
+        }
       />
+
+      {appliedCount > 0 && (
+        <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-emerald-900">
+              <span className="font-semibold">{appliedCount} improvement{appliedCount !== 1 ? 's' : ''}</span>{' '}
+              applied and ready to deploy. Verify with an eval run, then promote to production.
+            </p>
+            <div className="flex items-center gap-2">
+              <Link
+                to="/evals"
+                className="rounded-lg border border-emerald-300 bg-white px-3 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100"
+              >
+                Re-run Eval
+              </Link>
+              <Link
+                to="/deploy"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-800"
+              >
+                Deploy Now
+                <ArrowRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          </div>
+        </section>
+      )}
 
       <section className="grid gap-3 lg:grid-cols-4">
         {WORKFLOW_STEPS.map(({ key, title, description, icon: Icon }, index) => (

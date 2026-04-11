@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowLeft } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowLeftRight, BarChart3, Zap } from 'lucide-react';
 import { useEvalDetail } from '../lib/api';
 import { ScoreBar } from '../components/ScoreBar';
 import { StatusBadge } from '../components/StatusBadge';
@@ -133,6 +133,42 @@ export function EvalDetail() {
               <DimensionBreakdown dimensions={score.dimensions} />
             </div>
           </details>
+        </section>
+      )}
+
+      {result.status === 'completed' && (
+        <section className="rounded-lg border border-sky-100 bg-sky-50/60 px-5 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-sky-900">Next steps</h3>
+              <p className="mt-1 text-sm text-sky-800">
+                Drill into individual examples, compare this run against another, or optimize to address failures.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                to={`/results/${id}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                <BarChart3 className="h-4 w-4" />
+                Explore Results
+              </Link>
+              <Link
+                to="/compare"
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+                Compare
+              </Link>
+              <Link
+                to={`/optimize?evalRunId=${id}`}
+                className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+              >
+                <Zap className="h-4 w-4" />
+                Optimize
+              </Link>
+            </div>
+          </div>
         </section>
       )}
 

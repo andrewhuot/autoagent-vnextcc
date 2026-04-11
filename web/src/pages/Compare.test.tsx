@@ -244,4 +244,11 @@ describe('Compare', () => {
       screen.getByText('Choose two different configs to compare. Build or import another version if only one is available.')
     ).toBeInTheDocument();
   });
+
+  it('renders forward navigation links to Optimize and Improvements', () => {
+    renderPage();
+
+    expect(screen.getByRole('link', { name: /Optimize/ })).toHaveAttribute('href', '/optimize');
+    expect(screen.getByRole('link', { name: /Review Improvements/ })).toHaveAttribute('href', '/improvements');
+  });
 });
