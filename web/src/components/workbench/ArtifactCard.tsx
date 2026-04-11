@@ -40,21 +40,21 @@ export function ArtifactCard({ artifact, compact = false }: ArtifactCardProps) {
       className={classNames(
         'group flex w-full items-start gap-3 rounded-lg border px-3 py-2.5 text-left transition',
         'border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] hover:border-[color:var(--wb-border-strong)]',
-        isActive && 'border-[color:var(--wb-accent)] bg-white/[0.04]'
+        isActive && 'border-[color:var(--wb-accent-border)] bg-[color:var(--wb-accent-weak)]'
       )}
     >
-      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded bg-white/[0.04] text-neutral-300">
+      <span className="mt-0.5 flex h-6 w-6 items-center justify-center rounded bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-soft)]">
         <Icon className="h-3.5 w-3.5" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="flex items-baseline gap-2">
-          <span className="text-[12px] font-semibold text-neutral-100">{artifact.name}</span>
-          <span className="text-[10px] uppercase tracking-wide text-neutral-500">
+          <span className="text-[12px] font-semibold text-[color:var(--wb-text)]">{artifact.name}</span>
+          <span className="text-[10px] uppercase tracking-wide text-[color:var(--wb-text-dim)]">
             {artifact.category}
           </span>
         </span>
         {!compact && (
-          <span className="mt-0.5 block text-[12px] leading-4 text-neutral-400">
+          <span className="mt-0.5 block text-[12px] leading-4 text-[color:var(--wb-text-dim)]">
             {artifact.summary}
           </span>
         )}

@@ -167,4 +167,45 @@ describe('workbench-store', () => {
     expect(state.buildStatus).toBe('error');
     expect(state.error).toBe('Provider timed out');
   });
+
+  it('defaults to light theme', () => {
+    expect(useWorkbenchStore.getState().theme).toBe('light');
+  });
+
+  it('toggles theme between light and dark and persists to localStorage', () => {
+    // Stub localStorage so we can assert persistence on top of jsdom's
+    // partial implementation.
+    const storage: Record<string, string> = {};
+    const stub = {
+      getItem: (key: string) => storage[key] ?? null,
+      setItem: (key: string, value: string) => {
+        storage[key] = value;
+      },
+      removeItem: (key: string) => {
+        delete storage[key];
+      },
+      clear: () => {
+        for (const key of Object.keys(storage)) delete storage[key];
+      },
+      key: () => null,
+      length: 0,
+    };
+    Object.defineProperty(window, 'localStorage', { value: stub, configurable: true });
+
+    useWorkbenchStore.getState().toggleTheme();
+    expect(useWorkbenchStore.getState().theme).toBe('dark');
+    expect(storage['agentlab.workbench.theme']).toBe('dark');
+    useWorkbenchStore.getState().toggleTheme();
+    expect(useWorkbenchStore.getState().theme).toBe('light');
+    expect(storage['agentlab.workbench.theme']).toBe('light');
+  });
+
+  it('reset() preserves the user theme choice', () => {
+    useWorkbenchStore.getState().setTheme('dark');
+    useWorkbenchStore.getState().beginBuild('Build something');
+    useWorkbenchStore.getState().reset();
+    const state = useWorkbenchStore.getState();
+    expect(state.theme).toBe('dark');
+    expect(state.messages).toHaveLength(0);
+  });
 });

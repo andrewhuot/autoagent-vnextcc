@@ -46,7 +46,7 @@ export function ChatInput({ onSubmit, placeholder = 'Describe what you\u2019d li
       >
         <button
           type="button"
-          className="mb-0.5 rounded p-1 text-neutral-500 hover:bg-white/5 hover:text-neutral-300"
+          className="mb-0.5 rounded p-1 text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
           aria-label="Attach"
           tabIndex={-1}
         >
@@ -69,13 +69,13 @@ export function ChatInput({ onSubmit, placeholder = 'Describe what you\u2019d li
           }}
           placeholder={placeholder}
           aria-label="Build request"
-          className="min-h-[22px] flex-1 resize-none bg-transparent text-[13px] leading-5 text-neutral-100 placeholder:text-neutral-500 focus:outline-none"
+          className="min-h-[22px] flex-1 resize-none bg-transparent text-[13px] leading-5 text-[color:var(--wb-text)] placeholder:text-[color:var(--wb-text-muted)] focus:outline-none"
         />
         {isBuilding ? (
           <button
             type="button"
             onClick={cancelBuild}
-            className="flex h-8 w-8 items-center justify-center rounded-md bg-[color:var(--wb-error)]/20 text-[color:var(--wb-error)] hover:bg-[color:var(--wb-error)]/30"
+            className="flex h-8 w-8 items-center justify-center rounded-md bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)] hover:opacity-90"
             aria-label="Stop build"
             title="Stop build"
           >
@@ -89,8 +89,8 @@ export function ChatInput({ onSubmit, placeholder = 'Describe what you\u2019d li
             className={classNames(
               'flex h-8 w-8 items-center justify-center rounded-md transition',
               value.trim()
-                ? 'bg-[color:var(--wb-accent)] text-[#0b0b0d] hover:opacity-90'
-                : 'bg-white/5 text-neutral-600'
+                ? 'bg-[color:var(--wb-accent)] text-[color:var(--wb-accent-fg)] hover:opacity-90'
+                : 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]'
             )}
             aria-label="Send"
             title="Send (⌘↵)"

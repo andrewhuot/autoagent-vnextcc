@@ -53,31 +53,87 @@ body {
 }
 
 /* ---------------------------------------------------------------------------
- * Workbench dark theme
+ * Workbench theme tokens
  *
- * Scoped to ``.workbench-root`` so the rest of the app stays light. All
- * Workbench components pull from these variables (``bg-[color:var(--wb-bg)]``)
- * to keep dark-mode styling in one place.
+ * Both light (default) and dark variants live here. Components use
+ * ``bg-[color:var(--wb-bg)]`` style references so switching themes is a
+ * matter of flipping a single class on ``.workbench-root``. Light matches
+ * the rest of AgentLab; dark is an opt-in toggle per user preference.
  * ------------------------------------------------------------------------ */
 .workbench-root {
-  --wb-bg: #0b0b0d;
-  --wb-bg-elev: #141418;
-  --wb-border: #2a2a30;
-  --wb-border-strong: #3a3a42;
-  --wb-text: #ececf1;
-  --wb-text-dim: #9ca3af;
-  --wb-accent: #a78bfa;
-  --wb-success: #34d399;
-  --wb-warn: #fbbf24;
-  --wb-error: #f87171;
+  /* --- Light (default) --- */
+  --wb-bg: #ffffff;
+  --wb-bg-elev: #f8fafc;            /* slate-50 */
+  --wb-bg-hover: rgba(15, 23, 42, 0.04);
+  --wb-bg-active: rgba(15, 23, 42, 0.08);
+  --wb-border: #e5e7eb;             /* gray-200 */
+  --wb-border-strong: #cbd5e1;      /* slate-300 */
+  --wb-text: #0f172a;               /* slate-900 */
+  --wb-text-soft: #334155;          /* slate-700 */
+  --wb-text-dim: #64748b;           /* slate-500 */
+  --wb-text-muted: #94a3b8;         /* slate-400 */
+  --wb-accent: #7c3aed;             /* violet-600 */
+  --wb-accent-fg: #ffffff;
+  --wb-accent-weak: rgba(124, 58, 237, 0.10);
+  --wb-accent-border: rgba(124, 58, 237, 0.30);
+  --wb-success: #059669;            /* emerald-600 */
+  --wb-success-weak: rgba(5, 150, 105, 0.10);
+  --wb-warn: #d97706;               /* amber-600 */
+  --wb-warn-weak: rgba(217, 119, 6, 0.10);
+  --wb-error: #dc2626;              /* red-600 */
+  --wb-error-weak: rgba(220, 38, 38, 0.10);
+  --wb-user-bubble-bg: rgba(124, 58, 237, 0.08);
+  --wb-user-bubble-border: rgba(124, 58, 237, 0.20);
+  --wb-code-bg: #f8fafc;
+  --wb-code-border: #e5e7eb;
+  --wb-code-line: #94a3b8;
+  --wb-syntax-text: #0f172a;
+  --wb-syntax-keyword: #7c3aed;
+  --wb-syntax-string: #b45309;
+  --wb-syntax-comment: #64748b;
+  --wb-syntax-number: #047857;
   color: var(--wb-text);
 }
 
-.workbench-root ::selection {
-  background: rgba(167, 139, 250, 0.25);
+.workbench-root.dark {
+  /* --- Dark (opt-in) --- */
+  --wb-bg: #0b0b0d;
+  --wb-bg-elev: #141418;
+  --wb-bg-hover: rgba(255, 255, 255, 0.05);
+  --wb-bg-active: rgba(255, 255, 255, 0.08);
+  --wb-border: #2a2a30;
+  --wb-border-strong: #3a3a42;
+  --wb-text: #ececf1;
+  --wb-text-soft: #d1d5db;
+  --wb-text-dim: #9ca3af;
+  --wb-text-muted: #6b7280;
+  --wb-accent: #a78bfa;
+  --wb-accent-fg: #0b0b0d;
+  --wb-accent-weak: rgba(167, 139, 250, 0.15);
+  --wb-accent-border: rgba(167, 139, 250, 0.50);
+  --wb-success: #34d399;
+  --wb-success-weak: rgba(52, 211, 153, 0.15);
+  --wb-warn: #fbbf24;
+  --wb-warn-weak: rgba(251, 191, 36, 0.15);
+  --wb-error: #f87171;
+  --wb-error-weak: rgba(248, 113, 113, 0.15);
+  --wb-user-bubble-bg: rgba(255, 255, 255, 0.02);
+  --wb-user-bubble-border: #2a2a30;
+  --wb-code-bg: #0f0f13;
+  --wb-code-border: #2a2a30;
+  --wb-code-line: #4b5563;
+  --wb-syntax-text: #ececf1;
+  --wb-syntax-keyword: #c586c0;
+  --wb-syntax-string: #ce9178;
+  --wb-syntax-comment: #9ca3af;
+  --wb-syntax-number: #b5cea8;
 }
 
-.workbench-root *::-webkit-scrollbar-thumb {
+.workbench-root ::selection {
+  background: var(--wb-accent-weak);
+}
+
+.workbench-root.dark *::-webkit-scrollbar-thumb {
   background-color: #3a3a42;
 }
 

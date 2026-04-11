@@ -53,10 +53,10 @@ export function ConversationFeed() {
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
         {buildStatus === 'idle' && messages.length === 0 && (
           <div className="mt-12 text-center">
-            <h2 className="text-[15px] font-semibold text-neutral-100">
+            <h2 className="text-[15px] font-semibold text-[color:var(--wb-text)]">
               Describe the agent you want to build
             </h2>
-            <p className="mt-2 text-[12px] leading-5 text-neutral-500">
+            <p className="mt-2 text-[12px] leading-5 text-[color:var(--wb-text-dim)]">
               I&rsquo;ll produce a plan, generate tools and guardrails, and render the
               source code so you can review it — all live on the right.
             </p>
@@ -75,7 +75,7 @@ export function ConversationFeed() {
 
         {artifacts.length > 0 && (
           <div className="flex flex-col gap-2">
-            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-neutral-500">
+            <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
               Artifacts
             </h3>
             {artifacts.map((artifact) => (
@@ -87,26 +87,26 @@ export function ConversationFeed() {
         {runningTask && (
           <div
             className={classNames(
-              'flex items-center gap-2 rounded-md border border-dashed border-[color:var(--wb-border)] px-3 py-2 text-[12px] text-neutral-300'
+              'flex items-center gap-2 rounded-md border border-dashed border-[color:var(--wb-border)] px-3 py-2 text-[12px] text-[color:var(--wb-text-soft)]'
             )}
             aria-live="polite"
           >
             <Loader2 className="h-3.5 w-3.5 animate-spin text-[color:var(--wb-accent)]" />
             <span>
-              <span className="text-neutral-500">Next:&nbsp;</span>
+              <span className="text-[color:var(--wb-text-dim)]">Next:&nbsp;</span>
               {runningTask.title}
             </span>
           </div>
         )}
 
         {buildStatus === 'done' && plan && (
-          <div className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-success)]/10 px-3 py-2 text-[12px] text-[color:var(--wb-success)]">
+          <div className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-success-weak)] px-3 py-2 text-[12px] text-[color:var(--wb-success)]">
             Build complete. Canonical model updated with the new plan.
           </div>
         )}
 
         {error && (
-          <div className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-error)]/10 px-3 py-2 text-[12px] text-[color:var(--wb-error)]">
+          <div className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-error-weak)] px-3 py-2 text-[12px] text-[color:var(--wb-error)]">
             {error}
           </div>
         )}

@@ -262,11 +262,11 @@ function tokenize(source: string, language: string): Token[] {
 }
 
 const TOKEN_CLASSES: Record<Token['type'], string> = {
-  text: 'text-neutral-200',
-  keyword: 'text-[#c586c0]',
-  string: 'text-[#ce9178]',
-  comment: 'text-neutral-500 italic',
-  number: 'text-[#b5cea8]',
+  text: 'text-[color:var(--wb-syntax-text)]',
+  keyword: 'text-[color:var(--wb-syntax-keyword)]',
+  string: 'text-[color:var(--wb-syntax-string)]',
+  comment: 'text-[color:var(--wb-syntax-comment)] italic',
+  number: 'text-[color:var(--wb-syntax-number)]',
 };
 
 export function SourceCodeView({ source, language, filename }: SourceCodeViewProps) {
@@ -274,15 +274,15 @@ export function SourceCodeView({ source, language, filename }: SourceCodeViewPro
   const lines = useMemo(() => source.split('\n'), [source]);
 
   return (
-    <div className="relative h-full overflow-hidden rounded-md border border-[color:var(--wb-border)] bg-[#0f0f13]">
+    <div className="relative h-full overflow-hidden rounded-md border border-[color:var(--wb-code-border)] bg-[color:var(--wb-code-bg)]">
       {filename && (
-        <div className="flex items-center justify-between border-b border-[color:var(--wb-border)] px-3 py-1.5 text-[11px] text-neutral-500">
+        <div className="flex items-center justify-between border-b border-[color:var(--wb-code-border)] px-3 py-1.5 text-[11px] text-[color:var(--wb-text-dim)]">
           <span className="font-mono">{filename}</span>
           <span className="uppercase tracking-wider">{language}</span>
         </div>
       )}
       <div className="grid grid-cols-[auto_1fr] overflow-auto">
-        <pre className="select-none border-r border-[color:var(--wb-border)] px-3 py-3 text-right font-mono text-[11px] leading-5 text-neutral-600">
+        <pre className="select-none border-r border-[color:var(--wb-code-border)] px-3 py-3 text-right font-mono text-[11px] leading-5 text-[color:var(--wb-code-line)]">
           {lines.map((_, index) => `${index + 1}`).join('\n')}
         </pre>
         <pre className="overflow-x-auto px-4 py-3 font-mono text-[12px] leading-5">

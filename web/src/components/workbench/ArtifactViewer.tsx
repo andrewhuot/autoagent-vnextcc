@@ -107,13 +107,13 @@ export function ArtifactViewer() {
                 className={classNames(
                   'rounded-md px-2.5 py-1 text-[12px] transition',
                   isActive
-                    ? 'bg-white/[0.06] text-neutral-100'
-                    : 'text-neutral-500 hover:text-neutral-300'
+                    ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
+                    : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
                 )}
               >
                 {tab.label}
                 {count > 0 && (
-                  <span className="ml-1 text-[10px] text-neutral-500">{count}</span>
+                  <span className="ml-1 text-[10px] text-[color:var(--wb-text-dim)]">{count}</span>
                 )}
               </button>
             );
@@ -126,8 +126,8 @@ export function ArtifactViewer() {
             className={classNames(
               'rounded px-2 py-0.5 text-[11px] transition',
               activeView === 'preview'
-                ? 'bg-white/[0.08] text-neutral-100'
-                : 'text-neutral-500 hover:text-neutral-300'
+                ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
+                : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
             )}
           >
             Preview
@@ -138,8 +138,8 @@ export function ArtifactViewer() {
             className={classNames(
               'rounded px-2 py-0.5 text-[11px] transition',
               activeView === 'source'
-                ? 'bg-white/[0.08] text-neutral-100'
-                : 'text-neutral-500 hover:text-neutral-300'
+                ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
+                : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
             )}
           >
             Source code
@@ -161,8 +161,8 @@ export function ArtifactViewer() {
                     className={classNames(
                       'whitespace-nowrap rounded-md px-2 py-1 text-[11px] transition',
                       artifact.id === active.id
-                        ? 'bg-white/[0.06] text-neutral-100'
-                        : 'text-neutral-500 hover:text-neutral-300'
+                        ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
+                        : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
                     )}
                   >
                     {artifact.name}
@@ -206,9 +206,9 @@ function ArtifactPreviewBody({
 }) {
   if (artifact.language === 'markdown') {
     return (
-      <article className="prose prose-invert max-w-2xl text-[13px] leading-6">
-        <h2 className="mb-2 text-[15px] font-semibold text-neutral-100">{artifact.name}</h2>
-        <pre className="whitespace-pre-wrap font-sans text-[13px] leading-6 text-neutral-300">
+      <article className="max-w-2xl text-[13px] leading-6">
+        <h2 className="mb-2 text-[15px] font-semibold text-[color:var(--wb-text)]">{artifact.name}</h2>
+        <pre className="whitespace-pre-wrap font-sans text-[13px] leading-6 text-[color:var(--wb-text-soft)]">
           {artifact.preview}
         </pre>
       </article>
@@ -221,9 +221,9 @@ function ArtifactPreviewBody({
   }
   return (
     <div className="max-w-2xl">
-      <h2 className="mb-2 text-[15px] font-semibold text-neutral-100">{artifact.name}</h2>
-      <p className="text-[13px] leading-6 text-neutral-400">{artifact.summary}</p>
-      <pre className="mt-3 whitespace-pre-wrap rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-3 font-mono text-[12px] text-neutral-300">
+      <h2 className="mb-2 text-[15px] font-semibold text-[color:var(--wb-text)]">{artifact.name}</h2>
+      <p className="text-[13px] leading-6 text-[color:var(--wb-text-dim)]">{artifact.summary}</p>
+      <pre className="mt-3 whitespace-pre-wrap rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-3 font-mono text-[12px] text-[color:var(--wb-text-soft)]">
         {artifact.preview}
       </pre>
     </div>

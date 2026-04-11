@@ -45,7 +45,35 @@ export type ArtifactCategoryFilter =
 /** High-level lifecycle of the page-wide build flow. */
 export type BuildStatus = 'idle' | 'starting' | 'running' | 'done' | 'error';
 
+/** User-facing theme for the Workbench shell. Default is light. */
+export type WorkbenchTheme = 'light' | 'dark';
+
+const THEME_STORAGE_KEY = 'agentlab.workbench.theme';
+
+function loadInitialTheme(): WorkbenchTheme {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch {
+    // localStorage may be unavailable in private mode — fall through.
+  }
+  return 'light';
+}
+
+function persistTheme(theme: WorkbenchTheme): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+  } catch {
+    // Best-effort — silently skip if storage is unavailable.
+  }
+}
+
 interface WorkbenchState {
+  // --- theme (light by default; user-toggleable, persisted to localStorage)
+  theme: WorkbenchTheme;
+
   // --- identity
   projectId: string | null;
   projectName: string;
@@ -96,10 +124,13 @@ interface WorkbenchActions {
   setActiveCategory: (category: ArtifactCategoryFilter) => void;
   setTarget: (target: WorkbenchTarget) => void;
   setError: (error: string | null) => void;
+  setTheme: (theme: WorkbenchTheme) => void;
+  toggleTheme: () => void;
   reset: () => void;
 }
 
 const INITIAL_STATE: WorkbenchState = {
+  theme: loadInitialTheme(),
   projectId: null,
   projectName: 'New Workbench',
   target: 'portable',
@@ -312,7 +343,24 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
   setError: (error) => set(() => ({ error })),
 
-  reset: () => set(() => ({ ...INITIAL_STATE })),
+  setTheme: (theme) => {
+    persistTheme(theme);
+    set(() => ({ theme }));
+  },
+
+  toggleTheme: () => {
+    const next: WorkbenchTheme = get().theme === 'dark' ? 'light' : 'dark';
+    persistTheme(next);
+    set(() => ({ theme: next }));
+  },
+
+  // Reset preserves the user's theme choice — it's a display preference,
+  // not conversation state.
+  reset: () =>
+    set((state) => ({
+      ...INITIAL_STATE,
+      theme: state.theme,
+    })),
 }));
 
 /** Deep-clone a plan tree. Keeps reducers pure without pulling in Immer. */

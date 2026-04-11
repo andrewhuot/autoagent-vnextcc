@@ -35,9 +35,9 @@ function StatusIcon({ status }: { status: PlanTaskStatus }) {
     return <PauseCircle className={classNames(sharedClass, 'text-[color:var(--wb-warn)]')} aria-label="Paused" />;
   }
   if (status === 'skipped') {
-    return <CircleDashed className={classNames(sharedClass, 'text-neutral-500')} aria-label="Skipped" />;
+    return <CircleDashed className={classNames(sharedClass, 'text-[color:var(--wb-text-muted)]')} aria-label="Skipped" />;
   }
-  return <Circle className={classNames(sharedClass, 'text-neutral-500')} aria-label="Pending" />;
+  return <Circle className={classNames(sharedClass, 'text-[color:var(--wb-text-muted)]')} aria-label="Pending" />;
 }
 
 function TaskRow({ task, depth }: { task: PlanTask; depth: number }) {
@@ -67,14 +67,14 @@ function TaskRow({ task, depth }: { task: PlanTask; depth: number }) {
         onClick={handleClick}
         className={classNames(
           'group flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors',
-          'hover:bg-white/5 focus:outline-none focus:ring-1 focus:ring-[color:var(--wb-accent)]',
-          isActive && 'bg-white/[0.06]'
+          'hover:bg-[color:var(--wb-bg-hover)] focus:outline-none focus:ring-1 focus:ring-[color:var(--wb-accent)]',
+          isActive && 'bg-[color:var(--wb-bg-active)]'
         )}
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
       >
         <span className="mt-0.5">
           {hasChildren ? (
-            <ChevronDown className="h-3.5 w-3.5 text-neutral-500" />
+            <ChevronDown className="h-3.5 w-3.5 text-[color:var(--wb-text-muted)]" />
           ) : (
             <StatusIcon status={task.status} />
           )}
@@ -83,14 +83,16 @@ function TaskRow({ task, depth }: { task: PlanTask; depth: number }) {
           <span
             className={classNames(
               'block truncate text-[13px] leading-5',
-              task.status === 'done' ? 'text-neutral-400' : 'text-neutral-100',
-              hasChildren && 'font-medium text-neutral-200'
+              task.status === 'done'
+                ? 'text-[color:var(--wb-text-dim)]'
+                : 'text-[color:var(--wb-text)]',
+              hasChildren && 'font-medium text-[color:var(--wb-text)]'
             )}
           >
             {task.title}
           </span>
           {!hasChildren && task.log && task.log.length > 0 && (
-            <span className="mt-0.5 block truncate text-[11px] text-neutral-500">
+            <span className="mt-0.5 block truncate text-[11px] text-[color:var(--wb-text-dim)]">
               {task.log[task.log.length - 1]}
             </span>
           )}
@@ -116,11 +118,11 @@ export function PlanTreeView({ plan }: PlanTreeViewProps) {
       className="rounded-lg border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-3"
     >
       <header className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-neutral-400">
+        <h3 className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
           <ListTree className="h-3.5 w-3.5" />
           Plan
         </h3>
-        <span className="text-[11px] text-neutral-500">
+        <span className="text-[11px] text-[color:var(--wb-text-dim)]">
           {summary.done} / {summary.leafCount} steps
         </span>
       </header>
