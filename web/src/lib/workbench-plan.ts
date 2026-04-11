@@ -70,7 +70,11 @@ export function recomputeParentStatus(root: PlanTask): void {
   }
 }
 
-/** Count total / done / running across the whole tree. */
+/** Count total / done / running across the whole tree.
+ *
+ * ``done`` / ``running`` are leaf-only so the header counter reads
+ * "3/8 steps" rather than double-counting parent bubble-up status.
+ */
 export function summarizePlan(root: PlanTask | null): {
   total: number;
   done: number;
@@ -86,9 +90,12 @@ export function summarizePlan(root: PlanTask | null): {
   let leafCount = 0;
   for (const task of walkTasks(root)) {
     total += 1;
-    if (task.status === 'done') done += 1;
-    if (task.status === 'running') running += 1;
-    if (!task.children || task.children.length === 0) leafCount += 1;
+    const isLeaf = !task.children || task.children.length === 0;
+    if (isLeaf) {
+      leafCount += 1;
+      if (task.status === 'done') done += 1;
+      if (task.status === 'running') running += 1;
+    }
   }
   return { total, done, running, leafCount };
 }

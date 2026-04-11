@@ -5,7 +5,7 @@
  */
 
 import { useMemo } from 'react';
-import { CheckCircle2, ChevronDown, ChevronRight, Circle, CircleDashed, Loader2, PauseCircle, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, ChevronDown, Circle, CircleDashed, ListTree, Loader2, PauseCircle, TriangleAlert } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import type { PlanTask, PlanTaskStatus } from '../../lib/workbench-api';
 import { useWorkbenchStore } from '../../lib/workbench-store';
@@ -117,7 +117,7 @@ export function PlanTreeView({ plan }: PlanTreeViewProps) {
     >
       <header className="mb-2 flex items-center justify-between gap-2">
         <h3 className="flex items-center gap-2 text-[12px] font-semibold uppercase tracking-wider text-neutral-400">
-          <ChevronRight className="h-3.5 w-3.5" />
+          <ListTree className="h-3.5 w-3.5" />
           Plan
         </h3>
         <span className="text-[11px] text-neutral-500">

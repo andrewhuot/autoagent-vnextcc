@@ -59,6 +59,14 @@ def _infer_domain(brief: str) -> str:
         return "Healthcare Intake"
     if "it " in lowered or "vpn" in lowered or "password" in lowered:
         return "IT Helpdesk"
+    if (
+        "m&a" in lowered
+        or "acquisition" in lowered
+        or "merger" in lowered
+        or "deal memo" in lowered
+        or "investment" in lowered
+    ):
+        return "M&A Analyst"
     return "Agent"
 
 

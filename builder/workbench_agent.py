@@ -294,14 +294,15 @@ def _fake_execute(
             "label": "Root instructions",
             "object": {"instructions_append": instructions},
         }
+        agent_label = _agent_label(domain)
         artifact = WorkbenchArtifact(
             id=f"art-{new_id()}",
             task_id=leaf.id,
             category="agent",
-            name=f"{domain} agent — role",
-            summary=f"Defined role and scope for the {domain.lower()} agent.",
-            preview=f"# {domain} Agent\n\n{instructions}\n",
-            source=f"# {domain} Agent\n\n{instructions}\n",
+            name=f"{agent_label} — role",
+            summary=f"Defined role and scope for the {agent_label.lower()}.",
+            preview=f"# {agent_label}\n\n{instructions}\n",
+            source=f"# {agent_label}\n\n{instructions}\n",
             language="markdown",
             created_at=now,
         )
@@ -462,9 +463,10 @@ def _fake_execute(
         return artifact, None, "Rendered agent.py"
 
     if "test cases" in title or "draft test" in title:
+        agent_label = _agent_label(domain)
         suite = {
             "id": f"eval-{_slugify(domain)[:24]}",
-            "name": f"{domain} regression",
+            "name": f"{agent_label} regression",
             "cases": [
                 {
                     "id": "case-001",
@@ -536,10 +538,20 @@ def _chunk(text: str, size: int) -> list[str]:
     return chunks
 
 
+def _agent_label(domain: str) -> str:
+    """Render a non-redundant agent label, e.g. "Agent" not "Agent agent"."""
+    cleaned = domain.strip() or "Agent"
+    if cleaned.lower().endswith("agent"):
+        return cleaned
+    return f"{cleaned} agent"
+
+
 def _instructions_from_brief(brief: str, domain: str) -> str:
     """One-paragraph human-readable role summary."""
+    label = _agent_label(domain).lower()
     return (
-        f"You are a {domain.lower()} agent. Goal: {brief.strip()}. "
+        f"You are a{'n' if label[:1] in 'aeiou' else ''} {label}. "
+        f"Goal: {brief.strip()}. "
         f"Be concise, cite assumptions when unclear, and escalate when the user "
         f"asks for something outside your configured scope."
     )

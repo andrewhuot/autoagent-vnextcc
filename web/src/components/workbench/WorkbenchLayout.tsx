@@ -72,9 +72,9 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
         </div>
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col xl:grid xl:grid-cols-[460px_minmax(0,1fr)]">
+      <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[440px_minmax(0,1fr)]">
         {/* Left pane: conversation + chat input + plan tree */}
-        <div className="flex min-h-0 flex-col border-b border-[color:var(--wb-border)] xl:border-b-0 xl:border-r">
+        <div className="flex min-h-0 flex-col border-b border-[color:var(--wb-border)] lg:border-b-0 lg:border-r">
           <div className="flex min-h-0 flex-1 flex-col">{left}</div>
           {footer}
         </div>
