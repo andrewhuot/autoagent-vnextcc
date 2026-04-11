@@ -52,6 +52,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     items: [
       { label: 'Build', path: '/build' },
       { label: 'Agent Improver', path: '/agent-improver' },
+      { label: 'Workbench', path: '/workbench' },
     ],
   },
   {
@@ -163,6 +164,7 @@ const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build' },
   '/build': { title: 'Build', breadcrumbs: ['Build'] },
   '/agent-improver': { title: 'Agent Improver', breadcrumbs: ['Build'] },
+  '/workbench': { title: 'Workbench', breadcrumbs: ['Build'] },
   '/intelligence': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=transcript' },
   '/builder': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=builder-chat' },
   '/builder/demo': {
@@ -321,6 +323,7 @@ const SIMPLE_MODE_PATHS = new Set([
   '/dashboard',
   '/setup',
   '/build',
+  '/workbench',
   '/evals',
   '/results',
   '/compare',

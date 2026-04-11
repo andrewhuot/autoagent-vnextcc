@@ -1,6 +1,31 @@
 // Builder Workspace canonical frontend types.
 // Mirrors backend dataclasses from builder/types.py.
 
+export interface BuilderConfigDraftTool {
+  id?: string;
+  name: string;
+  description?: string;
+  type?: string;
+}
+
+export interface BuilderConfigDraftPolicy {
+  id?: string;
+  name: string;
+  scope?: string;
+  description?: string;
+}
+
+export interface BuilderConfigDraft {
+  agent_name: string;
+  model: string;
+  system_prompt: string;
+  tools: BuilderConfigDraftTool[];
+  routing_rules: Array<Record<string, unknown>>;
+  policies: BuilderConfigDraftPolicy[];
+  eval_criteria: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+}
+
 export type ExecutionMode = 'ask' | 'draft' | 'apply' | 'delegate';
 
 export type TaskStatus =

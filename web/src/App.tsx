@@ -40,6 +40,7 @@ import { PreferenceInbox } from './pages/PreferenceInbox';
 import { PolicyCandidates } from './pages/PolicyCandidates';
 import { RewardAudit } from './pages/RewardAudit';
 import { Build } from './pages/Build';
+import { Workbench } from './pages/Workbench';
 import { Studio } from './pages/studio/Studio';
 import { Improvements } from './pages/Improvements';
 import { Connect } from './pages/Connect';
@@ -74,6 +75,7 @@ export default function App() {
           <Routes>
             <Route path="/" element={<Navigate to="/build" replace />} />
             <Route path="/build" element={<Build />} />
+            <Route path="/workbench" element={<Workbench />} />
             <Route path="/agent-improver" element={<AgentImprover />} />
             <Route path="/intelligence" element={<LegacyRouteRedirect />} />
             <Route path="/builder" element={<LegacyRouteRedirect />} />

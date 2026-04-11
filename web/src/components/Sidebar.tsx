@@ -38,6 +38,7 @@ import {
   Target,
   ShieldCheck,
   Workflow,
+  LayoutTemplate,
 } from 'lucide-react';
 import {
   getNavigationSections,
@@ -49,6 +50,7 @@ import { classNames } from '../lib/utils';
 
 const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/build': Hammer,
+  '/workbench': LayoutTemplate,
   '/agent-improver': BrainCircuit,
   '/intelligence': BrainCircuit,
   '/connect': Download,

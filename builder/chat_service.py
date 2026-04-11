@@ -108,6 +108,177 @@ class BuilderChatService:
             return None
         return preview_generated_config(session.generated_config, message).to_dict()
 
+    # ------------------------------------------------------------------
+    # Workbench export / test-live helpers
+    # ------------------------------------------------------------------
+
+    def draft_to_export_payload(self, draft: BuilderConfigDraft) -> dict:
+        """Map BuilderConfigDraft to the dict shape exporters consume."""
+        return {
+            "name": draft.agent_name,
+            "model": draft.model,
+            "instructions": draft.system_prompt,
+            "tools": [
+                {
+                    "name": tool.name if hasattr(tool, "name") else tool.get("name", ""),
+                    "description": tool.description if hasattr(tool, "description") else tool.get("description", ""),
+                    "type": getattr(tool, "type", None) or (tool.get("type", "function") if isinstance(tool, dict) else "function"),
+                }
+                for tool in (draft.tools or [])
+            ],
+            "policies": [
+                {"name": p.name, "description": p.description} if hasattr(p, "name") else p
+                for p in (draft.policies or [])
+            ],
+            "routing_rules": [
+                {"name": r.name, "intent": r.intent, "description": r.description} if hasattr(r, "name") else r
+                for r in (draft.routing_rules or [])
+            ],
+            "metadata": dict(draft.metadata or {}),
+        }
+
+    def export_to_adk(self, session_id: str) -> dict:
+        """Export the session's draft to ADK format. Never raises."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return {
+                "filename": "agent.py",
+                "content": "",
+                "content_type": "text/x-python",
+                "warnings": [f"Session {session_id} not found"],
+            }
+        draft = session.config
+        if draft is None:
+            return {
+                "filename": "agent.py",
+                "content": "",
+                "content_type": "text/x-python",
+                "warnings": ["No agent draft available yet"],
+            }
+        warnings: list[str] = []
+        try:
+            from adk.exporter import AdkExporter  # noqa: PLC0415
+            payload = self.draft_to_export_payload(draft)
+            # AdkExporter.export_agent() requires a snapshot_path on disk;
+            # without one we perform a dry_run=True pass with a stub path so
+            # the call always returns an ExportResult without writing files.
+            import tempfile, os  # noqa: PLC0415
+            with tempfile.TemporaryDirectory() as tmp:
+                # Write a minimal agent.py stub so the parser has something to read
+                stub = os.path.join(tmp, "agent.py")
+                with open(stub, "w") as fh:
+                    fh.write(
+                        f'from google.adk.agents import Agent\n'
+                        f'root_agent = Agent(\n'
+                        f'    name="{payload.get("name", "agent")}",\n'
+                        f'    model="{payload.get("model", "")}",\n'
+                        f'    instruction="""{payload.get("instructions", "")}""",\n'
+                        f')\n'
+                    )
+                result = AdkExporter().export_agent(payload, tmp, dry_run=True)
+            # Build a human-readable summary from the ExportResult
+            if hasattr(result, "changes"):
+                content = f"# ADK export preview for {draft.agent_name}\n"
+                content += f"# model: {draft.model or '(default)'}\n\n"
+                content += f"root_agent = Agent(\n"
+                content += f'    name="{draft.agent_name}",\n'
+                content += f'    model="{draft.model}",\n'
+                content += f'    instruction="""{draft.system_prompt}""",\n'
+                content += f')\n'
+                if result.changes:
+                    warnings.append(f"Export diff has {len(result.changes)} change(s) relative to stub.")
+            else:
+                content = str(result)
+            return {
+                "filename": "agent.py",
+                "content": content,
+                "content_type": "text/x-python",
+                "warnings": warnings,
+            }
+        except Exception as exc:
+            return {
+                "filename": "agent.py",
+                "content": "",
+                "content_type": "text/x-python",
+                "warnings": [f"ADK export failed: {exc}"],
+            }
+
+    def export_to_cx(self, session_id: str) -> dict:
+        """Export the session's draft to CX Studio format. Never raises."""
+        session = self._sessions.get(session_id)
+        if session is None:
+            return {
+                "filename": "agent.json",
+                "content": "",
+                "content_type": "application/json",
+                "warnings": [f"Session {session_id} not found"],
+                "diff": None,
+            }
+        draft = session.config
+        if draft is None:
+            return {
+                "filename": "agent.json",
+                "content": "",
+                "content_type": "application/json",
+                "warnings": ["No agent draft available yet"],
+                "diff": None,
+            }
+        warnings: list[str] = []
+        try:
+            import json as _json  # noqa: PLC0415
+            payload = self.draft_to_export_payload(draft)
+            # CxExporter requires a live client and a snapshot path on disk.
+            # Without those, return a JSON representation of the draft payload
+            # and report why a full push is not available.
+            content = _json.dumps(payload, indent=2)
+            warnings.append(
+                "CX push requires a configured CX client and snapshot path; "
+                "returning draft payload as JSON preview only."
+            )
+            return {
+                "filename": "agent.json",
+                "content": content,
+                "content_type": "application/json",
+                "warnings": warnings,
+                "diff": None,
+            }
+        except Exception as exc:
+            return {
+                "filename": "agent.json",
+                "content": "",
+                "content_type": "application/json",
+                "warnings": [f"CX export failed: {exc}"],
+                "diff": None,
+            }
+
+    def test_live(self, session_id: str, user_input: str) -> dict:
+        """Run an end-to-end live test against the session's current draft."""
+        try:
+            result = self.preview_session(session_id=session_id, message=user_input)
+            if result is None:
+                return {
+                    "reply": f"No preview available for session {session_id} (session missing or draft not ready).",
+                    "trace_id": session_id,
+                    "tool_calls": [],
+                }
+            if isinstance(result, dict):
+                return {
+                    "reply": result.get("response") or result.get("reply") or str(result),
+                    "trace_id": result.get("trace_id") or result.get("session_id") or session_id,
+                    "tool_calls": result.get("tool_calls") or [],
+                }
+            return {
+                "reply": str(result),
+                "trace_id": session_id,
+                "tool_calls": [],
+            }
+        except Exception as exc:
+            return {
+                "reply": f"Test live failed: {exc}",
+                "trace_id": session_id,
+                "tool_calls": [],
+            }
+
     def serialize_session(self, session: BuilderChatSession) -> dict[str, Any]:
         """Convert session state to the frontend-facing response shape."""
         return {

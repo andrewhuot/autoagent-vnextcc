@@ -118,6 +118,19 @@ class BuilderPreviewRequest(BaseModel):
     message: str = Field(min_length=1)
 
 
+class ExportAdkRequest(BaseModel):
+    session_id: str
+
+
+class ExportCxRequest(BaseModel):
+    session_id: str
+
+
+class TestLiveRequest(BaseModel):
+    session_id: str
+    input: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -206,6 +219,24 @@ async def preview_builder_chat_session(request: Request, body: BuilderPreviewReq
     if preview is None:
         raise HTTPException(status_code=404, detail="Builder session not found")
     return preview
+
+
+@router.post("/export/adk")
+async def export_adk(request: Request, body: ExportAdkRequest) -> dict:
+    service = _chat_service(request)
+    return service.export_to_adk(body.session_id)
+
+
+@router.post("/export/cx")
+async def export_cx(request: Request, body: ExportCxRequest) -> dict:
+    service = _chat_service(request)
+    return service.export_to_cx(body.session_id)
+
+
+@router.post("/test-live")
+async def test_live(request: Request, body: TestLiveRequest) -> dict:
+    service = _chat_service(request)
+    return service.test_live(body.session_id, body.input)
 
 
 # ---------------------------------------------------------------------------

@@ -291,14 +291,23 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {demoJourneyContext ? <DemoJourneyStrip context={demoJourneyContext} /> : null}
 
-        <main className="flex-1 px-5 py-6 sm:px-6">
-          <div
-            key={location.pathname}
-            className="mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]"
-          >
-            {children}
-          </div>
-        </main>
+        {(() => {
+          const isWorkbench = location.pathname === '/workbench';
+          return isWorkbench ? (
+            <main className="flex-1 overflow-hidden">
+              {children}
+            </main>
+          ) : (
+            <main className="flex-1 px-5 py-6 sm:px-6">
+              <div
+                key={location.pathname}
+                className="mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]"
+              >
+                {children}
+              </div>
+            </main>
+          );
+        })()}
       </div>
 
       <CommandPalette />
