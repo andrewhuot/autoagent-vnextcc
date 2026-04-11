@@ -2,6 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { OpportunityItem } from '../components/OpportunityItem';
 import { useOpportunities } from '../lib/api';
+import type { OptimizationOpportunity } from '../lib/types';
 
 interface OpportunitiesProps {
   embedded?: boolean;
@@ -18,6 +19,23 @@ export function Opportunities({ embedded = false }: OpportunitiesProps) {
     in_progress: opportunities.filter((o) => o.status === 'in_progress').length,
     resolved: opportunities.filter((o) => o.status === 'resolved').length,
   };
+
+  function handleOptimizeOpportunity(opportunity: OptimizationOpportunity) {
+    const family = opportunity.failure_family.replaceAll('_', ' ');
+    const objective = `Improve ${family} for ${opportunity.affected_agent_path}`;
+    const search = new URLSearchParams({
+      force: '1',
+      opportunity_id: opportunity.opportunity_id,
+      objective,
+    });
+
+    navigate(`/optimize?${search.toString()}`, {
+      state: {
+        opportunityId: opportunity.opportunity_id,
+        objective,
+      },
+    });
+  }
 
   return (
     <div className="space-y-6">
@@ -65,7 +83,11 @@ export function Opportunities({ embedded = false }: OpportunitiesProps) {
             </div>
           ) : (
             sorted.map((opportunity) => (
-              <OpportunityItem key={opportunity.opportunity_id} opportunity={opportunity} />
+              <OpportunityItem
+                key={opportunity.opportunity_id}
+                opportunity={opportunity}
+                onOptimize={handleOptimizeOpportunity}
+              />
             ))
           )}
         </div>

@@ -254,3 +254,79 @@
 - Playwright maintained flow: `PLAYWRIGHT_BASE_URL=http://localhost:5180 npx playwright test tests/builder-flow.spec.ts` passed with 2 tests.
 - Manual browser verification on `http://localhost:5180/build?tab=builder-chat` covered create, inspect, test, mock fallback, configured `Tool: change_booking`, save, and `/evals?agent=agent-v003&new=1` handoff to `Start First Evaluation`.
 - Full web build remains blocked outside this Build scope: `npm run build` fails on unused `NormalizedFallback` imports in `src/lib/provider-fallback.test.ts` and `src/pages/AgentImprover.tsx`.
+
+## Optimize and Improvements Effectiveness Campaign
+
+### Requirements
+- Review optimization and improvement steps end to end across both UI and CLI.
+- Read broadly first: relevant routes/pages/components, backend optimize/improvements routes/services/stores, CLI/runbooks/docs, tests, and recent UX findings.
+- Audit the real operator journey from eval findings through start optimization, proposal inspection, candidate review, approve/reject/promote/deploy, and CLI touchpoints.
+- Use browser/Playwright where helpful for the UI path.
+- Research product or platform expectations where needed.
+- Identify biggest effectiveness gaps, especially weak review context, unclear candidate differences, poor eval handoffs, CLI/UI divergence, missing evidence, dead ends, state/context loss, misleading labels, and lack of confidence that optimization improved the agent.
+- Implement high-value improvements, add/strengthen tests, verify thoroughly, commit, push, and run the requested `openclaw system event`.
+
+### Initial Environment Findings
+- Branch is `feat/optimize-improvements-effectiveness-codex`.
+- HEAD is `9fbb3a99eaae6f5dd4f8e2440e1233ba52c708fa`, matching `origin/master` and the requested base state.
+- Initial worktree was clean.
+- No project-local `AGENTS.md` file was found; follow the user-supplied global instructions and existing repo style.
+
+### Research Findings
+- Repository has multiple relevant UI surfaces: `web/src/pages/Optimize.tsx`, `LiveOptimize.tsx`, `Improvements.tsx`, `Opportunities.tsx`, `Reviews.tsx`, `AutoFix.tsx`, `ChangeReview.tsx`, `EvalRuns.tsx`, `EvalDetail.tsx`, `ResultsExplorer.tsx`, `Deploy.tsx`, and `LoopMonitor.tsx`.
+- Relevant backend/API surfaces include `api/routes/optimize.py`, `optimize_stream.py`, `autofix.py`, `changes.py`, `opportunities.py`, `experiments.py`, `loop.py`, `deploy.py`, `eval.py`, `results.py`, and optimizer modules such as `loop.py`, `search.py`, `change_card.py`, `autofix.py`, `memory.py`, `pending_reviews.py`, `human_control.py`, and `diff_engine.py`.
+- CLI touchpoints are centered in the large `runner.py` plus `cli/` helpers; targeted reading covered `agentlab optimize`, `review`, `changes`, `deploy`, and the hidden/deprecated `improve` flow.
+- Prior product docs/plans are directly relevant: `OPTIMIZATION_COMPONENTS_AUDIT.md`, `docs/features/prompt-optimization.md`, `docs/features/autofix.md`, `docs/plans/2026-04-01-optimize-human-approval.md`, `docs/plans/2026-04-01-seamless-agent-journey.md`, and `working-docs/plans/UX_OVERHAUL_PLAN.md`.
+- `Optimize.tsx` supports two tabs: Run and Live. Run can start `/api/optimize/run` with selected agent/config, optional eval run context, mode/objective/guardrails/budget, and a default human-approval checkbox.
+- Optimize pending reviews come from `/api/optimize/pending`; approving one calls `/api/optimize/pending/{attempt_id}/approve` and immediately deploys the captured proposed config via the backend deployer.
+- Improvements wraps Opportunities, Experiments, Change Review, and History tabs, but the embedded Opportunity list is currently read-only and does not expose a direct optimize-from-opportunity action.
+- Change Review uses `/api/changes` change cards, separate from Optimize pending reviews. Applying a change card currently updates card status to `applied` in `ChangeCardStore`; it does not appear to deploy a pending optimizer proposal.
+- Experiments cards link pending/rejected candidates to `/improvements?tab=review` and accepted candidates to `/deploy`, but do not carry a selected experiment/change context.
+- CLI `agentlab optimize` is eval-first: it refuses to optimize without latest eval data for the active config, builds health context from failed eval cases, saves an accepted candidate config as a `candidate` version, writes a reviewable `ChangeCard`, and mirrors the candidate into the experiment log/store.
+- CLI `agentlab review apply` marks the change card applied, syncs its experiment status to accepted, and sets the candidate config version active locally. CLI deploy then canaries a non-active candidate version.
+- CLI `agentlab improve` is hidden and emits a deprecation tip toward `agentlab optimize --cycles 1`; AutoFix remains a separate suggest/apply/history flow.
+- Product mismatch: web `/api/optimize/run` with human approval persists a `PendingReview` and approving it immediately calls `deployer.deploy`, while the primary CLI review flow persists `ChangeCard`/`ExperimentCard` and separates apply, eval verification, and deploy.
+
+### Technical Decisions
+| Decision | Rationale |
+|----------|-----------|
+| Use planning files for this campaign | The task spans product audit, repo discovery, implementation, verification, commit/push, and notification. |
+| Preserve historical `findings.md` content | Earlier AgentLab Build/Agent Improver/Workbench findings provide relevant context for this adjacent Optimize/Improvements campaign. |
+
+### Issues Encountered
+| Issue | Resolution |
+|-------|------------|
+| A parent-directory `find .. -name AGENTS.md` search was too broad and slow | Replaced it with a project-local pruned search excluding `.git` and `node_modules`; no local AGENTS override found. |
+
+### Visual/Browser Findings
+- Added and passed a browser-level Playwright journey that mocks the API at the network boundary and verifies the real route flow: Improvements opportunity -> Optimize deep link with objective/force -> pending-review evidence -> Change Review candidate handoff.
+
+### Verification Results
+- Branch/base check confirmed current HEAD and merge-base are both `9fbb3a9`.
+- Focused backend API regression passed: `.venv/bin/python -m pytest tests/test_changes_api.py tests/test_optimize_api.py -q` returned 14 passed.
+- Focused web regression passed: `npm run test -- Optimize.test.tsx Opportunities.test.tsx ChangeReview.test.tsx` returned 4 files passed, 15 tests passed.
+- Related backend regression passed: `.venv/bin/python -m pytest tests/test_changes_api.py tests/test_change_card.py tests/test_experiments.py tests/test_experiments_api.py tests/test_e2e_value_chain_cli.py tests/test_optimize_api.py -q` returned 60 passed.
+- Related web regression passed: `npm run test -- Optimize.test.tsx Opportunities.test.tsx ChangeReview.test.tsx Improvements.test.tsx EvalRuns.test.tsx Deploy.test.tsx ResultsExplorer.test.tsx LiveOptimize.test.tsx` returned 9 files passed, 38 tests passed.
+- Production web build passed with `npm run build`; Vite emitted the existing large chunk warning for `index-*.js`.
+- Browser sanity passed: `PLAYWRIGHT_BASE_URL=http://127.0.0.1:5177 npx playwright test tests/optimize-improvements-flow.spec.ts` returned 1 passed.
+- Python syntax check passed: `.venv/bin/python -m py_compile api/models.py api/routes/changes.py api/routes/optimize.py tests/test_changes_api.py tests/test_optimize_api.py`.
+- CLI smoke checks passed: `.venv/bin/agentlab optimize --help`, `review --help`, `changes --help`, and `deploy --help` rendered 97 total help lines.
+- `git diff --check` passed with no whitespace errors.
+- Targeted ESLint passed for touched non-Optimize source/test files and the new Playwright spec. Including `Optimize.tsx` still fails on pre-existing React compiler diagnostics around synchronous setState in effects and effect dependency warnings.
+- Full web suite passed: `npm run test` returned 47 files passed and 274 tests passed; jsdom still emitted its known navigation warning.
+- Full backend suite did not fully pass: `.venv/bin/python -m pytest -q` returned 3557 passed, 6 failed, and 20 warnings. The failures were outside this patch: stale mutation registry count expectations (`13` expected, current registry returns `14`) and shell-script safety tests that became active because this campaign created `.venv` for verification.
+
+### Effectiveness Gaps Selected for Fix
+- Pending Optimize reviews showed scores, diff, reasoning, and governance notes, but did not explain what evidence the optimizer used. Operators could approve a deployment without seeing the eval/observer source, failed-case count, top failure buckets, or sample failures.
+- Opportunities were a ranked queue with no action on each item. A user could see a high-priority failure cluster, but had to manually jump to Optimize and retype the objective/context.
+- Change Review hid candidate handoff metadata already present in CLI-generated ChangeCards: candidate config version/path, source eval path, and linked experiment ID.
+- Web `/api/changes/{id}/apply` diverged from CLI `agentlab review apply`: the CLI accepted the linked experiment and activated the candidate locally, while the API only marked the card applied.
+
+### Implementation Findings
+- `PendingReview` now carries `source_eval_run_id`, a bounded `evidence_summary`, and up to five representative failure samples. The summary includes evidence source, total/failed cases, safety failures, top buckets, rates, and observer/eval reason.
+- Optimize pending review cards now include a Decision evidence panel so approval is grounded in the eval/observer context rather than only a score delta.
+- Opportunities now expose an `Optimize this` action that deep-links to `/optimize` with `force=1`, `opportunity_id`, and a prefilled objective derived from the failure family and affected agent path.
+- Optimize reads opportunity deep-link state from query params and opens Advanced settings with force/objective preloaded.
+- Change Review now surfaces candidate config version/path, source eval path, and experiment ID before the operator applies a card.
+- Applying a ChangeCard via API now promotes the candidate config when a compatible version manager is configured and syncs the linked experiment to accepted. Rejecting a ChangeCard via API now syncs the linked experiment to rejected.
+- The CLI implementation did not require direct command edits because the strongest divergence was in the API/UI path; this patch aligns the web API behavior with the existing CLI review-apply contract.

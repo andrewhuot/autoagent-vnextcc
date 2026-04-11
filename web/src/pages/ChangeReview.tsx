@@ -103,6 +103,12 @@ function SelectedCardDetail({ selectedCard }: { selectedCard: ChangeCard }) {
       ...Object.keys(selectedCard.metrics_after),
     ])
   );
+  const hasCandidateHandoff = Boolean(
+    selectedCard.candidate_config_version ||
+    selectedCard.candidate_config_path ||
+    selectedCard.source_eval_path ||
+    selectedCard.experiment_card_id
+  );
 
   return (
     <section className="rounded-lg border border-gray-200 bg-white p-5">
@@ -164,6 +170,35 @@ function SelectedCardDetail({ selectedCard }: { selectedCard: ChangeCard }) {
           {selectedCard.diff_hunks.length !== 1 ? 's' : ''}.
         </p>
       </div>
+
+      {hasCandidateHandoff && (
+        <div className="mb-4 rounded-lg border border-gray-200 bg-gray-50 p-3">
+          <h4 className="text-xs font-medium text-gray-500">Candidate handoff</h4>
+          <div className="mt-2 space-y-2 text-sm text-gray-700">
+            {selectedCard.candidate_config_version ? (
+              <p>
+                <span className="font-medium text-gray-900">
+                  Candidate v{selectedCard.candidate_config_version}
+                </span>
+              </p>
+            ) : null}
+            {selectedCard.candidate_config_path ? (
+              <p className="break-all font-mono text-xs text-gray-600">{selectedCard.candidate_config_path}</p>
+            ) : null}
+            {selectedCard.source_eval_path ? (
+              <p className="break-all font-mono text-xs text-gray-600">{selectedCard.source_eval_path}</p>
+            ) : null}
+            {selectedCard.experiment_card_id ? (
+              <p className="text-xs text-gray-600">Experiment {selectedCard.experiment_card_id}</p>
+            ) : null}
+          </div>
+          <p className="mt-3 text-sm text-gray-600">
+            Apply sets this candidate as the local active config when the server has the matching
+            config version, syncs the experiment decision, and should be followed by a fresh eval
+            before deploy.
+          </p>
+        </div>
+      )}
 
       {/* Info badges */}
       <div className="mb-4 flex flex-wrap gap-2">

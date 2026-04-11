@@ -702,6 +702,18 @@ class PendingReview(BaseModel):
         "immediate",
         description="Deployment strategy to use when the review is approved",
     )
+    source_eval_run_id: Optional[str] = Field(
+        None,
+        description="Eval run that supplied the review evidence, when scoped from eval results",
+    )
+    evidence_summary: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Bounded operator-facing evidence summary for the approval decision",
+    )
+    failure_samples: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Small set of representative failures used to generate the candidate",
+    )
 
 
 class PendingReviewActionResponse(BaseModel):

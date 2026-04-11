@@ -133,6 +133,64 @@ def _build_failure_samples_from_eval_payload(
     return samples
 
 
+def _summarize_failure_samples(
+    failure_samples: list[dict[str, Any]],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Return a bounded failure sample payload that helps humans inspect evidence."""
+    summarized: list[dict[str, Any]] = []
+    for sample in failure_samples[:limit]:
+        safety_flags = sample.get("safety_flags")
+        summarized.append({
+            "user_message": str(sample.get("user_message") or ""),
+            "error_message": str(sample.get("error_message") or ""),
+            "agent_response": str(sample.get("agent_response") or ""),
+            "safety_flags": safety_flags if isinstance(safety_flags, list) else [],
+            "latency_ms": float(sample.get("latency_ms") or 0.0),
+            "specialist_used": str(sample.get("specialist_used") or ""),
+        })
+    return summarized
+
+
+def _build_pending_review_evidence(
+    report: HealthReport,
+    failure_samples: list[dict[str, Any]],
+    *,
+    eval_run_id: str | None,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Build the human-review evidence contract without exposing unbounded traces."""
+    total_cases = int(report.metrics.total_conversations or 0)
+    failed_cases = int(round(total_cases * float(report.metrics.error_rate or 0.0)))
+    safety_failures = int(round(total_cases * float(report.metrics.safety_violation_rate or 0.0)))
+    top_failure_buckets = [
+        {"family": family, "count": int(count)}
+        for family, count in sorted(
+            (report.failure_buckets or {}).items(),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+        if int(count) > 0
+    ][:5]
+
+    summary = {
+        "source": "eval_run" if eval_run_id else "recent_observer",
+        "total_cases": total_cases,
+        "failed_cases": failed_cases,
+        "safety_failures": safety_failures,
+        "success_rate": float(report.metrics.success_rate or 0.0),
+        "error_rate": float(report.metrics.error_rate or 0.0),
+        "safety_violation_rate": float(report.metrics.safety_violation_rate or 0.0),
+        "failure_sample_count": len(failure_samples),
+        "top_failure_buckets": top_failure_buckets,
+        "reason": report.reason,
+    }
+    if eval_run_id:
+        summary["eval_run_id"] = eval_run_id
+
+    return summary, _summarize_failure_samples(failure_samples)
+
+
 def _build_health_report_from_eval_task(
     eval_payload: dict[str, Any],
     *,
@@ -398,6 +456,11 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                     if pending_review_store is None:
                         raise HTTPException(status_code=500, detail="Pending review store is not configured")
                     attempt_id = recent_attempt.attempt_id if recent_attempt is not None else task.task_id
+                    evidence_summary, review_failure_samples = _build_pending_review_evidence(
+                        report,
+                        failure_samples,
+                        eval_run_id=body.eval_run_id,
+                    )
                     pending_review = PendingReview(
                         attempt_id=attempt_id,
                         proposed_config=new_config,
@@ -413,6 +476,9 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                         governance_notes=diagnostics.governance_notes,
                         deploy_scores=scores_dict,
                         deploy_strategy=deploy_strategy,
+                        source_eval_run_id=body.eval_run_id,
+                        evidence_summary=evidence_summary,
+                        failure_samples=review_failure_samples,
                     )
                     pending_review_store.save_review(pending_review)
                     if recent_attempt is not None:

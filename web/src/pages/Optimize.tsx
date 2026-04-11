@@ -255,6 +255,40 @@ function formatContextValue(value: unknown): string {
   return String(value);
 }
 
+function numericReviewEvidence(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return null;
+  }
+  return value;
+}
+
+function reviewEvidenceSource(review: PendingReview): string {
+  const evalRunId = review.source_eval_run_id ?? review.evidence_summary?.eval_run_id;
+  if (typeof evalRunId === 'string' && evalRunId.length > 0) {
+    return `Evidence from eval ${evalRunId}`;
+  }
+  return 'Evidence from recent observed failures';
+}
+
+function reviewCaseSummary(review: PendingReview): string | null {
+  const totalCases = numericReviewEvidence(review.evidence_summary?.total_cases);
+  const failedCases = numericReviewEvidence(review.evidence_summary?.failed_cases);
+  if (totalCases === null || failedCases === null) {
+    return null;
+  }
+  return `${failedCases} failed of ${totalCases} cases`;
+}
+
+function reviewFailureBuckets(review: PendingReview): Array<{ family: string; count: number }> {
+  const buckets = review.evidence_summary?.top_failure_buckets;
+  if (!Array.isArray(buckets)) {
+    return [];
+  }
+  return buckets
+    .filter((bucket) => typeof bucket.family === 'string' && typeof bucket.count === 'number')
+    .map((bucket) => ({ family: bucket.family, count: bucket.count }));
+}
+
 function getProgressValue(status: TaskState | undefined, progress: number | undefined): number {
   if (status === 'completed') {
     return 100;
@@ -605,7 +639,7 @@ function OptimizeRunSection({
   const rejectReview = useRejectReview();
 
   const [windowSize, setWindowSize] = useState(100);
-  const [force, setForce] = useState(() => searchParams.get('new') === '1');
+  const [force, setForce] = useState(() => searchParams.get('new') === '1' || searchParams.get('force') === '1');
   const [requireHumanApproval, setRequireHumanApproval] = useState(true);
   const [expandedAttempt, setExpandedAttempt] = useState<string | null>(null);
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
@@ -614,8 +648,10 @@ function OptimizeRunSection({
   const [completedRun, setCompletedRun] = useState<CompletedOptimizationSummary | null>(null);
   const [latestResult, setLatestResult] = useState<PersistedOptimizeResult | null>(null);
   const [optimizeMode, setOptimizeMode] = useState<OptimizeMode>('standard');
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [objective, setObjective] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(
+    () => searchParams.has('objective') || searchParams.get('force') === '1'
+  );
+  const [objective, setObjective] = useState(() => searchParams.get('objective') ?? '');
   const [guardrails, setGuardrails] = useState<string[]>([]);
   const [newGuardrail, setNewGuardrail] = useState('');
   const [researchAlgorithm, setResearchAlgorithm] = useState('bayesian');
@@ -1568,6 +1604,9 @@ function OptimizeRunSection({
           <div className="space-y-4">
             {pendingReviews.map((review) => {
               const delta = scoreDelta(review.score_before, review.score_after);
+              const caseSummary = reviewCaseSummary(review);
+              const failureBuckets = reviewFailureBuckets(review);
+              const failureSamples = review.failure_samples ?? [];
               return (
                 <article
                   key={review.attempt_id}
@@ -1613,6 +1652,48 @@ function OptimizeRunSection({
                     </div>
 
                     <div className="space-y-4">
+                      <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
+                        <h5 className="text-sm font-semibold text-gray-900">Decision evidence</h5>
+                        <p className="mt-2 text-sm text-gray-700">{reviewEvidenceSource(review)}</p>
+                        {caseSummary ? (
+                          <p className="mt-1 text-sm text-gray-600">{caseSummary}</p>
+                        ) : null}
+                        {failureBuckets.length > 0 ? (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            {failureBuckets.map((bucket) => (
+                              <span
+                                key={`${review.attempt_id}-${bucket.family}`}
+                                className="rounded-full border border-gray-200 bg-white px-2.5 py-1 text-xs font-medium text-gray-600"
+                              >
+                                {bucket.family.replaceAll('_', ' ')} ({bucket.count})
+                              </span>
+                            ))}
+                          </div>
+                        ) : null}
+                        {failureSamples.length > 0 ? (
+                          <div className="mt-3 space-y-2">
+                            {failureSamples.slice(0, 2).map((sample, index) => (
+                              <div
+                                key={`${review.attempt_id}-sample-${index}`}
+                                className="rounded-lg border border-gray-200 bg-white px-3 py-2"
+                              >
+                                <p className="text-xs font-medium text-gray-500">Sample failure {index + 1}</p>
+                                <p className="mt-1 line-clamp-2 text-sm text-gray-700">
+                                  {sample.user_message || sample.error_message || 'No sample text recorded.'}
+                                </p>
+                                {sample.error_message ? (
+                                  <p className="mt-1 line-clamp-2 text-xs text-gray-500">{sample.error_message}</p>
+                                ) : null}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-sm text-gray-500">
+                            No representative failure samples were recorded for this review.
+                          </p>
+                        )}
+                      </div>
+
                       <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
                         <h5 className="text-sm font-semibold text-gray-900">Governance notes</h5>
                         {review.governance_notes.length > 0 ? (

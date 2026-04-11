@@ -772,6 +772,14 @@ def test_accepted_optimization_run_defaults_to_pending_human_review_and_skips_de
     assert pending_reviews[0]["change_description"] == "Strengthen root prompt"
     assert pending_reviews[0]["reasoning"] == "Improve routing clarity and answer quality"
     assert "Validate every answer." in pending_reviews[0]["config_diff"]
+    assert pending_reviews[0]["source_eval_run_id"] is None
+    assert pending_reviews[0]["evidence_summary"]["source"] == "recent_observer"
+    assert pending_reviews[0]["evidence_summary"]["total_cases"] == 42
+    assert pending_reviews[0]["evidence_summary"]["failed_cases"] == 9
+    assert pending_reviews[0]["evidence_summary"]["top_failure_buckets"] == [
+        {"family": "routing_error", "count": 4}
+    ]
+    assert pending_reviews[0]["failure_samples"] == []
 
     history_response = client.get("/api/optimize/history")
     assert history_response.status_code == 200

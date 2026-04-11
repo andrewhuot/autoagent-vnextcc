@@ -16,6 +16,41 @@ def _get_store(request: Request):
     return store
 
 
+def _sync_linked_experiment(
+    request: Request,
+    *,
+    experiment_id: str,
+    status: str,
+    result_summary: str,
+) -> bool:
+    """Mirror review decisions so web and CLI experiment history stay consistent."""
+    if not experiment_id:
+        return False
+
+    experiment_store = getattr(request.app.state, "experiment_store", None)
+    if experiment_store is None or not hasattr(experiment_store, "update_status"):
+        return False
+
+    experiment_store.update_status(experiment_id, status, result_summary=result_summary)
+    return True
+
+
+def _promote_candidate_config(request: Request, candidate_version: int | None) -> bool:
+    """Promote reviewable candidate configs when the API has version state available."""
+    if candidate_version is None:
+        return False
+
+    version_manager = getattr(request.app.state, "version_manager", None)
+    if version_manager is None or not hasattr(version_manager, "promote"):
+        return False
+
+    try:
+        version_manager.promote(candidate_version)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return True
+
+
 @router.get("")
 @router.get("/")
 async def list_change_cards(
@@ -141,10 +176,23 @@ async def apply_change_card(card_id: str, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"Change card not found: {card_id}")
     if card.status != "pending":
         raise HTTPException(status_code=400, detail=f"Card is not pending (status={card.status})")
+    candidate_promoted = _promote_candidate_config(request, card.candidate_config_version)
     ok = store.update_status(card_id, "applied")
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update card status")
-    return {"card_id": card_id, "status": "applied"}
+    experiment_synced = _sync_linked_experiment(
+        request,
+        experiment_id=card.experiment_card_id,
+        status="accepted",
+        result_summary=f"Accepted from change card {card_id}",
+    )
+    return {
+        "card_id": card_id,
+        "status": "applied",
+        "message": "Change card applied",
+        "experiment_synced": experiment_synced,
+        "candidate_promoted": candidate_promoted,
+    }
 
 
 @router.post("/{card_id}/reject")
@@ -163,7 +211,19 @@ async def reject_change_card(card_id: str, request: Request) -> dict[str, Any]:
     ok = store.update_status(card_id, "rejected", reason=reason)
     if not ok:
         raise HTTPException(status_code=500, detail="Failed to update card status")
-    return {"card_id": card_id, "status": "rejected", "reason": reason}
+    experiment_synced = _sync_linked_experiment(
+        request,
+        experiment_id=card.experiment_card_id,
+        status="rejected",
+        result_summary=f"Rejected from change card {card_id}: {reason}".strip(),
+    )
+    return {
+        "card_id": card_id,
+        "status": "rejected",
+        "message": "Change card rejected",
+        "reason": reason,
+        "experiment_synced": experiment_synced,
+    }
 
 
 @router.patch("/{card_id}/hunks")

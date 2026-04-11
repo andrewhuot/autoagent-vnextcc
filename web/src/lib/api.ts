@@ -483,6 +483,10 @@ interface RawChangeCard {
   risk_class?: 'low' | 'medium' | 'high';
   rollout_plan?: string;
   created_at?: number;
+  candidate_config_version?: number | null;
+  candidate_config_path?: string;
+  source_eval_path?: string;
+  experiment_card_id?: string;
 }
 
 function buildHunkContent(oldValue: string, newValue: string): string {
@@ -532,6 +536,10 @@ function mapChangeCard(raw: RawChangeCard): ChangeCard {
     rollout_plan: raw.rollout_plan ?? '',
     created_at: fromEpoch(raw.created_at),
     updated_at: fromEpoch(raw.created_at),
+    candidate_config_version: raw.candidate_config_version ?? null,
+    candidate_config_path: raw.candidate_config_path ?? '',
+    source_eval_path: raw.source_eval_path ?? '',
+    experiment_card_id: raw.experiment_card_id ?? '',
   };
 }
 
@@ -1051,6 +1059,9 @@ export function usePendingReviews(poll = false) {
           governance_notes?: string[];
           deploy_scores?: Record<string, unknown>;
           deploy_strategy: string;
+          source_eval_run_id?: string | null;
+          evidence_summary?: PendingReview['evidence_summary'];
+          failure_samples?: PendingReview['failure_samples'];
         }>
       >('/optimize/pending');
 
@@ -1071,6 +1082,9 @@ export function usePendingReviews(poll = false) {
           : [],
         deploy_scores: row.deploy_scores ?? {},
         deploy_strategy: row.deploy_strategy ?? 'immediate',
+        source_eval_run_id: row.source_eval_run_id ?? null,
+        evidence_summary: row.evidence_summary ?? {},
+        failure_samples: Array.isArray(row.failure_samples) ? row.failure_samples : [],
       }));
     },
     refetchInterval: poll ? 10000 : false,

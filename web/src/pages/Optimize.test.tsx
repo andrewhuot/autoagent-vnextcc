@@ -306,6 +306,18 @@ describe('Optimize', () => {
     expect(screen.getByLabelText('Objective')).toBeInTheDocument();
   });
 
+  it('opens opportunity deep links with objective and force settings preloaded', () => {
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+
+    renderOptimize('/optimize?agent=agent-v002&force=1&objective=Improve%20routing%20failure%20for%20root');
+
+    expect(screen.getByLabelText('Objective')).toHaveValue('Improve routing failure for root');
+    expect(screen.getByLabelText(/Force optimization even if/)).toBeChecked();
+  });
+
   it('shows inline accepted results with diff, governance notes, and next actions', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
@@ -439,6 +451,23 @@ describe('Optimize', () => {
           selected_operator_family: 'prompts',
           governance_notes: ['Protected safety floor at 99%.'],
           deploy_strategy: 'immediate',
+          source_eval_run_id: 'eval-run-1234',
+          evidence_summary: {
+            source: 'eval_run',
+            total_cases: 12,
+            failed_cases: 4,
+            safety_failures: 1,
+            failure_sample_count: 2,
+            top_failure_buckets: [{ family: 'routing_error', count: 4 }],
+          },
+          failure_samples: [
+            {
+              user_message: 'Route this billing escalation safely.',
+              error_message: 'routing: expected=billing got=support',
+              safety_flags: [],
+              latency_ms: 420,
+            },
+          ],
         },
       ],
       isLoading: false,
@@ -451,6 +480,10 @@ describe('Optimize', () => {
     expect(screen.getByText('Strengthen root prompt')).toBeInTheDocument();
     expect(screen.getByText('Improve routing clarity and answer quality')).toBeInTheDocument();
     expect(screen.getByText('Protected safety floor at 99%.')).toBeInTheDocument();
+    expect(screen.getByText('Evidence from eval eval-run-1234')).toBeInTheDocument();
+    expect(screen.getByText('4 failed of 12 cases')).toBeInTheDocument();
+    expect(screen.getByText('routing error (4)')).toBeInTheDocument();
+    expect(screen.getByText(/Route this billing escalation safely/)).toBeInTheDocument();
     expect(screen.getByText('- root: old')).toBeInTheDocument();
     expect(screen.getByText('+ root: new')).toBeInTheDocument();
   });

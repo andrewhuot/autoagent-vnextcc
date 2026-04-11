@@ -4,6 +4,7 @@ import { classNames } from '../lib/utils';
 
 interface OpportunityItemProps {
   opportunity: OptimizationOpportunity;
+  onOptimize?: (opportunity: OptimizationOpportunity) => void;
 }
 
 function priorityColor(score: number): string {
@@ -32,7 +33,7 @@ function MiniBar({ value, label }: { value: number; label: string }) {
   );
 }
 
-export function OpportunityItem({ opportunity }: OpportunityItemProps) {
+export function OpportunityItem({ opportunity, onOptimize }: OpportunityItemProps) {
   return (
     <div className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white px-4 py-3 transition-colors hover:bg-gray-50">
       {/* Priority score circle */}
@@ -74,6 +75,16 @@ export function OpportunityItem({ opportunity }: OpportunityItemProps) {
           </span>
         ))}
       </div>
+
+      {onOptimize ? (
+        <button
+          type="button"
+          onClick={() => onOptimize(opportunity)}
+          className="shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:border-gray-400 hover:bg-gray-100"
+        >
+          Optimize this
+        </button>
+      ) : null}
     </div>
   );
 }

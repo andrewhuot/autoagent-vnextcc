@@ -461,6 +461,35 @@ export interface OptimizeCycleResult {
   global_dimensions: Record<string, unknown>;
 }
 
+export interface PendingReviewFailureBucket {
+  family: string;
+  count: number;
+}
+
+export interface PendingReviewFailureSample {
+  user_message?: string;
+  error_message?: string;
+  agent_response?: string;
+  safety_flags?: string[];
+  latency_ms?: number;
+  specialist_used?: string;
+}
+
+export interface PendingReviewEvidenceSummary {
+  source?: string;
+  eval_run_id?: string;
+  total_cases?: number;
+  failed_cases?: number;
+  safety_failures?: number;
+  success_rate?: number;
+  error_rate?: number;
+  safety_violation_rate?: number;
+  failure_sample_count?: number;
+  top_failure_buckets?: PendingReviewFailureBucket[];
+  reason?: string;
+  [key: string]: unknown;
+}
+
 export interface PendingReview {
   attempt_id: string;
   proposed_config: Record<string, unknown>;
@@ -476,6 +505,9 @@ export interface PendingReview {
   governance_notes: string[];
   deploy_scores?: Record<string, unknown>;
   deploy_strategy: string;
+  source_eval_run_id: string | null;
+  evidence_summary: PendingReviewEvidenceSummary;
+  failure_samples: PendingReviewFailureSample[];
 }
 
 export interface PendingReviewActionResult {
@@ -698,8 +730,10 @@ export interface PromoteTraceResult {
 
 export interface OptimizationOpportunity {
   opportunity_id: string;
+  cluster_id?: string;
   failure_family: string;
   affected_agent_path: string;
+  affected_surface_candidates?: string[];
   severity: number;
   prevalence: number;
   recency: number;
@@ -708,6 +742,7 @@ export interface OptimizationOpportunity {
   status: 'open' | 'in_progress' | 'resolved';
   recommended_operator_families: string[];
   sample_trace_ids: string[];
+  resolution_experiment_id?: string | null;
 }
 
 export interface ExperimentScores {
@@ -1013,6 +1048,10 @@ export interface ChangeCard {
   rollout_plan: string;
   created_at: string;
   updated_at: string;
+  candidate_config_version?: number | null;
+  candidate_config_path?: string;
+  source_eval_path?: string;
+  experiment_card_id?: string;
 }
 
 export interface ChangeGateDecision {
