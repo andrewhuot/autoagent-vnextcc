@@ -310,6 +310,177 @@ class WorkbenchService:
         self.store.save_project(project)
         return self.response(project)
 
+    async def run_build_stream(
+        self,
+        *,
+        project_id: str | None,
+        brief: str,
+        target: str = "portable",
+        environment: str = "draft",
+        agent: Any = None,
+    ) -> Any:
+        """Drive a streaming build run, yielding events the UI can consume.
+
+        Returns an async iterator of ``{"event": str, "data": dict}`` events.
+        Ensures a project exists (creating one from ``brief`` if needed),
+        invokes the builder agent, applies ``operations`` emitted by each
+        completed task to the canonical model, and persists plan+artifacts
+        on every event. Safe to call with ``project_id=None`` for a brand-new
+        build.
+        """
+        from builder.workbench_agent import (  # local import to avoid cycle
+            BuildRequest,
+            build_default_agent,
+        )
+        from builder.workbench_plan import (
+            PlanTask,
+            PlanTaskStatus,
+            WorkbenchArtifact,
+            find_task,
+            recompute_parent_status,
+        )
+
+        runner = agent if agent is not None else build_default_agent()
+
+        if project_id:
+            try:
+                project = self._require_project(project_id)
+            except KeyError:
+                project = self.store.create_project(
+                    brief=brief, target=target, environment=environment
+                )
+        else:
+            project = self.store.create_project(
+                brief=brief, target=target, environment=environment
+            )
+        project.setdefault("plan", None)
+        project.setdefault("artifacts", [])
+        project.setdefault("build_status", "running")
+        project["build_status"] = "running"
+        project["last_brief"] = brief
+        self.store.save_project(project)
+
+        plan_root: PlanTask | None = None
+        request = BuildRequest(
+            project_id=project["project_id"],
+            brief=brief,
+            target=target,
+            environment=environment,
+        )
+
+        async def _stream() -> Any:
+            nonlocal plan_root
+            operations_for_version: list[dict[str, Any]] = []
+            async for event in runner.run(request, project):
+                event_name = str(event.get("event") or "")
+                data = event.get("data") or {}
+
+                if event_name == "plan.ready":
+                    plan_root = PlanTask.from_dict(data["plan"])
+                    project["plan"] = plan_root.to_dict()
+                    project["artifacts"] = []
+                    self.store.save_project(project)
+
+                elif event_name == "task.started" and plan_root is not None:
+                    task = find_task(plan_root, str(data.get("task_id") or ""))
+                    if task is not None:
+                        task.status = PlanTaskStatus.RUNNING.value
+                        task.started_at = _now_iso()
+                        recompute_parent_status(plan_root)
+                        project["plan"] = plan_root.to_dict()
+                        self.store.save_project(project)
+
+                elif event_name == "task.progress" and plan_root is not None:
+                    task = find_task(plan_root, str(data.get("task_id") or ""))
+                    note = str(data.get("note") or "")
+                    if task is not None and note:
+                        task.log.append(note)
+                        project["plan"] = plan_root.to_dict()
+                        self.store.save_project(project)
+
+                elif event_name == "artifact.updated" and plan_root is not None:
+                    artifact_payload = data.get("artifact") or {}
+                    artifact = WorkbenchArtifact.from_dict(artifact_payload)
+                    artifacts = list(project.get("artifacts", []))
+                    artifacts = [a for a in artifacts if a.get("id") != artifact.id]
+                    artifacts.append(artifact.to_dict())
+                    project["artifacts"] = artifacts
+                    task = find_task(plan_root, artifact.task_id)
+                    if task is not None and artifact.id not in task.artifact_ids:
+                        task.artifact_ids.append(artifact.id)
+                        project["plan"] = plan_root.to_dict()
+                    self.store.save_project(project)
+
+                elif event_name == "task.completed" and plan_root is not None:
+                    task = find_task(plan_root, str(data.get("task_id") or ""))
+                    if task is not None:
+                        task.status = PlanTaskStatus.DONE.value
+                        task.completed_at = _now_iso()
+                        recompute_parent_status(plan_root)
+                        project["plan"] = plan_root.to_dict()
+                    operations = list(data.get("operations") or [])
+                    if operations:
+                        operations_for_version.extend(operations)
+                        project["model"] = apply_operations(project["model"], operations)
+                        project["compatibility"] = build_compatibility_diagnostics(
+                            project["model"],
+                            target=str(project.get("target") or "portable"),
+                        )
+                        project["exports"] = compile_workbench_exports(project["model"])
+                    self.store.save_project(project)
+
+                elif event_name == "build.completed":
+                    if operations_for_version:
+                        project["version"] = int(project.get("version") or 1) + 1
+                        project["draft_badge"] = f"Draft v{project['version']}"
+                        self._add_version(
+                            project,
+                            summary=f"Built {len(operations_for_version)} change(s) from brief",
+                        )
+                        self._add_activity(
+                            project,
+                            kind="build",
+                            summary=brief.strip()[:120] or "Built agent from brief.",
+                            diff=build_model_diff(
+                                project["versions"][-2]["model"]
+                                if len(project.get("versions", [])) >= 2
+                                else project["model"],
+                                project["model"],
+                                operations_for_version,
+                            ),
+                        )
+                    project["build_status"] = "idle"
+                    self.store.save_project(project)
+
+                elif event_name == "error":
+                    project["build_status"] = "error"
+                    self.store.save_project(project)
+
+                # Always enrich the event with the current project_id so the
+                # frontend can correlate even when a build creates a new one.
+                data.setdefault("project_id", project["project_id"])
+                yield {"event": event_name, "data": data}
+
+        return _stream()
+
+    def get_plan_snapshot(self, *, project_id: str) -> dict[str, Any]:
+        """Return the current plan + artifacts snapshot for page hydration."""
+        project = self._require_project(project_id)
+        return {
+            "project_id": project["project_id"],
+            "name": project.get("name"),
+            "target": project.get("target"),
+            "environment": project.get("environment"),
+            "version": project.get("version"),
+            "build_status": project.get("build_status", "idle"),
+            "plan": project.get("plan"),
+            "artifacts": list(project.get("artifacts", [])),
+            "model": project.get("model"),
+            "exports": project.get("exports"),
+            "compatibility": project.get("compatibility"),
+            "last_brief": project.get("last_brief"),
+        }
+
     def rollback(self, *, project_id: str, version: int) -> dict[str, Any]:
         """Create a new version from an earlier canonical snapshot."""
         project = self._require_project(project_id)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+import json
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from builder.workbench import WorkbenchService, WorkbenchStore
@@ -48,6 +50,16 @@ class WorkbenchRollbackRequest(BaseModel):
 
     project_id: str
     version: int = Field(ge=1)
+
+
+class WorkbenchBuildStreamRequest(BaseModel):
+    """Request body for a streaming agent build run."""
+
+    project_id: str | None = Field(default=None)
+    brief: str = Field(min_length=1)
+    target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
+    environment: str = Field(default="draft")
+    mock: bool = Field(default=False, description="Force mock mode for tests.")
 
 
 def _service(request: Request) -> WorkbenchService:
@@ -123,3 +135,59 @@ async def rollback(request: Request, body: WorkbenchRollbackRequest) -> dict[str
         return _service(request).rollback(project_id=body.project_id, version=body.version)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workbench project version not found") from exc
+
+
+@router.get("/projects/{project_id}/plan")
+async def get_plan_snapshot(project_id: str, request: Request) -> dict[str, Any]:
+    """Return the current plan tree and artifacts for page hydration."""
+    try:
+        return _service(request).get_plan_snapshot(project_id=project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench project not found") from exc
+
+
+def _format_sse(event_name: str, data: dict[str, Any]) -> bytes:
+    """Encode one event as a Server-Sent-Events frame."""
+    payload = json.dumps(data, default=str)
+    return f"event: {event_name}\ndata: {payload}\n\n".encode("utf-8")
+
+
+@router.post("/build/stream")
+async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> StreamingResponse:
+    """Stream a full agent build (plan tree + per-task artifacts) as SSE.
+
+    WHY: The Workbench UI mirrors Manus — a live plan tree on the left with
+    running spinners, artifact cards inline, and a source-code preview on the
+    right. That needs low-latency incremental updates, not one JSON blob.
+    """
+    from builder.workbench_agent import build_default_agent
+
+    service = _service(request)
+    agent = build_default_agent(force_mock=body.mock)
+
+    async def event_generator() -> AsyncIterator[bytes]:
+        try:
+            stream = await service.run_build_stream(
+                project_id=body.project_id,
+                brief=body.brief,
+                target=body.target,
+                environment=body.environment,
+                agent=agent,
+            )
+            async for event in stream:
+                yield _format_sse(
+                    str(event.get("event") or "message"),
+                    event.get("data") or {},
+                )
+        except Exception as exc:  # noqa: BLE001 — surface as an error event
+            yield _format_sse("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
