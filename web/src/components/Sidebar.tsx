@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react';
 import {
   type LucideIcon,
   Cloud,
+  Bot,
   Hammer,
   LayoutDashboard,
   FlaskConical,
@@ -49,6 +50,7 @@ import { classNames } from '../lib/utils';
 
 const ICON_BY_PATH: Record<string, LucideIcon> = {
   '/build': Hammer,
+  '/workbench': Bot,
   '/agent-improver': BrainCircuit,
   '/intelligence': BrainCircuit,
   '/connect': Download,

@@ -51,6 +51,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
     description: COMMAND_TAXONOMY.build.description,
     items: [
       { label: 'Build', path: '/build' },
+      { label: 'Workbench', path: '/workbench' },
       { label: 'Agent Improver', path: '/agent-improver' },
     ],
   },
@@ -162,6 +163,7 @@ const NAVIGATION_SECTIONS: NavigationSection[] = [
 const ROUTE_METADATA: Record<string, RouteMetadata> = {
   '/': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build' },
   '/build': { title: 'Build', breadcrumbs: ['Build'] },
+  '/workbench': { title: 'Agent Builder Workbench', breadcrumbs: ['Build'] },
   '/agent-improver': { title: 'Agent Improver', breadcrumbs: ['Build'] },
   '/intelligence': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=transcript' },
   '/builder': { title: 'Build', breadcrumbs: ['Build'], redirectTo: '/build?tab=builder-chat' },
@@ -321,6 +323,7 @@ const SIMPLE_MODE_PATHS = new Set([
   '/dashboard',
   '/setup',
   '/build',
+  '/workbench',
   '/evals',
   '/results',
   '/compare',
