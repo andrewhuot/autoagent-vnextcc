@@ -11,8 +11,6 @@ import { useMemo } from 'react';
 import { classNames } from '../../lib/utils';
 import type { WorkbenchArtifactCategory } from '../../lib/workbench-api';
 import {
-  selectActiveArtifact,
-  selectFilteredArtifacts,
   useWorkbenchStore,
   type ArtifactCategoryFilter,
 } from '../../lib/workbench-store';
@@ -60,23 +58,36 @@ function defaultFilename(artifact: {
 }
 
 export function ArtifactViewer() {
-  const active = useWorkbenchStore(selectActiveArtifact);
-  const filtered = useWorkbenchStore(selectFilteredArtifacts);
+  const artifacts = useWorkbenchStore((s) => s.artifacts);
   const activeCategory = useWorkbenchStore((s) => s.activeCategory);
   const setActiveCategory = useWorkbenchStore((s) => s.setActiveCategory);
   const activeView = useWorkbenchStore((s) => s.activeArtifactView);
   const setActiveView = useWorkbenchStore((s) => s.setActiveArtifactView);
   const setActiveArtifact = useWorkbenchStore((s) => s.setActiveArtifact);
+  const activeArtifactId = useWorkbenchStore((s) => s.activeArtifactId);
+
+  const active = useMemo(
+    () =>
+      activeArtifactId
+        ? artifacts.find((a) => a.id === activeArtifactId) ?? null
+        : artifacts[artifacts.length - 1] ?? null,
+    [artifacts, activeArtifactId]
+  );
+
+  const filtered = useMemo(
+    () => (activeCategory === 'all' ? artifacts : artifacts.filter((a) => a.category === activeCategory)),
+    [artifacts, activeCategory]
+  );
 
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const tab of CATEGORY_TABS) counts.set(tab.id, 0);
-    for (const artifact of useWorkbenchStore.getState().artifacts) {
+    for (const artifact of artifacts) {
       counts.set('all', (counts.get('all') ?? 0) + 1);
       counts.set(artifact.category, (counts.get(artifact.category) ?? 0) + 1);
     }
     return counts;
-  }, []);
+  }, [artifacts]);
 
   const filename = active ? defaultFilename(active) : '';
 

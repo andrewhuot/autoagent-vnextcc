@@ -11,10 +11,12 @@
  *   └────────────────────────┴─────────────────────────┘
  */
 
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Sparkles } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import { useWorkbenchStore } from '../../lib/workbench-store';
+import { summarizePlan } from '../../lib/workbench-plan';
 
 interface WorkbenchLayoutProps {
   left: ReactNode;
@@ -28,6 +30,8 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
   const target = useWorkbenchStore((s) => s.target);
   const version = useWorkbenchStore((s) => s.version);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
+  const plan = useWorkbenchStore((s) => s.plan);
+  const progress = useMemo(() => summarizePlan(plan), [plan]);
 
   return (
     <div className="workbench-root flex h-[calc(100vh-120px)] min-h-[600px] flex-col overflow-hidden rounded-xl border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] text-neutral-100 shadow-[0_0_0_1px_rgba(255,255,255,0.03)]">
@@ -52,6 +56,11 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
             {target} · v{version}
           </span>
           <StatusPill status={buildStatus} />
+          {progress.leafCount > 0 && (
+            <span className="text-[11px] text-neutral-500" aria-live="polite">
+              {progress.done}/{progress.leafCount} steps
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button

@@ -90,15 +90,33 @@ export function AgentWorkbench() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // --- keyboard shortcut: ⌘K focuses chat input ---------------------------
+  // --- keyboard shortcuts --------------------------------------------------
+  //   ⌘K focuses the chat input
+  //   ⌘← / ⌘→ cycle through the artifacts in the right pane
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+      const meta = event.metaKey || event.ctrlKey;
+      if (meta && event.key.toLowerCase() === 'k') {
         event.preventDefault();
         const textarea = document.querySelector<HTMLTextAreaElement>(
           '[aria-label="Build request"]'
         );
         textarea?.focus();
+        return;
+      }
+      if (meta && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        const state = useWorkbenchStore.getState();
+        if (state.artifacts.length < 2) return;
+        event.preventDefault();
+        const currentIndex = state.artifacts.findIndex(
+          (a) => a.id === state.activeArtifactId
+        );
+        const safeIndex = currentIndex === -1 ? 0 : currentIndex;
+        const nextIndex =
+          event.key === 'ArrowRight'
+            ? (safeIndex + 1) % state.artifacts.length
+            : (safeIndex - 1 + state.artifacts.length) % state.artifacts.length;
+        state.setActiveArtifact(state.artifacts[nextIndex].id);
       }
     };
     window.addEventListener('keydown', handler);
