@@ -46,6 +46,99 @@
 - `git diff --check`: passed.
 - `rg` heading check confirmed the plan includes executive recommendation, current architecture inventory, functional requirement coverage, route decision, canonical data model, backend/frontend architecture, risks, phase order, ticket backlog, and verification matrix.
 
+## Agent Builder Workbench Campaign Findings
+
+### Initial State
+
+- Branch is `feat/agent-builder-workbench-codex`.
+- HEAD is `f5c14c74d14d5a7a145ffe3865f85c0e8894ed41`, matching `origin/master` and the requested base commit.
+- Local `master` is older (`f15f0b36a2fb86f103a88aa296b5d7a8cb8adff7`), so this campaign will avoid using it as a base or merge target.
+- Initial worktree was clean.
+- No project-local `AGENTS.md` file was found in this checkout; follow the user-supplied global instructions and existing repo style.
+- Memory quick pass found no relevant hits for Workbench/AgentLab in `/Users/andrew/.codex/memories/MEMORY.md`.
+
+### Product Requirements
+
+- The Workbench must be a new feature in addition to current AgentLab, not a destructive replacement.
+- It should reuse current Build, Agent Improver, Eval Runs, Results Explorer, Compare, Optimize, Improvements, Trace, and Deploy surfaces where feasible.
+- Canonical model comes first: natural-language changes patch structured state, then generated source/config/export previews derive from that state.
+- Conversation and change planning live on the left; the current system truth lives on the right.
+- Show a plan before applying, and run validation/testing after applying.
+- Label components and exports as portable, ADK-only, CX-only, or invalid for the selected target.
+- MVP right-pane surfaces: Preview, Agent Card, Source Code, Tools, Callbacks, Guardrails, Evals, Trace, Test Live, Deploy, Activity/Diff.
+
+### Repo Reconnaissance Findings
+
+- `/build` is the existing unified Build workspace. Its builder-chat tab is the closest current primitive: it calls `/api/builder/chat`, `/api/builder/preview`, exports config, saves via `/api/agents`, and hands off to Eval Runs.
+- `BuilderChatService` stores in-memory sessions and converts natural language into generated config. It is useful but not canonical-model-first: follow-up turns mutate `generated_config` directly through `TranscriptIntelligenceService.chat_refine`.
+- `builder/workspace_config.py` already maps generated Build contracts into real AgentLab runtime configs, preview runs, saved versions, and generated eval cases. This should be reused for Workbench preview/test/save.
+- `/api/agents` already saves builder sessions or config dictionaries into the shared agent library/versioning path and returns agent records suitable for Eval Runs.
+- `/evals`, `/traces`, and `/deploy` already have page/API surfaces and React Query hooks. Workbench can link/handoff to those routes and show compact embedded summaries rather than duplicating all logic.
+- ADK import/export routes and CX import/export/deploy/preflight routes already exist. For MVP export previews, a canonical compiler can produce representative ADK/CX artifacts without requiring a live ADK snapshot or CX credentials.
+- `cx_studio/compat.py` already contains ADK/CX compatibility semantics. Workbench can use its status categories to label canonical components as portable, ADK-only, CX-only, or invalid for target.
+- Navigation metadata lives in `web/src/lib/navigation.ts`, route wiring in `web/src/App.tsx`, and sidebar icons in `web/src/components/Sidebar.tsx`.
+- Frontend tests use Vitest + Testing Library with inline `fetch` stubs. Backend route tests commonly create a small FastAPI app and include the target router directly.
+
+### Architecture Direction
+
+- Add a new `/workbench` route and navigation entry under Build, keeping `/build` intact.
+- Add a backend Workbench service/store under `builder/` that owns canonical agent project state, versions, activity, exports, compatibility labels, and validation/test results.
+- Add API endpoints under `/api/workbench` for create/get, plan, apply, test, export preview, history, and rollback.
+- Keep generated ADK/CX source/config as compiler output from the canonical model. Do not use generated files as the source of truth.
+- On apply, create a new immutable version, compile outputs, and run deterministic validation/test immediately.
+
+### Implementation Findings
+
+- Added `builder/workbench.py` as the canonical model service/store/compiler. It owns structured project state, plan inference, apply operations, export previews, compatibility diagnostics, validation, activity, versions, and rollback.
+- Added `/api/workbench` routes for project create/default/get, plan, apply, test, and rollback.
+- Workbench state persists to `.agentlab/workbench_projects.json` by default; tests inject an isolated `WorkbenchStore`.
+- Export previews are compiler output from canonical state:
+  - ADK: `agent.py`, `tools.py`, and `agentlab.yaml`.
+  - CX: `agent.json` and `playbook.yaml`.
+- Compatibility diagnostics label canonical objects as `portable`, `adk-only`, `cx-only`, or `invalid`. A local shell tool is ADK-only generally and invalid for the CX target.
+- Added `web/src/pages/AgentWorkbench.tsx` with the PRD two-pane shape: left conversation/plans/progress/history, right truth tabs for all MVP surfaces.
+- Added `web/src/lib/workbench-api.ts` as a typed frontend client.
+- Added `/workbench` route, Build navigation entry, simple sidebar inclusion, route metadata, and sidebar icon.
+
+### Focused Verification
+
+- `.venv/bin/python -m pytest tests/test_workbench_api.py -q`: 4 passed.
+- `npm run test -- src/pages/AgentWorkbench.test.tsx src/lib/navigation.test.ts`: 12 passed.
+
+### PRD Coverage
+
+- Covered: new additive `/workbench` surface with the PRD two-pane model.
+- Covered: canonical structured project model in backend state before generated outputs.
+- Covered: natural-language requests generate structured change-plan cards before apply.
+- Covered: applying a plan mutates the canonical model, creates a version, recompiles exports, and runs validation immediately.
+- Covered: right-pane surfaces for Preview, Agent Card, Source Code, Tools, Callbacks, Guardrails, Evals, Trace, Test Live, Deploy, and Activity / Diff.
+- Covered: portable / ADK-only / CX-only / invalid compatibility labels, including CX-invalid local shell tools.
+- Covered: ADK export preview and CX export preview compiled from canonical state.
+- Covered: version history and rollback affordance in the Workbench shell.
+- Covered: reuse/handoff to existing Eval Runs, Trace, and Deploy surfaces through Workbench tabs and route links.
+
+### Deferred Scope
+
+- Direct save of a Workbench canonical project into the existing AgentLab agent library is not wired yet; the Deploy tab currently hands off to the existing eval/deploy routes.
+- Eval execution remains deterministic Workbench validation plus route handoff, not a full generated eval run launched from the Workbench tab.
+- Trace is based on Workbench validation events; it does not yet persist into the broader trace database.
+- ADK/CX exports are preview artifacts, not downloadable packages or live CX deployments.
+- The natural-language interpreter is deterministic MVP inference, not an LLM-backed semantic planner.
+
+### Verification Results
+
+- `.venv/bin/python -m pytest tests/test_workbench_api.py -q`: 4 passed.
+- `npm run test -- src/pages/AgentWorkbench.test.tsx src/lib/navigation.test.ts`: 12 passed.
+- `.venv/bin/python -m pytest tests/test_workbench_api.py tests/test_builder_chat_api.py tests/test_agents_api.py tests/test_api_server_startup.py -q`: 18 passed.
+- `npm run test -- src/pages/AgentWorkbench.test.tsx src/lib/navigation.test.ts src/pages/Build.test.tsx src/components/Layout.test.ts`: 47 passed.
+- `.venv/bin/python -m py_compile builder/workbench.py api/routes/workbench.py`: passed.
+- `npm run build`: passed with the existing Vite large-chunk warning.
+- `npx eslint src/pages/AgentWorkbench.tsx src/pages/AgentWorkbench.test.tsx src/lib/workbench-api.ts src/lib/navigation.ts src/lib/navigation.test.ts src/components/Sidebar.tsx src/App.tsx`: passed.
+- `npm run test`: 45 files passed, 271 tests passed, with the existing jsdom navigation warning.
+- `.venv/bin/python -m pytest -q`: 3556 passed, 4 failed, 19 warnings. The failures are unrelated to touched files: two mutation-count tests and one mutation registry test expect 13 operators while the current registry has 14, and one shell-script safety test did not observe port 5173 opening in time.
+- `npm run lint`: failed on pre-existing repo-wide lint debt in untouched files. Touched-file ESLint passed separately.
+- Browser sanity on `/workbench`: passed create-plan, plan-before-apply, apply-to-v2, automatic-test, right-tab, and ADK/CX export preview checks.
+
 ## Agent Improver Live UX Campaign Findings
 
 ### Requirements

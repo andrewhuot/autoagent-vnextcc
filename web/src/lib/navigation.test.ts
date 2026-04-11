@@ -50,6 +50,7 @@ describe('navigation schema', () => {
 
   it('maps build and optimize routes to the unified sections', () => {
     expect(getRouteTitle('/build')).toBe('Build');
+    expect(getRouteTitle('/workbench')).toBe('Agent Builder Workbench');
     expect(getRouteTitle('/agent-improver')).toBe('Agent Improver');
     expect(getRouteTitle('/intelligence')).toBe('Build');
     expect(getRouteTitle('/optimize')).toBe('Optimize');
@@ -97,7 +98,7 @@ describe('navigation schema', () => {
     const buildSection = sections.find((section) => section.group === 'build');
     const simpleSections = getSimpleNavigationSections();
 
-    expect(buildSection?.items.map((item) => item.path)).toEqual(['/build', '/agent-improver']);
+    expect(buildSection?.items.map((item) => item.path)).toEqual(['/build', '/workbench', '/agent-improver']);
     expect(simpleSections.flatMap((section) => section.items.map((item) => item.path))).not.toContain('/agent-improver');
   });
 
@@ -109,6 +110,7 @@ describe('navigation schema', () => {
       '/dashboard',
       '/setup',
       '/build',
+      '/workbench',
       '/evals',
       '/results',
       '/compare',
