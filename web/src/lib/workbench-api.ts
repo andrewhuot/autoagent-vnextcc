@@ -1,3 +1,82 @@
+// ---------------------------------------------------------------------------
+// Streaming builder types (Phase 1+2)
+// ---------------------------------------------------------------------------
+
+export type PlanTaskStatus =
+  | 'pending'
+  | 'running'
+  | 'done'
+  | 'skipped'
+  | 'error'
+  | 'paused';
+
+export interface PlanTask {
+  id: string;
+  title: string;
+  description?: string;
+  status: PlanTaskStatus;
+  children: PlanTask[];
+  artifact_ids: string[];
+  log?: string[];
+  parent_id: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export type WorkbenchArtifactCategory =
+  | 'agent'
+  | 'tool'
+  | 'callback'
+  | 'guardrail'
+  | 'eval'
+  | 'environment'
+  | 'deployment'
+  | 'api_call'
+  | 'plan'
+  | 'note';
+
+export interface WorkbenchArtifact {
+  id: string;
+  task_id: string;
+  category: WorkbenchArtifactCategory | string;
+  name: string;
+  summary: string;
+  preview: string;
+  source: string;
+  language: string;
+  created_at: string;
+  version: number;
+}
+
+export interface BuildStreamEvent {
+  event:
+    | 'plan.ready'
+    | 'task.started'
+    | 'task.progress'
+    | 'message.delta'
+    | 'artifact.updated'
+    | 'task.completed'
+    | 'build.completed'
+    | 'error'
+    | string;
+  data: Record<string, unknown>;
+}
+
+export interface WorkbenchPlanSnapshot {
+  project_id: string;
+  name: string;
+  target: WorkbenchTarget;
+  environment: string;
+  version: number;
+  build_status: 'idle' | 'running' | 'error' | 'done' | string;
+  plan: PlanTask | null;
+  artifacts: WorkbenchArtifact[];
+  model: WorkbenchCanonicalModel | null;
+  exports: WorkbenchExports | null;
+  compatibility: WorkbenchCompatibilityDiagnostic[];
+  last_brief?: string;
+}
+
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
 export type CompatibilityStatus = 'portable' | 'adk-only' | 'cx-only' | 'invalid';
 export type WorkbenchPlanStatus = 'planned' | 'applied';
@@ -247,4 +326,106 @@ export function rollbackWorkbenchProject(body: {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Fetch the current plan + artifacts snapshot for a project.
+ *
+ * Used to hydrate the Workbench UI on page reload so an in-flight or
+ * completed build survives a refresh.
+ */
+export function getWorkbenchPlanSnapshot(projectId: string): Promise<WorkbenchPlanSnapshot> {
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/plan`);
+}
+
+/**
+ * POST a brief to the Workbench streaming builder and yield one SSE event
+ * per chunk. Callers drive the Zustand store from the event stream and can
+ * abort mid-stream via the optional ``signal``.
+ */
+export async function* streamWorkbenchBuild(
+  body: {
+    project_id?: string | null;
+    brief: string;
+    target?: WorkbenchTarget;
+    environment?: string;
+    mock?: boolean;
+  },
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<BuildStreamEvent> {
+  const response = await fetch('/api/workbench/build/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    let message = `Workbench stream failed (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload && typeof payload === 'object' && typeof payload.detail === 'string') {
+        message = payload.detail;
+      }
+    } catch {
+      const text = await response.text().catch(() => '');
+      if (text.trim()) message = text.trim();
+    }
+    throw new WorkbenchApiError(message, response.status);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new WorkbenchApiError('Workbench stream has no body', 500);
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    // SSE frames are separated by a blank line.
+    let separatorIndex = buffer.indexOf('\n\n');
+    while (separatorIndex !== -1) {
+      const rawFrame = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      const parsed = parseSseFrame(rawFrame);
+      if (parsed) yield parsed;
+      separatorIndex = buffer.indexOf('\n\n');
+    }
+  }
+
+  // Flush a trailing frame if the server closed without a final blank line.
+  const tail = buffer.trim();
+  if (tail) {
+    const parsed = parseSseFrame(tail);
+    if (parsed) yield parsed;
+  }
+}
+
+function parseSseFrame(frame: string): BuildStreamEvent | null {
+  let eventName = 'message';
+  const dataLines: string[] = [];
+  for (const rawLine of frame.split('\n')) {
+    const line = rawLine.trimEnd();
+    if (!line) continue;
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  try {
+    const data = JSON.parse(dataLines.join('\n')) as Record<string, unknown>;
+    return { event: eventName, data };
+  } catch {
+    return { event: eventName, data: { raw: dataLines.join('\n') } };
+  }
 }

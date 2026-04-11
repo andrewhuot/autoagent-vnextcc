@@ -52,6 +52,35 @@ body {
   background: rgba(37, 99, 235, 0.18);
 }
 
+/* ---------------------------------------------------------------------------
+ * Workbench dark theme
+ *
+ * Scoped to ``.workbench-root`` so the rest of the app stays light. All
+ * Workbench components pull from these variables (``bg-[color:var(--wb-bg)]``)
+ * to keep dark-mode styling in one place.
+ * ------------------------------------------------------------------------ */
+.workbench-root {
+  --wb-bg: #0b0b0d;
+  --wb-bg-elev: #141418;
+  --wb-border: #2a2a30;
+  --wb-border-strong: #3a3a42;
+  --wb-text: #ececf1;
+  --wb-text-dim: #9ca3af;
+  --wb-accent: #a78bfa;
+  --wb-success: #34d399;
+  --wb-warn: #fbbf24;
+  --wb-error: #f87171;
+  color: var(--wb-text);
+}
+
+.workbench-root ::selection {
+  background: rgba(167, 139, 250, 0.25);
+}
+
+.workbench-root *::-webkit-scrollbar-thumb {
+  background-color: #3a3a42;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
