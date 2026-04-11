@@ -117,6 +117,124 @@ def _operation_label(operation: dict[str, Any]) -> str:
     return str(operation.get("label") or operation.get("object", {}).get("name") or operation.get("operation") or "change")
 
 
+def _compact_conversation(
+    conversation: list[dict[str, Any]],
+    *,
+    limit: int = 16,
+) -> list[dict[str, Any]]:
+    """Return the most recent N conversation messages in planner-friendly form.
+
+    WHY: The live planner prompt embeds conversation history so a follow-up
+    turn can reason about the agent it has already built. We pass it to the
+    agent as a compact list ordered oldest→newest and capped so prompts stay
+    within the planner's token budget.
+    """
+    if not conversation:
+        return []
+    tail = conversation[-limit:]
+    compact: list[dict[str, Any]] = []
+    for message in tail:
+        if not isinstance(message, dict):
+            continue
+        content = str(message.get("content") or "").strip()
+        if not content:
+            continue
+        compact.append(
+            {
+                "role": str(message.get("role") or "user"),
+                "content": content[:1200],
+                "turn_id": message.get("turn_id"),
+            }
+        )
+    return compact
+
+
+def _summarize_prior_turns(
+    turns: list[dict[str, Any]],
+    *,
+    limit: int = 6,
+) -> list[dict[str, Any]]:
+    """Return compact per-turn summaries for the planner.
+
+    WHY: Planners only need titles and status of earlier turns, not the raw
+    plan tree or artifacts. Keeping this structured lets the agent decide
+    whether a follow-up is a delta (add one tool) or a rewrite.
+    """
+    compact: list[dict[str, Any]] = []
+    for turn in turns[-limit:]:
+        if not isinstance(turn, dict):
+            continue
+        compact.append(
+            {
+                "turn_id": turn.get("turn_id"),
+                "brief": str(turn.get("brief") or "")[:500],
+                "status": turn.get("status"),
+                "mode": turn.get("mode"),
+                "operation_labels": [
+                    _operation_label(op) for op in (turn.get("operations") or [])
+                ][:6],
+            }
+        )
+    return compact
+
+
+def _model_summary(model: dict[str, Any]) -> dict[str, Any]:
+    """Condensed canonical model view used inside agent prompts."""
+    if not isinstance(model, dict):
+        return {}
+    root_agent = (model.get("agents") or [{}])[0] if model.get("agents") else {}
+    return {
+        "agent_name": root_agent.get("name"),
+        "agent_role": root_agent.get("role"),
+        "instructions_excerpt": str(root_agent.get("instructions") or "")[:600],
+        "tool_names": [t.get("name") for t in model.get("tools", []) if t.get("name")],
+        "guardrail_names": [g.get("name") for g in model.get("guardrails", []) if g.get("name")],
+        "eval_suite_names": [s.get("name") for s in model.get("eval_suites", []) if s.get("name")],
+        "sub_agent_count": len(root_agent.get("sub_agents") or []),
+    }
+
+
+def _append_assistant_chunk(
+    project: dict[str, Any],
+    *,
+    turn_id: str,
+    task_id: str,
+    chunk: str,
+) -> None:
+    """Append a streamed assistant chunk onto the conversation history.
+
+    Chunks from the same (turn, task) tuple coalesce onto a single message so
+    the persisted log shows one narration bubble per leaf task rather than one
+    per token.
+    """
+    conversation = project.setdefault("conversation", [])
+    # Look for the most recent assistant bubble belonging to this turn+task
+    # from the end so we merge into the right message even when multiple
+    # leaves narrate concurrently.
+    for message in reversed(conversation):
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "assistant":
+            continue
+        if message.get("turn_id") != turn_id:
+            continue
+        if message.get("task_id") != task_id:
+            continue
+        message["content"] = f"{message.get('content', '')}{chunk}"
+        return
+    conversation.append(
+        {
+            "id": f"msg-{new_id()}",
+            "role": "assistant",
+            "content": chunk,
+            "turn_id": turn_id,
+            "task_id": task_id,
+            "created_at": _now_iso(),
+            "kind": "narration",
+        }
+    )
+
+
 class WorkbenchStore:
     """Persist canonical Workbench projects as JSON.
 
@@ -169,6 +287,17 @@ class WorkbenchStore:
                     "diff": [],
                 }
             ],
+            # Multi-turn autonomy state. ``conversation`` is the flat list of
+            # user + assistant messages shown in the left pane across every
+            # turn of the Workbench session. ``turns`` groups each user brief
+            # with its plan tree, artifacts, and autonomous iteration history
+            # so the UI can render a Claude-Code/Manus-style running log.
+            "conversation": [],
+            "turns": [],
+            "plan": None,
+            "artifacts": [],
+            "build_status": "idle",
+            "last_brief": "",
         }
         self.save_project(project)
         return project
@@ -326,15 +455,24 @@ class WorkbenchService:
         target: str = "portable",
         environment: str = "draft",
         agent: Any = None,
+        auto_iterate: bool = True,
+        max_iterations: int = 3,
     ) -> Any:
-        """Drive a streaming build run, yielding events the UI can consume.
+        """Drive a multi-turn streaming build run, yielding events the UI consumes.
 
         Returns an async iterator of ``{"event": str, "data": dict}`` events.
-        Ensures a project exists (creating one from ``brief`` if needed),
-        invokes the builder agent, applies ``operations`` emitted by each
-        completed task to the canonical model, and persists plan+artifacts
-        on every event. Safe to call with ``project_id=None`` for a brand-new
-        build.
+
+        Multi-turn semantics:
+            * Each call represents ONE user turn (initial build or follow-up).
+            * Conversation history + prior turns persist on the project so the
+              agent can generate delta plans that build on earlier work.
+            * Artifacts and plans from previous turns are preserved (the store
+              keeps them under ``project["turns"]``) and only the *latest* turn
+              is mirrored in ``project["plan"]``.
+            * When ``auto_iterate`` is set and validation flags problems after
+              a turn, the service autonomously drives additional corrective
+              iterations (bounded by ``max_iterations``) — that's what turns
+              the Workbench into a Claude-Code/Manus-style agent loop.
         """
         from builder.workbench_agent import (  # local import to avoid cycle
             BuildRequest,
@@ -364,30 +502,117 @@ class WorkbenchService:
         project.setdefault("plan", None)
         project.setdefault("artifacts", [])
         project.setdefault("build_status", "running")
+        project.setdefault("conversation", [])
+        project.setdefault("turns", [])
         project["build_status"] = "running"
         project["last_brief"] = brief
+        project["target"] = target
+
+        # --- turn bookkeeping ------------------------------------------------
+        # A "turn" is everything the agent does in response to one user
+        # message. Its plan, artifacts, validation result and iteration log
+        # all hang off the same record so the UI and downstream analytics can
+        # trace every iteration back to the message that produced it.
+        prior_turns = list(project.get("turns") or [])
+        prior_turn_count = len(prior_turns)
+        is_initial_turn = prior_turn_count == 0
+        turn_id = f"turn-{new_id()}"
+        now = _now_iso()
+        user_message = {
+            "id": f"msg-{new_id()}",
+            "role": "user",
+            "content": brief,
+            "turn_id": turn_id,
+            "created_at": now,
+        }
+        project.setdefault("conversation", []).append(user_message)
+        turn_record: dict[str, Any] = {
+            "turn_id": turn_id,
+            "brief": brief,
+            "mode": "initial" if is_initial_turn else "follow_up",
+            "status": "running",
+            "created_at": now,
+            "plan": None,
+            "artifact_ids": [],
+            "operations": [],
+            "iterations": [],
+            "validation": None,
+        }
+        prior_turns.append(turn_record)
+        project["turns"] = prior_turns
         self.store.save_project(project)
 
-        plan_root: PlanTask | None = None
-        request = BuildRequest(
-            project_id=project["project_id"],
-            brief=brief,
-            target=target,
-            environment=environment,
-        )
+        # Build a compact conversation history so the agent's planner can
+        # reason about prior turns without seeing the entire artifact blob.
+        conversation_history = _compact_conversation(project.get("conversation", []))
+        prior_turn_summary = _summarize_prior_turns(prior_turns[:-1])
 
-        async def _stream() -> Any:
-            nonlocal plan_root
-            operations_for_version: list[dict[str, Any]] = []
+        service = self
+
+        async def _run_one_pass(
+            iteration_index: int,
+            pass_brief: str,
+            pass_mode: str,
+        ) -> Any:
+            """Run one agent pass (one plan-tree execution) and persist events.
+
+            Writes the iteration result back to ``turn_record["iterations"][-1]``
+            before returning so the outer loop can read ``operations`` and
+            ``status`` off the record.
+            """
+            nonlocal project
+            iteration_id = f"iter-{new_id()}"
+            iteration_record = {
+                "iteration_id": iteration_id,
+                "index": iteration_index,
+                "mode": pass_mode,
+                "brief": pass_brief,
+                "status": "running",
+                "operations": [],
+                "created_at": _now_iso(),
+            }
+            turn_record["iterations"].append(iteration_record)
+            project["turns"] = prior_turns
+            service.store.save_project(project)
+
+            yield {
+                "event": "iteration.started",
+                "data": {
+                    "turn_id": turn_id,
+                    "iteration_id": iteration_id,
+                    "index": iteration_index,
+                    "mode": pass_mode,
+                },
+            }
+
+            request = BuildRequest(
+                project_id=project["project_id"],
+                brief=pass_brief,
+                target=target,
+                environment=environment,
+                mode=pass_mode,
+                conversation_history=conversation_history,
+                prior_turn_summary=prior_turn_summary,
+                current_model_summary=_model_summary(project["model"]),
+            )
+
+            plan_root: PlanTask | None = None
+            operations_in_pass: list[dict[str, Any]] = []
+            pass_status = "completed"
+
             async for event in runner.run(request, project):
                 event_name = str(event.get("event") or "")
                 data = event.get("data") or {}
+                data = dict(data)
+                data.setdefault("turn_id", turn_id)
+                data.setdefault("iteration_id", iteration_id)
 
                 if event_name == "plan.ready":
                     plan_root = PlanTask.from_dict(data["plan"])
+                    turn_record["plan"] = plan_root.to_dict()
                     project["plan"] = plan_root.to_dict()
-                    project["artifacts"] = []
-                    self.store.save_project(project)
+                    iteration_record["plan"] = plan_root.to_dict()
+                    service.store.save_project(project)
 
                 elif event_name == "task.started" and plan_root is not None:
                     task = find_task(plan_root, str(data.get("task_id") or ""))
@@ -395,29 +620,41 @@ class WorkbenchService:
                         task.status = PlanTaskStatus.RUNNING.value
                         task.started_at = _now_iso()
                         recompute_parent_status(plan_root)
+                        turn_record["plan"] = plan_root.to_dict()
                         project["plan"] = plan_root.to_dict()
-                        self.store.save_project(project)
+                        service.store.save_project(project)
 
                 elif event_name == "task.progress" and plan_root is not None:
                     task = find_task(plan_root, str(data.get("task_id") or ""))
                     note = str(data.get("note") or "")
                     if task is not None and note:
                         task.log.append(note)
+                        turn_record["plan"] = plan_root.to_dict()
                         project["plan"] = plan_root.to_dict()
-                        self.store.save_project(project)
+                        service.store.save_project(project)
 
                 elif event_name == "artifact.updated" and plan_root is not None:
                     artifact_payload = data.get("artifact") or {}
                     artifact = WorkbenchArtifact.from_dict(artifact_payload)
+                    # Stamp each artifact with the turn so the UI can group it.
+                    artifact_dict = artifact.to_dict()
+                    artifact_dict["turn_id"] = turn_id
+                    artifact_dict["iteration_id"] = iteration_id
                     artifacts = list(project.get("artifacts", []))
                     artifacts = [a for a in artifacts if a.get("id") != artifact.id]
-                    artifacts.append(artifact.to_dict())
+                    artifacts.append(artifact_dict)
                     project["artifacts"] = artifacts
+                    if artifact.id not in turn_record["artifact_ids"]:
+                        turn_record["artifact_ids"].append(artifact.id)
                     task = find_task(plan_root, artifact.task_id)
                     if task is not None and artifact.id not in task.artifact_ids:
                         task.artifact_ids.append(artifact.id)
+                        turn_record["plan"] = plan_root.to_dict()
                         project["plan"] = plan_root.to_dict()
-                    self.store.save_project(project)
+                    service.store.save_project(project)
+                    # Re-emit the enriched artifact so the UI receives the
+                    # turn/iteration metadata alongside the original payload.
+                    data["artifact"] = artifact_dict
 
                 elif event_name == "task.completed" and plan_root is not None:
                     task = find_task(plan_root, str(data.get("task_id") or ""))
@@ -425,49 +662,188 @@ class WorkbenchService:
                         task.status = PlanTaskStatus.DONE.value
                         task.completed_at = _now_iso()
                         recompute_parent_status(plan_root)
+                        turn_record["plan"] = plan_root.to_dict()
                         project["plan"] = plan_root.to_dict()
                     operations = list(data.get("operations") or [])
                     if operations:
-                        operations_for_version.extend(operations)
+                        operations_in_pass.extend(operations)
                         project["model"] = apply_operations(project["model"], operations)
                         project["compatibility"] = build_compatibility_diagnostics(
                             project["model"],
                             target=str(project.get("target") or "portable"),
                         )
                         project["exports"] = compile_workbench_exports(project["model"])
-                    self.store.save_project(project)
+                    service.store.save_project(project)
+
+                elif event_name == "message.delta":
+                    # Capture assistant narration as a conversation message so
+                    # the history survives reloads. Buffer per (turn, task)
+                    # tuple by merging onto the most recent assistant message.
+                    text_chunk = str(data.get("text") or "")
+                    if text_chunk:
+                        _append_assistant_chunk(
+                            project,
+                            turn_id=turn_id,
+                            task_id=str(data.get("task_id") or ""),
+                            chunk=text_chunk,
+                        )
+                        service.store.save_project(project)
 
                 elif event_name == "build.completed":
-                    if operations_for_version:
-                        project["version"] = int(project.get("version") or 1) + 1
-                        project["draft_badge"] = f"Draft v{project['version']}"
-                        self._add_version(
-                            project,
-                            summary=f"Built {len(operations_for_version)} change(s) from brief",
-                        )
-                        self._add_activity(
-                            project,
-                            kind="build",
-                            summary=brief.strip()[:120] or "Built agent from brief.",
-                            diff=build_model_diff(
-                                project["versions"][-2]["model"]
-                                if len(project.get("versions", [])) >= 2
-                                else project["model"],
-                                project["model"],
-                                operations_for_version,
-                            ),
-                        )
-                    project["build_status"] = "idle"
-                    self.store.save_project(project)
+                    pass_status = "completed"
 
                 elif event_name == "error":
+                    pass_status = "error"
                     project["build_status"] = "error"
-                    self.store.save_project(project)
+                    service.store.save_project(project)
 
-                # Always enrich the event with the current project_id so the
-                # frontend can correlate even when a build creates a new one.
                 data.setdefault("project_id", project["project_id"])
                 yield {"event": event_name, "data": data}
+
+            iteration_record["status"] = pass_status
+            iteration_record["operations"] = list(operations_in_pass)
+            iteration_record["completed_at"] = _now_iso()
+            project["turns"] = prior_turns
+            service.store.save_project(project)
+
+        async def _stream() -> Any:
+            nonlocal project
+            # Emit a turn.started event so the UI can group subsequent events.
+            yield {
+                "event": "turn.started",
+                "data": {
+                    "turn_id": turn_id,
+                    "mode": turn_record["mode"],
+                    "brief": brief,
+                    "project_id": project["project_id"],
+                    "message_id": user_message["id"],
+                },
+            }
+            total_operations: list[dict[str, Any]] = []
+            current_brief = brief
+            current_mode = turn_record["mode"]
+            iterations_to_run = max(1, int(max_iterations or 1))
+            final_status = "completed"
+
+            for iteration_index in range(iterations_to_run):
+                # ``_run_one_pass`` is an async generator; it writes its
+                # result into ``turn_record["iterations"][-1]`` before
+                # finishing, so we read back from there once it's exhausted.
+                async for event in _run_one_pass(
+                    iteration_index, current_brief, current_mode
+                ):
+                    yield event
+
+                latest_iter = turn_record["iterations"][-1]
+                pass_ops = list(latest_iter.get("operations") or [])
+                total_operations.extend(pass_ops)
+                if latest_iter.get("status") == "error":
+                    final_status = "error"
+                    break
+
+                # Run deterministic validation so we can decide whether to
+                # autonomously iterate again.
+                validation = run_workbench_validation(project)
+                project["last_test"] = validation
+                turn_record["validation"] = validation
+                self.store.save_project(project)
+
+                yield {
+                    "event": "validation.ready",
+                    "data": {
+                        "turn_id": turn_id,
+                        "iteration_id": turn_record["iterations"][-1]["iteration_id"],
+                        "status": validation.get("status"),
+                        "checks": validation.get("checks", []),
+                        "project_id": project["project_id"],
+                    },
+                }
+
+                should_iterate = (
+                    auto_iterate
+                    and validation.get("status") != "passed"
+                    and iteration_index + 1 < iterations_to_run
+                )
+                if not should_iterate:
+                    break
+
+                # Frame the next pass as a self-directed correction and tell
+                # the agent to produce the smallest plan that fixes the gaps.
+                failed_checks = [c for c in validation.get("checks", []) if not c.get("passed")]
+                correction_notes = "; ".join(
+                    str(c.get("detail") or c.get("name") or "") for c in failed_checks
+                ) or "Validation flagged issues in the current canonical model."
+                current_brief = (
+                    "Autonomous correction pass. The previous plan left validation "
+                    f"issues: {correction_notes}. Produce a minimal delta plan that "
+                    "resolves them without rewriting the agent from scratch."
+                )
+                current_mode = "correction"
+                # Feed the agent a refreshed snapshot of its own state.
+                nonlocal_conversation = _compact_conversation(project.get("conversation", []))
+                # Update the closed-over variables _run_one_pass reads.
+                conversation_history.clear()
+                conversation_history.extend(nonlocal_conversation)
+                # Also update the model summary for the correction pass.
+                prior_turn_summary.clear()
+                prior_turn_summary.extend(_summarize_prior_turns(prior_turns[:-1]))
+
+            # --- finalize turn ------------------------------------------------
+            if total_operations and final_status != "error":
+                project["version"] = int(project.get("version") or 1) + 1
+                project["draft_badge"] = f"Draft v{project['version']}"
+                self._add_version(
+                    project,
+                    summary=f"Turn {prior_turn_count + 1}: {len(total_operations)} change(s)",
+                )
+                before_model = (
+                    project["versions"][-2]["model"]
+                    if len(project.get("versions", [])) >= 2
+                    else project["model"]
+                )
+                self._add_activity(
+                    project,
+                    kind="build",
+                    summary=brief.strip()[:120] or "Built agent from brief.",
+                    diff=build_model_diff(before_model, project["model"], total_operations),
+                )
+
+            turn_record["status"] = final_status
+            turn_record["operations"] = total_operations
+            turn_record["completed_at"] = _now_iso()
+            project["turns"] = prior_turns
+            project["build_status"] = "idle" if final_status != "error" else "error"
+
+            # Push an assistant "done" bubble into the conversation so
+            # reloading the page rehydrates the running log.
+            closing_text = (
+                f"Completed turn with {len(total_operations)} change(s)."
+                if total_operations
+                else "Turn completed without canonical changes."
+            )
+            project["conversation"].append(
+                {
+                    "id": f"msg-{new_id()}",
+                    "role": "assistant",
+                    "content": closing_text,
+                    "turn_id": turn_id,
+                    "created_at": _now_iso(),
+                    "kind": "turn_summary",
+                }
+            )
+            self.store.save_project(project)
+
+            yield {
+                "event": "turn.completed",
+                "data": {
+                    "turn_id": turn_id,
+                    "status": final_status,
+                    "operations": total_operations,
+                    "version": project["version"],
+                    "project_id": project["project_id"],
+                    "iterations": len(turn_record["iterations"]),
+                },
+            }
 
         return _stream()
 
@@ -487,6 +863,10 @@ class WorkbenchService:
             "exports": project.get("exports"),
             "compatibility": project.get("compatibility"),
             "last_brief": project.get("last_brief"),
+            # Multi-turn state needed to rehydrate a live Workbench session.
+            "conversation": list(project.get("conversation", [])),
+            "turns": copy.deepcopy(project.get("turns") or []),
+            "last_test": project.get("last_test"),
         }
 
     def rollback(self, *, project_id: str, version: int) -> dict[str, Any]:

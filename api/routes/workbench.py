@@ -53,13 +53,31 @@ class WorkbenchRollbackRequest(BaseModel):
 
 
 class WorkbenchBuildStreamRequest(BaseModel):
-    """Request body for a streaming agent build run."""
+    """Request body for a streaming agent build run.
+
+    Multi-turn fields:
+        auto_iterate    — when True the service autonomously drives a
+                          validation + correction loop after the main
+                          plan finishes, up to ``max_iterations`` passes.
+        max_iterations  — hard cap on how many plan passes a single turn
+                          may run (initial pass + optional corrections).
+    """
 
     project_id: str | None = Field(default=None)
     brief: str = Field(min_length=1)
     target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
     environment: str = Field(default="draft")
     mock: bool = Field(default=False, description="Force mock mode for tests.")
+    auto_iterate: bool = Field(
+        default=True,
+        description="Let the service run corrective iterations after validation.",
+    )
+    max_iterations: int = Field(
+        default=3,
+        ge=1,
+        le=6,
+        description="Cap on plan passes per user turn (initial + corrections).",
+    )
 
 
 def _service(request: Request) -> WorkbenchService:
@@ -173,6 +191,8 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
                 target=body.target,
                 environment=body.environment,
                 agent=agent,
+                auto_iterate=body.auto_iterate,
+                max_iterations=body.max_iterations,
             )
             async for event in stream:
                 yield _format_sse(

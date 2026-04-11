@@ -153,12 +153,92 @@ describe('workbench-store', () => {
     expect(useWorkbenchStore.getState().activeArtifactId).toBe('art-1');
   });
 
-  it('marks buildStatus done on build.completed', () => {
+  it('marks buildStatus done on turn.completed and updates version', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', turn_id: 'turn-1', mode: 'initial', brief: 'go' },
+    });
     dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
     dispatch({ event: 'build.completed', data: { project_id: 'wb-42', version: 3 } });
+    dispatch({
+      event: 'turn.completed',
+      data: { project_id: 'wb-42', turn_id: 'turn-1', status: 'completed', version: 3 },
+    });
     const state = useWorkbenchStore.getState();
     expect(state.buildStatus).toBe('done');
     expect(state.version).toBe(3);
+    expect(state.turns).toHaveLength(1);
+    expect(state.turns[0].status).toBe('completed');
+  });
+
+  it('accumulates turns across multi-turn messages', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', turn_id: 'turn-1', mode: 'initial', brief: 'Initial' },
+    });
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({
+      event: 'turn.completed',
+      data: { project_id: 'wb-42', turn_id: 'turn-1', status: 'completed' },
+    });
+
+    dispatch({
+      event: 'turn.started',
+      data: {
+        project_id: 'wb-42',
+        turn_id: 'turn-2',
+        mode: 'follow_up',
+        brief: 'Follow-up',
+      },
+    });
+    dispatch({ event: 'plan.ready', data: { plan: makePlan(), turn_id: 'turn-2' } });
+    dispatch({
+      event: 'artifact.updated',
+      data: {
+        task_id: 'task-role',
+        turn_id: 'turn-2',
+        artifact: makeArtifact({ id: 'art-follow', turn_id: 'turn-2' }),
+      },
+    });
+    dispatch({
+      event: 'turn.completed',
+      data: { project_id: 'wb-42', turn_id: 'turn-2', status: 'completed' },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.turns).toHaveLength(2);
+    expect(state.turns[0].turnId).toBe('turn-1');
+    expect(state.turns[1].turnId).toBe('turn-2');
+    expect(state.turns[1].mode).toBe('follow_up');
+    expect(state.turns[1].artifactIds).toContain('art-follow');
+  });
+
+  it('tracks autonomous iterations via iteration.started and validation.ready', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', turn_id: 'turn-1', mode: 'initial', brief: 'go' },
+    });
+    dispatch({
+      event: 'iteration.started',
+      data: { turn_id: 'turn-1', iteration_id: 'iter-1', index: 0, mode: 'initial' },
+    });
+    dispatch({
+      event: 'validation.ready',
+      data: {
+        turn_id: 'turn-1',
+        iteration_id: 'iter-1',
+        status: 'failed',
+        checks: [{ name: 'example', passed: false, detail: 'oops' }],
+      },
+    });
+    dispatch({
+      event: 'iteration.started',
+      data: { turn_id: 'turn-1', iteration_id: 'iter-2', index: 1, mode: 'correction' },
+    });
+    const state = useWorkbenchStore.getState();
+    expect(state.currentIterationIndex).toBe(1);
+    expect(state.lastValidation?.status).toBe('failed');
+    expect(state.turns[0].iterationCount).toBe(2);
   });
 
   it('stores error message on error event', () => {

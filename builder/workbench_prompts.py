@@ -20,9 +20,20 @@ You are the planner for an agent builder workbench. When the user describes
 an agent they want, you respond with a concrete, layered PLAN TREE that a
 downstream executor can run step by step.
 
+You operate over multiple turns. Each new user message may extend, refine,
+or correct the existing canonical agent. Match the shape of the plan tree
+to the size of the request:
+
+- ``initial`` turn     → full plan with 3-5 children each with 1-3 leaves.
+- ``follow_up`` turn   → focused DELTA plan with 1-2 children and 1-3 leaves
+                         that only touches the parts the user just asked for.
+                         NEVER rebuild the agent from scratch on a follow-up.
+- ``correction`` turn  → the smallest plan that resolves the validation
+                         issues you were told about. Usually 1 child + 1-2
+                         leaves.
+
 STRICT RULES:
 - Output MUST be a single JSON object, no prose, no markdown fences.
-- The tree has one root, 3-5 children, and each child has 1-3 leaves.
 - Each leaf task MUST map to exactly one of these executor kinds:
     role          — write the agent's role summary
     instructions  — draft the system prompt
@@ -54,14 +65,60 @@ SCHEMA:
 """
 
 
-def planner_user_prompt(brief: str, target: str, domain: str) -> str:
-    """Shape the user-side prompt the planner receives."""
-    return (
-        f"Brief: {brief}\n"
-        f"Target runtime: {target}\n"
-        f"Detected domain: {domain}\n\n"
-        "Produce the plan tree now as pure JSON."
-    )
+def planner_user_prompt(
+    brief: str,
+    target: str,
+    domain: str,
+    *,
+    mode: str = "initial",
+    conversation_history: list[dict[str, Any]] | None = None,
+    prior_turn_summary: list[dict[str, Any]] | None = None,
+    current_model_summary: dict[str, Any] | None = None,
+) -> str:
+    """Shape the user-side prompt the planner receives.
+
+    Extra fields are only rendered when they carry signal so the first-turn
+    prompt stays tight, while multi-turn prompts include the full running
+    context so the planner can produce deltas.
+    """
+    parts: list[str] = [
+        f"Turn mode: {mode}",
+        f"Brief: {brief}",
+        f"Target runtime: {target}",
+        f"Detected domain: {domain}",
+    ]
+
+    if current_model_summary:
+        parts.append("\nCurrent canonical model summary:")
+        parts.append(json.dumps(current_model_summary, indent=2, default=str))
+
+    if prior_turn_summary:
+        parts.append("\nPrior turns on this project (oldest → newest):")
+        parts.append(json.dumps(prior_turn_summary, indent=2, default=str))
+
+    if conversation_history:
+        parts.append("\nRecent conversation (oldest → newest):")
+        rendered = []
+        for message in conversation_history:
+            role = str(message.get("role") or "user").upper()
+            content = str(message.get("content") or "").strip()
+            rendered.append(f"{role}: {content}")
+        parts.append("\n".join(rendered))
+
+    if mode == "follow_up":
+        parts.append(
+            "\nProduce a minimal DELTA plan that applies only the user's "
+            "latest request on top of the existing agent."
+        )
+    elif mode == "correction":
+        parts.append(
+            "\nProduce the smallest correction plan that resolves the "
+            "validation issues from the previous pass."
+        )
+    else:
+        parts.append("\nProduce the plan tree now as pure JSON.")
+
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------

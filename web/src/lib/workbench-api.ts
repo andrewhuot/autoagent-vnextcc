@@ -46,10 +46,18 @@ export interface WorkbenchArtifact {
   language: string;
   created_at: string;
   version: number;
+  /** Turn id this artifact was generated in (multi-turn builds). */
+  turn_id?: string;
+  /** Iteration id within the turn (autonomous corrections). */
+  iteration_id?: string;
 }
 
 export interface BuildStreamEvent {
   event:
+    | 'turn.started'
+    | 'turn.completed'
+    | 'iteration.started'
+    | 'validation.ready'
     | 'plan.ready'
     | 'task.started'
     | 'task.progress'
@@ -60,6 +68,56 @@ export interface BuildStreamEvent {
     | 'error'
     | string;
   data: Record<string, unknown>;
+}
+
+/** One durable message in the Workbench conversation log. */
+export interface WorkbenchConversationMessage {
+  id: string;
+  role: 'user' | 'assistant' | string;
+  content: string;
+  turn_id?: string | null;
+  task_id?: string | null;
+  created_at: string;
+  kind?: string;
+}
+
+/** Compact validation check result surfaced by the autonomous loop. */
+export interface WorkbenchValidationCheck {
+  name: string;
+  passed: boolean;
+  detail: string;
+}
+
+/** One autonomous iteration inside a turn. */
+export interface WorkbenchIterationRecord {
+  iteration_id: string;
+  index: number;
+  mode: 'initial' | 'follow_up' | 'correction' | string;
+  brief: string;
+  status: 'running' | 'completed' | 'error' | string;
+  operations?: unknown[];
+  plan?: PlanTask | null;
+  created_at: string;
+  completed_at?: string;
+}
+
+/** One user-facing turn in the multi-turn log. */
+export interface WorkbenchTurnRecord {
+  turn_id: string;
+  brief: string;
+  mode: 'initial' | 'follow_up' | 'correction' | string;
+  status: 'running' | 'completed' | 'error' | string;
+  created_at: string;
+  completed_at?: string;
+  plan?: PlanTask | null;
+  artifact_ids: string[];
+  operations?: unknown[];
+  iterations: WorkbenchIterationRecord[];
+  validation?: {
+    run_id?: string;
+    status?: string;
+    checks?: WorkbenchValidationCheck[];
+  } | null;
 }
 
 export interface WorkbenchPlanSnapshot {
@@ -75,6 +133,12 @@ export interface WorkbenchPlanSnapshot {
   exports: WorkbenchExports | null;
   compatibility: WorkbenchCompatibilityDiagnostic[];
   last_brief?: string;
+  conversation?: WorkbenchConversationMessage[];
+  turns?: WorkbenchTurnRecord[];
+  last_test?: {
+    status?: string;
+    checks?: WorkbenchValidationCheck[];
+  } | null;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -350,6 +414,10 @@ export async function* streamWorkbenchBuild(
     target?: WorkbenchTarget;
     environment?: string;
     mock?: boolean;
+    /** Let the service autonomously run corrective iterations. */
+    auto_iterate?: boolean;
+    /** Hard cap on plan passes per turn (initial + corrections). */
+    max_iterations?: number;
   },
   options: { signal?: AbortSignal } = {}
 ): AsyncIterable<BuildStreamEvent> {

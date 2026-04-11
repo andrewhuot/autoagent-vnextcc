@@ -223,9 +223,16 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     events = _parse_sse(response.text)
     assert events, "expected at least one SSE event"
 
-    # Structure: plan.ready first, build.completed last.
-    assert events[0]["event"] == "plan.ready"
-    assert events[-1]["event"] == "build.completed"
+    # Multi-turn structure: turn.started wraps the run, plan.ready is the
+    # second event, build.completed closes the agent pass, and
+    # turn.completed is the final event consumed by the UI.
+    event_names = [ev["event"] for ev in events]
+    assert event_names[0] == "turn.started"
+    assert event_names[1] == "iteration.started"
+    assert event_names[2] == "plan.ready"
+    assert event_names[-1] == "turn.completed"
+    assert "build.completed" in event_names
+    assert "validation.ready" in event_names
     final_project_id = events[-1]["data"]["project_id"]
     assert final_project_id.startswith("wb-")
 
@@ -234,6 +241,11 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     tasks_completed = {ev["data"]["task_id"] for ev in events if ev["event"] == "task.completed"}
     assert tasks_started == tasks_completed
     assert len(tasks_started) >= 5  # at least 5 leaf tasks in the canned plan
+
+    # Every data payload is tagged with the same turn_id so the UI can
+    # group events by turn even when multi-iteration loops run.
+    turn_ids = {ev["data"].get("turn_id") for ev in events if ev["data"].get("turn_id")}
+    assert len(turn_ids) == 1
 
 
 def test_build_stream_persists_plan_and_artifacts(tmp_path: Path) -> None:

@@ -29,7 +29,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
 from builder.types import new_id
@@ -67,12 +67,32 @@ BuildEvent = dict[str, Any]
 # ---------------------------------------------------------------------------
 @dataclass
 class BuildRequest:
-    """One end-to-end build request sourced from the Workbench UI."""
+    """One end-to-end build request sourced from the Workbench UI.
+
+    Multi-turn fields:
+        mode                   — ``"initial"`` for the first turn,
+                                 ``"follow_up"`` for subsequent user turns,
+                                 or ``"correction"`` when the autonomous
+                                 loop is making a self-directed fix.
+        conversation_history   — Compact (role, content) pairs of prior
+                                 messages so the planner can reason about
+                                 the running dialogue.
+        prior_turn_summary     — Lightweight summaries of prior turns so
+                                 planner prompts don't have to ingest the
+                                 full plan tree or artifact blobs.
+        current_model_summary  — Condensed canonical-model snapshot so the
+                                 planner can ask for deltas (add one tool)
+                                 instead of rebuilding everything.
+    """
 
     project_id: str
     brief: str
     target: str = "portable"
     environment: str = "draft"
+    mode: str = "initial"
+    conversation_history: list[dict[str, Any]] = field(default_factory=list)
+    prior_turn_summary: list[dict[str, Any]] = field(default_factory=list)
+    current_model_summary: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -139,17 +159,40 @@ class MockWorkbenchBuilderAgent(WorkbenchBuilderAgent):
         """Yield plan + per-task events then a terminal build.completed event."""
         brief = request.brief.strip() or "Help users with the requested workflow."
         domain = _infer_domain(brief)
-        plan = _build_plan_tree(brief, domain)
+
+        # Follow-up / correction turns emit a smaller delta plan tree so the
+        # UI shows a focused change set on top of the existing build instead
+        # of rebuilding from scratch.
+        if request.mode in {"follow_up", "correction"}:
+            plan = _build_follow_up_plan_tree(
+                brief=brief,
+                domain=domain,
+                model_summary=request.current_model_summary,
+                mode=request.mode,
+            )
+        else:
+            plan = _build_plan_tree(brief, domain)
 
         yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
         await self._tick()
 
         root_id = plan.id
-        welcome = (
-            f"Here's the plan for your {domain} agent. I'll create the agent definition, "
-            f"generate tools, wire guardrails, draft an evaluation suite, and render the "
-            f"source code so you can review it."
-        )
+        if request.mode == "follow_up":
+            welcome = (
+                f"Got it — I'll apply your follow-up delta to the existing "
+                f"{domain} agent and surface any affected artifacts."
+            )
+        elif request.mode == "correction":
+            welcome = (
+                "Running an autonomous correction pass to resolve the issues "
+                "validation flagged last time."
+            )
+        else:
+            welcome = (
+                f"Here's the plan for your {domain} agent. I'll create the agent definition, "
+                f"generate tools, wire guardrails, draft an evaluation suite, and render the "
+                f"source code so you can review it."
+            )
         for chunk in _chunk(welcome, 28):
             yield {
                 "event": "message.delta",
@@ -261,6 +304,87 @@ def _build_plan_tree(brief: str, domain: str) -> PlanTask:
         child.parent_id = root.id
         for grandchild in child.children:
             grandchild.parent_id = child.id
+    return root
+
+
+def _build_follow_up_plan_tree(
+    *,
+    brief: str,
+    domain: str,
+    model_summary: dict[str, Any] | None,
+    mode: str,
+) -> PlanTask:
+    """Return a minimal delta plan tree for follow-up or correction turns.
+
+    WHY: Multi-turn autonomy should feel like Claude Code — each follow-up
+    message produces a focused delta, not a full rebuild. Correction passes
+    do the same but with an autonomous framing so the UI can surface "the
+    agent fixed itself" feedback.
+    """
+    lowered = brief.lower()
+    model_summary = model_summary or {}
+    root_title = (
+        "Autonomous correction"
+        if mode == "correction"
+        else f"Apply follow-up to {domain} agent"
+    )
+    root = PlanTask(
+        id=f"task-{new_id()}",
+        title=root_title,
+        description=brief.strip()[:240],
+        status=PlanTaskStatus.PENDING.value,
+    )
+
+    def leaf(title: str, description: str = "") -> PlanTask:
+        return PlanTask(
+            id=f"task-{new_id()}",
+            title=title,
+            description=description,
+            parent_id=root.id,
+            status=PlanTaskStatus.PENDING.value,
+        )
+
+    leaves: list[PlanTask] = []
+
+    # Heuristic routing: decide which change(s) the delta should apply based
+    # on the user's text. This keeps the mock agent's output realistic for
+    # tests and no-key demos.
+    want_guardrail = (
+        "guardrail" in lowered
+        or "policy" in lowered
+        or "never" in lowered
+        or "pii" in lowered
+        or mode == "correction"
+    )
+    want_tool = (
+        "tool" in lowered
+        or "lookup" in lowered
+        or "integration" in lowered
+    )
+    want_eval = "eval" in lowered or "regression" in lowered or "test case" in lowered
+    want_instructions = (
+        "instruction" in lowered
+        or "tone" in lowered
+        or "persona" in lowered
+        or "style" in lowered
+    )
+
+    if not any([want_guardrail, want_tool, want_eval, want_instructions]):
+        # Default to an instructions refinement so at least one artifact is
+        # always produced on a follow-up turn.
+        want_instructions = True
+
+    if want_instructions:
+        leaves.append(leaf("Draft system instructions", "Refine the root system prompt."))
+    if want_tool:
+        leaves.append(leaf("Design tool schemas", "Design the new tool the user requested."))
+        leaves.append(leaf("Generate tool source", "Emit a stub for the new tool."))
+    if want_guardrail:
+        leaves.append(leaf("Author guardrail rules", "Add the safety rule the user asked for."))
+    if want_eval:
+        leaves.append(leaf("Draft test cases", "Append a regression case for the new behaviour."))
+
+    root.children = leaves
     return root
 
 
@@ -646,7 +770,14 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
 
         # --- Step 1: ask the planner for a tree -----------------------------
         plan, assistant_intro = await asyncio.to_thread(
-            self._plan_or_fallback, brief=brief, domain=domain, target=request.target
+            self._plan_or_fallback,
+            brief=brief,
+            domain=domain,
+            target=request.target,
+            mode=request.mode,
+            conversation_history=request.conversation_history,
+            prior_turn_summary=request.prior_turn_summary,
+            current_model_summary=request.current_model_summary,
         )
         yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
         await asyncio.sleep(0)
@@ -712,13 +843,35 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
     # ------------------------------------------------------------------
     # Planner
     # ------------------------------------------------------------------
-    def _plan_or_fallback(self, *, brief: str, domain: str, target: str) -> tuple[PlanTask, str]:
-        """Call the planner with retries; fall back to the mock tree on failure."""
+    def _plan_or_fallback(
+        self,
+        *,
+        brief: str,
+        domain: str,
+        target: str,
+        mode: str = "initial",
+        conversation_history: list[dict[str, Any]] | None = None,
+        prior_turn_summary: list[dict[str, Any]] | None = None,
+        current_model_summary: dict[str, Any] | None = None,
+    ) -> tuple[PlanTask, str]:
+        """Call the planner with retries; fall back to the mock tree on failure.
+
+        Falls back to the appropriate delta tree when the live call fails so
+        multi-turn runs still produce something meaningful for the UI.
+        """
         try:
             from optimizer.providers import LLMRequest
 
             req = LLMRequest(
-                prompt=planner_user_prompt(brief=brief, target=target, domain=domain),
+                prompt=planner_user_prompt(
+                    brief=brief,
+                    target=target,
+                    domain=domain,
+                    mode=mode,
+                    conversation_history=conversation_history or [],
+                    prior_turn_summary=prior_turn_summary or [],
+                    current_model_summary=current_model_summary or {},
+                ),
                 system=PLANNER_SYSTEM_PROMPT,
                 temperature=0.3,
                 max_tokens=self.max_tokens_plan,
@@ -735,7 +888,15 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
                     return plan, intro or _default_intro(domain, plan)
         except Exception:  # noqa: BLE001 — downgrade to mock tree
             pass
-        fallback = _build_plan_tree(brief, domain)
+        if mode in {"follow_up", "correction"}:
+            fallback = _build_follow_up_plan_tree(
+                brief=brief,
+                domain=domain,
+                model_summary=current_model_summary or {},
+                mode=mode,
+            )
+        else:
+            fallback = _build_plan_tree(brief, domain)
         return fallback, _default_intro(domain, fallback)
 
     # ------------------------------------------------------------------

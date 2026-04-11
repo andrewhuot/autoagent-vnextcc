@@ -38,6 +38,8 @@ export function AgentWorkbench() {
   const target = useWorkbenchStore((s) => s.target);
   const setError = useWorkbenchStore((s) => s.setError);
   const reset = useWorkbenchStore((s) => s.reset);
+  const autoIterate = useWorkbenchStore((s) => s.autoIterate);
+  const maxIterations = useWorkbenchStore((s) => s.maxIterations);
 
   // Track the active stream controller so we can abort on unmount.
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -76,6 +78,10 @@ export function AgentWorkbench() {
                 ? 'error'
                 : 'idle',
           lastBrief: snapshot.last_brief,
+          // Multi-turn hydration: repopulate conversation + turn tree so a
+          // page reload restores the running log exactly where it stopped.
+          conversation: snapshot.conversation,
+          turns: snapshot.turns,
         });
       } catch (error) {
         if (cancelled) return;
@@ -136,6 +142,8 @@ export function AgentWorkbench() {
             project_id: projectId ?? null,
             brief,
             target,
+            auto_iterate: autoIterate,
+            max_iterations: maxIterations,
           },
           { signal: controller.signal }
         );
@@ -152,7 +160,16 @@ export function AgentWorkbench() {
         }
       }
     },
-    [beginBuild, dispatchEvent, projectId, setAbortController, setError, target]
+    [
+      autoIterate,
+      beginBuild,
+      dispatchEvent,
+      maxIterations,
+      projectId,
+      setAbortController,
+      setError,
+      target,
+    ]
   );
 
   return (

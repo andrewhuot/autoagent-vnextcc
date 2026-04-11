@@ -221,7 +221,8 @@ describe('AgentWorkbench', () => {
     // The artifact shows up both in the left-pane ArtifactCard and as the
     // active preview filename in the right pane — that's intentional.
     expect(screen.getAllByText('Airline Support Role').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Artifacts')).toBeInTheDocument();
+    // Multi-turn feed renders artifacts under a per-turn "Artifacts (n)" heading.
+    expect(screen.getByText(/^Artifacts\b/)).toBeInTheDocument();
   });
 
   it('pushes the user message immediately when the chat input is submitted', async () => {
