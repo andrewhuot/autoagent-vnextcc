@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import App from '../App';
 import { getNavigationSections, getSimpleNavigationSections } from '../lib/navigation';
 import { CommandPalette } from './CommandPalette';
-import { getDemoJourneyContext, getRouteContext } from './Layout';
+import { getDemoJourneyContext, getRouteContext } from './layoutContext';
 import { Sidebar } from './Sidebar';
 
 vi.mock('../lib/websocket', () => ({
@@ -128,6 +128,22 @@ describe('getDemoJourneyContext', () => {
     expect(studioCtx!.stepLabel).toBe('Step 3 of 5');
   });
 
+  it('does not describe a generic new eval as a saved Build handoff', () => {
+    const ctx = getDemoJourneyContext('/evals', '?new=1');
+
+    expect(ctx).not.toBeNull();
+    expect(ctx!.summary).toBe('Set up an eval run');
+    expect(ctx!.detail).toContain('Choose an agent');
+  });
+
+  it('uses selected-draft copy when an eval URL carries an agent', () => {
+    const ctx = getDemoJourneyContext('/evals', '?new=1&agent=agent-v002');
+
+    expect(ctx).not.toBeNull();
+    expect(ctx!.summary).toBe('Run the selected draft');
+    expect(ctx!.detail).toContain('same saved config');
+  });
+
   it('returns journey context for improvements and deploy', () => {
     const improvementsCtx = getDemoJourneyContext('/improvements');
     expect(improvementsCtx).not.toBeNull();
@@ -165,6 +181,30 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('link', { name: 'CX Import' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Connect' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'CLI' })).not.toBeInTheDocument();
+  });
+
+  it('marks Workbench and Agent Improver as Build-stage pages in guided flow', () => {
+    installLocalStorageMock();
+
+    const { rerender } = render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ['/workbench'] },
+        createElement(Sidebar, { mobileOpen: true, onClose: vi.fn() })
+      )
+    );
+
+    expect(screen.getByText("You're on Build. Next up: Eval.")).toBeInTheDocument();
+
+    rerender(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ['/agent-improver'] },
+        createElement(Sidebar, { mobileOpen: true, onClose: vi.fn() })
+      )
+    );
+
+    expect(screen.getByText("You're on Build. Next up: Eval.")).toBeInTheDocument();
   });
 
   it('toggles to the full navigation surface and persists pro mode', async () => {

@@ -117,7 +117,8 @@ const GUIDED_FLOW_STEPS: GuidedFlowStep[] = [
   },
   {
     label: 'Build',
-    matcher: (pathname) => pathname === '/build',
+    matcher: (pathname) =>
+      pathname === '/build' || pathname === '/workbench' || pathname === '/agent-improver',
   },
   {
     label: 'Eval',
@@ -126,7 +127,11 @@ const GUIDED_FLOW_STEPS: GuidedFlowStep[] = [
   },
   {
     label: 'Improve',
-    matcher: (pathname) => pathname === '/optimize' || pathname === '/studio' || pathname === '/improvements',
+    matcher: (pathname) =>
+      pathname === '/optimize' ||
+      pathname === '/studio' ||
+      pathname === '/live-optimize' ||
+      pathname === '/improvements',
   },
   {
     label: 'Deploy',

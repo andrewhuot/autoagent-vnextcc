@@ -175,15 +175,22 @@ describe('AgentWorkbench', () => {
       await screen.findByLabelText('Workbench request'),
       'Add a flight status tool and a PII guardrail'
     );
-    await user.click(screen.getByRole('button', { name: 'Plan' }));
+    expect(screen.getByRole('button', { name: 'Plan mode' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Apply mode' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Ask mode' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Create plan' }));
 
     const planCard = await screen.findByTestId('workbench-change-plan');
+    expect(within(planCard).getByText('Change plan')).toBeInTheDocument();
     expect(within(planCard).getByText('Add a flight status lookup tool and guardrail.')).toBeInTheDocument();
     expect(within(planCard).getByText('flight_status_lookup')).toBeInTheDocument();
     expect(screen.queryByText('canonical_model_present')).not.toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'Apply plan' }));
 
+    expect(await screen.findByText('Applied plan')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Applied' })).toBeDisabled();
     expect(await screen.findByText('Automatic test passed')).toBeInTheDocument();
     expect(screen.getByText('canonical_model_present')).toBeInTheDocument();
     await waitFor(() => {

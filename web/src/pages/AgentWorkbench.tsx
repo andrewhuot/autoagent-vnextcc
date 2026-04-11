@@ -81,6 +81,17 @@ const WORKBENCH_TABS: Array<{ id: WorkbenchTab; label: string }> = [
 ];
 
 const TARGET_OPTIONS: WorkbenchTarget[] = ['portable', 'adk', 'cx'];
+const MODE_LABELS: Record<WorkbenchMode, string> = {
+  plan: 'Plan',
+  apply: 'Apply',
+  ask: 'Ask',
+};
+
+const MODE_ARIA_LABELS: Record<WorkbenchMode, string> = {
+  plan: 'Plan mode',
+  apply: 'Apply mode',
+  ask: 'Ask mode',
+};
 
 /**
  * Two-pane Agent Builder Workbench built around the canonical project model.
@@ -365,6 +376,8 @@ export function AgentWorkbench() {
                 <button
                   key={item}
                   type="button"
+                  aria-label={MODE_ARIA_LABELS[item]}
+                  aria-pressed={mode === item}
                   onClick={() => setMode(item)}
                   className={classNames(
                     'rounded-lg border px-3 py-1.5 text-xs font-semibold capitalize',
@@ -373,7 +386,7 @@ export function AgentWorkbench() {
                       : 'border-gray-200 bg-white text-gray-600 hover:text-gray-900'
                   )}
                 >
-                  {item}
+                  {MODE_LABELS[item]}
                 </button>
               ))}
             </div>
@@ -400,7 +413,7 @@ export function AgentWorkbench() {
                 className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Send className="h-4 w-4" />
-                {busy ? 'Working...' : 'Plan'}
+                {busy ? 'Creating plan...' : 'Create plan'}
               </button>
             </div>
           </div>
@@ -484,23 +497,40 @@ function ChangePlanCard({
   onApply: () => void;
   busy: boolean;
 }) {
+  const applied = plan.status === 'applied';
+
   return (
-    <section data-testid="workbench-change-plan" className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4">
+    <section
+      data-testid="workbench-change-plan"
+      className={classNames(
+        'rounded-lg border px-4 py-4',
+        applied ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'
+      )}
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-amber-700">Change plan</p>
-          <h3 className="mt-1 text-sm font-semibold text-amber-950">{plan.summary}</h3>
-          <p className="mt-1 text-xs text-amber-800">
+          <p
+            className={classNames(
+              'text-xs font-semibold uppercase tracking-wider',
+              applied ? 'text-emerald-700' : 'text-amber-700'
+            )}
+          >
+            {applied ? 'Applied plan' : 'Change plan'}
+          </p>
+          <h3 className={classNames('mt-1 text-sm font-semibold', applied ? 'text-emerald-950' : 'text-amber-950')}>
+            {plan.summary}
+          </h3>
+          <p className={classNames('mt-1 text-xs', applied ? 'text-emerald-800' : 'text-amber-800')}>
             Source v{plan.source_version}. Test after apply: {plan.test_after_apply ? 'required' : 'not configured'}.
           </p>
         </div>
         <button
           type="button"
           onClick={onApply}
-          disabled={busy || plan.status === 'applied'}
+          disabled={busy || applied}
           className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          Apply plan
+          {applied ? 'Applied' : 'Apply plan'}
         </button>
       </div>
       <div className="mt-3 space-y-2">

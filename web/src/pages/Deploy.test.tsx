@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Deploy } from './Deploy';
@@ -26,7 +26,12 @@ vi.mock('../lib/toast', () => ({
 function renderPage() {
   return render(
     <MemoryRouter initialEntries={['/deploy']}>
-      <Deploy />
+      <Routes>
+        <Route path="/deploy" element={<Deploy />} />
+        <Route path="/build" element={<div>Build</div>} />
+        <Route path="/workbench" element={<div>Workbench</div>} />
+        <Route path="/improvements" element={<div>Improvements</div>} />
+      </Routes>
     </MemoryRouter>
   );
 }
@@ -121,5 +126,21 @@ describe('Deploy', () => {
       { version: 9, strategy: 'immediate' },
       expect.any(Object)
     );
+  });
+
+  it('explains how to create a deployable version when the form has no configs', async () => {
+    const user = userEvent.setup();
+    apiMocks.useConfigs.mockReturnValue({ data: [] });
+
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Deploy Version' }));
+
+    expect(screen.getByRole('heading', { name: 'No deployable versions yet' })).toBeInTheDocument();
+    expect(screen.getByText(/Create or accept a version before promoting/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Build' })).toHaveAttribute('href', '/build');
+    expect(screen.getByRole('link', { name: 'Open Workbench' })).toHaveAttribute('href', '/workbench');
+    expect(screen.getByRole('link', { name: 'Review Improvements' })).toHaveAttribute('href', '/improvements');
+    expect(screen.queryByRole('button', { name: 'Deploy' })).not.toBeInTheDocument();
   });
 });

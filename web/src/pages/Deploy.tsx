@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Rocket, RotateCcw } from 'lucide-react';
 import { useConfigs, useDeploy, useDeployStatus, useRollback } from '../lib/api';
 import { EmptyState } from '../components/EmptyState';
@@ -25,8 +25,9 @@ export function Deploy() {
   const [strategy, setStrategy] = useState<'canary' | 'immediate'>('canary');
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const showDeployForm = showForm || searchParams.get('new') === '1';
+  const availableConfigs = configs || [];
   const activeConfig = deployStatus?.active_version
-    ? configs?.find((entry) => entry.version === deployStatus.active_version) || null
+    ? availableConfigs.find((entry) => entry.version === deployStatus.active_version) || null
     : null;
 
   function closeForm() {
@@ -257,49 +258,82 @@ export function Deploy() {
       )}
 
       {showDeployForm && (
-        <section className="rounded-lg border border-gray-200 bg-white p-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <label htmlFor="deploy-version" className="mb-1 block text-xs text-gray-500">Version</label>
-              <select
-                id="deploy-version"
-                value={version}
-                onChange={(event) => setVersion(event.target.value)}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                <option value="">Select version</option>
-                {(configs || []).map((config) => (
-                  <option key={config.version} value={config.version}>
-                    v{config.version} · {config.status}
-                  </option>
-                ))}
-              </select>
+        availableConfigs.length === 0 ? (
+          <section className="rounded-lg border border-sky-200 bg-sky-50 p-5">
+            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-sky-950">No deployable versions yet</h3>
+                <p className="mt-1 max-w-2xl text-sm leading-6 text-sky-900">
+                  Create or accept a version before promoting it. Build a draft, apply a Workbench plan, or review accepted improvements first.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Link
+                  to="/build"
+                  className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-100"
+                >
+                  Open Build
+                </Link>
+                <Link
+                  to="/workbench"
+                  className="rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-100"
+                >
+                  Open Workbench
+                </Link>
+                <Link
+                  to="/improvements"
+                  className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+                >
+                  Review Improvements
+                </Link>
+              </div>
             </div>
+          </section>
+        ) : (
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div>
+                <label htmlFor="deploy-version" className="mb-1 block text-xs text-gray-500">Version</label>
+                <select
+                  id="deploy-version"
+                  value={version}
+                  onChange={(event) => setVersion(event.target.value)}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="">Select version</option>
+                  {availableConfigs.map((config) => (
+                    <option key={config.version} value={config.version}>
+                      v{config.version} · {config.status}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-            <div>
-              <label htmlFor="deploy-strategy" className="mb-1 block text-xs text-gray-500">Strategy</label>
-              <select
-                id="deploy-strategy"
-                value={strategy}
-                onChange={(event) => setStrategy(event.target.value as 'canary' | 'immediate')}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
-              >
-                <option value="canary">Canary (safe default)</option>
-                <option value="immediate">Immediate promotion</option>
-              </select>
-            </div>
+              <div>
+                <label htmlFor="deploy-strategy" className="mb-1 block text-xs text-gray-500">Strategy</label>
+                <select
+                  id="deploy-strategy"
+                  value={strategy}
+                  onChange={(event) => setStrategy(event.target.value as 'canary' | 'immediate')}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="canary">Canary (safe default)</option>
+                  <option value="immediate">Immediate promotion</option>
+                </select>
+              </div>
 
-            <div className="flex items-end">
-              <button
-                onClick={handleDeploy}
-                disabled={!version || deploy.isPending || isConfirmationPending('deploy')}
-                className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
-              >
-                {deploy.isPending ? 'Deploying...' : 'Deploy'}
-              </button>
+              <div className="flex items-end">
+                <button
+                  onClick={handleDeploy}
+                  disabled={!version || deploy.isPending || isConfirmationPending('deploy')}
+                  className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+                >
+                  {deploy.isPending ? 'Deploying...' : 'Deploy'}
+                </button>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
+        )
       )}
 
       <section className="overflow-hidden rounded-lg border border-gray-200 bg-white">
