@@ -54,4 +54,79 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('flight_status_lookup.py')).toBeInTheDocument();
     expect(screen.queryByText('AGENT PREVIEW')).not.toBeInTheDocument();
   });
+
+  it('does not show the Diff tab when there are no previous version artifacts', () => {
+    render(<ArtifactViewer />);
+    expect(screen.queryByRole('button', { name: 'Diff' })).not.toBeInTheDocument();
+  });
+
+  it('shows version badge when iterationCount > 0', () => {
+    useWorkbenchStore.setState({ iterationCount: 2 });
+    render(<ArtifactViewer />);
+    // Two artifacts => sub-navigation visible, each should have a "v3" badge
+    expect(screen.getAllByText('v3').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('shows the Diff tab when previousVersionArtifacts and diffTargetVersion are set', () => {
+    useWorkbenchStore.setState({
+      previousVersionArtifacts: [
+        {
+          id: 'art-agent-old',
+          task_id: 'task-role',
+          category: 'agent',
+          name: 'Agent role',
+          summary: 'Old summary',
+          preview: 'OLD PREVIEW',
+          source: 'OLD SOURCE',
+          language: 'markdown',
+          created_at: '2026-04-10T00:00:00Z',
+          version: 1,
+        },
+      ],
+      diffTargetVersion: 1,
+    });
+    render(<ArtifactViewer />);
+    expect(screen.getByRole('button', { name: 'Diff' })).toBeInTheDocument();
+  });
+
+  it('renders the diff view with added and removed lines', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      previousVersionArtifacts: [
+        {
+          id: 'art-agent-old',
+          task_id: 'task-role',
+          category: 'agent',
+          name: 'Agent role',
+          summary: 'Old summary',
+          preview: 'line one\nold line',
+          source: 'line one\nold line',
+          language: 'python',
+          created_at: '2026-04-10T00:00:00Z',
+          version: 1,
+        },
+      ],
+      diffTargetVersion: 1,
+      artifacts: [
+        {
+          id: 'art-agent',
+          task_id: 'task-role',
+          category: 'agent',
+          name: 'Agent role',
+          summary: 'Agent summary',
+          preview: 'line one\nnew line',
+          source: 'line one\nnew line',
+          language: 'python',
+          created_at: '2026-04-11T00:00:00Z',
+          version: 2,
+        },
+      ],
+      activeArtifactId: 'art-agent',
+    });
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: 'Diff' }));
+    // The diff should show the removed old line and added new line
+    expect(screen.getByText('old line')).toBeInTheDocument();
+    expect(screen.getByText('new line')).toBeInTheDocument();
+  });
 });

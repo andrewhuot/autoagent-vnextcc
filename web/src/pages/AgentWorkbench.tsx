@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   getDefaultWorkbenchProject,
   getWorkbenchPlanSnapshot,
+  iterateWorkbenchBuild,
   streamWorkbenchBuild,
   type WorkbenchTarget,
 } from '../lib/workbench-api';
@@ -28,11 +29,13 @@ import { WorkbenchLayout } from '../components/workbench/WorkbenchLayout';
 import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
+import { IterationControls } from '../components/workbench/IterationControls';
 
 export function AgentWorkbench() {
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
   const beginBuild = useWorkbenchStore((s) => s.beginBuild);
+  const startIteration = useWorkbenchStore((s) => s.startIteration);
   const dispatchEvent = useWorkbenchStore((s) => s.dispatchEvent);
   const setAbortController = useWorkbenchStore((s) => s.setAbortController);
   const target = useWorkbenchStore((s) => s.target);
@@ -139,6 +142,21 @@ export function AgentWorkbench() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Stream consumer — shared between fresh builds and iterations
+  // ---------------------------------------------------------------------------
+  const consumeStream = useCallback(
+    async (stream: AsyncIterable<import('../lib/workbench-api').BuildStreamEvent>) => {
+      for await (const event of stream) {
+        dispatchEvent(event);
+      }
+    },
+    [dispatchEvent]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Fresh build handler
+  // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
     async (brief: string) => {
       beginBuild(brief);
@@ -156,9 +174,7 @@ export function AgentWorkbench() {
           },
           { signal: controller.signal }
         );
-        for await (const event of stream) {
-          dispatchEvent(event);
-        }
+        await consumeStream(stream);
       } catch (error) {
         if ((error as Error).name === 'AbortError') return;
         setError(error instanceof Error ? error.message : 'Build failed');
@@ -169,15 +185,55 @@ export function AgentWorkbench() {
         }
       }
     },
-    [beginBuild, dispatchEvent, environment, projectId, setAbortController, setError, target]
+    [beginBuild, consumeStream, environment, projectId, setAbortController, setError, target]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Iteration handler — called by IterationControls and ReflectionCard
+  // ---------------------------------------------------------------------------
+  const handleIterate = useCallback(
+    async (message: string) => {
+      const currentProjectId = useWorkbenchStore.getState().projectId;
+      if (!currentProjectId) {
+        await handleSubmit(message);
+        return;
+      }
+
+      startIteration(message);
+      const controller = new AbortController();
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = controller;
+      setAbortController(controller);
+      try {
+        const stream = iterateWorkbenchBuild(
+          {
+            project_id: currentProjectId,
+            message,
+            target,
+          },
+          { signal: controller.signal }
+        );
+        await consumeStream(stream);
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        setError(error instanceof Error ? error.message : 'Iteration failed');
+      } finally {
+        if (activeControllerRef.current === controller) {
+          activeControllerRef.current = null;
+          setAbortController(null);
+        }
+      }
+    },
+    [consumeStream, handleSubmit, setAbortController, setError, startIteration, target]
   );
 
   return (
     <div className="px-4 pb-6 pt-2">
       <WorkbenchLayout
-        left={<ConversationFeed />}
+        left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
         footer={<ChatInput onSubmit={handleSubmit} />}
+        iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>
   );

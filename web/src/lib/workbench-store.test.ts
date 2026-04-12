@@ -302,3 +302,103 @@ describe('workbench-store', () => {
     expect(state.messages).toHaveLength(0);
   });
 });
+
+describe('workbench-store — harness features', () => {
+  beforeEach(() => {
+    useWorkbenchStore.getState().reset();
+  });
+
+  it('stores harness metrics from harness.metrics event', () => {
+    dispatch({
+      event: 'harness.metrics',
+      data: {
+        current_phase: 'executing',
+        steps_completed: 2,
+        total_steps: 5,
+        tokens_used: 1200,
+        cost_usd: 0.018,
+        elapsed_ms: 12500,
+      },
+    });
+    const state = useWorkbenchStore.getState();
+    expect(state.harnessMetrics).not.toBeNull();
+    expect(state.harnessMetrics?.currentPhase).toBe('executing');
+    expect(state.harnessMetrics?.stepsCompleted).toBe(2);
+    expect(state.harnessMetrics?.tokensUsed).toBe(1200);
+  });
+
+  it('stores reflections from reflection.completed event', () => {
+    dispatch({
+      event: 'reflection.completed',
+      data: {
+        id: 'refl-1',
+        quality_score: 0.85,
+        suggestions: ['Add error handling', 'Improve guardrails'],
+      },
+    });
+    const state = useWorkbenchStore.getState();
+    expect(state.reflections).toHaveLength(1);
+    expect(state.reflections[0].qualityScore).toBe(0.85);
+    expect(state.reflections[0].suggestions).toHaveLength(2);
+  });
+
+  it('records iteration from iteration.started event', () => {
+    dispatch({
+      event: 'iteration.started',
+      data: {
+        id: 'iter-1',
+        message: 'Improve error handling',
+      },
+    });
+    const state = useWorkbenchStore.getState();
+    // Starts at 0, increments to 1
+    expect(state.iterationCount).toBe(1);
+    expect(state.iterationHistory).toHaveLength(1);
+  });
+
+  it('startIteration stores optimistic local state', () => {
+    // Seed some artifacts first
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({
+      event: 'artifact.updated',
+      data: { task_id: 'task-role', artifact: makeArtifact() },
+    });
+    expect(useWorkbenchStore.getState().artifacts).toHaveLength(1);
+
+    useWorkbenchStore.getState().startIteration('Make it better');
+    const state = useWorkbenchStore.getState();
+    expect(state.buildStatus).toBe('starting');
+    expect(state.iterationCount).toBeGreaterThanOrEqual(1);
+    expect(state.previousVersionArtifacts).toHaveLength(1);
+    // Optimistic user message added
+    const userMessages = state.messages.filter((m) => m.role === 'user');
+    expect(userMessages.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('selectVersionForDiff sets the diff target version', () => {
+    useWorkbenchStore.getState().selectVersionForDiff(3);
+    expect(useWorkbenchStore.getState().diffTargetVersion).toBe(3);
+    useWorkbenchStore.getState().selectVersionForDiff(null);
+    expect(useWorkbenchStore.getState().diffTargetVersion).toBeNull();
+  });
+
+  it('reset clears harness-specific state', () => {
+    dispatch({
+      event: 'harness.metrics',
+      data: { phase: 'reflect', current_step: 'validate', steps_completed: 1, steps_total: 1, tokens_used: 500, estimated_cost: 0.01, elapsed_seconds: 5 },
+    });
+    dispatch({
+      event: 'reflection.completed',
+      data: { id: 'refl-1', score: 0.9, summary: 'Great', suggestions: [], created_at: '2026-04-11T00:00:00Z' },
+    });
+    useWorkbenchStore.getState().selectVersionForDiff(2);
+
+    useWorkbenchStore.getState().reset();
+    const state = useWorkbenchStore.getState();
+    expect(state.harnessMetrics).toBeNull();
+    expect(state.reflections).toHaveLength(0);
+    expect(state.iterationCount).toBe(0);
+    expect(state.previousVersionArtifacts).toHaveLength(0);
+    expect(state.diffTargetVersion).toBeNull();
+  });
+});

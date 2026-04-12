@@ -13,6 +13,7 @@ import type { WorkbenchArtifactCategory } from '../../lib/workbench-api';
 import {
   useWorkbenchStore,
   type ArtifactCategoryFilter,
+  type ArtifactView,
   type WorkspaceTab,
 } from '../../lib/workbench-store';
 import { SourceCodeView } from './SourceCodeView';
@@ -100,6 +101,91 @@ export function ArtifactViewer() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Inline line-level diff
+// ---------------------------------------------------------------------------
+
+interface DiffLine {
+  type: 'same' | 'added' | 'removed';
+  content: string;
+}
+
+function buildLineDiff(oldText: string, newText: string): DiffLine[] {
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+  const result: DiffLine[] = [];
+  const max = Math.max(oldLines.length, newLines.length);
+  let oi = 0;
+  let ni = 0;
+  while (oi < oldLines.length || ni < newLines.length) {
+    if (oi < oldLines.length && ni < newLines.length && oldLines[oi] === newLines[ni]) {
+      result.push({ type: 'same', content: oldLines[oi] });
+      oi++;
+      ni++;
+    } else {
+      // Consume removed lines until we find a match or exhaust old
+      const lookAhead = Math.min(max, 4);
+      let matchedOld = -1;
+      let matchedNew = -1;
+      for (let d = 1; d <= lookAhead; d++) {
+        if (ni + d < newLines.length && oi < oldLines.length && oldLines[oi] === newLines[ni + d]) {
+          matchedNew = ni + d;
+          break;
+        }
+        if (oi + d < oldLines.length && ni < newLines.length && oldLines[oi + d] === newLines[ni]) {
+          matchedOld = oi + d;
+          break;
+        }
+      }
+      if (matchedNew !== -1) {
+        while (ni < matchedNew) {
+          result.push({ type: 'added', content: newLines[ni] });
+          ni++;
+        }
+      } else if (matchedOld !== -1) {
+        while (oi < matchedOld) {
+          result.push({ type: 'removed', content: oldLines[oi] });
+          oi++;
+        }
+      } else {
+        if (oi < oldLines.length) {
+          result.push({ type: 'removed', content: oldLines[oi] });
+          oi++;
+        }
+        if (ni < newLines.length) {
+          result.push({ type: 'added', content: newLines[ni] });
+          ni++;
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function DiffView({ oldSource, newSource }: { oldSource: string; newSource: string }) {
+  const lines = useMemo(() => buildLineDiff(oldSource, newSource), [oldSource, newSource]);
+  return (
+    <pre className="font-mono text-[12px] leading-5">
+      {lines.map((line, i) => (
+        <div
+          key={i}
+          className={classNames(
+            'px-3',
+            line.type === 'added' && 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]',
+            line.type === 'removed' && 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]',
+            line.type === 'same' && 'text-[color:var(--wb-text-soft)]'
+          )}
+        >
+          <span className="mr-2 inline-block w-4 select-none text-right text-[color:var(--wb-text-muted)]">
+            {line.type === 'added' ? '+' : line.type === 'removed' ? '-' : ' '}
+          </span>
+          {line.content}
+        </div>
+      ))}
+    </pre>
+  );
+}
+
 function ArtifactsWorkspace() {
   const artifacts = useWorkbenchStore((s) => s.artifacts);
   const activeCategory = useWorkbenchStore((s) => s.activeCategory);
@@ -108,6 +194,9 @@ function ArtifactsWorkspace() {
   const setActiveView = useWorkbenchStore((s) => s.setActiveArtifactView);
   const setActiveArtifact = useWorkbenchStore((s) => s.setActiveArtifact);
   const activeArtifactId = useWorkbenchStore((s) => s.activeArtifactId);
+  const previousVersionArtifacts = useWorkbenchStore((s) => s.previousVersionArtifacts);
+  const diffTargetVersion = useWorkbenchStore((s) => s.diffTargetVersion);
+  const iterationCount = useWorkbenchStore((s) => s.iterationCount);
 
   const filtered = useMemo(
     () => (activeCategory === 'all' ? artifacts : artifacts.filter((a) => a.category === activeCategory)),
@@ -122,6 +211,16 @@ function ArtifactsWorkspace() {
     [filtered, activeArtifactId]
   );
 
+  const previousArtifact = useMemo(() => {
+    if (!active || previousVersionArtifacts.length === 0) return null;
+    return previousVersionArtifacts.find(
+      (a) => a.category === active.category && a.name === active.name
+    ) ?? null;
+  }, [active, previousVersionArtifacts]);
+
+  const hasDiff = previousArtifact !== null && diffTargetVersion !== null;
+  const effectiveView = activeView === 'diff' && !hasDiff ? 'preview' : activeView;
+
   const categoryCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const tab of CATEGORY_TABS) counts.set(tab.id, 0);
@@ -133,6 +232,12 @@ function ArtifactsWorkspace() {
   }, [artifacts]);
 
   const filename = active ? defaultFilename(active) : '';
+
+  const viewTabs: Array<{ id: ArtifactView; label: string }> = [
+    { id: 'preview', label: 'Preview' },
+    { id: 'source', label: 'Source code' },
+    ...(hasDiff ? [{ id: 'diff' as const, label: 'Diff' }] : []),
+  ];
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[color:var(--wb-bg)]">
@@ -163,30 +268,21 @@ function ArtifactsWorkspace() {
           })}
         </div>
         <div className="flex shrink-0 items-center gap-1 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-0.5">
-          <button
-            type="button"
-            onClick={() => setActiveView('preview')}
-            className={classNames(
-              'rounded px-2 py-0.5 text-[11px] transition',
-              activeView === 'preview'
-                ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
-                : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
-            )}
-          >
-            Preview
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveView('source')}
-            className={classNames(
-              'rounded px-2 py-0.5 text-[11px] transition',
-              activeView === 'source'
-                ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
-                : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
-            )}
-          >
-            Source code
-          </button>
+          {viewTabs.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveView(tab.id)}
+              className={classNames(
+                'rounded px-2 py-0.5 text-[11px] transition',
+                effectiveView === tab.id
+                  ? 'bg-[color:var(--wb-bg-active)] text-[color:var(--wb-text)]'
+                  : 'text-[color:var(--wb-text-dim)] hover:text-[color:var(--wb-text)]'
+              )}
+            >
+              {tab.label}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -209,12 +305,22 @@ function ArtifactsWorkspace() {
                     )}
                   >
                     {artifact.name}
+                    {iterationCount > 0 && (
+                      <span className="ml-1 rounded bg-[color:var(--wb-accent-weak)] px-1 text-[9px] text-[color:var(--wb-accent)]">
+                        v{iterationCount + 1}
+                      </span>
+                    )}
                   </button>
                 ))}
               </div>
             )}
             <div className="min-h-0 flex-1 overflow-auto p-4">
-              {activeView === 'source' ? (
+              {effectiveView === 'diff' && previousArtifact ? (
+                <DiffView
+                  oldSource={previousArtifact.source || previousArtifact.preview}
+                  newSource={active.source || active.preview}
+                />
+              ) : effectiveView === 'source' ? (
                 <SourceCodeView
                   source={active.source || active.preview}
                   language={active.language}

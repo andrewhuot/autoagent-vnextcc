@@ -339,6 +339,11 @@ class WorkbenchService:
         completed task to the canonical model, and persists plan+artifacts
         on every event. Safe to call with ``project_id=None`` for a brand-new
         build.
+
+        When ``project_id`` is provided AND the project already has artifacts
+        from a prior build AND a ``brief`` is supplied, this method
+        automatically routes to ``run_iteration_stream()`` so the user gets
+        delta behavior rather than a full rebuild.
         """
         from builder.workbench_agent import (  # local import to avoid cycle
             BuildRequest,
@@ -356,11 +361,22 @@ class WorkbenchService:
 
         if project_id:
             try:
-                project = self._require_project(project_id)
+                existing = self._require_project(project_id)
             except KeyError:
-                project = self.store.create_project(
-                    brief=brief, target=target, environment=environment
+                existing = None
+
+            if existing is not None and existing.get("artifacts") and brief:
+                # Project has prior artifacts — treat as an iteration.
+                return await self.run_iteration_stream(
+                    project_id=project_id,
+                    follow_up=brief,
+                    target=target,
+                    environment=environment,
+                    agent=runner,
                 )
+            project = existing or self.store.create_project(
+                brief=brief, target=target, environment=environment
+            )
         else:
             project = self.store.create_project(
                 brief=brief, target=target, environment=environment
@@ -369,6 +385,7 @@ class WorkbenchService:
         project.setdefault("artifacts", [])
         project.setdefault("messages", [])
         project.setdefault("runs", {})
+        project.setdefault("harness_state", {"checkpoints": []})
         project.setdefault("build_status", "running")
         project["build_status"] = "running"
         project["last_brief"] = brief
@@ -501,6 +518,10 @@ class WorkbenchService:
                         data["version"] = project.get("version")
                         self.store.save_project(project)
 
+                    elif event_name in ("harness.metrics", "reflection.completed", "iteration.started"):
+                        # Additive harness events — persist and pass through.
+                        pass
+
                     elif event_name == "error":
                         async for failure in self._fail_run_stream(
                             project,
@@ -527,6 +548,240 @@ class WorkbenchService:
                 ):
                     yield terminal_event
             except Exception as exc:  # noqa: BLE001 - persist failure before surfacing it
+                async for failure in self._fail_run_stream(
+                    project,
+                    run,
+                    message=str(exc),
+                ):
+                    yield failure
+
+        return _stream()
+
+    async def run_iteration_stream(
+        self,
+        *,
+        project_id: str,
+        follow_up: str,
+        target: str = "portable",
+        environment: str = "draft",
+        agent: Any = None,
+    ) -> Any:
+        """Handle a follow-up iteration on an existing build.
+
+        Loads the project, determines the iteration number from prior
+        harness_state, and delegates to the agent's ``iterate()`` method
+        (if available) or falls back to a fresh ``run()`` with the follow-up
+        as the brief.
+        """
+        from builder.workbench_agent import (
+            BuildRequest,
+            build_default_agent,
+        )
+        from builder.workbench_plan import (
+            PlanTask,
+            PlanTaskStatus,
+            WorkbenchArtifact,
+            find_task,
+            recompute_parent_status,
+        )
+
+        runner = agent if agent is not None else build_default_agent()
+        project = self._require_project(project_id)
+
+        # Determine iteration number from prior harness_state
+        harness_state = project.setdefault("harness_state", {"checkpoints": []})
+        completed_checkpoints = len(harness_state.get("checkpoints") or [])
+        iteration_number = max(2, (completed_checkpoints // 5) + 2)
+
+        project["build_status"] = "running"
+        started_model = copy.deepcopy(project["model"])
+        run = self._start_run(
+            project,
+            brief=follow_up,
+            target=target,
+            environment=environment,
+        )
+        self._append_message(
+            project,
+            run,
+            role="user",
+            text=follow_up,
+            task_id=None,
+            append_to_previous=False,
+        )
+        self.store.save_project(project)
+
+        request = BuildRequest(
+            project_id=project["project_id"],
+            brief=project.get("last_brief") or follow_up,
+            target=target or str(project.get("target") or "portable"),
+            environment=environment,
+        )
+
+        # Use agent.iterate() if available (harness-aware agents)
+        if hasattr(runner, "iterate"):
+            source_iter = runner.iterate(request, project, follow_up)
+        else:
+            # Fallback — run with combined brief
+            combined_brief = f"{request.brief}\n\nIteration feedback: {follow_up}"
+            request_with_followup = BuildRequest(
+                project_id=request.project_id,
+                brief=combined_brief,
+                target=request.target,
+                environment=request.environment,
+            )
+            source_iter = runner.run(request_with_followup, project)
+
+        plan_root: PlanTask | None = None
+        operations_for_version: list[dict[str, Any]] = []
+
+        async def _stream() -> Any:
+            nonlocal plan_root
+            nonlocal operations_for_version
+            try:
+                # Emit iteration.started event
+                iter_started = {
+                    "project_id": project["project_id"],
+                    "run_id": run["run_id"],
+                    "iteration_number": iteration_number,
+                    "message": follow_up,
+                    "artifact_count": len(project.get("artifacts", [])),
+                }
+                self._record_run_event(project, run, "iteration.started", iter_started)
+                self.store.save_project(project)
+                yield {"event": "iteration.started", "data": iter_started}
+
+                async for event in source_iter:
+                    event_name = str(event.get("event") or "")
+                    data = copy.deepcopy(event.get("data") or {})
+
+                    if event_name == "plan.ready":
+                        run["phase"] = "plan"
+                        plan_root = PlanTask.from_dict(data["plan"])
+                        project["plan"] = plan_root.to_dict()
+                        self.store.save_project(project)
+
+                    elif event_name == "message.delta":
+                        run["phase"] = "plan" if plan_root is None else "build"
+                        self._append_message(
+                            project,
+                            run,
+                            role="assistant",
+                            text=str(data.get("text") or ""),
+                            task_id=str(data.get("task_id") or "") or None,
+                            append_to_previous=True,
+                        )
+                        self.store.save_project(project)
+
+                    elif event_name == "task.started" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        if task is not None:
+                            task.status = PlanTaskStatus.RUNNING.value
+                            task.started_at = _now_iso()
+                            recompute_parent_status(plan_root)
+                            project["plan"] = plan_root.to_dict()
+                            self.store.save_project(project)
+
+                    elif event_name == "task.progress" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        note = str(data.get("note") or "")
+                        if task is not None and note:
+                            task.log.append(note)
+                            project["plan"] = plan_root.to_dict()
+                            self.store.save_project(project)
+
+                    elif event_name == "artifact.updated" and plan_root is not None:
+                        run["phase"] = "build"
+                        artifact_payload = data.get("artifact") or {}
+                        artifact = WorkbenchArtifact.from_dict(artifact_payload)
+                        # For iterations: upsert by category+name to replace prior versions
+                        artifacts = list(project.get("artifacts", []))
+                        artifacts = [
+                            a for a in artifacts
+                            if not (
+                                a.get("category") == artifact.category
+                                and a.get("name") == artifact.name
+                            )
+                        ]
+                        artifacts.append(artifact.to_dict())
+                        project["artifacts"] = artifacts
+                        task = find_task(plan_root, artifact.task_id)
+                        if task is not None and artifact.id not in task.artifact_ids:
+                            task.artifact_ids.append(artifact.id)
+                            project["plan"] = plan_root.to_dict()
+                        self.store.save_project(project)
+
+                    elif event_name == "task.completed" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        if task is not None:
+                            task.status = PlanTaskStatus.DONE.value
+                            task.completed_at = _now_iso()
+                            recompute_parent_status(plan_root)
+                            project["plan"] = plan_root.to_dict()
+                        operations = list(data.get("operations") or [])
+                        if operations:
+                            operations_for_version.extend(operations)
+                            project["model"] = apply_operations(project["model"], operations)
+                            project["compatibility"] = build_compatibility_diagnostics(
+                                project["model"],
+                                target=str(project.get("target") or "portable"),
+                            )
+                            project["exports"] = compile_workbench_exports(project["model"])
+                        self.store.save_project(project)
+
+                    elif event_name == "build.completed":
+                        run["phase"] = "build"
+                        if operations_for_version:
+                            project["version"] = int(project.get("version") or 1) + 1
+                            project["draft_badge"] = f"Draft v{project['version']}"
+                            self._add_version(
+                                project,
+                                summary=f"Iteration {iteration_number}: {follow_up.strip()[:80]}",
+                            )
+                            self._add_activity(
+                                project,
+                                kind="build",
+                                summary=f"Iteration {iteration_number}: {follow_up.strip()[:120]}",
+                                diff=build_model_diff(
+                                    started_model,
+                                    project["model"],
+                                    operations_for_version,
+                                ),
+                            )
+                        data["operations"] = operations_for_version
+                        data["version"] = project.get("version")
+                        self.store.save_project(project)
+
+                    elif event_name in ("harness.metrics", "reflection.completed"):
+                        pass  # persist and yield below
+
+                    elif event_name == "error":
+                        async for failure in self._fail_run_stream(
+                            project,
+                            run,
+                            message=str(data.get("message") or "Build failed."),
+                        ):
+                            yield failure
+                        return
+
+                    data.setdefault("project_id", project["project_id"])
+                    data.setdefault("run_id", run["run_id"])
+                    data.setdefault("phase", run.get("phase", "build"))
+                    data.setdefault("status", run.get("status", "running"))
+                    self._record_run_event(project, run, event_name, data)
+                    self.store.save_project(project)
+                    yield {"event": event_name, "data": data}
+
+                async for terminal_event in self._complete_run_stream(
+                    project=project,
+                    run=run,
+                    operations=operations_for_version,
+                ):
+                    yield terminal_event
+            except Exception as exc:  # noqa: BLE001
                 async for failure in self._fail_run_stream(
                     project,
                     run,

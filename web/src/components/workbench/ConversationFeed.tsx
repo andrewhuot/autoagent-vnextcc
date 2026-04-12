@@ -19,13 +19,21 @@ import { walkTasks } from '../../lib/workbench-plan';
 import { AssistantMessageCard } from './AssistantMessageCard';
 import { ArtifactCard } from './ArtifactCard';
 import { PlanTreeView } from './PlanTreeView';
+import { ReflectionCard } from './ReflectionCard';
 
-export function ConversationFeed() {
+interface ConversationFeedProps {
+  /** Called when the user clicks "Apply" on a reflection suggestion. */
+  onApplySuggestion?: (suggestion: string) => void;
+}
+
+export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = {}) {
   const plan = useWorkbenchStore((s) => s.plan);
   const messages = useWorkbenchStore((s) => s.messages);
   const artifacts = useWorkbenchStore((s) => s.artifacts);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
   const error = useWorkbenchStore((s) => s.error);
+  const reflections = useWorkbenchStore((s) => s.reflections);
+  const iterationCount = useWorkbenchStore((s) => s.iterationCount);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -33,7 +41,7 @@ export function ConversationFeed() {
     const container = scrollRef.current;
     if (!container) return;
     container.scrollTop = container.scrollHeight;
-  }, [messages.length, artifacts.length, plan?.status, buildStatus]);
+  }, [messages.length, artifacts.length, plan?.status, buildStatus, reflections.length]);
 
   const runningTask = plan
     ? Array.from(walkTasks(plan)).find(
@@ -79,9 +87,27 @@ export function ConversationFeed() {
           <div className="flex flex-col gap-2">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
               Artifacts
+              {iterationCount > 0 && (
+                <span className="ml-1.5 text-[color:var(--wb-accent)]">
+                  (iteration {iterationCount})
+                </span>
+              )}
             </h3>
             {artifacts.map((artifact) => (
               <ArtifactCard key={artifact.id} artifact={artifact} />
+            ))}
+          </div>
+        )}
+
+        {/* Reflection cards from the harness reflect phase */}
+        {reflections.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {reflections.map((reflection) => (
+              <ReflectionCard
+                key={reflection.id}
+                reflection={reflection}
+                onApplySuggestion={onApplySuggestion ?? (() => {})}
+              />
             ))}
           </div>
         )}

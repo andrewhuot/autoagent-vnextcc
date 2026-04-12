@@ -62,6 +62,16 @@ class WorkbenchBuildStreamRequest(BaseModel):
     mock: bool = Field(default=False, description="Force mock mode for tests.")
 
 
+class WorkbenchIterateRequest(BaseModel):
+    """Follow-up iteration on an existing build."""
+
+    project_id: str
+    follow_up: str = Field(min_length=1)
+    target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
+    environment: str = Field(default="draft")
+    mock: bool = Field(default=False, description="Force mock mode for tests.")
+
+
 def _service(request: Request) -> WorkbenchService:
     """Return the Workbench service, creating the JSON store on demand."""
     store = getattr(request.app.state, "workbench_store", None)
@@ -179,6 +189,48 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
                     str(event.get("event") or "message"),
                     event.get("data") or {},
                 )
+        except Exception as exc:  # noqa: BLE001 — surface as an error event
+            yield _format_sse("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/build/iterate")
+async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> StreamingResponse:
+    """Stream a follow-up iteration on an existing build as SSE.
+
+    Delegates to ``WorkbenchService.run_iteration_stream()`` which reuses the
+    current canonical model and generates delta artifacts.
+    """
+    from builder.workbench_agent import build_default_agent
+
+    service = _service(request)
+    agent = build_default_agent(force_mock=body.mock)
+
+    async def event_generator() -> AsyncIterator[bytes]:
+        try:
+            stream = await service.run_iteration_stream(
+                project_id=body.project_id,
+                follow_up=body.follow_up,
+                target=body.target,
+                environment=body.environment,
+                agent=agent,
+            )
+            async for event in stream:
+                yield _format_sse(
+                    str(event.get("event") or "message"),
+                    event.get("data") or {},
+                )
+        except KeyError:
+            yield _format_sse("error", {"message": f"Project {body.project_id} not found"})
         except Exception as exc:  # noqa: BLE001 — surface as an error event
             yield _format_sse("error", {"message": str(exc)})
 

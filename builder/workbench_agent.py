@@ -613,12 +613,18 @@ def _default_tool_for_domain(domain: str, brief: str) -> dict[str, Any]:
 # Live LLM-driven agent
 # ---------------------------------------------------------------------------
 class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
-    """Real LLM-backed builder. Uses LLMRouter for planning + per-task execution.
+    """Real harness-backed builder. Delegates to ``HarnessExecutionEngine``.
 
-    The agent keeps a deterministic fallback: if JSON parsing fails after
-    ``max_json_retries`` attempts, the offending step degrades to the mock
-    executor so the build still makes progress and the UI still sees
-    artifacts. This matches the global "stop after 3 attempts" rule.
+    The ``HarnessExecutionEngine`` provides the full plan-execute-reflect-present
+    lifecycle. This class is the ``WorkbenchBuilderAgent`` adapter that:
+
+    - Wires the engine with the optional LLM router
+    - Tracks version/iteration state across ``iterate()`` calls
+    - Falls back to ``MockWorkbenchBuilderAgent`` if the engine raises
+      unexpectedly, matching the global graceful-degradation rule
+
+    Both ``run()`` and ``iterate()`` share the same event contract so the
+    ``WorkbenchService`` SSE stream is forward-compatible.
     """
 
     def __init__(
@@ -634,162 +640,77 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
         self.max_json_retries = max_json_retries
         self.max_tokens_plan = max_tokens_plan
         self.max_tokens_task = max_tokens_task
+        # Iteration tracking — survives across successive iterate() calls
+        self._iteration: int = 1
+        self._previous_artifacts: list[dict[str, Any]] = []
+        self._previous_plan: Optional[dict[str, Any]] = None
+
+    def _make_engine(self, store: Any = None, event_broker: Any = None) -> Any:
+        """Construct a ``HarnessExecutionEngine`` bound to this agent's router."""
+        from builder.harness import HarnessExecutionEngine
+
+        _store = store or _NullStore()
+        _broker = event_broker or _NullEventBroker()
+        return HarnessExecutionEngine(_store, _broker, router=self.router)
 
     async def run(
         self,
         request: BuildRequest,
         project: dict[str, Any],
     ) -> AsyncIterator[BuildEvent]:
-        """Drive a real LLM build, yielding the same event shape as the mock."""
-        brief = request.brief.strip() or "Help users with the requested workflow."
-        domain = _infer_domain(brief)
+        """Drive a real harness build, yielding the same event shape as the mock.
 
-        # --- Step 1: ask the planner for a tree -----------------------------
-        plan, assistant_intro = await asyncio.to_thread(
-            self._plan_or_fallback, brief=brief, domain=domain, target=request.target
-        )
-        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
-        await asyncio.sleep(0)
-
-        if assistant_intro:
-            for chunk in _chunk(assistant_intro, 32):
-                yield {
-                    "event": "message.delta",
-                    "data": {"task_id": plan.id, "text": chunk},
-                }
-                await asyncio.sleep(0.02)
-
-        # --- Step 2: execute each leaf task --------------------------------
-        applied_operations: list[dict[str, Any]] = []
-        # Mutate a working copy of the model so downstream tasks see fresh state.
-        working_model = copy.deepcopy(project.get("model") or {})
-
-        for leaf in walk_leaves(plan):
-            yield {"event": "task.started", "data": {"task_id": leaf.id}}
-            await asyncio.sleep(0)
-
-            artifact, operation, log_line = await asyncio.to_thread(
-                self._execute_leaf_or_fallback,
-                leaf=leaf,
-                brief=brief,
-                domain=domain,
-                target=request.target,
-                working_model=working_model,
-            )
-
-            if log_line:
-                yield {
-                    "event": "task.progress",
-                    "data": {"task_id": leaf.id, "note": log_line},
-                }
-                await asyncio.sleep(0)
-            if artifact is not None:
-                yield {
-                    "event": "artifact.updated",
-                    "data": {"task_id": leaf.id, "artifact": artifact.to_dict()},
-                }
-                await asyncio.sleep(0)
-            if operation is not None:
-                applied_operations.append(operation)
-                working_model = _apply_operation_in_place(working_model, operation)
-
-            completed_ops = [operation] if operation is not None else []
-            yield {
-                "event": "task.completed",
-                "data": {"task_id": leaf.id, "operations": completed_ops},
-            }
-            await asyncio.sleep(0)
-
-        yield {
-            "event": "build.completed",
-            "data": {
-                "project_id": request.project_id,
-                "operations": applied_operations,
-                "plan_id": plan.id,
-            },
-        }
-
-    # ------------------------------------------------------------------
-    # Planner
-    # ------------------------------------------------------------------
-    def _plan_or_fallback(self, *, brief: str, domain: str, target: str) -> tuple[PlanTask, str]:
-        """Call the planner with retries; fall back to the mock tree on failure."""
+        Delegates to ``HarnessExecutionEngine.run()``. Falls back to
+        ``MockWorkbenchBuilderAgent`` on any unexpected error so the UI always
+        receives a coherent event stream.
+        """
         try:
-            from optimizer.providers import LLMRequest
+            engine = self._make_engine()
+            async for event in engine.run(request, project):
+                # Track state for subsequent iterate() calls
+                if event.get("event") == "artifact.updated":
+                    artifact_data = (event.get("data") or {}).get("artifact")
+                    if isinstance(artifact_data, dict):
+                        self._previous_artifacts.append(artifact_data)
+                elif event.get("event") == "plan.ready":
+                    self._previous_plan = (event.get("data") or {}).get("plan")
+                yield event
+            self._iteration = 2  # Next call is an iteration
+        except Exception:  # noqa: BLE001 — always degrade gracefully
+            async for event in MockWorkbenchBuilderAgent().run(request, project):
+                yield event
 
-            req = LLMRequest(
-                prompt=planner_user_prompt(brief=brief, target=target, domain=domain),
-                system=PLANNER_SYSTEM_PROMPT,
-                temperature=0.3,
-                max_tokens=self.max_tokens_plan,
-            )
-            for _ in range(self.max_json_retries + 1):
-                response = self.router.generate(req)
-                parsed = _parse_json_object(response.text)
-                if parsed is None:
-                    continue
-                root_payload = parsed.get("root") or {}
-                intro = str(parsed.get("assistant_intro") or "").strip()
-                plan = _plan_from_llm_payload(root_payload, brief=brief, domain=domain)
-                if plan is not None:
-                    return plan, intro or _default_intro(domain, plan)
-        except Exception:  # noqa: BLE001 — downgrade to mock tree
-            pass
-        fallback = _build_plan_tree(brief, domain)
-        return fallback, _default_intro(domain, fallback)
-
-    # ------------------------------------------------------------------
-    # Executor
-    # ------------------------------------------------------------------
-    def _execute_leaf_or_fallback(
+    async def iterate(
         self,
-        *,
-        leaf: PlanTask,
-        brief: str,
-        domain: str,
-        target: str,
-        working_model: dict[str, Any],
-    ) -> tuple[WorkbenchArtifact | None, dict[str, Any] | None, str | None]:
-        """Call the executor for a single leaf, or fall back to the mock body."""
-        kind = _infer_kind_from_leaf(leaf)
-        if kind is None:
-            return _fake_execute(leaf, brief, domain, target)
-        try:
-            from optimizer.providers import LLMRequest
+        request: BuildRequest,
+        project: dict[str, Any],
+        follow_up: str,
+    ) -> AsyncIterator[BuildEvent]:
+        """Handle a follow-up iteration refining a previous build.
 
-            canonical_summary = {
-                "tools": [tool.get("name") for tool in working_model.get("tools", [])],
-                "guardrails": [g.get("name") for g in working_model.get("guardrails", [])],
-                "agent_name": (working_model.get("agents") or [{}])[0].get("name"),
-            }
-            req = LLMRequest(
-                prompt=executor_user_prompt(
-                    kind=kind,
-                    brief=brief,
-                    task_title=leaf.title,
-                    canonical_summary=canonical_summary,
-                ),
-                system=EXECUTOR_SYSTEM_PROMPT,
-                temperature=0.2,
-                max_tokens=self.max_tokens_task,
-            )
-            for _ in range(self.max_json_retries + 1):
-                response = self.router.generate(req)
-                parsed = _parse_json_object(response.text)
-                if parsed is None:
-                    continue
-                result = _artifact_and_op_from_executor(
-                    kind=kind,
-                    payload=parsed,
-                    leaf=leaf,
-                    brief=brief,
-                    domain=domain,
-                )
-                if result is not None:
-                    return result
-        except Exception:  # noqa: BLE001 — downgrade to mock body
-            pass
-        return _fake_execute(leaf, brief, domain, target)
+        Passes the prior plan and artifacts to the engine so it can produce
+        delta artifacts rather than rebuilding from scratch.
+        """
+        try:
+            engine = self._make_engine()
+            existing_artifacts = list(project.get("artifacts") or self._previous_artifacts)
+            existing_plan = project.get("plan") or self._previous_plan
+            async for event in engine.iterate(
+                request,
+                existing_plan=existing_plan,
+                existing_artifacts=existing_artifacts,
+                follow_up=follow_up,
+                iteration_number=self._iteration,
+            ):
+                if event.get("event") == "artifact.updated":
+                    artifact_data = (event.get("data") or {}).get("artifact")
+                    if isinstance(artifact_data, dict):
+                        self._previous_artifacts.append(artifact_data)
+                yield event
+            self._iteration += 1
+        except Exception:  # noqa: BLE001 — degrade to mock
+            async for event in MockWorkbenchBuilderAgent().run(request, project):
+                yield event
 
 
 # ---------------------------------------------------------------------------
@@ -1122,6 +1043,20 @@ def _default_intro(domain: str, plan: PlanTask) -> str:
         f"Here's the plan for your {domain} agent. I'll start with {joined} "
         f"and render each artifact on the right as I go."
     )
+
+
+class _NullStore:
+    """No-op store used when no persistent store is available."""
+
+    def save_project(self, project: dict[str, Any]) -> None:
+        """Accept but discard a project save request."""
+
+
+class _NullEventBroker:
+    """No-op event broker used when no real broker is available."""
+
+    def publish(self, *args: Any, **kwargs: Any) -> None:
+        """Accept but discard a publish request."""
 
 
 __all__ = [
