@@ -154,7 +154,7 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
             <CheckCircle2 className="h-3.5 w-3.5" />
             <span>
               {turns.length === 1
-                ? 'Candidate ready for human review. Inspect artifacts, source, and the review gate before promotion.'
+                ? 'Review required. Inspect artifacts, source, and the review gate before promotion.'
                 : `Turn ${turns.length} complete. Review the updated candidate or send another follow-up.`}
             </span>
           </div>

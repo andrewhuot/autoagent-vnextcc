@@ -72,7 +72,13 @@ describe('Improvements', () => {
     expect(await screen.findByText('Review Content')).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'History' }));
-    expect(await screen.findByText('No completed improvements yet.')).toBeInTheDocument();
+    expect((await screen.findAllByText('No data yet')).length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('Expected: decisions appear after proposals are accepted or rejected.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: review pending improvements or run Optimize to create a proposal.')
+    ).toBeInTheDocument();
   });
 
   it('supports deep-linking directly to a workflow tab', () => {

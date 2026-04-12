@@ -1089,7 +1089,7 @@ function OptimizeRunSection({
                     to="/improvements?tab=review"
                     className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                   >
-                    Open Improvements
+                    Open Review
                   </Link>
                 </>
               ) : completedRun.accepted ? (
@@ -1349,7 +1349,7 @@ function OptimizeRunSection({
                   to="/improvements?tab=review"
                   className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                 >
-                  Open Improvements
+                  Open Review
                   <ArrowUpRight className="h-4 w-4" />
                 </Link>
               </>
@@ -2004,16 +2004,20 @@ function OptimizeRunSection({
       ) : activeAgent ? (
         <EmptyState
           icon={Zap}
+          state="no-data"
           title="No optimization history"
           description="Start a cycle to let the optimizer inspect failures, propose a config update, and run gate checks."
+          nextAction="Start optimization to create the first cycle record."
           actionLabel="Start optimization"
           onAction={() => handleStart()}
         />
       ) : (
         <EmptyState
           icon={Zap}
+          state="blocked"
           title="Pick an agent to optimize"
           description="Build or connect an agent first, then bring it here to optimize the same saved config."
+          nextAction="Open Build to create a saved config, or select an existing agent from the library."
           actionLabel="Open Build"
           onAction={() => navigate('/build')}
         />

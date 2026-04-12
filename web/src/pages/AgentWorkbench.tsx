@@ -40,6 +40,7 @@ import { IterationControls } from '../components/workbench/IterationControls';
 import { toastError } from '../lib/toast';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
+import { statusLabel } from '../lib/utils';
 
 function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   switch (status) {
@@ -81,7 +82,7 @@ function getWorkbenchJourneySummary(input: {
     return createJourneyStatusSummary({
       currentStep: 'workbench',
       status: 'ready',
-      statusLabel: 'Candidate ready',
+      statusLabel: statusLabel('ready'),
       summary: 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
       nextLabel: 'Run eval',
       nextDescription: 'Open Eval Runs and launch the first evaluation for this candidate.',

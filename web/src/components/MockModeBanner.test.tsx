@@ -58,7 +58,7 @@ describe('MockModeBanner', () => {
 
     renderBanner();
 
-    const dismissButton = await screen.findByRole('button', { name: 'Dismiss mock mode warning' });
+    const dismissButton = await screen.findByRole('button', { name: 'Dismiss preview mode warning' });
     expect(dismissButton).toBeInTheDocument();
   });
 
@@ -78,7 +78,7 @@ describe('MockModeBanner', () => {
     renderBanner();
 
     await screen.findByRole('alert');
-    expect(screen.queryByRole('button', { name: 'Dismiss mock mode warning' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Dismiss preview mode warning' })).not.toBeInTheDocument();
   });
 
   it('hides the banner when dismiss is clicked', async () => {
@@ -97,7 +97,7 @@ describe('MockModeBanner', () => {
     const user = userEvent.setup();
     renderBanner();
 
-    const dismissButton = await screen.findByRole('button', { name: 'Dismiss mock mode warning' });
+    const dismissButton = await screen.findByRole('button', { name: 'Dismiss preview mode warning' });
     await user.click(dismissButton);
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();

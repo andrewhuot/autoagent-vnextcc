@@ -9,7 +9,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { toastError, toastSuccess } from '../lib/toast';
-import { formatPercent, formatTimestamp, statusVariant } from '../lib/utils';
+import { formatPercent, formatTimestamp, statusLabel, statusVariant } from '../lib/utils';
 import type { DeployStatus } from '../lib/types';
 
 type PendingConfirmation =
@@ -191,8 +191,11 @@ export function Deploy() {
     return (
       <EmptyState
         icon={Rocket}
+        state={isError ? 'degraded' : 'no-data'}
+        stateLabel={isError ? 'Degraded' : 'No data yet'}
         title="No deployment status"
-        description="Initialize and deploy a config version to begin rollout management."
+        description="Expected: deployment status appears after a config has been deployed."
+        nextAction="deploy a version or refresh after starting the server from a workspace."
         actionLabel="Refresh"
         onAction={() => refetch()}
       />
@@ -251,7 +254,7 @@ export function Deploy() {
               {pendingConfirmation.type === 'rollback'
                 ? 'Confirm rollback'
                 : pendingConfirmation.type === 'promote'
-                  ? 'Confirm promote'
+                  ? 'Confirm canary promotion'
                   : 'Confirm deploy'}
             </button>
           </div>
@@ -265,7 +268,7 @@ export function Deploy() {
             {deployStatus.active_version ? `v${deployStatus.active_version}` : '—'}
           </p>
           {activeConfig && (
-            <p className="mt-1 text-xs text-gray-500">{activeConfig.config_hash} · {activeConfig.status}</p>
+            <p className="mt-1 text-xs text-gray-500">{activeConfig.config_hash} · {statusLabel(activeConfig.status)}</p>
           )}
         </div>
 
@@ -279,7 +282,15 @@ export function Deploy() {
               {deployStatus.canary_status.canary_conversations} conversations observed
             </p>
           ) : (
-            <p className="mt-1 text-xs text-gray-500">No active canary</p>
+            <div className="mt-2 space-y-1">
+              <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-sky-700">
+                Waiting
+              </span>
+              <p className="text-xs font-medium text-gray-600">No active canary</p>
+              <p className="text-xs leading-5 text-gray-500">
+                Next: Deploy a candidate with the canary strategy to collect rollout evidence.
+              </p>
+            </div>
           )}
         </div>
 
@@ -305,7 +316,7 @@ export function Deploy() {
                 className="inline-flex items-center gap-1 rounded-lg border border-green-300 bg-white px-2.5 py-1 text-xs text-green-700 hover:bg-green-50 disabled:opacity-60"
               >
                 <ArrowUpCircle className="h-3.5 w-3.5" />
-                {promoteCanary.isPending ? 'Promoting...' : 'Promote'}
+                {promoteCanary.isPending ? 'Promoting...' : 'Promote canary'}
               </button>
               <button
                 onClick={handleRollback}
@@ -349,7 +360,7 @@ export function Deploy() {
                 <option value="">Select version</option>
                 {(configs || []).map((config) => (
                   <option key={config.version} value={config.version}>
-                    v{config.version} · {config.status}
+                    v{config.version} · {statusLabel(config.status)}
                   </option>
                 ))}
               </select>
@@ -416,7 +427,14 @@ export function Deploy() {
             </table>
           </div>
         ) : (
-          <div className="p-6 text-center text-sm text-gray-500">No deployment history yet.</div>
+          <EmptyState
+            icon={Rocket}
+            state="no-data"
+            stateLabel="No data yet"
+            title="No data yet"
+            description="Expected: deployment history appears after a rollout request completes."
+            nextAction="Deploy a canary or immediate rollout to create the first history entry."
+          />
         )}
       </section>
     </div>
