@@ -73,6 +73,12 @@ function ScoreRing({ score }: ScoreRingProps) {
   );
 }
 
+function normalizeQualityScore(score: number): number {
+  if (!Number.isFinite(score)) return 0;
+  const scaled = score >= 0 && score <= 1 ? score * 100 : score;
+  return Math.round(Math.max(0, Math.min(100, scaled)));
+}
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
@@ -85,6 +91,7 @@ interface ReflectionCardProps {
 
 export function ReflectionCard({ reflection, onApplySuggestion }: ReflectionCardProps) {
   const { qualityScore, suggestions } = reflection;
+  const displayScore = normalizeQualityScore(qualityScore);
 
   return (
     <div
@@ -96,7 +103,7 @@ export function ReflectionCard({ reflection, onApplySuggestion }: ReflectionCard
     >
       {/* Header row */}
       <div className="flex items-center gap-3">
-        <ScoreRing score={qualityScore} />
+        <ScoreRing score={displayScore} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <Sparkles className="h-3 w-3 text-[color:var(--wb-accent)]" />
@@ -104,8 +111,8 @@ export function ReflectionCard({ reflection, onApplySuggestion }: ReflectionCard
               Reflection
             </span>
           </div>
-          <p className={classNames('text-[11px]', scoreColor(qualityScore))}>
-            Quality score: {qualityScore}/100
+          <p className={classNames('text-[11px]', scoreColor(displayScore))}>
+            Quality score: {displayScore}/100
           </p>
         </div>
       </div>

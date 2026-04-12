@@ -15,7 +15,7 @@ import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Moon, Sparkles, Sun } from 'lucide-react';
 import { classNames } from '../../lib/utils';
-import { useWorkbenchStore } from '../../lib/workbench-store';
+import { isWorkbenchBuildActive, useWorkbenchStore } from '../../lib/workbench-store';
 import { summarizePlan } from '../../lib/workbench-plan';
 import { HarnessMetricsBar } from './HarnessMetricsBar';
 
@@ -41,7 +41,38 @@ export function WorkbenchLayout({
   const plan = useWorkbenchStore((s) => s.plan);
   const theme = useWorkbenchStore((s) => s.theme);
   const toggleTheme = useWorkbenchStore((s) => s.toggleTheme);
+  const setActiveWorkspaceTab = useWorkbenchStore((s) => s.setActiveWorkspaceTab);
+  const presentation = useWorkbenchStore((s) => s.presentation);
+  const activeRun = useWorkbenchStore((s) => s.activeRun);
+  const harnessMetrics = useWorkbenchStore((s) => s.harnessMetrics);
   const progress = useMemo(() => summarizePlan(plan), [plan]);
+  const reviewGate =
+    presentation?.review_gate ??
+    activeRun?.presentation?.review_gate ??
+    activeRun?.review_gate ??
+    null;
+  const handoff =
+    presentation?.handoff ??
+    activeRun?.presentation?.handoff ??
+    activeRun?.handoff ??
+    null;
+  const hasReviewState = Boolean(reviewGate || handoff);
+  const reviewBlocked =
+    reviewGate?.status === 'blocked' ||
+    Boolean(reviewGate?.blocking_reasons?.length);
+  const reviewLabel = reviewBlocked
+    ? 'Review blocked'
+    : hasReviewState
+      ? 'Review required'
+      : isWorkbenchBuildActive(buildStatus)
+        ? 'Review pending'
+        : 'No review gate';
+  const reviewTitle = hasReviewState
+    ? 'Open the review gate and handoff details'
+    : isWorkbenchBuildActive(buildStatus)
+      ? 'The review gate appears after presentation is ready'
+      : 'Run the harness to produce a review gate';
+  const showMetrics = harnessMetrics !== null || isWorkbenchBuildActive(buildStatus);
 
   return (
     <div
@@ -54,7 +85,12 @@ export function WorkbenchLayout({
       )}
     >
       {/* Top bar */}
-      <header className="flex items-center justify-between gap-3 border-b border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] px-4 py-2.5">
+      <header
+        className={classNames(
+          'flex items-center justify-between gap-3 bg-[color:var(--wb-bg)] px-4 py-2.5',
+          !showMetrics && 'border-b border-[color:var(--wb-border)]'
+        )}
+      >
         <div className="flex min-w-0 items-center gap-2">
           {onBack && (
             <button
@@ -73,7 +109,7 @@ export function WorkbenchLayout({
           <span className="rounded-full border border-[color:var(--wb-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[color:var(--wb-text-dim)]">
             {target} · v{version}
           </span>
-          <StatusPill status={buildStatus} />
+          <StatusPill status={buildStatus} hasReviewState={hasReviewState} reviewBlocked={reviewBlocked} />
           {progress.leafCount > 0 && (
             <span className="text-[11px] text-[color:var(--wb-text-dim)]" aria-live="polite">
               {progress.done}/{progress.leafCount} steps
@@ -92,21 +128,27 @@ export function WorkbenchLayout({
           </button>
           <button
             type="button"
-            disabled
+            disabled={!hasReviewState}
+            onClick={() => setActiveWorkspaceTab('activity')}
             className={classNames(
               'rounded-md px-3 py-1 text-[12px] font-medium transition',
-              'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)] opacity-50'
+              hasReviewState
+                ? reviewBlocked
+                  ? 'border border-[color:var(--wb-error)] bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)] hover:opacity-90'
+                  : 'border border-[color:var(--wb-accent-border)] bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)] hover:bg-[color:var(--wb-accent)] hover:text-[color:var(--wb-accent-fg)]'
+                : 'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)] opacity-60'
             )}
-            title="Coming soon — promotion flow under development"
+            title={reviewTitle}
           >
-            Review candidate
+            {reviewLabel}
           </button>
         </div>
-        {/* Harness metrics — renders only when a build is active or metrics exist */}
-        <div className="px-4 pb-2">
+      </header>
+      {showMetrics && (
+        <div className="border-y border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] px-4 py-2">
           <HarnessMetricsBar />
         </div>
-      </header>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[440px_minmax(0,1fr)]">
         {/* Left pane: conversation + chat input + iteration controls */}
@@ -122,30 +164,40 @@ export function WorkbenchLayout({
   );
 }
 
-function StatusPill({ status }: { status: string }) {
+function StatusPill({
+  status,
+  hasReviewState,
+  reviewBlocked,
+}: {
+  status: string;
+  hasReviewState: boolean;
+  reviewBlocked: boolean;
+}) {
   let className = 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-dim)]';
   let label = 'Idle';
   if (status === 'running' || status === 'starting') {
     className = 'bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]';
-    label = 'Running';
+    label = status === 'starting' ? 'Starting' : 'Running';
   } else if (status === 'done') {
-    className = 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]';
-    label = 'Ready';
+    className = reviewBlocked
+      ? 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]'
+      : 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]';
+    label = reviewBlocked ? 'Blocked' : hasReviewState ? 'Review needed' : 'Candidate ready';
   } else if (status === 'error') {
     className = 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]';
-    label = 'Error';
+    label = 'Failed';
   } else if (status === 'queued') {
     className = 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
     label = 'Queued';
   } else if (status === 'reflecting') {
-    className = 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400';
-    label = 'Reflecting';
+    className = 'bg-[color:var(--wb-warn-weak)] text-[color:var(--wb-warn)]';
+    label = 'Validating';
   } else if (status === 'presenting') {
     className = 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400';
-    label = 'Presenting';
+    label = 'Preparing review';
   } else if (status === 'cancelled') {
     className = 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]';
-    label = 'Cancelled';
+    label = 'Stopped';
   }
   return (
     <span

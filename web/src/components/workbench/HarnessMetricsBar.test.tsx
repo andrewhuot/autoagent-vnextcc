@@ -27,6 +27,12 @@ describe('HarnessMetricsBar', () => {
     expect(screen.getByLabelText('Harness metrics')).toBeInTheDocument();
   });
 
+  it('renders during reflection before a fresh metrics event arrives', () => {
+    useWorkbenchStore.setState({ buildStatus: 'reflecting' });
+    renderBar();
+    expect(screen.getByLabelText('Harness metrics')).toBeInTheDocument();
+  });
+
   it('shows the current phase label', () => {
     useWorkbenchStore.getState().dispatchEvent({
       event: 'harness.metrics',
@@ -118,6 +124,7 @@ describe('HarnessMetricsBar', () => {
           limits: { max_iterations: 2, max_tokens: 1000 },
           usage: { iterations: 0, tokens: 0, cost_usd: 0, elapsed_ms: 0 },
         },
+        telemetry_summary: { event_count: 7 },
       },
     });
     useWorkbenchStore.getState().dispatchEvent({
@@ -129,5 +136,6 @@ describe('HarnessMetricsBar', () => {
 
     expect(screen.getByText('Mock')).toBeInTheDocument();
     expect(screen.getByText('250/1000 tokens')).toBeInTheDocument();
+    expect(screen.getByText('event 7')).toBeInTheDocument();
   });
 });

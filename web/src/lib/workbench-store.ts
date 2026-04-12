@@ -20,6 +20,7 @@ import type {
   WorkbenchCompatibilityDiagnostic,
   WorkbenchConversationMessage,
   WorkbenchExports,
+  WorkbenchHarnessState,
   WorkbenchMessage,
   WorkbenchPresentation,
   WorkbenchRun,
@@ -72,7 +73,8 @@ export type ArtifactCategoryFilter =
   | 'tool'
   | 'guardrail'
   | 'eval'
-  | 'environment';
+  | 'environment'
+  | 'other';
 
 /** Right-side workspace surfaces backed by the latest harness payload. */
 export type WorkspaceTab = 'artifacts' | 'agent' | 'source' | 'evals' | 'trace' | 'activity';
@@ -88,6 +90,19 @@ export type BuildStatus =
   | 'done'
   | 'error'
   | 'cancelled';
+
+const ACTIVE_BUILD_STATUSES = new Set<BuildStatus>([
+  'starting',
+  'queued',
+  'running',
+  'reflecting',
+  'presenting',
+]);
+
+/** Return whether the Workbench run is still producing authoritative state. */
+export function isWorkbenchBuildActive(status: BuildStatus | string): boolean {
+  return ACTIVE_BUILD_STATUSES.has(status as BuildStatus);
+}
 
 /** User-facing theme for the Workbench shell. Default is light. */
 export type WorkbenchTheme = 'light' | 'dark';
@@ -199,6 +214,7 @@ interface WorkbenchActions {
     lastBrief?: string;
     conversation?: WorkbenchConversationMessage[];
     turns?: WorkbenchTurnRecord[];
+    harnessState?: WorkbenchHarnessState | null;
   }) => void;
   beginBuild: (brief: string) => void;
   setAbortController: (controller: AbortController | null) => void;
@@ -345,6 +361,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
             ? snapshot.messages.map(messageFromApi)
             : state.messages;
 
+      const activeRun = snapshot.activeRun ?? state.activeRun;
+      const buildStatus = snapshot.buildStatus ?? state.buildStatus;
+      const hydratedMetrics = metricsFromHarnessState(snapshot.harnessState);
+
       return {
         projectId: snapshot.projectId,
         projectName: snapshot.projectName ?? state.projectName,
@@ -359,13 +379,14 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         compatibility: snapshot.compatibility ?? state.compatibility,
         lastTest: snapshot.lastTest ?? state.lastTest,
         activity: snapshot.activity ?? state.activity,
-        activeRun: snapshot.activeRun ?? state.activeRun,
+        activeRun,
         presentation: snapshot.activeRun?.presentation ?? state.presentation,
-        buildStatus: snapshot.buildStatus ?? state.buildStatus,
+        buildStatus,
         lastBrief: snapshot.lastBrief ?? state.lastBrief,
-        error: null,
+        error: deriveHydrationNotice(activeRun, buildStatus),
         turns,
         activeTurnId: turns.length > 0 ? turns[turns.length - 1].turnId : null,
+        harnessMetrics: hydratedMetrics ?? state.harnessMetrics,
       };
     }),
 
@@ -1095,6 +1116,50 @@ function mergeRunBudgetFromMetrics(
   };
 }
 
+function metricsFromHarnessState(
+  harnessState: WorkbenchHarnessState | null | undefined
+): HarnessMetrics | null {
+  const metrics = harnessState?.last_metrics;
+  if (!metrics) return null;
+  const phase = metrics.current_phase;
+  const currentPhase: HarnessMetrics['currentPhase'] =
+    phase === 'planning' ||
+    phase === 'executing' ||
+    phase === 'reflecting' ||
+    phase === 'presenting' ||
+    phase === 'idle'
+      ? phase
+      : 'idle';
+  return {
+    stepsCompleted: Number(metrics.steps_completed ?? 0),
+    totalSteps: Number(metrics.total_steps ?? 0),
+    tokensUsed: Number(metrics.tokens_used ?? 0),
+    costUsd: Number(metrics.cost_usd ?? 0),
+    elapsedMs: Number(
+      metrics.elapsed_ms ?? (metrics.elapsed_seconds ? metrics.elapsed_seconds * 1000 : 0)
+    ),
+    currentPhase,
+  };
+}
+
+function deriveHydrationNotice(
+  activeRun: WorkbenchRun | null,
+  buildStatus: BuildStatus
+): string | null {
+  if (!activeRun) return null;
+  const status = String(activeRun.status ?? buildStatus);
+  if (buildStatus === 'cancelled' || status === 'cancelled') {
+    return activeRun.cancel_reason ?? 'Run cancelled by operator.';
+  }
+  if (buildStatus === 'error' || status === 'failed' || status === 'error') {
+    if (activeRun.failure_reason === 'stale_interrupted' && activeRun.error) {
+      return activeRun.error;
+    }
+    return activeRun.error ?? activeRun.failure_reason ?? 'Workbench run failed.';
+  }
+  return null;
+}
+
 /** Deep-clone a plan tree. Keeps reducers pure without pulling in Immer. */
 function cloneTree(task: PlanTask): PlanTask {
   return {
@@ -1137,5 +1202,10 @@ export function selectActiveArtifact(state: WorkbenchState): WorkbenchArtifact |
 /** Filter artifacts by the active category tab. */
 export function selectFilteredArtifacts(state: WorkbenchState): WorkbenchArtifact[] {
   if (state.activeCategory === 'all') return state.artifacts;
+  if (state.activeCategory === 'other') {
+    return state.artifacts.filter(
+      (a) => !['agent', 'tool', 'guardrail', 'eval', 'environment'].includes(a.category)
+    );
+  }
   return state.artifacts.filter((a) => a.category === state.activeCategory);
 }

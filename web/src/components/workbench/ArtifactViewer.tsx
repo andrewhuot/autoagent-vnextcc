@@ -26,7 +26,16 @@ const CATEGORY_TABS: Array<{ id: ArtifactCategoryFilter; label: string }> = [
   { id: 'guardrail', label: 'Guardrails' },
   { id: 'eval', label: 'Evals' },
   { id: 'environment', label: 'Environment' },
+  { id: 'other', label: 'Other' },
 ];
+
+const PRIMARY_CATEGORY_IDS = new Set<ArtifactCategoryFilter>([
+  'agent',
+  'tool',
+  'guardrail',
+  'eval',
+  'environment',
+]);
 
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
   { id: 'artifacts', label: 'Artifacts' },
@@ -198,10 +207,13 @@ function ArtifactsWorkspace() {
   const diffTargetVersion = useWorkbenchStore((s) => s.diffTargetVersion);
   const iterationCount = useWorkbenchStore((s) => s.iterationCount);
 
-  const filtered = useMemo(
-    () => (activeCategory === 'all' ? artifacts : artifacts.filter((a) => a.category === activeCategory)),
-    [artifacts, activeCategory]
-  );
+  const filtered = useMemo(() => {
+    if (activeCategory === 'all') return artifacts;
+    if (activeCategory === 'other') {
+      return artifacts.filter((a) => !PRIMARY_CATEGORY_IDS.has(a.category as ArtifactCategoryFilter));
+    }
+    return artifacts.filter((a) => a.category === activeCategory);
+  }, [artifacts, activeCategory]);
 
   const active = useMemo(
     () =>
@@ -226,7 +238,11 @@ function ArtifactsWorkspace() {
     for (const tab of CATEGORY_TABS) counts.set(tab.id, 0);
     for (const artifact of artifacts) {
       counts.set('all', (counts.get('all') ?? 0) + 1);
-      counts.set(artifact.category, (counts.get(artifact.category) ?? 0) + 1);
+      if (PRIMARY_CATEGORY_IDS.has(artifact.category as ArtifactCategoryFilter)) {
+        counts.set(artifact.category, (counts.get(artifact.category) ?? 0) + 1);
+      } else {
+        counts.set('other', (counts.get('other') ?? 0) + 1);
+      }
     }
     return counts;
   }, [artifacts]);
@@ -333,8 +349,8 @@ function ArtifactsWorkspace() {
           </div>
         ) : (
           <EmptyPreview
-            title="Processes paused, click to wake up"
-            description="Describe the agent you want on the left. The preview of each generated artifact will appear here."
+            title="No artifacts yet"
+            description="Generated artifacts will appear here as the run produces them."
           />
         )}
       </div>

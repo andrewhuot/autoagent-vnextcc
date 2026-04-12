@@ -16,13 +16,13 @@
 import {
   Activity,
   Brain,
-  CheckCircle,
+  Clock,
   Layers,
   Loader2,
   Presentation,
 } from 'lucide-react';
 import { classNames } from '../../lib/utils';
-import { useWorkbenchStore } from '../../lib/workbench-store';
+import { isWorkbenchBuildActive, useWorkbenchStore } from '../../lib/workbench-store';
 import type { HarnessMetrics } from '../../lib/workbench-api';
 
 // ---------------------------------------------------------------------------
@@ -109,8 +109,7 @@ export function HarnessMetricsBar() {
 
   // Show when there are real metrics OR when a build is active (shows zeros
   // while the first harness.metrics event hasn't arrived yet).
-  const visible =
-    metrics !== null || buildStatus === 'running' || buildStatus === 'starting';
+  const visible = metrics !== null || isWorkbenchBuildActive(buildStatus);
 
   if (!visible) return null;
 
@@ -140,6 +139,10 @@ export function HarnessMetricsBar() {
     tokensUsed;
   const progressPct =
     totalSteps > 0 ? Math.min(100, Math.round((stepsCompleted / totalSteps) * 100)) : 0;
+  const eventCount =
+    activeRun?.telemetry_summary?.event_count ??
+    activeRun?.events?.length ??
+    0;
 
   return (
     <div
@@ -214,8 +217,14 @@ export function HarnessMetricsBar() {
       {/* Elapsed */}
       {elapsedMs > 0 && (
         <span className="flex items-center gap-1 tabular-nums text-[color:var(--wb-text-dim)]">
-          <CheckCircle className="h-2.5 w-2.5" />
+          <Clock className="h-2.5 w-2.5" />
           {formatElapsed(elapsedMs)}
+        </span>
+      )}
+
+      {eventCount > 0 && (
+        <span className="tabular-nums text-[color:var(--wb-text-dim)]">
+          event {eventCount}
         </span>
       )}
 

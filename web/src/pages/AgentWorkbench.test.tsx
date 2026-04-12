@@ -142,7 +142,7 @@ describe('AgentWorkbench', () => {
 
     // Empty preview copy from the reference mockup.
     expect(
-      screen.getByText('Processes paused, click to wake up')
+      screen.getByText('No artifacts yet')
     ).toBeInTheDocument();
 
     // Chat input is rendered.
@@ -154,7 +154,7 @@ describe('AgentWorkbench', () => {
     renderWorkbench();
 
     // Wait for the initial hydration flow to settle.
-    await screen.findByText('Processes paused, click to wake up');
+    await screen.findByText('No artifacts yet');
 
     // Inject a hydrated snapshot — the UI should render plan + artifacts.
     useWorkbenchStore.getState().hydrate({
@@ -236,7 +236,7 @@ describe('AgentWorkbench', () => {
     renderWorkbench();
 
     // Wait for the initial hydrate to finish.
-    await screen.findByText('Processes paused, click to wake up');
+    await screen.findByText('No artifacts yet');
 
     const textarea = screen.getByLabelText('Build request');
     await user.type(textarea, 'Build me a sales qualification agent{Enter}');
@@ -250,5 +250,112 @@ describe('AgentWorkbench', () => {
       // Plan tree from the mocked stream was dispatched into the store.
       expect(useWorkbenchStore.getState().plan?.title).toBe('Build Sales agent');
     });
+  });
+
+  it('opens the review gate from the header when a completed run has handoff state', async () => {
+    const user = userEvent.setup();
+    const model = {
+      project: { name: 'Airline Support Workbench', description: 'Airline support agent' },
+      agents: [
+        {
+          id: 'root',
+          name: 'Airline Support Agent',
+          role: 'Help travelers',
+          model: 'gpt-5.4-mini',
+          instructions: 'Help travelers safely.',
+          sub_agents: [],
+        },
+      ],
+      tools: [],
+      callbacks: [],
+      guardrails: [],
+      eval_suites: [],
+      environments: [{ id: 'draft', name: 'Draft', target: 'portable' }],
+      deployments: [],
+    };
+    installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-test',
+        name: 'Airline Support Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 2,
+        build_status: 'completed',
+        plan: null,
+        artifacts: [],
+        messages: [],
+        model,
+        exports: { generated_config: {}, adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        last_test: null,
+        activity: [],
+        active_run: {
+          run_id: 'run-1',
+          project_id: 'wb-test',
+          brief: 'Build airline support',
+          target: 'portable',
+          environment: 'draft',
+          status: 'completed',
+          phase: 'presenting',
+          started_version: 1,
+          completed_version: 2,
+          created_at: '2026-04-11T00:00:00Z',
+          updated_at: '2026-04-11T00:00:01Z',
+          completed_at: '2026-04-11T00:00:02Z',
+          error: null,
+          events: [],
+          messages: [],
+          validation: null,
+          presentation: {
+            run_id: 'run-1',
+            version: 2,
+            summary: 'Built 3 canonical changes.',
+            artifact_ids: [],
+            active_artifact_id: null,
+            generated_outputs: ['agent.py'],
+            validation_status: 'passed',
+            next_actions: ['Review candidate before promotion.'],
+            review_gate: {
+              status: 'review_required',
+              promotion_status: 'draft',
+              requires_human_review: true,
+              blocking_reasons: [],
+              checks: [
+                {
+                  name: 'human_review',
+                  status: 'required',
+                  required: true,
+                  detail: 'Human review is required before promotion.',
+                },
+              ],
+            },
+            handoff: {
+              project_id: 'wb-test',
+              run_id: 'run-1',
+              turn_id: 'turn-1',
+              version: 2,
+              review_gate_status: 'review_required',
+              active_artifact_id: null,
+              last_event_sequence: 12,
+              next_operator_action: 'Review candidate and run evals before promotion.',
+              resume_prompt: 'Resume Workbench project wb-test at Draft v2.',
+            },
+          },
+        },
+        runs: [],
+        last_brief: 'Build airline support',
+        conversation: [],
+        turns: [],
+      },
+    });
+    renderWorkbench();
+
+    const reviewButton = await screen.findByRole('button', { name: 'Review required' });
+    expect(reviewButton).toBeEnabled();
+    await user.click(reviewButton);
+
+    expect(screen.getByText('Review gate')).toBeInTheDocument();
+    expect(screen.getByText('Session handoff')).toBeInTheDocument();
+    expect(screen.getByText('Resume Workbench project wb-test at Draft v2.')).toBeInTheDocument();
   });
 });

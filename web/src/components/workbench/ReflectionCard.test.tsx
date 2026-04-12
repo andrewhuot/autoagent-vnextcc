@@ -26,6 +26,19 @@ describe('ReflectionCard', () => {
     expect(screen.getByText('82')).toBeInTheDocument();
   });
 
+  it('normalizes 0-1 quality scores for display', () => {
+    render(
+      <div className="workbench-root">
+        <ReflectionCard
+          reflection={makeReflection({ qualityScore: 0.85 })}
+          onApplySuggestion={() => {}}
+        />
+      </div>
+    );
+    expect(screen.getByText('85')).toBeInTheDocument();
+    expect(screen.getByText('Quality score: 85/100')).toBeInTheDocument();
+  });
+
   it('shows all suggestion texts', () => {
     render(
       <div className="workbench-root">

@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Paperclip, Repeat, Send, Square } from 'lucide-react';
 import { classNames } from '../../lib/utils';
-import { useWorkbenchStore } from '../../lib/workbench-store';
+import { isWorkbenchBuildActive, useWorkbenchStore } from '../../lib/workbench-store';
 
 interface ChatInputProps {
   onSubmit: (text: string) => void;
@@ -29,7 +29,7 @@ export function ChatInput({ onSubmit, onCancel, placeholder }: ChatInputProps) {
   const maxIterations = useWorkbenchStore((s) => s.maxIterations);
   const setMaxIterations = useWorkbenchStore((s) => s.setMaxIterations);
   const turnCount = useWorkbenchStore((s) => s.turns.length);
-  const isBuilding = buildStatus === 'running' || buildStatus === 'starting';
+  const isBuilding = isWorkbenchBuildActive(buildStatus);
   const isFollowUp = turnCount > 0;
 
   useEffect(() => {
