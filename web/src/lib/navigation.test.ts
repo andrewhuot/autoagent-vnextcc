@@ -56,6 +56,7 @@ describe('navigation schema', () => {
     expect(getRouteTitle('/optimize')).toBe('Optimize');
     expect(getRouteTitle('/live-optimize')).toBe('Live Optimize');
     expect(getRouteTitle('/improvements')).toBe('Improvements');
+    expect(getRouteTitle('/context')).toBe('Context Engineering Studio');
   });
 
   it('returns route redirects for legacy build and improvement pages', () => {
@@ -92,6 +93,15 @@ describe('navigation schema', () => {
       '/cx/import',
     ]);
     expect(getRouteTitle('/connect')).toBe('Connect');
+  });
+
+  it('labels the context route as Context Engineering Studio', () => {
+    const observeSection = sections.find((section) => section.group === 'observe');
+
+    expect(observeSection?.items.find((item) => item.path === '/context')?.label).toBe(
+      'Context Engineering Studio'
+    );
+    expect(getRouteTitle('/context')).toBe('Context Engineering Studio');
   });
 
   it('adds Agent Improver to the build section without promoting it into simple mode', () => {

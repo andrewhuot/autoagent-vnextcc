@@ -429,7 +429,7 @@ async def lifespan(app: FastAPI):
         drift_threshold=runtime.optimizer.drift_threshold,
     )
 
-    # Context Workbench
+    # Context Engineering Studio
     from context.analyzer import ContextAnalyzer
 
     app.state.context_analyzer = ContextAnalyzer()

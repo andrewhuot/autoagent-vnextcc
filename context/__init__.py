@@ -1,4 +1,4 @@
-"""Context Engineering Workbench — diagnostic and tuning tools for agent context."""
+"""Context Engineering Studio — diagnostic and tuning tools for agent context."""
 
 from context.analyzer import ContextAnalyzer
 from context.simulator import CompactionSimulator

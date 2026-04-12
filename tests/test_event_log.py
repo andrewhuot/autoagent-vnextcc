@@ -468,7 +468,7 @@ def test_all_valid_event_types_are_accepted(tmp_path: Path) -> None:
         "judge_feedback_recorded",
         "judge_drift_detected",
         "judge_version_created",
-        # Context Workbench events
+        # Context Engineering Studio events
         "context_analyzed",
         "context_simulation_run",
         # Builder lifecycle events (bridged from EventBroker)

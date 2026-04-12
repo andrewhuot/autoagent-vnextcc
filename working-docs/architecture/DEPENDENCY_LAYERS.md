@@ -46,7 +46,7 @@
 | `observer/trace_graph.py` | Trace DAG visualization |
 | `observer/opportunities.py` | Optimization opportunities |
 | `observer/anomaly.py` | Anomaly detection |
-| `context/` | Context engineering workbench |
+| `context/` | Context Engineering Studio |
 | `judges/` | Judge ops (audit, calibration, drift) |
 | `graders/` | Grader stack (calibration, deterministic, LLM, similarity) |
 | `evals/nl_compiler.py` | Natural language scorer compiler |

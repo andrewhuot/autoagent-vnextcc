@@ -71,7 +71,7 @@
 
 ---
 
-## [2.2.0] — 2026-03-23 — AutoFix, Judge Ops, Context Workbench (862 tests)
+## [2.2.0] — 2026-03-23 — AutoFix, Judge Ops, Context Engineering Studio (862 tests)
 
 ### Added
 
@@ -88,7 +88,7 @@
 - CLI: `agentlab judges list|calibrate|drift`
 - API: 4 endpoints under `/api/judges/`
 
-**Context Engineering Workbench** (`context/`)
+**Context Engineering Studio** (`context/`)
 - ContextAnalyzer with growth pattern detection (linear/exponential/sawtooth/stable)
 - CompactionSimulator with 3 strategies (aggressive/balanced/conservative)
 - ContextMetrics (utilization, compaction loss, handoff fidelity, memory staleness)
@@ -98,7 +98,7 @@
 **Frontend**
 - AutoFix page
 - Judge Ops page
-- Context Workbench page
+- Context Engineering Studio page
 
 ### Numbers
 | Metric | Before | After |

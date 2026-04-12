@@ -1143,7 +1143,7 @@ export function useSubmitJudgeFeedback() {
   });
 }
 
-// Context Workbench
+// Context Engineering Studio
 
 export function useContextAnalysis(traceId: string | undefined, tokenBudget = 8000) {
   return useQuery<ContextTraceAnalysis>({

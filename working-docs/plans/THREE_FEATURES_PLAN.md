@@ -2,7 +2,7 @@
 
 ## Dependency Order
 1. **Judge Ops** — extends existing judges/calibration.py, no dependencies on other features
-2. **Context Workbench** — reads traces (existing), no feature dependencies
+2. **Context Engineering Studio** — reads traces (existing), no feature dependencies
 3. **AutoFix** — depends on mutations.py (existing), can reference judge ops for eval quality
 
 All three backends can be built in parallel since they only depend on existing code.
@@ -72,7 +72,7 @@ All three backends can be built in parallel since they only depend on existing c
 - Extends existing calibration.py patterns
 - Pure additive — no changes to judge execution path
 
-## Feature 3: Context Engineering Workbench
+## Feature 3: Context Engineering Studio
 
 ### Files to Create
 - `context/__init__.py` — Package init
@@ -81,7 +81,7 @@ All three backends can be built in parallel since they only depend on existing c
 - `context/metrics.py` — Context metrics (utilization ratio, compaction loss, handoff fidelity, staleness)
 - `api/routes/context.py` — REST endpoints
 - `web/src/pages/ContextWorkbench.tsx` — Web UI
-- `tests/test_context.py` — All context workbench tests
+- `tests/test_context.py` — All Context Engineering Studio tests
 
 ### Files to Modify
 - `runner.py` — Add `context analyze`, `context simulate`, `context report` CLI commands
@@ -110,7 +110,7 @@ All three backends can be built in parallel since they only depend on existing c
 ### Phase 1: Backends (parallel via sub-agents)
 - Agent 1: AutoFix backend (`optimizer/autofix.py`, `autofix_proposers.py`, `autofix_vertex.py`) + tests
 - Agent 2: Judge Ops backend (`judges/versioning.py`, `drift_monitor.py`, `human_feedback.py`) + tests
-- Agent 3: Context Workbench backend (`context/`) + tests
+- Agent 3: Context Engineering Studio backend (`context/`) + tests
 
 ### Phase 2: Integration (sequential)
 - Update `data/event_log.py` with new event types

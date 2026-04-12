@@ -1,10 +1,10 @@
-# Context Workbench
+# Context Engineering Studio
 
 Analyze context window usage, simulate compaction strategies, and optimize how your agent uses its token budget.
 
 ## Overview
 
-Large context windows are expensive and can degrade quality when filled with irrelevant content. The Context Workbench gives you tools to understand growth patterns, identify waste, and simulate optimization strategies before applying them.
+Large context windows are expensive and can degrade quality when filled with irrelevant content. Context Engineering Studio gives you tools to understand growth patterns, identify waste, and simulate optimization strategies before applying them.
 
 Looking for the agent-building Workbench instead? See [Agent Builder Workbench](workbench.md).
 

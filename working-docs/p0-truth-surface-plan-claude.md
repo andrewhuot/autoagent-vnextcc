@@ -61,7 +61,7 @@ This session targets the **truth gap** specifically: making what users see match
 - **Reality:** Neither implemented. Drift checks run but receive empty verdicts.
 - **Fix:** Remove claims about auto-pause and SSE emission. Document what drift monitoring actually does (detection and alerting). Note the drift route now receives real threshold from config (Phase 1 fix).
 
-#### 2.4 Context workbench docs — aggregate report
+#### 2.4 Context Engineering Studio docs — aggregate report
 - **Current claim:** CLI `context report` outputs computed metrics
 - **Reality:** Stub returning all zeros / static string
 - **Fix:** Update docs to say aggregate report requires per-trace data to be collected first. Rewrite example workflow to lead with per-trace analysis (which works). Mark aggregate endpoint as "returns available data or empty defaults when no traces have been analyzed."

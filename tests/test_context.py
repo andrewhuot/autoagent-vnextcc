@@ -1,4 +1,4 @@
-"""Comprehensive tests for the Context Engineering Workbench."""
+"""Comprehensive tests for the Context Engineering Studio."""
 
 from __future__ import annotations
 

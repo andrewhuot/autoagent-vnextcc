@@ -154,7 +154,7 @@ All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md
 - **MCP server** — 22 tools plus prompts/resources for Claude Code, Codex, Cursor, Windsurf, and other MCP clients
 - **XML instructions** — Structured prompt format that makes agent instructions machine-editable for the optimizer
 - **NL scorer** — Define eval scoring criteria in natural language instead of code
-- **Context workbench** — Inspect token context usage and compaction tradeoffs for agents with large prompts
+- **Context Engineering Studio** — Inspect token context usage and compaction tradeoffs for agents with large prompts
 - **Registry and skills** — Manage reusable skills, policies, tools, and handoffs
 
 ---
@@ -230,7 +230,7 @@ See [docs/deployment.md](docs/deployment.md) for local, container, and Cloud Run
 
 - [Platform Overview](docs/platform-overview.md) | [Architecture](docs/architecture.md) | [API Reference](docs/api-reference.md)
 - [XML Instructions](docs/xml-instructions.md) | [CX Studio](docs/cx-studio-integration.md) | [MCP Integration](docs/mcp-integration.md) | [Deployment](docs/deployment.md)
-- Feature deep dives: [Workbench](docs/features/workbench.md) | [AutoFix](docs/features/autofix.md) | [Judge Ops](docs/features/judge-ops.md) | [Context Workbench](docs/features/context-workbench.md) | [Prompt Optimization](docs/features/prompt-optimization.md) | [Registry](docs/features/registry.md) | [Trace Grading](docs/features/trace-grading.md) | [NL Scorer](docs/features/nl-scorer.md)
+- Feature deep dives: [Workbench](docs/features/workbench.md) | [AutoFix](docs/features/autofix.md) | [Judge Ops](docs/features/judge-ops.md) | [Context Engineering Studio](docs/features/context-workbench.md) | [Prompt Optimization](docs/features/prompt-optimization.md) | [Registry](docs/features/registry.md) | [Trace Grading](docs/features/trace-grading.md) | [NL Scorer](docs/features/nl-scorer.md)
 
 ---
 

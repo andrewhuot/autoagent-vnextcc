@@ -161,7 +161,7 @@ Legend:
 | Context caching | Partial | Canonical config field exists; adaptive search and opportunity generation can target it | Not represented in ADK/connect flows; not surfaced as a richer context-engineering component |
 | Memory policy | Partial | Canonical config field exists; adaptive search can target it | No opportunity mapping, no NL/autofix path, and not connected to runtime memory-bank hooks |
 | Thresholds | Partial | Canonical config field exists; simple proposer and NL editor use it | Not a first-class mutation surface; not in adaptive search/operator system |
-| Compaction | None | Canonical config field and context workbench exist | No mutation surface, no opportunity generation, no writeback path |
+| Compaction | None | Canonical config field and Context Engineering Studio exist | No mutation surface, no opportunity generation, no writeback path |
 | Callbacks | Nominal | Runtime callback registry exists; `callback_patch` operator exists; safety opportunity can recommend it; ADK types know callback hooks | Not in canonical config, not mapped by ADK importer/exporter, no NL/autofix path, no clear writeback contract |
 | Guardrails / policies | Nominal | Guardrail registry and policy registry exist; connect adapters can import guardrails; `policy_edit` operator exists | Not in canonical config, not in opportunity generation, not mapped by ADK round-trip, not component-aware in live loop |
 | Tool contracts | Nominal | `tool_contract_edit` operator exists; registry has related concepts | No canonical config field, no opportunity mapping, no external round-trip path |

@@ -89,7 +89,7 @@ export function ContextWorkbench() {
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Context Workbench"
+        title="Context Engineering Studio"
         description="Analyze context growth, simulate compaction strategies, and measure handoff fidelity and memory staleness."
       />
 

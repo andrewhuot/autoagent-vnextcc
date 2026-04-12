@@ -150,7 +150,7 @@ The default simple-mode navigation is the current day-one product story:
 
 Pro mode expands into the broader operator and integration surface:
 
-- **Observe** — Conversations, Traces, Event Log, Blame Map, Context, Loop Monitor
+- **Observe** — Conversations, Traces, Event Log, Blame Map, Context Engineering Studio, Loop Monitor
 - **Govern** — Configs, Judge Ops, Runbooks, Skills, Memory, Registry, Scorer Studio, Notifications, reward/policy workflows
 - **Integrations** — CX Deploy, ADK Deploy, Agent Skills, Sandbox, What-If, Knowledge
 

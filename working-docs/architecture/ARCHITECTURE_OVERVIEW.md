@@ -95,7 +95,7 @@ agentlab/
 ├── cicd/                   — CI/CD gate integration for GitHub Actions
 ├── cli/                    — Modular CLI commands (skills, registry, etc.)
 ├── collaboration/          — Team collaboration features
-├── context/                — Context Engineering Workbench (analyzer, simulator, metrics)
+├── context/                — Context Engineering Studio (analyzer, simulator, metrics)
 ├── control/                — Human escape hatches, governance wrapper
 ├── core/                   — First-class domain objects, unified skills system
 ├── cx_studio/              — Google Cloud Contact Center AI bidirectional integration
@@ -269,7 +269,7 @@ Production-grade judge lifecycle management:
 - **Human feedback**: `HumanFeedbackStore` captures operator corrections to judge decisions, feeding back into calibration
 - **Calibration**: continuous agreement rate, position bias, and verbosity bias tracking
 
-### Context Engineering Workbench (`context/`)
+### Context Engineering Studio (`context/`)
 
 Tools for understanding and optimizing what goes into the agent's context window:
 - **ContextAnalyzer**: breaks down context composition — instructions, examples, retrieved content, conversation history — with token counts and relevance scores
@@ -785,7 +785,7 @@ Replaced the 9-dimension dashboard with R2's simplicity-first design:
 
 8. **It diagnoses precisely.** Seven span-level trace graders pinpoint exactly where an agent went wrong. Blame maps aggregate failures into actionable clusters with impact scores and trend detection.
 
-9. **It manages the full lifecycle.** Registry for reusable components, judge versioning with drift detection, context engineering workbench, NL scorer generation — not just optimization, but the entire agent operations workflow.
+9. **It manages the full lifecycle.** Registry for reusable components, judge versioning with drift detection, Context Engineering Studio, NL scorer generation — not just optimization, but the entire agent operations workflow.
 
 ---
 

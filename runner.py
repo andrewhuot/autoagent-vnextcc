@@ -6500,7 +6500,7 @@ def judges_drift() -> None:
 
 @cli.group("context")
 def context_group() -> None:
-    """Context Engineering Workbench — diagnose and tune agent context.
+    """Context Engineering Studio — diagnose and tune agent context.
 
     Examples:
       agentlab context simulate --strategy balanced

@@ -71,7 +71,7 @@
     - "XML instructions" -- mentioned 3 times, never explained. Why XML? What problem does it solve?
     - "Change cards" -- in review command description, never defined. Diffs? PRs? Proposals?
     - "NL scorer" -- "Create eval scorers from natural language." What is a scorer? How does NL scoring compare to code-based scoring?
-    - "Context workbench" -- "Inspect context usage and compaction tradeoffs." Token context? Retrieval context?
+    - "Context Engineering Studio" -- "Inspect context usage and compaction tradeoffs." Token context? Retrieval context?
 
 16. **How It Works placement**
     - Appears AFTER the Quick Start. A user runs 6 commands before they have a mental model of the product.

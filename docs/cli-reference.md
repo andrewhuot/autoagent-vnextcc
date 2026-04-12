@@ -393,7 +393,7 @@ Run `agentlab advanced` to see these in the CLI.
 | `build-show` | Deprecated alias for `agentlab build show` |
 | `changes` | Compatibility aliases for reviewable change cards |
 | `compare` | Compare configs, eval runs, and candidate versions |
-| `context` | Context Engineering Workbench |
+| `context` | Context Engineering Studio |
 | `continue` | Resume the most recent shell session |
 | `curriculum` | Self-play curriculum generation |
 | `cx` | Google Cloud CX / Dialogflow CX integration |

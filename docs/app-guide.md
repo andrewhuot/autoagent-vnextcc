@@ -93,7 +93,7 @@ The console is grouped into simple-mode core routes plus broader operator and in
 | Traces | `/traces` | Inspect trace events and trace-level detail |
 | Event Log | `/events` | Review recent system events |
 | Blame Map | `/blame` | Inspect failure clustering and likely root causes |
-| Context | `/context` | Review context usage and analysis tools |
+| Context Engineering Studio | `/context` | Review context usage, compaction simulations, and analysis tools |
 | Loop Monitor | `/loop` | Watch or control longer-running loop activity |
 
 ### Govern

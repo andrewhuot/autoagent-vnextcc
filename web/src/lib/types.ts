@@ -898,7 +898,7 @@ export interface JudgeDriftReport {
 }
 
 // ---------------------------------------------------------------------------
-// Context Workbench
+// Context Engineering Studio
 // ---------------------------------------------------------------------------
 
 export interface ContextTurnUtilization {
