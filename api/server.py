@@ -74,6 +74,7 @@ from api.routes import (
     generated_evals as generated_evals_routes,
     compare as compare_routes,
     results as results_routes,
+    reviews as reviews_routes,
 )
 from api.tasks import TaskManager
 from api.workspace_state import resolve_workspace_state
@@ -546,6 +547,7 @@ app.include_router(intelligence_routes.router)
 app.include_router(registry_routes.router)
 app.include_router(scorers_routes.router)
 app.include_router(changes_routes.router)
+app.include_router(reviews_routes.router)
 app.include_router(runbooks_routes.router)
 app.include_router(memory_routes.router)
 app.include_router(curriculum_routes.router)

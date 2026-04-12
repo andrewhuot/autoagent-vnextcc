@@ -10,10 +10,13 @@ vi.mock('../lib/api', () => ({
     isLoading: false,
     isError: false,
   }),
-  useChanges: () => ({
+  useOptimizeHistory: () => ({
     data: [],
     isLoading: false,
     isError: false,
+  }),
+  useUnifiedReviewStats: () => ({
+    data: undefined,
   }),
 }));
 
@@ -21,8 +24,8 @@ vi.mock('./Experiments', () => ({
   Experiments: () => <div>Experiments Content</div>,
 }));
 
-vi.mock('./ChangeReview', () => ({
-  ChangeReview: () => <div>Review Content</div>,
+vi.mock('./UnifiedReviewQueue', () => ({
+  UnifiedReviewQueue: () => <div>Review Content</div>,
 }));
 
 vi.mock('./Opportunities', () => ({

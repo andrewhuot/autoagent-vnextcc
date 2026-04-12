@@ -65,6 +65,7 @@ export function statusVariant(status: string): 'success' | 'error' | 'warning' |
     case 'promoted':
     case 'live':
       return 'success';
+    case 'rejected':
     case 'rejected_human':
     case 'failed':
     case 'fail':

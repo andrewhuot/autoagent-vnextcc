@@ -46,6 +46,7 @@ import {
   getSimpleNavigationSections,
   setSidebarMode,
 } from '../lib/navigation';
+import { useUnifiedReviewStats } from '../lib/api';
 import { classNames } from '../lib/utils';
 
 const ICON_BY_PATH: Record<string, LucideIcon> = {
@@ -151,6 +152,8 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const location = useLocation();
   const [simpleMode, setSimpleMode] = useState(() => getSidebarMode() !== 'pro');
   const guidedFlow = getGuidedFlowState(location.pathname);
+  const { data: reviewStats } = useUnifiedReviewStats();
+  const pendingReviewCount = reviewStats?.total_pending ?? 0;
 
   useEffect(() => {
     setSidebarMode(simpleMode ? 'simple' : 'pro');
@@ -239,25 +242,33 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
                 {section.title}
               </h3>
               <div className="space-y-0.5">
-                {section.items.map(({ to, label, icon: Icon }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={to !== '/evals'}
-                    onClick={onClose}
-                    className={({ isActive }) =>
-                      classNames(
-                        'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-all duration-150',
-                        isActive
-                          ? 'bg-gray-900 font-medium text-white shadow-sm'
-                          : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                      )
-                    }
-                  >
-                    <Icon className="h-4 w-4 shrink-0" />
-                    <span>{label}</span>
-                  </NavLink>
-                ))}
+                {section.items.map(({ to, label, icon: Icon }) => {
+                  const showBadge = to === '/improvements' && pendingReviewCount > 0;
+                  return (
+                    <NavLink
+                      key={to}
+                      to={to}
+                      end={to !== '/evals'}
+                      onClick={onClose}
+                      className={({ isActive }) =>
+                        classNames(
+                          'group flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition-all duration-150',
+                          isActive
+                            ? 'bg-gray-900 font-medium text-white shadow-sm'
+                            : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                        )
+                      }
+                    >
+                      <Icon className="h-4 w-4 shrink-0" />
+                      <span className="flex-1">{label}</span>
+                      {showBadge && (
+                        <span className="ml-auto flex h-5 min-w-5 items-center justify-center rounded-full bg-amber-500 px-1.5 text-[10px] font-bold text-white">
+                          {pendingReviewCount}
+                        </span>
+                      )}
+                    </NavLink>
+                  );
+                })}
               </div>
             </div>
           ))}

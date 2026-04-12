@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -715,6 +715,71 @@ class PendingReviewActionResponse(BaseModel):
         None,
         description="Deployment result for approval actions",
     )
+
+
+# ---------------------------------------------------------------------------
+# Unified review surface
+# ---------------------------------------------------------------------------
+
+
+class UnifiedReviewItem(BaseModel):
+    """Normalized review item aggregated from PendingReviewStore or ChangeCardStore.
+
+    The unified review surface reads from both stores and presents a single
+    list of actionable items so operators can see all pending decisions in
+    one place.
+    """
+
+    id: str = Field(..., description="Original store identifier (attempt_id or card_id)")
+    source: str = Field(
+        ...,
+        description="Origin store: 'optimizer' (PendingReviewStore) or 'change_card' (ChangeCardStore)",
+    )
+    status: str = Field(..., description="Review status: pending, approved/applied, rejected")
+    title: str = Field("", description="Human-readable title of the proposed change")
+    description: str = Field("", description="Why this change was proposed")
+    score_before: float = Field(0.0, description="Baseline composite score (0-1)")
+    score_after: float = Field(0.0, description="Candidate composite score (0-1)")
+    score_delta: float = Field(0.0, description="score_after minus score_before")
+    risk_class: str = Field("medium", description="Risk level: low, medium, high")
+    diff_summary: str = Field("", description="Config diff or rendered hunk summary")
+    created_at: datetime = Field(..., description="When the review record was created")
+    strategy: Optional[str] = Field(None, description="Optimization strategy used")
+    operator_family: Optional[str] = Field(None, description="Operator family if applicable")
+    has_detailed_audit: bool = Field(
+        False,
+        description="Whether the source store has a full audit trail (change cards do)",
+    )
+
+
+class UnifiedReviewStats(BaseModel):
+    """Aggregate counts across both review stores."""
+
+    total_pending: int = Field(0, description="Total pending items across all sources")
+    optimizer_pending: int = Field(0, description="Pending items from PendingReviewStore")
+    change_card_pending: int = Field(0, description="Pending items from ChangeCardStore")
+    total_approved: int = Field(0, description="Total approved/applied items")
+    total_rejected: int = Field(0, description="Total rejected items")
+
+
+class UnifiedReviewActionRequest(BaseModel):
+    """Request body for approving or rejecting a unified review item."""
+
+    source: Literal["optimizer", "change_card"] = Field(
+        ...,
+        description="Origin store: 'optimizer' or 'change_card'",
+    )
+    reason: str = Field("", description="Rejection reason (used only for rejections)")
+
+
+class UnifiedReviewActionResponse(BaseModel):
+    """Response after approving or rejecting a unified review item."""
+
+    status: str = Field(..., description="Action result: approved, rejected, applied")
+    id: str = Field(..., description="Item identifier")
+    source: str = Field(..., description="Origin store")
+    message: str = Field(..., description="Human-readable action summary")
+    deploy_message: Optional[str] = Field(None, description="Deployment result for approvals")
 
 
 # ---------------------------------------------------------------------------

@@ -100,6 +100,9 @@ import type {
   TranscriptReport,
   TranscriptReportSummary,
   TestProviderKeyResponse,
+  UnifiedReviewActionResult,
+  UnifiedReviewItem,
+  UnifiedReviewStats,
   UnifiedSkill,
 } from './types';
 import type { ArtifactRef, ArtifactType } from './builder-types';
@@ -2569,6 +2572,105 @@ export function useExportChange(id: string | undefined) {
     queryFn: async () => {
       if (!id) throw new ApiRequestError('Missing change ID', 400);
       return fetchApi<{ markdown: string }>(`/changes/${encodeURIComponent(id)}/export`);
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Unified Review Surface
+// ---------------------------------------------------------------------------
+
+export function useUnifiedReviews(poll = true) {
+  return useQuery<UnifiedReviewItem[]>({
+    queryKey: ['unifiedReviews', 'pending'],
+    queryFn: async () => {
+      const items = await fetchApi<
+        Array<{
+          id: string;
+          source: string;
+          status: string;
+          title: string;
+          description: string;
+          score_before: number;
+          score_after: number;
+          score_delta: number;
+          risk_class: string;
+          diff_summary: string;
+          created_at: string;
+          strategy: string | null;
+          operator_family: string | null;
+          has_detailed_audit: boolean;
+        }>
+      >('/reviews/pending');
+      return items.map((item) => ({
+        id: item.id,
+        source: item.source as UnifiedReviewItem['source'],
+        status: item.status,
+        title: item.title || 'Untitled proposal',
+        description: item.description || '',
+        score_before: item.score_before ?? 0,
+        score_after: item.score_after ?? 0,
+        score_delta: item.score_delta ?? 0,
+        risk_class: (item.risk_class ?? 'medium') as UnifiedReviewItem['risk_class'],
+        diff_summary: item.diff_summary ?? '',
+        created_at: item.created_at ?? '',
+        strategy: item.strategy ?? null,
+        operator_family: item.operator_family ?? null,
+        has_detailed_audit: item.has_detailed_audit ?? false,
+      }));
+    },
+    refetchInterval: poll ? 8000 : false,
+  });
+}
+
+export function useUnifiedReviewStats(poll = true) {
+  return useQuery<UnifiedReviewStats>({
+    queryKey: ['unifiedReviews', 'stats'],
+    queryFn: () => fetchApi<UnifiedReviewStats>('/reviews/stats'),
+    refetchInterval: poll ? 10000 : false,
+  });
+}
+
+export function useApproveUnifiedReview() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    UnifiedReviewActionResult,
+    ApiRequestError,
+    { id: string; source: string }
+  >({
+    mutationFn: ({ id, source }) =>
+      fetchApi(`/reviews/${encodeURIComponent(id)}/approve`, {
+        method: 'POST',
+        body: JSON.stringify({ source }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unifiedReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizePendingReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizeHistory'] });
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useRejectUnifiedReview() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    UnifiedReviewActionResult,
+    ApiRequestError,
+    { id: string; source: string; reason?: string }
+  >({
+    mutationFn: ({ id, source, reason }) =>
+      fetchApi(`/reviews/${encodeURIComponent(id)}/reject`, {
+        method: 'POST',
+        body: JSON.stringify({ source, reason: reason ?? '' }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unifiedReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizePendingReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizeHistory'] });
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
     },
   });
 }
