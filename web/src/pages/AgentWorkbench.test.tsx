@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentWorkbench } from './AgentWorkbench';
 import { useWorkbenchStore } from '../lib/workbench-store';
@@ -19,9 +19,23 @@ function renderWorkbench() {
       <MemoryRouter initialEntries={['/workbench']}>
         <Routes>
           <Route path="/workbench" element={<AgentWorkbench />} />
+          <Route path="/evals" element={<EvalLocationProbe />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>
+  );
+}
+
+function EvalLocationProbe() {
+  const location = useLocation();
+  const state = location.state as { agent?: { name?: string; config_path?: string } } | null;
+  return (
+    <div>
+      <p>Eval Page</p>
+      <p>{location.search}</p>
+      <p>{state?.agent?.name ?? 'No handoff agent'}</p>
+      <p>{state?.agent?.config_path ?? 'No handoff config'}</p>
+    </div>
   );
 }
 
@@ -34,6 +48,7 @@ function installMockFetch(opts: {
   projectId?: string;
   planSnapshot?: Record<string, unknown>;
   streamBody?: string;
+  bridgeResponse?: Record<string, unknown>;
 } = {}) {
   const projectId = opts.projectId ?? 'wb-test';
   const defaultProject = {
@@ -87,7 +102,7 @@ function installMockFetch(opts: {
     last_brief: '',
   };
 
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.endsWith('/api/workbench/projects/default')) {
       return new Response(JSON.stringify(defaultProject), {
@@ -117,6 +132,12 @@ function installMockFetch(opts: {
       return new Response('', {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+    if (url.includes('/api/workbench/projects/') && url.endsWith('/bridge/eval')) {
+      return new Response(JSON.stringify(opts.bridgeResponse ?? {}), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
       });
     }
     return new Response(JSON.stringify({}), {
@@ -363,6 +384,172 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('Review gate')).toBeInTheDocument();
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-test at Draft v2.')).toBeInTheDocument();
+  });
+
+  it('materializes an eval-ready workbench candidate and opens Eval with prefilled context', async () => {
+    const user = userEvent.setup();
+    const bridge = {
+      kind: 'workbench_eval_optimize',
+      schema_version: 1,
+      candidate: {
+        project_id: 'wb-test',
+        run_id: 'run-1',
+        version: 2,
+        target: 'portable',
+        environment: 'draft',
+        agent_name: 'Airline Support Agent',
+        validation_status: 'passed',
+        review_gate_status: 'review_required',
+        generated_config_hash: 'sha256:abc123',
+        config_path: '/workspace/configs/v003.yaml',
+        eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+        export_targets: ['adk', 'cx'],
+      },
+      evaluation: {
+        status: 'ready',
+        readiness_state: 'ready_for_eval',
+        label: 'Ready for Eval',
+        description: 'The Workbench candidate is saved and ready for an Eval run.',
+        primary_action_label: 'Open Eval with this candidate',
+        primary_action_target: '/evals?source=workbench&new=1',
+        request: {
+          config_path: '/workspace/configs/v003.yaml',
+          split: 'all',
+        },
+        start_endpoint: '/api/eval/run',
+        blocking_reasons: [],
+      },
+      optimization: {
+        status: 'awaiting_eval_run',
+        readiness_state: 'awaiting_eval_run',
+        label: 'Run Eval before Optimize',
+        description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
+        primary_action_label: 'Open Eval with this candidate',
+        primary_action_target: '/evals?source=workbench&new=1',
+        requires_eval_run: true,
+        request_template: {
+          config_path: '/workspace/configs/v003.yaml',
+          eval_run_id: null,
+          window: 100,
+          force: true,
+          require_human_approval: true,
+          mode: 'standard',
+          objective: 'Improve failures from the Workbench candidate eval run.',
+          guardrails: ['Preserve Workbench validation and target compatibility.'],
+          research_algorithm: '',
+          budget_cycles: 10,
+          budget_dollars: 50,
+        },
+        start_endpoint: '/api/optimize/run',
+        blocking_reasons: ['Run Eval first; Optimize requires a completed eval run.'],
+      },
+    };
+    installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-test',
+        name: 'Airline Support Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 2,
+        build_status: 'completed',
+        plan: null,
+        artifacts: [],
+        messages: [],
+        model: {
+          project: { name: 'Airline Support Workbench', description: 'Airline support agent' },
+          agents: [],
+          tools: [],
+          callbacks: [],
+          guardrails: [],
+          eval_suites: [],
+          environments: [],
+          deployments: [],
+        },
+        exports: { generated_config: {}, adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        last_test: null,
+        activity: [],
+        active_run: {
+          run_id: 'run-1',
+          project_id: 'wb-test',
+          brief: 'Build airline support',
+          target: 'portable',
+          environment: 'draft',
+          status: 'completed',
+          phase: 'presenting',
+          started_version: 1,
+          completed_version: 2,
+          created_at: '2026-04-11T00:00:00Z',
+          updated_at: '2026-04-11T00:00:01Z',
+          completed_at: '2026-04-11T00:00:02Z',
+          error: null,
+          events: [],
+          messages: [],
+          validation: null,
+          presentation: {
+            run_id: 'run-1',
+            version: 2,
+            summary: 'Built 3 canonical changes.',
+            artifact_ids: [],
+            active_artifact_id: null,
+            generated_outputs: ['agent.py'],
+            validation_status: 'passed',
+            next_actions: ['Review candidate before promotion.'],
+            improvement_bridge: {
+              ...bridge,
+              candidate: {
+                ...bridge.candidate,
+                config_path: null,
+                eval_cases_path: null,
+              },
+              evaluation: {
+                ...bridge.evaluation,
+                status: 'needs_saved_config',
+                readiness_state: 'needs_materialization',
+                label: 'Save candidate before Eval',
+                primary_action_label: 'Save candidate and open Eval',
+                request: null,
+                blocking_reasons: ['Materialize the Workbench candidate config before starting Eval.'],
+              },
+            },
+          },
+        },
+        runs: [],
+        last_brief: 'Build airline support',
+        conversation: [],
+        turns: [],
+      },
+      bridgeResponse: {
+        bridge,
+        save_result: {
+          config_path: '/workspace/configs/v003.yaml',
+          eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+        },
+        eval_request: bridge.evaluation.request,
+        optimize_request_template: bridge.optimization.request_template,
+        next: {
+          start_eval_endpoint: '/api/eval/run',
+          start_optimize_endpoint: '/api/optimize/run',
+          optimize_requires_eval_run: true,
+        },
+      },
+    });
+
+    const fetchMock = vi.mocked(fetch);
+    renderWorkbench();
+
+    await user.click(await screen.findByRole('button', { name: 'Save candidate and open Eval' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/workbench/projects/wb-test/bridge/eval',
+        expect.objectContaining({ method: 'POST' })
+      );
+    });
+    expect(await screen.findByText('Eval Page')).toBeInTheDocument();
+    expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
+    expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
+    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml');
   });
 
   it('passes manual iteration budget controls to the iterate stream', async () => {

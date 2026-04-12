@@ -16,13 +16,16 @@
  *   3. ⌘K focuses the input, ⌘↵ (or Enter) sends.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   cancelWorkbenchRun,
+  createWorkbenchEvalBridge,
   getDefaultWorkbenchProject,
   getWorkbenchPlanSnapshot,
   iterateWorkbenchBuild,
   streamWorkbenchBuild,
+  type WorkbenchImprovementBridge,
   type WorkbenchTarget,
 } from '../lib/workbench-api';
 import { useWorkbenchStore, type BuildStatus } from '../lib/workbench-store';
@@ -31,6 +34,7 @@ import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
 import { IterationControls } from '../components/workbench/IterationControls';
+import { toastError } from '../lib/toast';
 
 function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   switch (status) {
@@ -55,6 +59,7 @@ function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
 }
 
 export function AgentWorkbench() {
+  const navigate = useNavigate();
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
   const beginBuild = useWorkbenchStore((s) => s.beginBuild);
@@ -67,6 +72,10 @@ export function AgentWorkbench() {
   const reset = useWorkbenchStore((s) => s.reset);
   const autoIterate = useWorkbenchStore((s) => s.autoIterate);
   const maxIterations = useWorkbenchStore((s) => s.maxIterations);
+  const presentation = useWorkbenchStore((s) => s.presentation);
+  const activeRun = useWorkbenchStore((s) => s.activeRun);
+  const bridge = presentation?.improvement_bridge ?? activeRun?.presentation?.improvement_bridge ?? null;
+  const [evalHandoffPending, setEvalHandoffPending] = useState(false);
 
   // Track the active stream controller so we can abort on unmount.
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -274,8 +283,76 @@ export function AgentWorkbench() {
     state.cancelBuild();
   }, [dispatchEvent, setError]);
 
+  const handleOpenEval = useCallback(async () => {
+    const currentProjectId = useWorkbenchStore.getState().projectId;
+    if (!currentProjectId) {
+      toastError('Workbench candidate not ready', 'Run or reload the Workbench before opening Eval.');
+      return;
+    }
+
+    setEvalHandoffPending(true);
+    try {
+      const payload = await createWorkbenchEvalBridge(currentProjectId);
+      const materializedBridge = payload.bridge;
+      const configPath =
+        materializedBridge.evaluation.request?.config_path ??
+        materializedBridge.candidate.config_path ??
+        payload.save_result.config_path;
+      if (!configPath) {
+        throw new Error('The Workbench candidate did not return a saved config path.');
+      }
+
+      const candidate = materializedBridge.candidate;
+      const params = new URLSearchParams({
+        source: 'workbench',
+        new: '1',
+        projectId: candidate.project_id,
+        runId: candidate.run_id,
+        configPath,
+      });
+      if (candidate.agent_name) {
+        params.set('agentName', candidate.agent_name);
+      }
+      if (materializedBridge.evaluation.request?.generated_suite_id) {
+        params.set('generatedSuiteId', materializedBridge.evaluation.request.generated_suite_id);
+      }
+      if (materializedBridge.evaluation.request?.split) {
+        params.set('split', materializedBridge.evaluation.request.split);
+      }
+
+      navigate(`/evals?${params.toString()}`, {
+        state: {
+          source: 'workbench',
+          open: 'run',
+          workbenchBridge: materializedBridge,
+          agent: {
+            id: `workbench-${candidate.project_id}-v${candidate.version}`,
+            name: candidate.agent_name || 'Workbench Agent',
+            model: 'workbench',
+            created_at: new Date().toISOString(),
+            source: 'built',
+            config_path: configPath,
+            status: 'candidate',
+          },
+        },
+      });
+    } catch (error) {
+      toastError(
+        'Eval handoff failed',
+        error instanceof Error ? error.message : 'Workbench could not materialize this candidate for Eval.'
+      );
+    } finally {
+      setEvalHandoffPending(false);
+    }
+  }, [navigate]);
+
   return (
     <div className="px-4 pb-6 pt-2">
+      <WorkbenchEvalHandoffPanel
+        bridge={bridge}
+        isPending={evalHandoffPending}
+        onOpenEval={handleOpenEval}
+      />
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
@@ -287,3 +364,67 @@ export function AgentWorkbench() {
 }
 
 export default AgentWorkbench;
+
+function WorkbenchEvalHandoffPanel({
+  bridge,
+  isPending,
+  onOpenEval,
+}: {
+  bridge: WorkbenchImprovementBridge | null;
+  isPending: boolean;
+  onOpenEval: () => void;
+}) {
+  if (!bridge) {
+    return null;
+  }
+
+  const evaluation = bridge.evaluation;
+  const isBlocked = evaluation.status === 'blocked';
+  const actionLabel =
+    evaluation.primary_action_label ??
+    (evaluation.status === 'needs_saved_config'
+      ? 'Save candidate and open Eval'
+      : 'Open Eval with this candidate');
+  const blockedActionLabel =
+    evaluation.readiness_state === 'draft_only' ? 'Finish Workbench run first' : 'Resolve blockers first';
+  const description =
+    evaluation.description ??
+    (evaluation.status === 'ready'
+      ? 'The Workbench candidate is ready to evaluate.'
+      : 'Save the Workbench candidate, then run Eval on that exact config.');
+
+  return (
+    <section className="mb-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-4 py-3 text-[color:var(--wb-text)]">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold text-[color:var(--wb-text)]">
+            {evaluation.label ?? 'Workbench candidate for Eval'}
+          </p>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
+            {description}
+          </p>
+          {bridge.candidate.config_path ? (
+            <p className="mt-1 break-all font-mono text-[11px] text-[color:var(--wb-text-dim)]">
+              {bridge.candidate.config_path}
+            </p>
+          ) : null}
+          {evaluation.blocking_reasons.length > 0 ? (
+            <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-dim)]">
+              {evaluation.blocking_reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        <button
+          type="button"
+          onClick={onOpenEval}
+          disabled={isBlocked || isPending}
+          className="inline-flex items-center justify-center rounded-md bg-[color:var(--wb-text)] px-3 py-2 text-[12px] font-medium text-[color:var(--wb-bg)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          {isPending ? 'Opening Eval...' : isBlocked ? blockedActionLabel : actionLabel}
+        </button>
+      </div>
+    </section>
+  );
+}

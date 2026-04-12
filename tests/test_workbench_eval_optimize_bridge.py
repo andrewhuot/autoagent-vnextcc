@@ -115,17 +115,134 @@ def test_materialized_eval_bridge_saves_candidate_and_returns_downstream_request
     assert bridge["candidate"]["generated_config_hash"]
 
     assert bridge["evaluation"]["status"] == "ready"
+    assert bridge["evaluation"]["readiness_state"] == "ready_for_eval"
+    assert bridge["evaluation"]["label"] == "Ready for Eval"
+    assert bridge["evaluation"]["primary_action_label"] == "Open Eval with this candidate"
+    assert bridge["evaluation"]["primary_action_target"].startswith("/evals?")
+    assert f"workbenchProjectId={project_id}" in bridge["evaluation"]["primary_action_target"]
+    assert "configPath=" in bridge["evaluation"]["primary_action_target"]
     assert bridge["evaluation"]["request"]["config_path"] == save_result["config_path"]
     assert bridge["evaluation"]["request"]["split"] == "all"
     assert payload["eval_request"] == bridge["evaluation"]["request"]
 
     assert bridge["optimization"]["status"] == "awaiting_eval_run"
+    assert bridge["optimization"]["readiness_state"] == "awaiting_eval_run"
+    assert bridge["optimization"]["label"] == "Run Eval before Optimize"
+    assert bridge["optimization"]["primary_action_label"] == "Open Eval with this candidate"
+    assert bridge["optimization"]["primary_action_target"] == bridge["evaluation"]["primary_action_target"]
     assert bridge["optimization"]["requires_eval_run"] is True
     assert bridge["optimization"]["request_template"]["config_path"] == save_result["config_path"]
     assert bridge["optimization"]["request_template"]["eval_run_id"] is None
     assert payload["optimize_request_template"] == bridge["optimization"]["request_template"]
     assert payload["next"]["start_eval_endpoint"] == "/api/eval/run"
     assert payload["next"]["start_optimize_endpoint"] == "/api/optimize/run"
+
+
+def test_bridge_explains_structurally_valid_candidate_before_materialization() -> None:
+    bridge = build_workbench_improvement_bridge(
+        {
+            "project_id": "wb-valid",
+            "version": 2,
+            "target": "portable",
+            "environment": "draft",
+            "compatibility": [],
+            "exports": {"generated_config": {"model": "gpt-5.4-mini"}},
+            "last_test": {"status": "passed", "checks": []},
+        },
+        run={
+            "run_id": "run-valid",
+            "turn_id": "turn-valid",
+            "status": "completed",
+            "validation": {"status": "passed", "checks": []},
+            "review_gate": {"status": "review_required", "blocking_reasons": []},
+        },
+    )
+
+    payload = bridge.model_dump(mode="python")
+
+    assert payload["evaluation"]["status"] == "needs_saved_config"
+    assert payload["evaluation"]["readiness_state"] == "needs_materialization"
+    assert payload["evaluation"]["label"] == "Save candidate before Eval"
+    assert payload["evaluation"]["description"] == (
+        "The Workbench candidate passed validation, but Eval needs a saved config file first."
+    )
+    assert payload["evaluation"]["primary_action_label"] == "Save candidate and open Eval"
+    assert payload["evaluation"]["prerequisite_step"] == "materialize_candidate"
+    assert payload["optimization"]["status"] == "blocked"
+    assert payload["optimization"]["readiness_state"] == "needs_eval_candidate"
+    assert payload["optimization"]["label"] == "Eval candidate not ready"
+    assert payload["optimization"]["prerequisite_step"] == "materialize_candidate"
+
+
+def test_bridge_explains_draft_only_candidate_before_eval() -> None:
+    bridge = build_workbench_improvement_bridge(
+        {
+            "project_id": "wb-draft-only",
+            "version": 1,
+            "target": "portable",
+            "environment": "draft",
+            "compatibility": [],
+            "exports": {"generated_config": {}},
+            "last_test": {},
+        },
+        run={
+            "run_id": "run-draft-only",
+            "turn_id": "turn-draft-only",
+            "status": "running",
+            "validation": {},
+            "review_gate": {"status": "review_required", "blocking_reasons": []},
+        },
+    )
+
+    payload = bridge.model_dump(mode="python")
+
+    assert payload["evaluation"]["status"] == "blocked"
+    assert payload["evaluation"]["readiness_state"] == "draft_only"
+    assert payload["evaluation"]["label"] == "Draft only"
+    assert "generated config" in payload["evaluation"]["description"]
+    assert "Workbench candidate has no generated config to evaluate." in payload["evaluation"]["blocking_reasons"]
+    assert "Workbench run has not completed successfully." in payload["evaluation"]["blocking_reasons"]
+    assert payload["optimization"]["status"] == "blocked"
+    assert payload["optimization"]["readiness_state"] == "draft_only"
+    assert payload["optimization"]["label"] == "Draft only"
+
+
+def test_bridge_marks_optimize_ready_after_completed_eval_run_id() -> None:
+    bridge = build_workbench_improvement_bridge(
+        {
+            "project_id": "wb-eval-complete",
+            "version": 3,
+            "target": "portable",
+            "environment": "draft",
+            "compatibility": [],
+            "exports": {"generated_config": {"model": "gpt-5.4-mini"}},
+            "last_test": {"status": "passed", "checks": []},
+        },
+        run={
+            "run_id": "run-eval-complete",
+            "turn_id": "turn-eval-complete",
+            "status": "completed",
+            "validation": {"status": "passed", "checks": []},
+            "review_gate": {"status": "review_required", "blocking_reasons": []},
+        },
+        config_path="/workspace/configs/v003.yaml",
+        eval_cases_path="/workspace/evals/cases/generated_build.yaml",
+        eval_run_id="eval-run-123",
+    )
+
+    payload = bridge.model_dump(mode="python")
+
+    assert payload["evaluation"]["readiness_state"] == "ready_for_eval"
+    assert payload["optimization"]["status"] == "ready"
+    assert payload["optimization"]["readiness_state"] == "ready_for_optimize"
+    assert payload["optimization"]["label"] == "Ready for Optimize"
+    assert payload["optimization"]["description"] == (
+        "Eval has run for this Workbench candidate, so Optimize can use that failure context."
+    )
+    assert payload["optimization"]["primary_action_label"] == "Start Optimize from Eval run"
+    assert payload["optimization"]["primary_action_target"].startswith("/optimize?")
+    assert "evalRunId=eval-run-123" in payload["optimization"]["primary_action_target"]
+    assert payload["optimization"]["request_template"]["eval_run_id"] == "eval-run-123"
 
 
 def test_bridge_blocks_downstream_requests_when_validation_failed() -> None:
@@ -153,9 +270,13 @@ def test_bridge_blocks_downstream_requests_when_validation_failed() -> None:
 
     payload = bridge.model_dump(mode="python")
     assert payload["evaluation"]["status"] == "blocked"
+    assert payload["evaluation"]["readiness_state"] == "blocked"
+    assert payload["evaluation"]["label"] == "Eval blocked"
     assert payload["evaluation"]["request"] is None
     assert "Latest harness validation is failed." in payload["evaluation"]["blocking_reasons"]
     assert payload["optimization"]["status"] == "blocked"
+    assert payload["optimization"]["readiness_state"] == "blocked"
+    assert payload["optimization"]["label"] == "Optimize blocked"
     assert payload["optimization"]["request_template"] is None
 
     with pytest.raises(ValueError, match="completed eval run"):
