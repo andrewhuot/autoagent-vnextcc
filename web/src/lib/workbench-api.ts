@@ -323,6 +323,35 @@ export interface WorkbenchPresentation {
   generated_outputs: string[];
   validation_status: WorkbenchTestStatus | string | null;
   next_actions: string[];
+  review_gate?: WorkbenchReviewGate;
+  handoff?: WorkbenchHandoff;
+}
+
+export interface WorkbenchReviewGateCheck {
+  name: string;
+  status: 'passed' | 'failed' | 'required' | string;
+  required: boolean;
+  detail: string;
+}
+
+export interface WorkbenchReviewGate {
+  status: 'review_required' | 'blocked' | string;
+  promotion_status: 'draft' | 'reviewed' | 'candidate' | 'staging' | 'production' | string;
+  requires_human_review: boolean;
+  checks: WorkbenchReviewGateCheck[];
+  blocking_reasons: string[];
+}
+
+export interface WorkbenchHandoff {
+  project_id: string;
+  run_id: string;
+  turn_id?: string | null;
+  version: number;
+  review_gate_status: string;
+  active_artifact_id?: string | null;
+  last_event_sequence: number;
+  next_operator_action: string;
+  resume_prompt: string;
 }
 
 export interface WorkbenchRunEvent {
@@ -401,6 +430,8 @@ export interface WorkbenchRun {
   telemetry_summary?: WorkbenchTelemetrySummary;
   failure_reason?: string | null;
   cancel_reason?: string | null;
+  review_gate?: WorkbenchReviewGate | null;
+  handoff?: WorkbenchHandoff | null;
   events: WorkbenchRunEvent[];
   messages: WorkbenchMessage[];
   validation: WorkbenchTestResult | null;
@@ -418,6 +449,7 @@ export interface WorkbenchProject {
   compatibility: WorkbenchCompatibilityDiagnostic[];
   exports: WorkbenchExports;
   last_test: WorkbenchTestResult | null;
+  artifacts?: WorkbenchArtifact[];
   messages?: WorkbenchMessage[];
   runs?: Record<string, WorkbenchRun> | WorkbenchRun[];
   active_run_id?: string | null;

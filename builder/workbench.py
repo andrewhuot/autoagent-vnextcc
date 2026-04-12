@@ -492,19 +492,25 @@ class WorkbenchStore:
             return {"projects": {}}
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return {"projects": {}}
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"corrupt Workbench store at {self.path}") from exc
         if not isinstance(payload, dict):
-            return {"projects": {}}
+            raise RuntimeError(f"corrupt Workbench store at {self.path}")
         projects = payload.get("projects")
         if not isinstance(projects, dict):
-            payload["projects"] = {}
+            raise RuntimeError(f"corrupt Workbench store at {self.path}")
         return payload
 
     def _write(self, payload: dict[str, Any]) -> None:
         """Write the full store atomically enough for local MVP usage."""
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        tmp_path = self.path.with_name(f".{self.path.name}.{new_id()}.tmp")
+        try:
+            tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+            os.replace(tmp_path, self.path)
+        finally:
+            if tmp_path.exists():
+                tmp_path.unlink()
 
 
 class WorkbenchService:
@@ -1356,6 +1362,8 @@ class WorkbenchService:
             "messages": [],
             "validation": None,
             "presentation": None,
+            "review_gate": None,
+            "handoff": None,
         }
         project.setdefault("runs", {})[run_id] = run
         project["active_run_id"] = run_id
@@ -1715,17 +1723,6 @@ class WorkbenchService:
         }
         project.setdefault("turns", []).append(turn)
         run["turn_id"] = turn["turn_id"]
-        project.setdefault("conversation", []).append(
-            {
-                "id": f"msg-{new_id()}",
-                "role": "user",
-                "content": brief,
-                "turn_id": turn["turn_id"],
-                "task_id": None,
-                "created_at": _now_iso(),
-                "kind": "brief",
-            }
-        )
         return turn
 
     def _start_iteration_record(
@@ -2102,6 +2099,8 @@ class WorkbenchService:
         project["build_status"] = RUN_STATUS_PRESENTING
         presentation = build_presentation_manifest(project, run=run, operations=operations)
         run["presentation"] = presentation
+        run["review_gate"] = copy.deepcopy(presentation.get("review_gate"))
+        run["handoff"] = copy.deepcopy(presentation.get("handoff"))
         present_ready = {
             "project_id": project["project_id"],
             "run_id": run["run_id"],
@@ -2305,8 +2304,9 @@ def build_presentation_manifest(
     if invalid:
         next_actions.insert(0, "Resolve invalid target compatibility before deployment.")
     else:
-        next_actions.append("Promote the candidate into Eval Runs or Deploy when ready.")
-    return {
+        next_actions.append("Complete human review before promotion to Eval Runs or Deploy.")
+    review_gate = build_review_gate(project, run=run)
+    presentation = {
         "run_id": run["run_id"],
         "version": int(project.get("version") or 1),
         "summary": f"Built {len(operations)} canonical change(s) and refreshed generated outputs.",
@@ -2315,6 +2315,97 @@ def build_presentation_manifest(
         "generated_outputs": sorted((project.get("exports", {}).get("adk", {}).get("files") or {}).keys()),
         "validation_status": (project.get("last_test") or {}).get("status"),
         "next_actions": next_actions,
+        "review_gate": review_gate,
+    }
+    presentation["handoff"] = build_run_handoff(project, run=run, presentation=presentation)
+    return presentation
+
+
+def build_review_gate(project: dict[str, Any], *, run: dict[str, Any]) -> dict[str, Any]:
+    """Return explicit promotion-readiness checks for one completed run.
+
+    WHY: the Workbench can generate useful drafts, but the PRD requires human
+    promotion and durable evidence. This gate makes that state explicit instead
+    of relying on optimistic UI copy.
+    """
+    validation = run.get("validation") if isinstance(run.get("validation"), dict) else project.get("last_test") or {}
+    validation_status = str(validation.get("status") or "missing")
+    invalid = [
+        item
+        for item in project.get("compatibility", [])
+        if isinstance(item, dict) and item.get("status") == "invalid"
+    ]
+    checks = [
+        {
+            "name": "harness_validation",
+            "status": "passed" if validation_status == "passed" else "failed",
+            "required": True,
+            "detail": (
+                "Latest harness validation passed."
+                if validation_status == "passed"
+                else f"Latest harness validation is {validation_status}."
+            ),
+        },
+        {
+            "name": "target_compatibility",
+            "status": "passed" if not invalid else "failed",
+            "required": True,
+            "detail": (
+                "No invalid target compatibility diagnostics."
+                if not invalid
+                else f"{len(invalid)} invalid target compatibility diagnostic(s)."
+            ),
+        },
+        {
+            "name": "human_review",
+            "status": "required",
+            "required": True,
+            "detail": "Human review is required before promotion to Eval Runs or Deploy.",
+        },
+    ]
+    blocking_reasons = [
+        check["detail"]
+        for check in checks
+        if check["required"] and check["status"] == "failed"
+    ]
+    return {
+        "status": "blocked" if blocking_reasons else "review_required",
+        "promotion_status": "draft",
+        "requires_human_review": True,
+        "checks": checks,
+        "blocking_reasons": blocking_reasons,
+    }
+
+
+def build_run_handoff(
+    project: dict[str, Any],
+    *,
+    run: dict[str, Any],
+    presentation: dict[str, Any],
+) -> dict[str, Any]:
+    """Build compact resume context for the next Workbench session."""
+    review_gate = presentation.get("review_gate") if isinstance(presentation.get("review_gate"), dict) else {}
+    gate_status = str(review_gate.get("status") or "unknown")
+    if gate_status == "blocked":
+        next_action = "Resolve blocking review gate issues before promotion."
+    else:
+        next_action = "Review candidate and run evals before promotion."
+    version = int(project.get("version") or 1)
+    run_id = str(run.get("run_id") or "")
+    return {
+        "project_id": project["project_id"],
+        "run_id": run_id,
+        "turn_id": run.get("turn_id") or run_id,
+        "version": version,
+        "review_gate_status": gate_status,
+        "active_artifact_id": presentation.get("active_artifact_id"),
+        "last_event_sequence": len(run.get("events") or []),
+        "next_operator_action": next_action,
+        "resume_prompt": (
+            f"Resume Workbench project {project['project_id']} at Draft v{version}. "
+            f"Review run {run_id}, inspect the review gate ({gate_status}), "
+            f"and {next_action[0].lower()}{next_action[1:]}"
+        ),
     }
 
 
@@ -2334,6 +2425,8 @@ def build_run_completion_payload(project: dict[str, Any], run: dict[str, Any]) -
         "telemetry_summary": copy.deepcopy(run.get("telemetry_summary") or {}),
         "failure_reason": run.get("failure_reason"),
         "cancel_reason": run.get("cancel_reason"),
+        "review_gate": copy.deepcopy(run.get("review_gate")),
+        "handoff": copy.deepcopy(run.get("handoff")),
         "version": int(project.get("version") or 1),
         "validation": run.get("validation") or project.get("last_test"),
         "presentation": run.get("presentation"),

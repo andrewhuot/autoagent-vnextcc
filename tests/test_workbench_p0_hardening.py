@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -34,6 +35,18 @@ def _parse_sse(stream_body: str) -> list[dict]:
         if data_lines:
             events.append({"event": event_name, "data": json.loads("\n".join(data_lines))})
     return events
+
+
+def test_workbench_store_refuses_corrupt_json_without_resetting(tmp_path: Path) -> None:
+    """A corrupt durable store should fail closed instead of erasing projects."""
+    path = tmp_path / "workbench.json"
+    path.write_text('{"projects": {"wb-existing": ', encoding="utf-8")
+    store = WorkbenchStore(path)
+
+    with pytest.raises(RuntimeError, match="corrupt Workbench store"):
+        store.list_projects()
+
+    assert path.read_text(encoding="utf-8").startswith('{"projects": {"wb-existing"')
 
 
 def test_cancel_endpoint_marks_active_run_cancelled(tmp_path: Path) -> None:
