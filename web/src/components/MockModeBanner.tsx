@@ -8,7 +8,16 @@ const PREVIEW_MODE_DESCRIPTION = 'AgentLab is using simulated responses until li
 const FRONTEND_ONLY_TITLE = 'Frontend-only mode';
 const FRONTEND_ONLY_DESCRIPTION =
   'AgentLab cannot reach the backend right now, so live status and saved actions may be unavailable.';
-const OPTIMIZATION_ROUTE_PREFIXES = ['/dashboard', '/build', '/evals', '/optimize', '/live-optimize', '/improvements', '/studio'];
+const OPTIMIZATION_ROUTE_PREFIXES = [
+  '/dashboard',
+  '/build',
+  '/evals',
+  '/optimize',
+  '/live-optimize',
+  '/improvements',
+  '/studio',
+  '/workbench',
+];
 const DISMISS_STORAGE_KEY = 'agentlab-mock-banner-dismissed';
 
 interface MockModeHealthPayload {

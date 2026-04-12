@@ -223,12 +223,15 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     events = _parse_sse(response.text)
     assert events, "expected at least one SSE event"
 
-    # Structure: plan.ready first, then build.completed, reflect/present
-    # phases, and a terminal run.completed.  Every event carries a turn_id
-    # so the UI can group events even across multi-iteration loops.
+    # Structure: turn.started seeds the multi-turn log, then plan.ready,
+    # build.completed, reflect/present phases, turn.completed, and terminal
+    # run.completed. Every event carries a turn_id so the UI can group events
+    # even across multi-iteration loops.
     event_names = [ev["event"] for ev in events]
-    assert event_names[0] == "plan.ready"
+    assert event_names[0] == "turn.started"
+    assert "plan.ready" in event_names
     assert "build.completed" in event_names
+    assert "run.completed" in event_names
     assert events[-1]["event"] == "run.completed"
     final_project_id = events[-1]["data"]["project_id"]
     assert final_project_id.startswith("wb-")
@@ -265,14 +268,15 @@ def test_build_stream_runs_reflect_and_present_phases(tmp_path: Path) -> None:
     assert "reflect.started" in names
     assert "reflect.completed" in names
     assert "present.ready" in names
+    assert "run.completed" in names
     assert names[-1] == "run.completed"
     assert names.index("build.completed") < names.index("reflect.started")
     assert names.index("reflect.completed") < names.index("present.ready")
     assert names.index("present.ready") < names.index("run.completed")
 
-    run_completed = events[-1]["data"]
+    run_completed = next(event["data"] for event in events if event["event"] == "run.completed")
     assert run_completed["status"] == "completed"
-    assert run_completed["phase"] == "present"
+    assert run_completed["phase"] == "presenting"
     assert run_completed["version"] >= 2
     assert run_completed["validation"]["status"] == "passed"
     assert run_completed["presentation"]["next_actions"]
@@ -297,7 +301,7 @@ def test_build_stream_persists_plan_and_artifacts(tmp_path: Path) -> None:
     assert body["project_id"] == project_id
     assert body["build_status"] == "completed"
     assert body["active_run"]["status"] == "completed"
-    assert body["active_run"]["phase"] == "present"
+    assert body["active_run"]["phase"] == "presenting"
     assert body["active_run"]["validation"]["status"] == "passed"
     assert len(body["active_run"]["events"]) >= len(events)
     assert body["messages"], "assistant narration should survive reload"
@@ -373,7 +377,10 @@ async def test_run_build_stream_marks_run_failed_when_agent_raises(tmp_path: Pat
     )
 
     events = [event async for event in stream]
-    assert [event["event"] for event in events][-2:] == ["error", "run.failed"]
+    event_names = [event["event"] for event in events]
+    assert event_names[-1] == "run.failed"
+    assert "error" in event_names
+    assert "turn.completed" in event_names
     project_id = events[-1]["data"]["project_id"]
     snapshot = service.get_plan_snapshot(project_id=project_id)
     assert snapshot["build_status"] == "failed"

@@ -783,9 +783,11 @@ async def test_workbench_service_routes_to_iteration_when_artifacts_exist(tmp_pa
         events.append(event)
 
     names = [e["event"] for e in events]
-    # The service wraps every build with reflect/present phases, so the
-    # terminal event is run.completed (the durable-run lifecycle endpoint).
+    # The service wraps every build with reflect/present phases and emits
+    # turn.completed before the terminal run.completed event.
     assert "build.completed" in names, f"build.completed missing from {names}"
+    assert "run.completed" in names, f"Expected run.completed, got last 3: {names[-3:]}"
+    assert "turn.completed" in names, f"Expected turn.completed, got last 3: {names[-3:]}"
     assert names[-1] == "run.completed", f"Expected run.completed, got last 3: {names[-3:]}"
 
 
@@ -817,6 +819,8 @@ async def test_workbench_service_run_iteration_stream_persists_harness_state(tmp
 
     names = [e["event"] for e in events]
     assert "build.completed" in names
+    assert "run.completed" in names
+    assert "turn.completed" in names
     assert names[-1] == "run.completed"
 
     # Activity log should contain an iterate or build entry
@@ -907,6 +911,8 @@ def test_iterate_endpoint_streams_sse(tmp_path: Path) -> None:
     assert len(events) > 0
     names = [e["event"] for e in events]
     assert "build.completed" in names
+    assert "run.completed" in names
+    assert "turn.completed" in names
     assert names[-1] == "run.completed"
 
 
@@ -983,4 +989,6 @@ def test_build_stream_endpoint_routes_to_iteration_for_existing_project(tmp_path
     second_events = _parse_sse(second_response.text)
     names = [e["event"] for e in second_events]
     assert "build.completed" in names
+    assert "run.completed" in names
+    assert "turn.completed" in names
     assert names[-1] == "run.completed"

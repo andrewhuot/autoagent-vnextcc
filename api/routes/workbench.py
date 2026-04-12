@@ -78,6 +78,21 @@ class WorkbenchBuildStreamRequest(BaseModel):
         le=6,
         description="Cap on plan passes per user turn (initial + corrections).",
     )
+    max_seconds: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional wall-clock budget in seconds.",
+    )
+    max_tokens: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional estimated-token budget.",
+    )
+    max_cost_usd: float | None = Field(
+        default=None,
+        gt=0,
+        description="Optional estimated cost budget in USD.",
+    )
 
 
 class WorkbenchIterateRequest(BaseModel):
@@ -88,6 +103,17 @@ class WorkbenchIterateRequest(BaseModel):
     target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
     environment: str = Field(default="draft")
     mock: bool = Field(default=False, description="Force mock mode for tests.")
+    max_iterations: int = Field(default=3, ge=1, le=6)
+    max_seconds: int | None = Field(default=None, ge=1)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_cost_usd: float | None = Field(default=None, gt=0)
+
+
+class WorkbenchCancelRunRequest(BaseModel):
+    """Request body for cancelling an active Workbench run."""
+
+    project_id: str | None = None
+    reason: str = Field(default="Cancelled by operator.")
 
 
 def _service(request: Request) -> WorkbenchService:
@@ -174,6 +200,37 @@ async def get_plan_snapshot(project_id: str, request: Request) -> dict[str, Any]
         raise HTTPException(status_code=404, detail="Workbench project not found") from exc
 
 
+@router.post("/runs/{run_id}/cancel")
+async def cancel_run(run_id: str, request: Request, body: WorkbenchCancelRunRequest) -> dict[str, Any]:
+    """Cancel an active Workbench run on the server side."""
+    try:
+        return _service(request).cancel_run(
+            project_id=body.project_id,
+            run_id=run_id,
+            reason=body.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench run not found") from exc
+
+
+@router.post("/projects/{project_id}/runs/{run_id}/cancel")
+async def cancel_project_run(
+    project_id: str,
+    run_id: str,
+    request: Request,
+    body: WorkbenchCancelRunRequest,
+) -> dict[str, Any]:
+    """Cancel an active Workbench run when the project id is already known."""
+    try:
+        return _service(request).cancel_run(
+            project_id=project_id,
+            run_id=run_id,
+            reason=body.reason,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench run not found") from exc
+
+
 def _format_sse(event_name: str, data: dict[str, Any]) -> bytes:
     """Encode one event as a Server-Sent-Events frame."""
     payload = json.dumps(data, default=str)
@@ -188,10 +245,10 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
     running spinners, artifact cards inline, and a source-code preview on the
     right. That needs low-latency incremental updates, not one JSON blob.
     """
-    from builder.workbench_agent import build_default_agent
+    from builder.workbench_agent import build_default_agent_with_readiness
 
     service = _service(request)
-    agent = build_default_agent(force_mock=body.mock)
+    agent, execution = build_default_agent_with_readiness(force_mock=body.mock)
 
     async def event_generator() -> AsyncIterator[bytes]:
         try:
@@ -203,6 +260,10 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
                 agent=agent,
                 auto_iterate=body.auto_iterate,
                 max_iterations=body.max_iterations,
+                max_seconds=body.max_seconds,
+                max_tokens=body.max_tokens,
+                max_cost_usd=body.max_cost_usd,
+                execution=execution,
             )
             async for event in stream:
                 yield _format_sse(
@@ -230,10 +291,10 @@ async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> Stre
     Delegates to ``WorkbenchService.run_iteration_stream()`` which reuses the
     current canonical model and generates delta artifacts.
     """
-    from builder.workbench_agent import build_default_agent
+    from builder.workbench_agent import build_default_agent_with_readiness
 
     service = _service(request)
-    agent = build_default_agent(force_mock=body.mock)
+    agent, execution = build_default_agent_with_readiness(force_mock=body.mock)
 
     async def event_generator() -> AsyncIterator[bytes]:
         try:
@@ -243,6 +304,11 @@ async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> Stre
                 target=body.target,
                 environment=body.environment,
                 agent=agent,
+                max_iterations=body.max_iterations,
+                max_seconds=body.max_seconds,
+                max_tokens=body.max_tokens,
+                max_cost_usd=body.max_cost_usd,
+                execution=execution,
             )
             async for event in stream:
                 yield _format_sse(

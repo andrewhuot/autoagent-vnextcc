@@ -99,6 +99,9 @@ export interface BuildStreamEvent {
     | 'present.ready'
     | 'run.completed'
     | 'run.failed'
+    | 'run.cancel_requested'
+    | 'run.cancelled'
+    | 'run.recovered'
     | 'harness.metrics'
     | 'reflection.completed'
     | 'iteration.started'
@@ -329,6 +332,51 @@ export interface WorkbenchRunEvent {
   status: string;
   created_at: string;
   data: Record<string, unknown>;
+  telemetry?: WorkbenchTelemetrySummary;
+}
+
+export interface WorkbenchBudget {
+  limits: {
+    max_iterations?: number | null;
+    max_seconds?: number | null;
+    max_tokens?: number | null;
+    max_cost_usd?: number | null;
+  };
+  usage: {
+    iterations?: number;
+    elapsed_ms?: number;
+    tokens?: number;
+    tokens_used?: number;
+    cost_usd?: number;
+  };
+  breach?: {
+    kind?: string;
+    limit?: number;
+    actual?: number;
+    exceeded?: string;
+    message?: string;
+  } | null;
+  exceeded?: string;
+  message?: string;
+}
+
+export interface WorkbenchTelemetrySummary {
+  run_id?: string;
+  turn_id?: string | null;
+  iteration_id?: string | null;
+  event?: string;
+  phase?: string;
+  status?: string;
+  provider?: string;
+  model?: string;
+  execution_mode?: string;
+  duration_ms?: number;
+  tokens_used?: number;
+  cost_usd?: number;
+  event_count?: number;
+  failure_reason?: string | null;
+  cancel_reason?: string | null;
+  budget_breach?: Record<string, unknown> | null;
 }
 
 export interface WorkbenchRun {
@@ -345,6 +393,14 @@ export interface WorkbenchRun {
   updated_at?: string;
   completed_at: string | null;
   error: string | null;
+  execution_mode?: string;
+  provider?: string;
+  model?: string;
+  mode_reason?: string;
+  budget?: WorkbenchBudget;
+  telemetry_summary?: WorkbenchTelemetrySummary;
+  failure_reason?: string | null;
+  cancel_reason?: string | null;
   events: WorkbenchRunEvent[];
   messages: WorkbenchMessage[];
   validation: WorkbenchTestResult | null;
@@ -496,6 +552,31 @@ export function getWorkbenchPlanSnapshot(projectId: string): Promise<WorkbenchPl
 }
 
 /**
+ * Request server-side cancellation for an active Workbench run.
+ *
+ * The project id is optional because operator logs often surface only run ids.
+ */
+export function cancelWorkbenchRun(
+  runId: string,
+  reason = 'Cancelled by operator.',
+  projectId?: string | null
+): Promise<{
+  project_id: string;
+  run_id: string;
+  status: string;
+  run?: WorkbenchRun;
+  cancel_reason?: string;
+}> {
+  return fetchWorkbench(`/api/workbench/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({
+      ...(projectId ? { project_id: projectId } : {}),
+      reason,
+    }),
+  });
+}
+
+/**
  * POST a brief to the Workbench streaming builder and yield one SSE event
  * per chunk. Callers drive the Zustand store from the event stream and can
  * abort mid-stream via the optional ``signal``.
@@ -511,6 +592,9 @@ export async function* streamWorkbenchBuild(
     auto_iterate?: boolean;
     /** Hard cap on plan passes per turn (initial + corrections). */
     max_iterations?: number;
+    max_seconds?: number;
+    max_tokens?: number;
+    max_cost_usd?: number;
   },
   options: { signal?: AbortSignal } = {}
 ): AsyncIterable<BuildStreamEvent> {
@@ -580,6 +664,10 @@ export async function* iterateWorkbenchBuild(
     project_id: string;
     message: string;
     target?: WorkbenchTarget;
+    max_iterations?: number;
+    max_seconds?: number;
+    max_tokens?: number;
+    max_cost_usd?: number;
   },
   options: { signal?: AbortSignal } = {}
 ): AsyncIterable<BuildStreamEvent> {
@@ -593,6 +681,10 @@ export async function* iterateWorkbenchBuild(
       project_id: body.project_id,
       follow_up: body.message,
       target: body.target,
+      max_iterations: body.max_iterations,
+      max_seconds: body.max_seconds,
+      max_tokens: body.max_tokens,
+      max_cost_usd: body.max_cost_usd,
     }),
     signal: options.signal,
   });

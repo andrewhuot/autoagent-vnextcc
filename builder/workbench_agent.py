@@ -109,19 +109,67 @@ def build_default_agent(*, force_mock: bool = False) -> "WorkbenchBuilderAgent":
     On any failure we fall back to the mock agent so the UI always has
     something coherent to render.
     """
+    agent, _metadata = build_default_agent_with_readiness(force_mock=force_mock)
+    return agent
+
+
+def build_default_agent_with_readiness(
+    *,
+    force_mock: bool = False,
+) -> tuple["WorkbenchBuilderAgent", dict[str, Any]]:
+    """Return the selected builder agent and operator-visible mode metadata.
+
+    WHY: staging operators need to know whether a Workbench run used a real
+    provider or deterministic mock output. The legacy factory intentionally
+    fell back to mock mode to keep the UI usable; this companion keeps that
+    behavior while making the selected mode explicit and durable.
+    """
     if force_mock:
-        return MockWorkbenchBuilderAgent()
+        return MockWorkbenchBuilderAgent(), {
+            "mode": "mock",
+            "provider": "mock",
+            "model": "mock-workbench",
+            "mock_reason": "Mock mode forced by request.",
+            "requested_mock": True,
+            "live_ready": False,
+        }
     try:
         from cli.mode import load_runtime_with_builder_live_preference
         from optimizer.providers import build_router_from_runtime_config
 
         runtime = load_runtime_with_builder_live_preference()
         router = build_router_from_runtime_config(runtime.optimizer)
+        model = router.models[0] if getattr(router, "models", None) else None
+        provider_name = str(getattr(model, "provider", "mock"))
+        model_name = str(getattr(model, "model", "mock-workbench"))
         if router.mock_mode:
-            return MockWorkbenchBuilderAgent()
-        return LiveWorkbenchBuilderAgent(router=router)
-    except Exception:  # noqa: BLE001 — any failure downgrades to mock
-        return MockWorkbenchBuilderAgent()
+            return MockWorkbenchBuilderAgent(), {
+                "mode": "mock",
+                "provider": provider_name or "mock",
+                "model": model_name or "mock-workbench",
+                "mock_reason": getattr(router, "mock_reason", "") or "Provider router selected mock mode.",
+                "requested_mock": bool(getattr(router, "requested_mock", False)),
+                "live_ready": False,
+                "skipped_models": list(getattr(router, "skipped_models", []) or []),
+            }
+        return LiveWorkbenchBuilderAgent(router=router), {
+            "mode": "live",
+            "provider": provider_name,
+            "model": model_name,
+            "mock_reason": "",
+            "requested_mock": False,
+            "live_ready": True,
+            "skipped_models": list(getattr(router, "skipped_models", []) or []),
+        }
+    except Exception as exc:  # noqa: BLE001 — any failure downgrades to mock
+        return MockWorkbenchBuilderAgent(), {
+            "mode": "mock",
+            "provider": "mock",
+            "model": "mock-workbench",
+            "mock_reason": f"Workbench live provider setup failed; falling back to mock mode: {exc}",
+            "requested_mock": False,
+            "live_ready": False,
+        }
 
 
 # ---------------------------------------------------------------------------

@@ -514,14 +514,37 @@ function TraceWorkspace() {
         {events.length === 0 && (
           <p className="text-[12px] text-[color:var(--wb-text-dim)]">No persisted run events yet.</p>
         )}
-        {events.slice(-40).map((event) => (
+        {events.slice(-40).map((event) => {
+          const telemetry = event.telemetry ?? (event.data?.telemetry as Record<string, unknown> | undefined);
+          const reason =
+            (telemetry?.failure_reason as string | undefined) ??
+            (telemetry?.cancel_reason as string | undefined) ??
+            (event.data?.failure_reason as string | undefined) ??
+            (event.data?.cancel_reason as string | undefined);
+          const tokenCount = Number(telemetry?.tokens_used ?? 0);
+          const costUsd = Number(telemetry?.cost_usd ?? 0);
+          const durationMs = Number(telemetry?.duration_ms ?? 0);
+          return (
           <div key={event.sequence} className="rounded-md border border-[color:var(--wb-border)] px-3 py-2">
             <div className="flex items-center justify-between gap-3 text-[12px]">
               <span className="font-mono text-[color:var(--wb-text)]">{event.event}</span>
-              <span className="text-[color:var(--wb-text-dim)]">{event.phase}</span>
+              <span className="text-[color:var(--wb-text-dim)]">
+                {event.status} · {event.phase}
+              </span>
+            </div>
+            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-[color:var(--wb-text-dim)]">
+              {event.created_at && <span>{new Date(event.created_at).toLocaleTimeString()}</span>}
+              {telemetry?.run_id ? <span>run {String(telemetry.run_id)}</span> : null}
+              {telemetry?.iteration_id ? <span>iter {String(telemetry.iteration_id)}</span> : null}
+              {telemetry?.provider ? <span>{String(telemetry.provider)} / {String(telemetry.model ?? 'unknown')}</span> : null}
+              {durationMs > 0 && <span>{durationMs}ms</span>}
+              {tokenCount > 0 && <span>{tokenCount} tokens</span>}
+              {costUsd > 0 && <span>${costUsd.toFixed(costUsd < 0.01 ? 4 : 2)}</span>}
+              {reason && <span>{reason}</span>}
             </div>
           </div>
-        ))}
+          );
+        })}
         {lastTest?.trace.map((entry) => (
           <div key={`${entry.event}-${entry.status}`} className="text-[12px] text-[color:var(--wb-text-soft)]">
             Reflection · {entry.event}: {entry.status}

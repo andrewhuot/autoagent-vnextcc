@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,10 +17,162 @@ from builder.types import new_id
 
 WorkbenchTarget = str
 
+RUN_STATUS_QUEUED = "queued"
+RUN_STATUS_RUNNING = "running"
+RUN_STATUS_REFLECTING = "reflecting"
+RUN_STATUS_PRESENTING = "presenting"
+RUN_STATUS_COMPLETED = "completed"
+RUN_STATUS_FAILED = "failed"
+RUN_STATUS_CANCELLED = "cancelled"
+
+ACTIVE_RUN_STATUSES = {
+    RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING,
+    RUN_STATUS_REFLECTING,
+    RUN_STATUS_PRESENTING,
+}
+TERMINAL_RUN_STATUSES = {
+    RUN_STATUS_COMPLETED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_CANCELLED,
+}
+
+PHASE_QUEUED = "queued"
+PHASE_PLANNING = "planning"
+PHASE_EXECUTING = "executing"
+PHASE_REFLECTING = "reflecting"
+PHASE_PRESENTING = "presenting"
+PHASE_TERMINAL = "terminal"
+
+TOKEN_COST_ESTIMATE_USD = 0.000003
+DEFAULT_STALE_RUN_SECONDS = 30 * 60
+
 
 def _now_iso() -> str:
     """Return a stable UTC timestamp for version and activity records."""
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _parse_iso(value: Any) -> datetime | None:
+    """Parse a stored UTC timestamp, returning None for old/malformed values."""
+    if not value:
+        return None
+    text = str(value)
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _elapsed_ms_since(value: Any) -> int:
+    """Return elapsed milliseconds since a stored timestamp."""
+    started = _parse_iso(value)
+    if started is None:
+        return 0
+    return max(0, round((datetime.now(tz=timezone.utc) - started).total_seconds() * 1000))
+
+
+def _positive_int(value: int | None) -> int | None:
+    """Normalize optional positive integer limits."""
+    if value is None:
+        return None
+    value = int(value)
+    return value if value > 0 else None
+
+
+def _positive_float(value: float | None) -> float | None:
+    """Normalize optional positive float limits."""
+    if value is None:
+        return None
+    value = float(value)
+    return value if value > 0 else None
+
+
+def _normalize_budget(
+    *,
+    max_iterations: int = 3,
+    max_seconds: int | None = None,
+    max_tokens: int | None = None,
+    max_cost_usd: float | None = None,
+) -> dict[str, Any]:
+    """Build the persisted budget object for a Workbench run.
+
+    WHY: budget state must be server-authoritative and survive page refreshes.
+    The limits are optional except iterations, while usage is always present so
+    API clients and operators can render honest progress.
+    """
+    return {
+        "limits": {
+            "max_iterations": max(1, int(max_iterations or 1)),
+            "max_seconds": _positive_int(max_seconds),
+            "max_tokens": _positive_int(max_tokens),
+            "max_cost_usd": _positive_float(max_cost_usd),
+        },
+        "usage": {
+            "iterations": 0,
+            "elapsed_ms": 0,
+            "tokens": 0,
+            "tokens_used": 0,
+            "cost_usd": 0.0,
+        },
+        "breach": None,
+    }
+
+
+def _budget_usage(budget: dict[str, Any]) -> dict[str, Any]:
+    """Return a mutable usage map from a persisted budget."""
+    usage = budget.setdefault("usage", {})
+    usage.setdefault("iterations", 0)
+    usage.setdefault("elapsed_ms", 0)
+    usage.setdefault("tokens", usage.get("tokens_used", 0))
+    usage.setdefault("tokens_used", 0)
+    usage.setdefault("cost_usd", 0.0)
+    return usage
+
+
+def _phase_to_status(phase: str) -> str:
+    """Map lifecycle phase to the run status used by active snapshots."""
+    if phase == PHASE_REFLECTING:
+        return RUN_STATUS_REFLECTING
+    if phase == PHASE_PRESENTING:
+        return RUN_STATUS_PRESENTING
+    if phase == PHASE_TERMINAL:
+        return RUN_STATUS_COMPLETED
+    if phase == PHASE_QUEUED:
+        return RUN_STATUS_QUEUED
+    return RUN_STATUS_RUNNING
+
+
+def _estimate_tokens_for_event(event_name: str, data: dict[str, Any]) -> int:
+    """Cheaply estimate tokens represented by one streamed event payload."""
+    if event_name == "harness.metrics":
+        return 0
+    if event_name == "message.delta":
+        return max(1, len(str(data.get("text") or "")) // 4)
+    if event_name == "artifact.updated":
+        artifact = data.get("artifact") if isinstance(data.get("artifact"), dict) else {}
+        text = "\n".join(
+            str(artifact.get(key) or "")
+            for key in ("summary", "preview", "source")
+        )
+        return max(1, len(text) // 4)
+    if event_name == "plan.ready":
+        # Plans are deterministic Workbench structure, not provider output.
+        # Keep budget enforcement anchored to provider deltas and harness metrics.
+        return 0
+    return 0
+
+
+def _default_execution_metadata() -> dict[str, Any]:
+    """Return conservative mock execution metadata for direct service tests."""
+    return {
+        "mode": "mock",
+        "provider": "mock",
+        "model": "mock-workbench",
+        "mock_reason": "Execution metadata was not supplied by the API route.",
+        "requested_mock": False,
+        "live_ready": False,
+    }
 
 
 def _slugify(value: str, fallback: str = "item") -> str:
@@ -323,6 +476,10 @@ class WorkbenchStore:
         project = self._load()["projects"].get(project_id)
         return copy.deepcopy(project) if project is not None else None
 
+    def list_projects(self) -> list[dict[str, Any]]:
+        """Return all persisted projects for run-level lookups."""
+        return [copy.deepcopy(project) for project in self._load()["projects"].values()]
+
     def save_project(self, project: dict[str, Any]) -> None:
         """Persist a project snapshot to disk."""
         payload = self._load()
@@ -371,6 +528,8 @@ class WorkbenchService:
         project = self.store.get_project(project_id)
         if project is None:
             raise KeyError(project_id)
+        if self._recover_stale_runs(project):
+            self.store.save_project(project)
         return self.response(project)
 
     def plan_change(
@@ -461,6 +620,10 @@ class WorkbenchService:
         agent: Any = None,
         auto_iterate: bool = True,
         max_iterations: int = 3,
+        max_seconds: int | None = None,
+        max_tokens: int | None = None,
+        max_cost_usd: float | None = None,
+        execution: dict[str, Any] | None = None,
     ) -> Any:
         """Drive a multi-turn streaming build run, yielding events the UI consumes.
 
@@ -508,6 +671,11 @@ class WorkbenchService:
                     target=target,
                     environment=environment,
                     agent=runner,
+                    max_iterations=max_iterations,
+                    max_seconds=max_seconds,
+                    max_tokens=max_tokens,
+                    max_cost_usd=max_cost_usd,
+                    execution=execution,
                 )
             project = existing or self.store.create_project(
                 brief=brief, target=target, environment=environment
@@ -534,7 +702,18 @@ class WorkbenchService:
             brief=brief,
             target=target,
             environment=environment,
+            budget=_normalize_budget(
+                max_iterations=max_iterations,
+                max_seconds=max_seconds,
+                max_tokens=max_tokens,
+                max_cost_usd=max_cost_usd,
+            ),
+            execution=execution or self._execution_metadata_from_agent(runner),
         )
+        # Stable turn_id so every event in this run can be grouped by the UI.
+        turn_id = run["run_id"]
+        run["turn_id"] = turn_id
+        self._start_turn(project, run, brief=brief, mode="initial")
         self._append_message(
             project,
             run,
@@ -543,8 +722,6 @@ class WorkbenchService:
             task_id=None,
             append_to_previous=False,
         )
-        # Stable turn_id so every event in this run can be grouped by the UI.
-        turn_id = run["run_id"]
         self.store.save_project(project)
 
         request = BuildRequest(
@@ -552,7 +729,9 @@ class WorkbenchService:
             brief=brief,
             target=target,
             environment=environment,
+            mode="initial",
             conversation_history=_compact_conversation(project.get("conversation", [])),
+            prior_turn_summary=_summarize_prior_turns(project.get("turns", [])),
             current_model_summary=_model_summary(project["model"]),
         )
         plan_root: PlanTask | None = None
@@ -561,19 +740,40 @@ class WorkbenchService:
             nonlocal plan_root
             operations_for_version: list[dict[str, Any]] = []
             try:
+                for startup_name, startup_data in self._run_start_events(project, run, brief=brief, mode="initial"):
+                    event_payload = self._prepare_stream_event(
+                        project,
+                        run,
+                        startup_name,
+                        startup_data,
+                    )
+                    self._record_run_event(project, run, startup_name, event_payload)
+                    self.store.save_project(project)
+                    yield {"event": startup_name, "data": event_payload}
+
                 async for event in runner.run(request, project):
                     event_name = str(event.get("event") or "")
                     data = copy.deepcopy(event.get("data") or {})
 
+                    if self._is_cancel_requested(project, run):
+                        async for cancelled in self._cancel_run_stream(
+                            project,
+                            run,
+                            reason=str(run.get("cancel_reason") or "Run cancelled."),
+                        ):
+                            yield cancelled
+                        return
+
                     if event_name == "plan.ready":
-                        run["phase"] = "plan"
+                        run["phase"] = PHASE_PLANNING
                         plan_root = PlanTask.from_dict(data["plan"])
                         project["plan"] = plan_root.to_dict()
                         project["artifacts"] = []
+                        self._update_turn(project, run, plan=project["plan"])
                         self.store.save_project(project)
 
                     elif event_name == "message.delta":
-                        run["phase"] = "plan" if plan_root is None else "build"
+                        run["phase"] = PHASE_PLANNING if plan_root is None else PHASE_EXECUTING
                         self._append_message(
                             project,
                             run,
@@ -585,17 +785,17 @@ class WorkbenchService:
                         self.store.save_project(project)
 
                     elif event_name == "task.started" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         if task is not None:
                             task.status = PlanTaskStatus.RUNNING.value
                             task.started_at = _now_iso()
                             recompute_parent_status(plan_root)
                             project["plan"] = plan_root.to_dict()
-                            self.store.save_project(project)
+                        self.store.save_project(project)
 
                     elif event_name == "task.progress" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         note = str(data.get("note") or "")
                         if task is not None and note:
@@ -604,21 +804,28 @@ class WorkbenchService:
                             self.store.save_project(project)
 
                     elif event_name == "artifact.updated" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         artifact_payload = data.get("artifact") or {}
+                        artifact_payload.setdefault("turn_id", turn_id)
+                        artifact_payload.setdefault("iteration_id", run.get("iteration_id"))
                         artifact = WorkbenchArtifact.from_dict(artifact_payload)
+                        artifact_dict = artifact.to_dict()
+                        artifact_dict["turn_id"] = turn_id
+                        artifact_dict["iteration_id"] = run.get("iteration_id")
                         artifacts = list(project.get("artifacts", []))
                         artifacts = [a for a in artifacts if a.get("id") != artifact.id]
-                        artifacts.append(artifact.to_dict())
+                        artifacts.append(artifact_dict)
                         project["artifacts"] = artifacts
+                        data["artifact"] = artifact_dict
                         task = find_task(plan_root, artifact.task_id)
                         if task is not None and artifact.id not in task.artifact_ids:
                             task.artifact_ids.append(artifact.id)
                             project["plan"] = plan_root.to_dict()
+                        self._update_turn(project, run, artifact_id=artifact.id, plan=project.get("plan"))
                         self.store.save_project(project)
 
                     elif event_name == "task.completed" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         if task is not None:
                             task.status = PlanTaskStatus.DONE.value
@@ -628,6 +835,7 @@ class WorkbenchService:
                         operations = list(data.get("operations") or [])
                         if operations:
                             operations_for_version.extend(operations)
+                            self._update_turn(project, run, operations=operations)
                             project["model"] = apply_operations(project["model"], operations)
                             project["compatibility"] = build_compatibility_diagnostics(
                                 project["model"],
@@ -637,7 +845,7 @@ class WorkbenchService:
                         self.store.save_project(project)
 
                     elif event_name == "build.completed":
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         if operations_for_version:
                             project["version"] = int(project.get("version") or 1) + 1
                             project["draft_badge"] = f"Draft v{project['version']}"
@@ -674,14 +882,21 @@ class WorkbenchService:
 
                     # Always enrich the event with the current IDs so the
                     # frontend can correlate even when a build creates a new one.
-                    data.setdefault("project_id", project["project_id"])
-                    data.setdefault("run_id", run["run_id"])
-                    data.setdefault("turn_id", turn_id)
-                    data.setdefault("phase", run.get("phase", "build"))
-                    data.setdefault("status", run.get("status", "running"))
+                    data = self._prepare_stream_event(project, run, event_name, data)
                     self._record_run_event(project, run, event_name, data)
                     self.store.save_project(project)
                     yield {"event": event_name, "data": data}
+                    breach = self._budget_breach(run)
+                    if breach is not None:
+                        async for failure in self._fail_run_stream(
+                            project,
+                            run,
+                            message=breach["message"],
+                            failure_reason="budget_exceeded",
+                            budget_breach=breach,
+                        ):
+                            yield failure
+                        return
 
                 async for terminal_event in self._complete_run_stream(
                     project=project,
@@ -707,6 +922,11 @@ class WorkbenchService:
         target: str = "portable",
         environment: str = "draft",
         agent: Any = None,
+        max_iterations: int = 3,
+        max_seconds: int | None = None,
+        max_tokens: int | None = None,
+        max_cost_usd: float | None = None,
+        execution: dict[str, Any] | None = None,
     ) -> Any:
         """Handle a follow-up iteration on an existing build.
 
@@ -742,7 +962,16 @@ class WorkbenchService:
             brief=follow_up,
             target=target,
             environment=environment,
+            budget=_normalize_budget(
+                max_iterations=max_iterations,
+                max_seconds=max_seconds,
+                max_tokens=max_tokens,
+                max_cost_usd=max_cost_usd,
+            ),
+            execution=execution or self._execution_metadata_from_agent(runner),
         )
+        run["turn_id"] = run["run_id"]
+        self._start_turn(project, run, brief=follow_up, mode="follow_up")
         self._append_message(
             project,
             run,
@@ -758,6 +987,10 @@ class WorkbenchService:
             brief=project.get("last_brief") or follow_up,
             target=target or str(project.get("target") or "portable"),
             environment=environment,
+            mode="follow_up",
+            conversation_history=_compact_conversation(project.get("conversation", [])),
+            prior_turn_summary=_summarize_prior_turns(project.get("turns", [])),
+            current_model_summary=_model_summary(project["model"]),
         )
 
         # Use agent.iterate() if available (harness-aware agents)
@@ -771,6 +1004,10 @@ class WorkbenchService:
                 brief=combined_brief,
                 target=request.target,
                 environment=request.environment,
+                mode="follow_up",
+                conversation_history=request.conversation_history,
+                prior_turn_summary=request.prior_turn_summary,
+                current_model_summary=request.current_model_summary,
             )
             source_iter = runner.run(request_with_followup, project)
 
@@ -781,30 +1018,39 @@ class WorkbenchService:
             nonlocal plan_root
             nonlocal operations_for_version
             try:
-                # Emit iteration.started event
-                iter_started = {
-                    "project_id": project["project_id"],
-                    "run_id": run["run_id"],
-                    "iteration_number": iteration_number,
-                    "message": follow_up,
-                    "artifact_count": len(project.get("artifacts", [])),
-                }
-                self._record_run_event(project, run, "iteration.started", iter_started)
-                self.store.save_project(project)
-                yield {"event": "iteration.started", "data": iter_started}
+                for startup_name, startup_data in self._run_start_events(project, run, brief=follow_up, mode="follow_up"):
+                    if startup_name == "iteration.started":
+                        startup_data["iteration_number"] = iteration_number
+                        startup_data["artifact_count"] = len(project.get("artifacts", []))
+                    event_payload = self._prepare_stream_event(project, run, startup_name, startup_data)
+                    self._record_run_event(project, run, startup_name, event_payload)
+                    self.store.save_project(project)
+                    yield {"event": startup_name, "data": event_payload}
 
                 async for event in source_iter:
                     event_name = str(event.get("event") or "")
                     data = copy.deepcopy(event.get("data") or {})
+                    if event_name == "iteration.started":
+                        # Durable iteration lifecycle is owned by WorkbenchService.
+                        continue
+                    if self._is_cancel_requested(project, run):
+                        async for cancelled in self._cancel_run_stream(
+                            project,
+                            run,
+                            reason=str(run.get("cancel_reason") or "Run cancelled."),
+                        ):
+                            yield cancelled
+                        return
 
                     if event_name == "plan.ready":
-                        run["phase"] = "plan"
+                        run["phase"] = PHASE_PLANNING
                         plan_root = PlanTask.from_dict(data["plan"])
                         project["plan"] = plan_root.to_dict()
+                        self._update_turn(project, run, plan=project["plan"])
                         self.store.save_project(project)
 
                     elif event_name == "message.delta":
-                        run["phase"] = "plan" if plan_root is None else "build"
+                        run["phase"] = PHASE_PLANNING if plan_root is None else PHASE_EXECUTING
                         self._append_message(
                             project,
                             run,
@@ -816,7 +1062,7 @@ class WorkbenchService:
                         self.store.save_project(project)
 
                     elif event_name == "task.started" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         if task is not None:
                             task.status = PlanTaskStatus.RUNNING.value
@@ -826,7 +1072,7 @@ class WorkbenchService:
                             self.store.save_project(project)
 
                     elif event_name == "task.progress" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         note = str(data.get("note") or "")
                         if task is not None and note:
@@ -835,28 +1081,31 @@ class WorkbenchService:
                             self.store.save_project(project)
 
                     elif event_name == "artifact.updated" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         artifact_payload = data.get("artifact") or {}
+                        artifact_payload.setdefault("turn_id", run["turn_id"])
+                        artifact_payload.setdefault("iteration_id", run.get("iteration_id"))
                         artifact = WorkbenchArtifact.from_dict(artifact_payload)
-                        # For iterations: upsert by category+name to replace prior versions
+                        artifact_dict = artifact.to_dict()
+                        artifact_dict["turn_id"] = run["turn_id"]
+                        artifact_dict["iteration_id"] = run.get("iteration_id")
+                        # Preserve prior-turn artifacts for auditability. Follow-up
+                        # iterations only replace an artifact when the generator
+                        # intentionally reuses the same artifact id.
                         artifacts = list(project.get("artifacts", []))
-                        artifacts = [
-                            a for a in artifacts
-                            if not (
-                                a.get("category") == artifact.category
-                                and a.get("name") == artifact.name
-                            )
-                        ]
-                        artifacts.append(artifact.to_dict())
+                        artifacts = [a for a in artifacts if a.get("id") != artifact.id]
+                        artifacts.append(artifact_dict)
                         project["artifacts"] = artifacts
+                        data["artifact"] = artifact_dict
                         task = find_task(plan_root, artifact.task_id)
                         if task is not None and artifact.id not in task.artifact_ids:
                             task.artifact_ids.append(artifact.id)
                             project["plan"] = plan_root.to_dict()
+                        self._update_turn(project, run, artifact_id=artifact.id, plan=project.get("plan"))
                         self.store.save_project(project)
 
                     elif event_name == "task.completed" and plan_root is not None:
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         task = find_task(plan_root, str(data.get("task_id") or ""))
                         if task is not None:
                             task.status = PlanTaskStatus.DONE.value
@@ -866,6 +1115,7 @@ class WorkbenchService:
                         operations = list(data.get("operations") or [])
                         if operations:
                             operations_for_version.extend(operations)
+                            self._update_turn(project, run, operations=operations)
                             project["model"] = apply_operations(project["model"], operations)
                             project["compatibility"] = build_compatibility_diagnostics(
                                 project["model"],
@@ -875,7 +1125,7 @@ class WorkbenchService:
                         self.store.save_project(project)
 
                     elif event_name == "build.completed":
-                        run["phase"] = "build"
+                        run["phase"] = PHASE_EXECUTING
                         if operations_for_version:
                             project["version"] = int(project.get("version") or 1) + 1
                             project["draft_badge"] = f"Draft v{project['version']}"
@@ -909,13 +1159,21 @@ class WorkbenchService:
                             yield failure
                         return
 
-                    data.setdefault("project_id", project["project_id"])
-                    data.setdefault("run_id", run["run_id"])
-                    data.setdefault("phase", run.get("phase", "build"))
-                    data.setdefault("status", run.get("status", "running"))
+                    data = self._prepare_stream_event(project, run, event_name, data)
                     self._record_run_event(project, run, event_name, data)
                     self.store.save_project(project)
                     yield {"event": event_name, "data": data}
+                    breach = self._budget_breach(run)
+                    if breach is not None:
+                        async for failure in self._fail_run_stream(
+                            project,
+                            run,
+                            message=breach["message"],
+                            failure_reason="budget_exceeded",
+                            budget_breach=breach,
+                        ):
+                            yield failure
+                        return
 
                 async for terminal_event in self._complete_run_stream(
                     project=project,
@@ -936,6 +1194,8 @@ class WorkbenchService:
     def get_plan_snapshot(self, *, project_id: str) -> dict[str, Any]:
         """Return the current plan + artifacts snapshot for page hydration."""
         project = self._require_project(project_id)
+        if self._recover_stale_runs(project):
+            self.store.save_project(project)
         return {
             "project_id": project["project_id"],
             "name": project.get("name"),
@@ -1052,23 +1312,46 @@ class WorkbenchService:
         brief: str,
         target: str,
         environment: str,
+        budget: dict[str, Any] | None = None,
+        execution: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Create the durable run envelope for one builder-agent request."""
         run_id = f"run-{new_id()}"
+        execution_payload = copy.deepcopy(execution or _default_execution_metadata())
         run = {
             "run_id": run_id,
             "project_id": project["project_id"],
             "brief": brief,
             "target": target,
             "environment": environment,
-            "status": "running",
-            "phase": "plan",
+            "status": RUN_STATUS_RUNNING,
+            "phase": PHASE_PLANNING,
+            "execution": execution_payload,
+            "execution_mode": execution_payload.get("mode", "mock"),
+            "provider": execution_payload.get("provider", "mock"),
+            "model": execution_payload.get("model", "mock-workbench"),
+            "mode_reason": execution_payload.get("mock_reason", ""),
+            "budget": copy.deepcopy(budget or _normalize_budget(max_iterations=3)),
+            "telemetry_summary": {
+                "run_id": run_id,
+                "provider": execution_payload.get("provider", "mock"),
+                "model": execution_payload.get("model", "mock-workbench"),
+                "execution_mode": execution_payload.get("mode", "mock"),
+                "duration_ms": 0,
+                "tokens_used": 0,
+                "cost_usd": 0.0,
+                "event_count": 0,
+            },
             "started_version": int(project.get("version") or 1),
             "completed_version": None,
             "created_at": _now_iso(),
             "updated_at": _now_iso(),
             "completed_at": None,
             "error": None,
+            "failure_reason": None,
+            "cancel_reason": None,
+            "cancel_requested_at": None,
+            "cancellation_requested": False,
             "events": [],
             "messages": [],
             "validation": None,
@@ -1090,6 +1373,509 @@ class WorkbenchService:
             return copy.deepcopy(newest)
         return None
 
+    def _recover_stale_runs(self, project: dict[str, Any]) -> bool:
+        """Mark stale in-flight runs as interrupted during snapshot hydration."""
+        runs = project.get("runs")
+        if not isinstance(runs, dict):
+            return False
+        try:
+            stale_seconds = int(os.environ.get("AGENTLAB_WORKBENCH_STALE_RUN_SECONDS", DEFAULT_STALE_RUN_SECONDS))
+        except ValueError:
+            stale_seconds = DEFAULT_STALE_RUN_SECONDS
+        if stale_seconds <= 0:
+            return False
+
+        now = datetime.now(tz=timezone.utc)
+        changed = False
+        for run in runs.values():
+            if not isinstance(run, dict):
+                continue
+            if str(run.get("status") or "") not in ACTIVE_RUN_STATUSES:
+                continue
+            updated_at = _parse_iso(run.get("updated_at") or run.get("created_at"))
+            if updated_at is None:
+                continue
+            age_seconds = (now - updated_at).total_seconds()
+            if age_seconds < stale_seconds:
+                continue
+            run["status"] = RUN_STATUS_FAILED
+            run["phase"] = PHASE_TERMINAL
+            run["failure_reason"] = "stale_interrupted"
+            run["error"] = f"Run interrupted after process recovery; last update was {round(age_seconds)} seconds ago."
+            run["completed_at"] = _now_iso()
+            run["recovered_at"] = run["completed_at"]
+            if project.get("active_run_id") == run.get("run_id"):
+                project["build_status"] = RUN_STATUS_FAILED
+            turn = self._current_turn(project, run)
+            iteration = self._current_iteration(project, run)
+            if iteration is not None:
+                self._complete_iteration_record(
+                    iteration,
+                    status=RUN_STATUS_FAILED,
+                    operations=list(iteration.get("operations") or []),
+                    plan=project.get("plan"),
+                )
+            self._complete_turn_record(turn, status=RUN_STATUS_FAILED)
+            payload = {
+                "project_id": project["project_id"],
+                "run_id": run.get("run_id"),
+                "phase": PHASE_TERMINAL,
+                "status": RUN_STATUS_FAILED,
+                "failure_reason": "stale_interrupted",
+                "message": run["error"],
+            }
+            self._enrich_stream_payload(run, payload)
+            self._record_run_event(project, run, "run.recovered", payload)
+            changed = True
+        return changed
+
+    def _refresh_run_from_store(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]]:
+        """Reload the project/run so stream loops observe external cancellation."""
+        latest = self.store.get_project(str(project["project_id"]))
+        if not isinstance(latest, dict):
+            return project, run
+        latest_run = (latest.get("runs") or {}).get(run.get("run_id"))
+        if not isinstance(latest_run, dict):
+            return latest, run
+        return latest, latest_run
+
+    def _is_cancelled_or_requested(self, run: dict[str, Any]) -> bool:
+        """Return whether a run should stop cooperatively at the next boundary."""
+        return (
+            str(run.get("status") or "") == RUN_STATUS_CANCELLED
+            or bool(run.get("cancellation_requested"))
+            or bool(run.get("cancel_requested_at"))
+        )
+
+    def _enrich_stream_payload(
+        self,
+        run: dict[str, Any],
+        data: dict[str, Any],
+        *,
+        turn_id: str | None = None,
+        iteration_id: str | None = None,
+    ) -> None:
+        """Attach IDs, lifecycle, execution mode, and budget to one SSE payload."""
+        execution = run.get("execution") if isinstance(run.get("execution"), dict) else {}
+        data.setdefault("run_id", run["run_id"])
+        data.setdefault("turn_id", turn_id or run.get("turn_id") or run["run_id"])
+        if iteration_id or run.get("iteration_id"):
+            data.setdefault("iteration_id", iteration_id or run.get("iteration_id"))
+        data.setdefault("phase", run.get("phase", PHASE_EXECUTING))
+        data.setdefault("status", run.get("status", RUN_STATUS_RUNNING))
+        data.setdefault("execution_mode", execution.get("mode") or run.get("execution_mode") or "mock")
+        data.setdefault("provider", execution.get("provider") or run.get("provider") or "mock")
+        data.setdefault("model", execution.get("model") or run.get("model") or "mock-workbench")
+        data.setdefault("mode_reason", execution.get("mock_reason") or run.get("mode_reason") or "")
+        data.setdefault("budget", copy.deepcopy(run.get("budget") or {}))
+
+    def _update_budget_from_event(
+        self,
+        run: dict[str, Any],
+        *,
+        event_name: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """Update budget usage from a streamed event and return a breach, if any."""
+        budget = run.setdefault("budget", _normalize_budget(max_iterations=3))
+        usage = _budget_usage(budget)
+        usage["elapsed_ms"] = _elapsed_ms_since(run.get("created_at"))
+
+        if event_name == "iteration.started":
+            index = data.get("index")
+            if isinstance(index, int):
+                usage["iterations"] = max(int(usage.get("iterations") or 0), index + 1)
+            else:
+                usage["iterations"] = max(int(usage.get("iterations") or 0), 1)
+
+        if event_name == "harness.metrics":
+            token_usage = max(
+                int(usage.get("tokens_used") or 0),
+                int(data.get("tokens_used") or 0),
+            )
+            usage["tokens_used"] = token_usage
+            usage["tokens"] = token_usage
+            usage["cost_usd"] = max(
+                float(usage.get("cost_usd") or 0.0),
+                float(data.get("cost_usd") or 0.0),
+            )
+            usage["elapsed_ms"] = max(
+                int(usage.get("elapsed_ms") or 0),
+                int(data.get("elapsed_ms") or 0),
+            )
+        else:
+            tokens = _estimate_tokens_for_event(event_name, data)
+            if tokens:
+                token_usage = int(usage.get("tokens_used") or 0) + tokens
+                usage["tokens_used"] = token_usage
+                usage["tokens"] = token_usage
+                usage["cost_usd"] = round(
+                    float(usage.get("cost_usd") or 0.0) + tokens * TOKEN_COST_ESTIMATE_USD,
+                    6,
+                )
+
+        limits = budget.setdefault("limits", {})
+        checks = (
+            ("iterations", limits.get("max_iterations"), usage.get("iterations")),
+            ("seconds", limits.get("max_seconds"), float(usage.get("elapsed_ms") or 0) / 1000.0),
+            ("tokens", limits.get("max_tokens"), usage.get("tokens_used")),
+            ("cost", limits.get("max_cost_usd"), usage.get("cost_usd")),
+        )
+        for kind, limit, actual in checks:
+            if limit is None:
+                continue
+            if float(actual or 0) > float(limit):
+                breach = {"kind": kind, "limit": limit, "actual": actual}
+                budget["breach"] = breach
+                return breach
+        budget["breach"] = None
+        return None
+
+    def _execution_metadata_from_agent(self, agent: Any) -> dict[str, Any]:
+        """Extract operator-visible execution metadata from a builder agent."""
+        metadata = getattr(agent, "execution_metadata", None)
+        if isinstance(metadata, dict):
+            return copy.deepcopy(metadata)
+        return {
+            "mode": str(getattr(agent, "execution_mode", "mock")),
+            "provider": str(getattr(agent, "provider", "mock")),
+            "model": str(getattr(agent, "model", "mock-workbench")),
+            "mock_reason": str(getattr(agent, "mode_reason", "")),
+            "requested_mock": bool(getattr(agent, "requested_mock", False)),
+            "live_ready": str(getattr(agent, "execution_mode", "mock")) == "live",
+        }
+
+    def _current_turn(self, project: dict[str, Any], run: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the durable turn record for a run, if present."""
+        turn_id = run.get("turn_id") or run.get("run_id")
+        for turn in project.get("turns") or []:
+            if isinstance(turn, dict) and turn.get("turn_id") == turn_id:
+                return turn
+        return None
+
+    def _current_iteration(self, project: dict[str, Any], run: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the active iteration record for a run, if present."""
+        turn = self._current_turn(project, run)
+        if not isinstance(turn, dict):
+            return None
+        iteration_id = run.get("iteration_id")
+        iterations = turn.get("iterations") or []
+        for iteration in iterations:
+            if isinstance(iteration, dict) and iteration.get("iteration_id") == iteration_id:
+                return iteration
+        return iterations[-1] if iterations and isinstance(iterations[-1], dict) else None
+
+    def _update_turn(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        plan: dict[str, Any] | None = None,
+        artifact_id: str | None = None,
+        operations: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Keep the durable turn and iteration records in sync with stream state."""
+        turn = self._current_turn(project, run)
+        if turn is None:
+            return
+        iteration = self._current_iteration(project, run)
+        if plan is not None:
+            turn["plan"] = copy.deepcopy(plan)
+            if iteration is not None:
+                iteration["plan"] = copy.deepcopy(plan)
+        if artifact_id:
+            artifact_ids = turn.setdefault("artifact_ids", [])
+            if artifact_id not in artifact_ids:
+                artifact_ids.append(artifact_id)
+        if operations:
+            turn.setdefault("operations", []).extend(copy.deepcopy(operations))
+            if iteration is not None:
+                iteration.setdefault("operations", []).extend(copy.deepcopy(operations))
+
+    def _run_start_events(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        brief: str,
+        mode: str,
+    ) -> list[tuple[str, dict[str, Any]]]:
+        """Return startup lifecycle events for a Workbench turn."""
+        turn = self._current_turn(project, run)
+        if turn is None:
+            turn = self._start_turn(project, run, brief=brief, mode=mode)
+        iteration = self._start_iteration_record(turn, brief=brief, mode=mode)
+        run["iteration_id"] = iteration["iteration_id"]
+        return [
+            (
+                "turn.started",
+                {
+                    "project_id": project["project_id"],
+                    "run_id": run["run_id"],
+                    "turn_id": run["turn_id"],
+                    "mode": mode,
+                    "brief": brief,
+                },
+            ),
+            (
+                "iteration.started",
+                {
+                    "project_id": project["project_id"],
+                    "run_id": run["run_id"],
+                    "turn_id": run["turn_id"],
+                    "iteration_id": iteration["iteration_id"],
+                    "index": iteration["index"],
+                    "iteration_number": iteration["index"] + 1,
+                    "mode": mode,
+                    "message": brief,
+                    "artifact_count": len(project.get("artifacts", [])),
+                },
+            ),
+        ]
+
+    def _prepare_stream_event(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        event_name: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Enrich and budget-check one outgoing stream event payload."""
+        payload = copy.deepcopy(data)
+        payload.setdefault("project_id", project["project_id"])
+        self._enrich_stream_payload(
+            run,
+            payload,
+            turn_id=str(run.get("turn_id") or run["run_id"]),
+            iteration_id=run.get("iteration_id"),
+        )
+        self._update_budget_from_event(run, event_name=event_name, data=payload)
+        payload["budget"] = copy.deepcopy(run.get("budget") or {})
+        payload["telemetry_summary"] = copy.deepcopy(run.get("telemetry_summary") or {})
+        return payload
+
+    def _budget_breach(self, run: dict[str, Any]) -> dict[str, Any] | None:
+        """Return a caller-friendly budget breach payload, if one exists."""
+        budget = run.get("budget") if isinstance(run.get("budget"), dict) else {}
+        breach = budget.get("breach")
+        if not isinstance(breach, dict):
+            return None
+        kind = str(breach.get("kind") or "budget")
+        exceeded = (
+            "max_tokens"
+            if kind == "tokens"
+            else "max_cost_usd"
+            if kind == "cost"
+            else f"max_{kind}"
+        )
+        budget["exceeded"] = exceeded
+        budget["message"] = f"Workbench run stopped because the {kind} budget was exceeded."
+        return {
+            **breach,
+            "exceeded": exceeded,
+            "message": budget["message"],
+        }
+
+    def _is_cancel_requested(self, project: dict[str, Any], run: dict[str, Any]) -> bool:
+        """Refresh persisted state and detect cooperative cancellation."""
+        latest_project, latest_run = self._refresh_run_from_store(project, run)
+        latest_status = str(latest_run.get("status") or "")
+        if latest_status == RUN_STATUS_CANCELLED or self._is_cancelled_or_requested(latest_run):
+            run.update(copy.deepcopy(latest_run))
+            project.setdefault("runs", {})[run["run_id"]] = run
+            project["build_status"] = RUN_STATUS_CANCELLED
+            return True
+        return self._is_cancelled_or_requested(run)
+
+    def _start_turn(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        brief: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Create the durable multi-turn record for one user turn."""
+        turn = {
+            "turn_id": run["run_id"],
+            "brief": brief,
+            "mode": mode,
+            "status": RUN_STATUS_RUNNING,
+            "created_at": _now_iso(),
+            "completed_at": None,
+            "plan": None,
+            "artifact_ids": [],
+            "operations": [],
+            "iterations": [],
+            "validation": None,
+        }
+        project.setdefault("turns", []).append(turn)
+        run["turn_id"] = turn["turn_id"]
+        project.setdefault("conversation", []).append(
+            {
+                "id": f"msg-{new_id()}",
+                "role": "user",
+                "content": brief,
+                "turn_id": turn["turn_id"],
+                "task_id": None,
+                "created_at": _now_iso(),
+                "kind": "brief",
+            }
+        )
+        return turn
+
+    def _start_iteration_record(
+        self,
+        turn: dict[str, Any],
+        *,
+        brief: str,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Create a durable iteration record under the active turn."""
+        iterations = turn.setdefault("iterations", [])
+        iteration = {
+            "iteration_id": f"iter-{new_id()}",
+            "index": len(iterations),
+            "mode": mode,
+            "brief": brief,
+            "status": RUN_STATUS_RUNNING,
+            "operations": [],
+            "plan": None,
+            "created_at": _now_iso(),
+            "completed_at": None,
+        }
+        iterations.append(iteration)
+        return iteration
+
+    def _complete_iteration_record(
+        self,
+        iteration: dict[str, Any],
+        *,
+        status: str,
+        operations: list[dict[str, Any]],
+        plan: dict[str, Any] | None,
+    ) -> None:
+        """Persist terminal state for one iteration record."""
+        iteration["status"] = status
+        iteration["completed_at"] = _now_iso()
+        iteration["operations"] = copy.deepcopy(operations)
+        if plan is not None:
+            iteration["plan"] = copy.deepcopy(plan)
+
+    def _complete_turn_record(
+        self,
+        turn: dict[str, Any] | None,
+        *,
+        status: str,
+        validation: dict[str, Any] | None = None,
+    ) -> None:
+        """Persist terminal state for a turn, if one exists."""
+        if turn is None:
+            return
+        turn["status"] = status
+        turn["completed_at"] = _now_iso()
+        if validation is not None:
+            turn["validation"] = {
+                "run_id": validation.get("run_id"),
+                "status": validation.get("status"),
+                "checks": validation.get("checks", []),
+            }
+
+    async def _turn_completed_stream(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        status: str | None = None,
+        validation: dict[str, Any] | None = None,
+    ) -> Any:
+        """Persist and emit a turn.completed event for UI hydration."""
+        final_status = status or str(run.get("status") or RUN_STATUS_COMPLETED)
+        turn = self._current_turn(project, run)
+        iteration = self._current_iteration(project, run)
+        if iteration is not None:
+            self._complete_iteration_record(
+                iteration,
+                status=final_status,
+                operations=list(iteration.get("operations") or []),
+                plan=iteration.get("plan") or (turn or {}).get("plan"),
+            )
+        self._complete_turn_record(turn, status=final_status, validation=validation)
+        payload = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "phase": PHASE_TERMINAL,
+            "status": final_status,
+            "version": int(project.get("version") or 1),
+            "validation": validation,
+            "iterations": len((turn or {}).get("iterations") or []),
+        }
+        self._enrich_stream_payload(run, payload)
+        self._record_run_event(project, run, "turn.completed", payload)
+        self.store.save_project(project)
+        yield {"event": "turn.completed", "data": payload}
+
+    def cancel_run(
+        self,
+        *,
+        project_id: str | None = None,
+        run_id: str,
+        reason: str = "",
+    ) -> dict[str, Any]:
+        """Request and persist cancellation for an active Workbench run.
+
+        WHY: operators often only have the run id from logs or telemetry.  The
+        service accepts an optional project id for fast-path API calls, but can
+        also locate the run across persisted projects.
+        """
+        projects = [self._require_project(project_id)] if project_id else self.store.list_projects()
+        for project in projects:
+            run = (project.get("runs") or {}).get(run_id)
+            if not isinstance(run, dict):
+                continue
+            if str(run.get("status") or "") in TERMINAL_RUN_STATUSES:
+                return build_run_completion_payload(project, run)
+            now = _now_iso()
+            run["cancellation_requested"] = True
+            run["cancel_requested_at"] = now
+            run["cancel_reason"] = reason or "Cancelled by operator."
+            requested = {
+                "project_id": project["project_id"],
+                "run_id": run_id,
+                "phase": run.get("phase", PHASE_EXECUTING),
+                "status": RUN_STATUS_CANCELLED,
+                "cancel_reason": run["cancel_reason"],
+            }
+            self._enrich_stream_payload(run, requested)
+            self._record_run_event(project, run, "run.cancel_requested", requested)
+            run["status"] = RUN_STATUS_CANCELLED
+            run["phase"] = PHASE_TERMINAL
+            run["completed_at"] = now
+            project["build_status"] = RUN_STATUS_CANCELLED
+            turn = self._current_turn(project, run)
+            iteration = self._current_iteration(project, run)
+            if iteration is not None:
+                self._complete_iteration_record(
+                    iteration,
+                    status=RUN_STATUS_CANCELLED,
+                    operations=list(iteration.get("operations") or []),
+                    plan=project.get("plan"),
+                )
+            self._complete_turn_record(turn, status=RUN_STATUS_CANCELLED)
+            cancelled = build_run_completion_payload(project, run)
+            cancelled["turn_id"] = run.get("turn_id") or run["run_id"]
+            cancelled["iteration_id"] = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+            self._enrich_stream_payload(run, cancelled, turn_id=cancelled["turn_id"], iteration_id=cancelled.get("iteration_id"))
+            self._record_run_event(project, run, "run.cancelled", cancelled)
+            self.store.save_project(project)
+            return build_run_completion_payload(project, run)
+        raise KeyError(run_id)
+
     def _record_run_event(
         self,
         project: dict[str, Any],
@@ -1099,6 +1885,8 @@ class WorkbenchService:
     ) -> dict[str, Any]:
         """Append one replayable event to the active run."""
         events = run.setdefault("events", [])
+        telemetry = self._build_telemetry(run, event_name=event_name, data=data)
+        data.setdefault("telemetry", telemetry)
         event = {
             "sequence": len(events) + 1,
             "event": event_name,
@@ -1106,11 +1894,69 @@ class WorkbenchService:
             "status": data.get("status") or run.get("status"),
             "created_at": _now_iso(),
             "data": copy.deepcopy(data),
+            "telemetry": telemetry,
         }
         events.append(event)
         run["updated_at"] = event["created_at"]
+        self._update_telemetry_summary(run, telemetry, event_count=len(events))
         project.setdefault("runs", {})[run["run_id"]] = run
         return event
+
+    def _build_telemetry(
+        self,
+        run: dict[str, Any],
+        *,
+        event_name: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build the normalized telemetry envelope for one run event."""
+        budget = run.get("budget") if isinstance(run.get("budget"), dict) else {}
+        usage = budget.get("usage") if isinstance(budget.get("usage"), dict) else {}
+        execution = run.get("execution") if isinstance(run.get("execution"), dict) else {}
+        return {
+            "event": event_name,
+            "run_id": run.get("run_id"),
+            "turn_id": data.get("turn_id") or run.get("turn_id") or run.get("run_id"),
+            "iteration_id": data.get("iteration_id") or run.get("iteration_id"),
+            "phase": data.get("phase") or run.get("phase"),
+            "status": data.get("status") or run.get("status"),
+            "provider": data.get("provider") or execution.get("provider") or run.get("provider"),
+            "model": data.get("model") or execution.get("model") or run.get("model"),
+            "execution_mode": data.get("execution_mode") or execution.get("mode") or run.get("execution_mode"),
+            "tokens_used": int(usage.get("tokens_used") or 0),
+            "cost_usd": float(usage.get("cost_usd") or 0.0),
+            "duration_ms": _elapsed_ms_since(run.get("created_at")),
+            "failure_reason": data.get("failure_reason") or run.get("failure_reason"),
+            "cancel_reason": data.get("cancel_reason") or run.get("cancel_reason"),
+            "budget_breach": budget.get("breach"),
+        }
+
+    def _update_telemetry_summary(
+        self,
+        run: dict[str, Any],
+        telemetry: dict[str, Any],
+        *,
+        event_count: int,
+    ) -> None:
+        """Maintain a compact, operator-visible telemetry summary on the run."""
+        summary = run.setdefault("telemetry_summary", {})
+        summary.update(
+            {
+                "run_id": telemetry.get("run_id"),
+                "provider": telemetry.get("provider"),
+                "model": telemetry.get("model"),
+                "execution_mode": telemetry.get("execution_mode"),
+                "phase": telemetry.get("phase"),
+                "status": telemetry.get("status"),
+                "duration_ms": telemetry.get("duration_ms"),
+                "tokens_used": telemetry.get("tokens_used"),
+                "cost_usd": telemetry.get("cost_usd"),
+                "failure_reason": telemetry.get("failure_reason"),
+                "cancel_reason": telemetry.get("cancel_reason"),
+                "budget_breach": telemetry.get("budget_breach"),
+                "event_count": event_count,
+            }
+        )
 
     def _append_message(
         self,
@@ -1125,6 +1971,13 @@ class WorkbenchService:
         """Persist user and assistant narration so refreshes keep context."""
         if not text:
             return
+        if role == "assistant":
+            _append_assistant_chunk(
+                project,
+                turn_id=str(run.get("turn_id") or run["run_id"]),
+                task_id=task_id or "",
+                chunk=text,
+            )
         for collection in (project.setdefault("messages", []), run.setdefault("messages", [])):
             last = collection[-1] if collection else None
             if (
@@ -1141,12 +1994,36 @@ class WorkbenchService:
                 {
                     "id": f"message-{new_id()}",
                     "run_id": run["run_id"],
+                    "turn_id": run.get("turn_id"),
                     "role": role,
                     "task_id": task_id,
                     "text": text.strip(),
                     "created_at": _now_iso(),
                 }
             )
+        conversation = project.setdefault("conversation", [])
+        last = conversation[-1] if conversation else None
+        if (
+            append_to_previous
+            and isinstance(last, dict)
+            and last.get("role") == role
+            and last.get("task_id") == task_id
+            and last.get("turn_id") == run.get("turn_id")
+        ):
+            last["content"] = f"{last.get('content', '')}{text}".strip()
+            last["updated_at"] = _now_iso()
+            return
+        conversation.append(
+            {
+                "id": f"conversation-{new_id()}",
+                "run_id": run["run_id"],
+                "turn_id": run.get("turn_id"),
+                "role": role,
+                "task_id": task_id,
+                "content": text.strip(),
+                "created_at": _now_iso(),
+            }
+        )
 
     async def _complete_run_stream(
         self,
@@ -1154,17 +2031,25 @@ class WorkbenchService:
         project: dict[str, Any],
         run: dict[str, Any],
         operations: list[dict[str, Any]],
+        turn: dict[str, Any] | None = None,
+        iteration: dict[str, Any] | None = None,
     ) -> Any:
         """Run reflection, produce presentation data, and emit terminal events."""
-        run["phase"] = "reflect"
-        project["build_status"] = "reflecting"
+        turn = turn or self._current_turn(project, run)
+        iteration = iteration or self._current_iteration(project, run)
+        run["phase"] = PHASE_REFLECTING
+        run["status"] = RUN_STATUS_REFLECTING
+        project["build_status"] = RUN_STATUS_REFLECTING
         reflect_started = {
             "project_id": project["project_id"],
             "run_id": run["run_id"],
-            "phase": "reflect",
-            "status": "running",
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id"),
+            "phase": PHASE_REFLECTING,
+            "status": RUN_STATUS_REFLECTING,
             "checks": ["canonical_model_present", "exports_compile", "target_compatibility"],
         }
+        self._enrich_stream_payload(run, reflect_started, turn_id=reflect_started["turn_id"], iteration_id=reflect_started.get("iteration_id"))
         self._record_run_event(project, run, "reflect.started", reflect_started)
         self.store.save_project(project)
         yield {"event": "reflect.started", "data": reflect_started}
@@ -1186,34 +2071,87 @@ class WorkbenchService:
         reflect_completed = {
             "project_id": project["project_id"],
             "run_id": run["run_id"],
-            "phase": "reflect",
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id"),
+            "phase": PHASE_REFLECTING,
             "status": validation["status"],
             "validation": validation,
         }
+        self._enrich_stream_payload(run, reflect_completed, turn_id=reflect_completed["turn_id"], iteration_id=reflect_completed.get("iteration_id"))
         self._record_run_event(project, run, "reflect.completed", reflect_completed)
         self.store.save_project(project)
         yield {"event": "reflect.completed", "data": reflect_completed}
 
-        run["phase"] = "present"
+        validation_ready = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id"),
+            "phase": PHASE_REFLECTING,
+            "status": validation["status"],
+            "checks": validation.get("checks", []),
+            "validation": validation,
+        }
+        self._enrich_stream_payload(run, validation_ready, turn_id=validation_ready["turn_id"], iteration_id=validation_ready.get("iteration_id"))
+        self._record_run_event(project, run, "validation.ready", validation_ready)
+        self.store.save_project(project)
+        yield {"event": "validation.ready", "data": validation_ready}
+
+        run["phase"] = PHASE_PRESENTING
+        run["status"] = RUN_STATUS_PRESENTING
+        project["build_status"] = RUN_STATUS_PRESENTING
         presentation = build_presentation_manifest(project, run=run, operations=operations)
         run["presentation"] = presentation
         present_ready = {
             "project_id": project["project_id"],
             "run_id": run["run_id"],
-            "phase": "present",
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id"),
+            "phase": PHASE_PRESENTING,
             "status": "ready",
             "presentation": presentation,
         }
+        self._enrich_stream_payload(run, present_ready, turn_id=present_ready["turn_id"], iteration_id=present_ready.get("iteration_id"))
         self._record_run_event(project, run, "present.ready", present_ready)
         self.store.save_project(project)
         yield {"event": "present.ready", "data": present_ready}
 
-        final_status = "completed" if validation["status"] == "passed" else "failed"
+        final_status = RUN_STATUS_COMPLETED if validation["status"] == "passed" else RUN_STATUS_FAILED
         run["status"] = final_status
+        run["phase"] = PHASE_PRESENTING
         run["completed_version"] = int(project.get("version") or 1)
         run["completed_at"] = _now_iso()
         project["build_status"] = final_status
+        if iteration is not None:
+            self._complete_iteration_record(
+                iteration,
+                status=final_status,
+                operations=operations,
+                plan=project.get("plan"),
+            )
+        self._complete_turn_record(turn, status=final_status, validation=validation)
+        turn_iteration_id = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+        turn_payload = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": turn_iteration_id,
+            "phase": PHASE_TERMINAL,
+            "status": final_status,
+            "version": int(project.get("version") or 1),
+            "iterations": len(turn.get("iterations", [])) if isinstance(turn, dict) else 1,
+            "validation": validation,
+            "run": copy.deepcopy(run),
+        }
+        self._enrich_stream_payload(run, turn_payload, turn_id=turn_payload["turn_id"], iteration_id=turn_iteration_id)
+        self._record_run_event(project, run, "turn.completed", turn_payload)
+        self.store.save_project(project)
+        yield {"event": "turn.completed", "data": turn_payload}
+
         payload = build_run_completion_payload(project, run)
+        payload["turn_id"] = run.get("turn_id") or run["run_id"]
+        payload["iteration_id"] = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+        self._enrich_stream_payload(run, payload, turn_id=payload.get("turn_id"), iteration_id=payload.get("iteration_id"))
         self._record_run_event(project, run, "run.completed", payload)
         self.store.save_project(project)
         yield {"event": "run.completed", "data": payload}
@@ -1224,28 +2162,126 @@ class WorkbenchService:
         run: dict[str, Any],
         *,
         message: str,
+        failure_reason: str = "error",
+        budget_breach: dict[str, Any] | None = None,
+        turn: dict[str, Any] | None = None,
+        iteration: dict[str, Any] | None = None,
     ) -> Any:
         """Persist and emit a failed terminal run state."""
-        run["status"] = "failed"
-        run["phase"] = "failed"
+        turn = turn or self._current_turn(project, run)
+        iteration = iteration or self._current_iteration(project, run)
+        run["status"] = RUN_STATUS_FAILED
+        run["phase"] = PHASE_TERMINAL
         run["error"] = message
+        run["failure_reason"] = failure_reason
+        if budget_breach is not None:
+            run.setdefault("budget", _normalize_budget())["breach"] = copy.deepcopy(budget_breach)
         run["completed_at"] = _now_iso()
-        project["build_status"] = "failed"
+        project["build_status"] = RUN_STATUS_FAILED
+        if iteration is not None:
+            self._complete_iteration_record(
+                iteration,
+                status=RUN_STATUS_FAILED,
+                operations=list(iteration.get("operations") or []),
+                plan=project.get("plan"),
+            )
+        self._complete_turn_record(turn, status=RUN_STATUS_FAILED)
         error_payload = {
             "project_id": project["project_id"],
             "run_id": run["run_id"],
-            "phase": "failed",
-            "status": "failed",
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id"),
+            "phase": PHASE_TERMINAL,
+            "status": RUN_STATUS_FAILED,
             "message": message,
+            "failure_reason": failure_reason,
         }
+        self._enrich_stream_payload(run, error_payload, turn_id=error_payload["turn_id"], iteration_id=error_payload.get("iteration_id"))
         self._record_run_event(project, run, "error", error_payload)
         self.store.save_project(project)
         yield {"event": "error", "data": error_payload}
 
+        if turn is not None:
+            turn_iteration_id = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+            turn_payload = {
+                "project_id": project["project_id"],
+                "run_id": run["run_id"],
+                "turn_id": run.get("turn_id") or run["run_id"],
+                "iteration_id": turn_iteration_id,
+                "phase": PHASE_TERMINAL,
+                "status": RUN_STATUS_FAILED,
+                "failure_reason": failure_reason,
+                "message": message,
+                "run": copy.deepcopy(run),
+            }
+            self._enrich_stream_payload(run, turn_payload, turn_id=turn_payload["turn_id"], iteration_id=turn_iteration_id)
+            self._record_run_event(project, run, "turn.completed", turn_payload)
+            self.store.save_project(project)
+            yield {"event": "turn.completed", "data": turn_payload}
+
         failed_payload = build_run_completion_payload(project, run)
+        failed_payload["message"] = message
+        failed_payload["failure_reason"] = failure_reason
+        failed_payload["turn_id"] = run.get("turn_id") or run["run_id"]
+        failed_payload["iteration_id"] = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+        self._enrich_stream_payload(run, failed_payload, turn_id=failed_payload["turn_id"], iteration_id=failed_payload.get("iteration_id"))
         self._record_run_event(project, run, "run.failed", failed_payload)
         self.store.save_project(project)
         yield {"event": "run.failed", "data": failed_payload}
+
+    async def _cancel_run_stream(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        reason: str | None = None,
+        turn: dict[str, Any] | None = None,
+        iteration: dict[str, Any] | None = None,
+    ) -> Any:
+        """Emit terminal cancellation state for a cooperatively stopped stream."""
+        turn = turn or self._current_turn(project, run)
+        iteration = iteration or self._current_iteration(project, run)
+        now = _now_iso()
+        run["status"] = RUN_STATUS_CANCELLED
+        run["phase"] = PHASE_TERMINAL
+        run["cancel_reason"] = reason or run.get("cancel_reason") or "Cancelled by operator."
+        run["completed_at"] = run.get("completed_at") or now
+        run["cancellation_requested"] = True
+        run["cancel_requested_at"] = run.get("cancel_requested_at") or now
+        project["build_status"] = RUN_STATUS_CANCELLED
+        if iteration is not None:
+            self._complete_iteration_record(
+                iteration,
+                status=RUN_STATUS_CANCELLED,
+                operations=list(iteration.get("operations") or []),
+                plan=project.get("plan"),
+            )
+        self._complete_turn_record(turn, status=RUN_STATUS_CANCELLED)
+        if turn is not None:
+            turn_iteration_id = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+            turn_payload = {
+                "project_id": project["project_id"],
+                "run_id": run["run_id"],
+                "turn_id": run.get("turn_id") or run["run_id"],
+                "iteration_id": turn_iteration_id,
+                "phase": PHASE_TERMINAL,
+                "status": RUN_STATUS_CANCELLED,
+                "cancel_reason": run.get("cancel_reason"),
+                "run": copy.deepcopy(run),
+            }
+            self._enrich_stream_payload(run, turn_payload, turn_id=turn_payload["turn_id"], iteration_id=turn_iteration_id)
+            self._record_run_event(project, run, "turn.completed", turn_payload)
+            self.store.save_project(project)
+            yield {"event": "turn.completed", "data": turn_payload}
+
+        payload = build_run_completion_payload(project, run)
+        payload["cancel_reason"] = run["cancel_reason"]
+        payload["turn_id"] = run.get("turn_id") or run["run_id"]
+        payload["iteration_id"] = iteration.get("iteration_id") if isinstance(iteration, dict) else run.get("iteration_id")
+        self._enrich_stream_payload(run, payload, turn_id=payload["turn_id"], iteration_id=payload.get("iteration_id"))
+        self._record_run_event(project, run, "run.cancelled", payload)
+        self.store.save_project(project)
+        yield {"event": "run.cancelled", "data": payload}
 
 
 def build_presentation_manifest(
@@ -1290,6 +2326,14 @@ def build_run_completion_payload(project: dict[str, Any], run: dict[str, Any]) -
         "run_id": run["run_id"],
         "phase": run.get("phase"),
         "status": run.get("status"),
+        "execution_mode": run.get("execution_mode") or (run.get("execution") or {}).get("mode"),
+        "provider": run.get("provider") or (run.get("execution") or {}).get("provider"),
+        "model": run.get("model") or (run.get("execution") or {}).get("model"),
+        "mode_reason": run.get("mode_reason") or (run.get("execution") or {}).get("mock_reason"),
+        "budget": copy.deepcopy(run.get("budget") or {}),
+        "telemetry_summary": copy.deepcopy(run.get("telemetry_summary") or {}),
+        "failure_reason": run.get("failure_reason"),
+        "cancel_reason": run.get("cancel_reason"),
         "version": int(project.get("version") or 1),
         "validation": run.get("validation") or project.get("last_test"),
         "presentation": run.get("presentation"),
@@ -1808,6 +2852,9 @@ def prepare_project_payload(project: dict[str, Any]) -> dict[str, Any]:
         {key: value for key, value in version.items() if key != "model"}
         for version in prepared.get("versions", [])
     ]
+    active_run_id = prepared.get("active_run_id")
+    runs = prepared.get("runs") if isinstance(prepared.get("runs"), dict) else {}
+    prepared["active_run"] = runs.get(active_run_id) if isinstance(active_run_id, str) else None
     prepared.pop("plans", None)
     return prepared
 

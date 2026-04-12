@@ -105,6 +105,7 @@ export function HarnessMetricsBar() {
   const metrics = useWorkbenchStore((s) => s.harnessMetrics);
   const iterationCount = useWorkbenchStore((s) => s.iterationCount);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
+  const activeRun = useWorkbenchStore((s) => s.activeRun);
 
   // Show when there are real metrics OR when a build is active (shows zeros
   // while the first harness.metrics event hasn't arrived yet).
@@ -119,6 +120,24 @@ export function HarnessMetricsBar() {
   const tokensUsed = metrics?.tokensUsed ?? 0;
   const costUsd = metrics?.costUsd ?? 0;
   const elapsedMs = metrics?.elapsedMs ?? 0;
+  const executionMode = activeRun?.execution_mode;
+  const executionLabel =
+    executionMode === 'live'
+      ? 'Live'
+      : executionMode === 'mock'
+        ? 'Mock'
+        : executionMode
+          ? executionMode
+          : null;
+  const providerModel =
+    activeRun?.provider || activeRun?.model
+      ? [activeRun.provider, activeRun.model].filter(Boolean).join(' / ')
+      : undefined;
+  const tokenLimit = activeRun?.budget?.limits?.max_tokens ?? null;
+  const budgetTokensUsed =
+    activeRun?.budget?.usage?.tokens ??
+    activeRun?.budget?.usage?.tokens_used ??
+    tokensUsed;
   const progressPct =
     totalSteps > 0 ? Math.min(100, Math.round((stepsCompleted / totalSteps) * 100)) : 0;
 
@@ -131,6 +150,18 @@ export function HarnessMetricsBar() {
       )}
       aria-label="Harness metrics"
     >
+      {executionLabel && (
+        <span
+          className={classNames(
+            'rounded border border-[color:var(--wb-border)] px-1.5 py-0.5',
+            'font-medium text-[color:var(--wb-text)]'
+          )}
+          title={providerModel}
+        >
+          {executionLabel}
+        </span>
+      )}
+
       {/* Phase indicator */}
       <span
         className={classNames(
@@ -164,6 +195,12 @@ export function HarnessMetricsBar() {
       {tokensUsed > 0 && (
         <span className="tabular-nums text-[color:var(--wb-text-dim)]">
           {formatTokens(tokensUsed)}
+        </span>
+      )}
+
+      {tokenLimit && (
+        <span className="tabular-nums text-[color:var(--wb-text-dim)]">
+          {budgetTokensUsed}/{tokenLimit} tokens
         </span>
       )}
 

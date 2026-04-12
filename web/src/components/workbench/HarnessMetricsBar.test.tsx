@@ -101,4 +101,33 @@ describe('HarnessMetricsBar', () => {
     // "X/Y steps" text should not appear.
     expect(screen.queryByText(/steps/)).toBeNull();
   });
+
+  it('surfaces run mode and token budget usage for operators', () => {
+    useWorkbenchStore.getState().dispatchEvent({
+      event: 'turn.started',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        turn_id: 'run-1',
+        mode: 'initial',
+        brief: 'Build',
+        execution_mode: 'mock',
+        provider: 'mock',
+        model: 'mock-builder',
+        budget: {
+          limits: { max_iterations: 2, max_tokens: 1000 },
+          usage: { iterations: 0, tokens: 0, cost_usd: 0, elapsed_ms: 0 },
+        },
+      },
+    });
+    useWorkbenchStore.getState().dispatchEvent({
+      event: 'harness.metrics',
+      data: { steps_completed: 0, total_steps: 0, tokens_used: 250, cost_usd: 0, elapsed_ms: 0, current_phase: 'executing' },
+    });
+
+    renderBar();
+
+    expect(screen.getByText('Mock')).toBeInTheDocument();
+    expect(screen.getByText('250/1000 tokens')).toBeInTheDocument();
+  });
 });

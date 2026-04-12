@@ -15,10 +15,11 @@ import { useWorkbenchStore } from '../../lib/workbench-store';
 
 interface ChatInputProps {
   onSubmit: (text: string) => void;
+  onCancel?: () => void;
   placeholder?: string;
 }
 
-export function ChatInput({ onSubmit, placeholder }: ChatInputProps) {
+export function ChatInput({ onSubmit, onCancel, placeholder }: ChatInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
@@ -128,7 +129,7 @@ export function ChatInput({ onSubmit, placeholder }: ChatInputProps) {
         {isBuilding ? (
           <button
             type="button"
-            onClick={cancelBuild}
+            onClick={onCancel ?? cancelBuild}
             className="flex h-8 w-8 items-center justify-center rounded-md bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)] hover:opacity-90"
             aria-label="Stop build"
             title="Stop build"

@@ -18,18 +18,41 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
+  cancelWorkbenchRun,
   getDefaultWorkbenchProject,
   getWorkbenchPlanSnapshot,
   iterateWorkbenchBuild,
   streamWorkbenchBuild,
   type WorkbenchTarget,
 } from '../lib/workbench-api';
-import { useWorkbenchStore } from '../lib/workbench-store';
+import { useWorkbenchStore, type BuildStatus } from '../lib/workbench-store';
 import { WorkbenchLayout } from '../components/workbench/WorkbenchLayout';
 import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
 import { IterationControls } from '../components/workbench/IterationControls';
+
+function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
+  switch (status) {
+    case 'queued':
+      return 'queued';
+    case 'running':
+      return 'running';
+    case 'reflecting':
+      return 'reflecting';
+    case 'presenting':
+      return 'presenting';
+    case 'completed':
+      return 'done';
+    case 'cancelled':
+      return 'cancelled';
+    case 'error':
+    case 'failed':
+      return 'error';
+    default:
+      return 'idle';
+  }
+}
 
 export function AgentWorkbench() {
   const projectId = useWorkbenchStore((s) => s.projectId);
@@ -87,15 +110,7 @@ export function AgentWorkbench() {
           lastTest: snapshot.last_test ?? null,
           activity: snapshot.activity ?? [],
           activeRun: snapshot.active_run ?? null,
-          buildStatus:
-            snapshot.build_status === 'running'
-              || snapshot.build_status === 'reflecting'
-              ? 'running'
-              : snapshot.build_status === 'completed'
-                ? 'done'
-                : snapshot.build_status === 'error' || snapshot.build_status === 'failed'
-                ? 'error'
-                : 'idle',
+          buildStatus: mapWorkbenchBuildStatus(snapshot.build_status),
           lastBrief: snapshot.last_brief,
           // Multi-turn hydration: repopulate conversation + turn tree so a
           // page reload restores the running log exactly where it stopped.
@@ -235,12 +250,32 @@ export function AgentWorkbench() {
     [consumeStream, handleSubmit, setAbortController, setError, startIteration, target]
   );
 
+  const handleCancel = useCallback(async () => {
+    const state = useWorkbenchStore.getState();
+    const runId = state.activeRun?.run_id;
+    const currentProjectId = state.projectId;
+    if (runId) {
+      try {
+        const payload = await cancelWorkbenchRun(
+          runId,
+          'Cancelled by operator.',
+          currentProjectId
+        );
+        dispatchEvent({ event: 'run.cancelled', data: payload as Record<string, unknown> });
+      } catch (error) {
+        setError(error instanceof Error ? error.message : 'Run cancellation failed');
+      }
+    }
+    activeControllerRef.current?.abort();
+    state.cancelBuild();
+  }, [dispatchEvent, setError]);
+
   return (
     <div className="px-4 pb-6 pt-2">
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
-        footer={<ChatInput onSubmit={handleSubmit} />}
+        footer={<ChatInput onSubmit={handleSubmit} onCancel={handleCancel} />}
         iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>

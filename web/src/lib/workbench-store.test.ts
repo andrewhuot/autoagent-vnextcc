@@ -339,6 +339,93 @@ describe('workbench-store', () => {
     expect(state.error).toBe('Provider timed out');
   });
 
+  it('stores mode, budget, and telemetry details from run start events', () => {
+    dispatch({
+      event: 'turn.started',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        turn_id: 'run-1',
+        mode: 'initial',
+        brief: 'Build',
+        execution_mode: 'mock',
+        provider: 'mock',
+        model: 'mock-builder',
+        mode_reason: 'forced by test',
+        budget: {
+          limits: {
+            max_iterations: 2,
+            max_tokens: 1000,
+            max_cost_usd: 1.5,
+            max_seconds: 60,
+          },
+          usage: {
+            iterations: 0,
+            tokens: 0,
+            cost_usd: 0,
+            elapsed_ms: 0,
+          },
+        },
+        telemetry_summary: {
+          run_id: 'run-1',
+          execution_mode: 'mock',
+          provider: 'mock',
+          model: 'mock-builder',
+          duration_ms: 0,
+        },
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.activeRun?.run_id).toBe('run-1');
+    expect(state.activeRun?.execution_mode).toBe('mock');
+    expect(state.activeRun?.provider).toBe('mock');
+    expect(state.activeRun?.budget?.limits.max_tokens).toBe(1000);
+    expect(state.activeRun?.telemetry_summary?.execution_mode).toBe('mock');
+  });
+
+  it('marks the build cancelled from run.cancelled events', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', run_id: 'run-1', turn_id: 'run-1', mode: 'initial', brief: 'Build' },
+    });
+    dispatch({
+      event: 'run.cancelled',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        status: 'cancelled',
+        phase: 'terminal',
+        cancel_reason: 'operator stopped it',
+        run: {
+          run_id: 'run-1',
+          project_id: 'wb-42',
+          brief: 'Build',
+          target: 'portable',
+          environment: 'draft',
+          status: 'cancelled',
+          phase: 'terminal',
+          started_version: 1,
+          completed_version: null,
+          created_at: '2026-04-12T00:00:00Z',
+          completed_at: '2026-04-12T00:00:01Z',
+          error: null,
+          cancel_reason: 'operator stopped it',
+          events: [],
+          messages: [],
+          validation: null,
+          presentation: null,
+        },
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.buildStatus).toBe('cancelled');
+    expect(state.error).toBe('operator stopped it');
+    expect(state.activeRun?.status).toBe('cancelled');
+    expect(state.activeRun?.cancel_reason).toBe('operator stopped it');
+  });
+
   it('defaults to light theme', () => {
     expect(useWorkbenchStore.getState().theme).toBe('light');
   });

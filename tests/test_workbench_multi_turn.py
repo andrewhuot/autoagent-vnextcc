@@ -66,12 +66,13 @@ def test_multi_turn_preserves_artifacts_and_conversation(tmp_path: Path) -> None
         },
     )
     assert events1[0]["event"] == "turn.started"
-    assert events1[-1]["event"] == "turn.completed"
+    assert events1[-1]["event"] == "run.completed"
+    assert "turn.completed" in [event["event"] for event in events1]
     project_id = events1[-1]["data"]["project_id"]
     turn_one_id = events1[0]["data"]["turn_id"]
 
     snapshot1 = client.get(f"/api/workbench/projects/{project_id}/plan").json()
-    assert snapshot1["build_status"] == "idle"
+    assert snapshot1["build_status"] == "completed"
     assert len(snapshot1["turns"]) == 1
     assert snapshot1["turns"][0]["turn_id"] == turn_one_id
     assert snapshot1["turns"][0]["mode"] == "initial"
@@ -140,7 +141,7 @@ def test_autonomous_loop_caps_at_max_iterations(tmp_path: Path) -> None:
     snapshot = client.get(f"/api/workbench/projects/{project_id}/plan").json()
     turn = snapshot["turns"][-1]
     assert 1 <= len(turn["iterations"]) <= 2
-    assert turn["status"] in {"completed", "error"}
+    assert turn["status"] in {"completed", "failed"}
 
 
 def test_follow_up_emits_delta_plan(tmp_path: Path) -> None:
