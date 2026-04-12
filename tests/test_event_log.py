@@ -471,6 +471,14 @@ def test_all_valid_event_types_are_accepted(tmp_path: Path) -> None:
         # Context Workbench events
         "context_analyzed",
         "context_simulation_run",
+        # Builder lifecycle events (bridged from EventBroker)
+        "builder_task_started",
+        "builder_task_completed",
+        "builder_task_failed",
+        "builder_session_opened",
+        "builder_session_closed",
+        "builder_eval_started",
+        "builder_eval_completed",
     }
 
     assert VALID_EVENT_TYPES == expected_types

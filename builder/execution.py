@@ -206,6 +206,56 @@ class BuilderExecutionEngine:
         return task
 
     # ------------------------------------------------------------------
+    # Crash recovery
+    # ------------------------------------------------------------------
+
+    DEFAULT_STALE_TASK_SECONDS: float = 30 * 60  # 30 minutes
+
+    def recover_stale_tasks(
+        self,
+        max_age_seconds: float | None = None,
+    ) -> list[BuilderTask]:
+        """Detect and recover tasks stuck in active states after a crash.
+
+        Tasks left in ``running`` or ``paused`` that haven't been updated
+        within ``max_age_seconds`` are marked ``failed`` with a
+        ``stale_interrupted`` reason. This mirrors the workbench's
+        ``_recover_stale_runs()`` pattern for BuilderTask objects.
+
+        Returns the list of recovered tasks.
+        """
+        threshold = max_age_seconds or self.DEFAULT_STALE_TASK_SECONDS
+        cutoff = now_ts() - threshold
+
+        recovered: list[BuilderTask] = []
+
+        for status in (TaskStatus.RUNNING, TaskStatus.PAUSED):
+            tasks = self._store.list_tasks(status=status, limit=500)
+            for task in tasks:
+                if task.updated_at < cutoff:
+                    task.status = TaskStatus.FAILED
+                    task.completed_at = now_ts()
+                    task.updated_at = now_ts()
+                    task.error = "stale_interrupted"
+                    task.metadata["recovery_reason"] = "stale_interrupted"
+                    task.metadata["original_status"] = status.value
+                    self._store.save_task(task)
+
+                    self._events.publish(
+                        BuilderEventType.TASK_FAILED,
+                        session_id=task.session_id,
+                        task_id=task.task_id,
+                        payload={
+                            "status": TaskStatus.FAILED.value,
+                            "error": "stale_interrupted",
+                            "original_status": status.value,
+                        },
+                    )
+                    recovered.append(task)
+
+        return recovered
+
+    # ------------------------------------------------------------------
     # Utility task operations
     # ------------------------------------------------------------------
 
