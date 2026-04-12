@@ -391,6 +391,21 @@ describe('Build', () => {
     expect(screen.getByText('Generated from a prompt')).toBeInTheDocument();
   });
 
+  it('explains expected no-data states in saved artifacts', async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await user.click(screen.getByRole('tab', { name: 'Saved Artifacts' }));
+
+    expect(screen.getAllByText('No data yet').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText('Expected: build artifacts appear after you generate, export, or save a draft.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: generate an agent, export from Builder Chat, or return after a CLI build.')
+    ).toBeInTheDocument();
+  });
+
   it('switches the XML instruction studio into form mode', async () => {
     const user = userEvent.setup();
     renderPage();

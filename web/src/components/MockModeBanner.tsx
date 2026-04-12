@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import { AlertTriangle, RotateCcw, X } from 'lucide-react';
 import { normalizeProviderFallback } from '../lib/provider-fallback';
+import { statusLabel } from '../lib/utils';
 
-const PREVIEW_MODE_TITLE = 'Preview mode is on';
+const PREVIEW_MODE_TITLE = `${statusLabel('mock')} is on`;
 const PREVIEW_MODE_DESCRIPTION = 'AgentLab is using simulated responses until live providers are ready.';
+const PREVIEW_MODE_DISMISS_LABEL = 'Dismiss preview mode warning';
 const FRONTEND_ONLY_TITLE = 'Frontend-only mode';
 const FRONTEND_ONLY_DESCRIPTION =
   'AgentLab cannot reach the backend right now, so live status and saved actions may be unavailable.';
@@ -308,7 +310,7 @@ export function MockModeBanner() {
         {bannerState.kind === 'preview' && bannerState.realProviderConfigured ? (
           <button
             type="button"
-            aria-label="Dismiss mock mode warning"
+            aria-label={PREVIEW_MODE_DISMISS_LABEL}
             onClick={handleDismiss}
             className={`rounded-md p-1.5 transition ${isRateLimit ? 'text-orange-700 hover:bg-orange-100' : 'text-amber-700 hover:bg-amber-100'}`}
           >

@@ -179,6 +179,24 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('link', { name: 'CLI' })).not.toBeInTheDocument();
   });
 
+  it('uses the same Optimize and Review labels in the sidebar journey', () => {
+    installLocalStorageMock();
+    render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ['/improvements'] },
+        createElement(Sidebar, { mobileOpen: true, onClose: vi.fn() })
+      )
+    );
+
+    expect(screen.getByText('You\'re on Review. Next up: Deploy.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Move left to right to keep the product feeling predictable: Setup, Build, Eval, Optimize, Review, then Deploy.')
+    ).toBeInTheDocument();
+    expect(screen.getAllByText('Optimize').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Review').length).toBeGreaterThan(0);
+  });
+
   it('toggles to the full navigation surface and persists pro mode', async () => {
     const user = userEvent.setup();
     const { localStorageMock } = installLocalStorageMock();

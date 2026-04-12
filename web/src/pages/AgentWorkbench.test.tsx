@@ -87,7 +87,8 @@ function installMockFetch(opts: {
     last_brief: '',
   };
 
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    void init;
     const url = typeof input === 'string' ? input : input.toString();
     if (url.endsWith('/api/workbench/projects/default')) {
       return new Response(JSON.stringify(defaultProject), {
@@ -363,6 +364,46 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('Review gate')).toBeInTheDocument();
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-test at Draft v2.')).toBeInTheDocument();
+  });
+
+  it('uses canonical status language for completed workbench candidates without a review gate', async () => {
+    installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-test',
+        name: 'Airline Support Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 2,
+        build_status: 'completed',
+        plan: null,
+        artifacts: [],
+        messages: [],
+        model: {
+          project: { name: 'Airline Support Workbench', description: 'Airline support agent' },
+          agents: [],
+          tools: [],
+          callbacks: [],
+          guardrails: [],
+          eval_suites: [],
+          environments: [],
+          deployments: [],
+        },
+        exports: { generated_config: {}, adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        last_test: null,
+        activity: [],
+        active_run: null,
+        runs: [],
+        last_brief: 'Build airline support',
+        conversation: [],
+        turns: [],
+      },
+    });
+
+    renderWorkbench();
+
+    expect(await screen.findByText('Ready')).toBeInTheDocument();
+    expect(screen.queryByText('Candidate ready')).not.toBeInTheDocument();
   });
 
   it('passes manual iteration budget controls to the iterate stream', async () => {

@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket } from 'lucide-react';
+import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
 import { UnifiedReviewQueue } from './UnifiedReviewQueue';
@@ -172,21 +173,34 @@ function ImprovementHistoryPanel() {
       </section>
 
       {isLoading && (
-        <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-          Loading improvement history...
-        </div>
+        <EmptyState
+          icon={Clock3}
+          state="waiting"
+          title="Loading improvement history"
+          description="The decision history is loading from experiments and optimizer attempts."
+          nextAction="wait for the history query to finish."
+        />
       )}
 
       {isError && (
-        <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50 text-sm text-red-600">
-          Failed to load improvement history.
-        </div>
+        <EmptyState
+          icon={Clock3}
+          state="degraded"
+          title="Failed to load improvement history"
+          description="The history query failed, so accepted and rejected decisions may be temporarily unavailable."
+          nextAction="retry this page after the backend is reachable."
+        />
       )}
 
       {!isLoading && !isError && history.length === 0 && (
-        <div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-gray-200 bg-gray-50 text-sm text-gray-500">
-          No completed improvements yet.
-        </div>
+        <EmptyState
+          icon={Clock3}
+          state="no-data"
+          stateLabel="No data yet"
+          title="No data yet"
+          description="Expected: decisions appear after proposals are accepted or rejected."
+          nextAction="review pending improvements or run Optimize to create a proposal."
+        />
       )}
 
       {!isLoading && !isError && history.length > 0 && (
@@ -305,7 +319,7 @@ export function Improvements() {
                 to="/deploy"
                 className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-emerald-800"
               >
-                Deploy Now
+                Open Deploy
                 <ArrowRight className="h-3.5 w-3.5" />
               </Link>
             </div>

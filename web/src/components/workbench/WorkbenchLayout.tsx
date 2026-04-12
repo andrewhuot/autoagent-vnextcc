@@ -14,7 +14,7 @@
 import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowLeft, Moon, Sparkles, Sun } from 'lucide-react';
-import { classNames } from '../../lib/utils';
+import { classNames, statusLabel } from '../../lib/utils';
 import { isWorkbenchBuildActive, useWorkbenchStore } from '../../lib/workbench-store';
 import { summarizePlan } from '../../lib/workbench-plan';
 import { HarnessMetricsBar } from './HarnessMetricsBar';
@@ -182,10 +182,10 @@ function StatusPill({
     className = reviewBlocked
       ? 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]'
       : 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]';
-    label = reviewBlocked ? 'Blocked' : hasReviewState ? 'Review needed' : 'Candidate ready';
+    label = reviewBlocked ? statusLabel('blocked') : hasReviewState ? statusLabel('review_required') : statusLabel('ready');
   } else if (status === 'error') {
     className = 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]';
-    label = 'Failed';
+    label = statusLabel('failed');
   } else if (status === 'queued') {
     className = 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
     label = 'Queued';
@@ -197,7 +197,7 @@ function StatusPill({
     label = 'Preparing review';
   } else if (status === 'cancelled') {
     className = 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]';
-    label = 'Stopped';
+    label = statusLabel('interrupted');
   }
   return (
     <span

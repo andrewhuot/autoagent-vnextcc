@@ -48,6 +48,7 @@ import {
   type BuilderSessionPayload,
 } from '../lib/builder-chat-api';
 import { PageHeader } from '../components/PageHeader';
+import { EmptyState as ProductEmptyState, type EmptyStateKind } from '../components/EmptyState';
 import { useActiveAgent } from '../lib/active-agent';
 import { getBuildWorkspaceContext } from '../lib/navigation';
 import { toastError, toastSuccess } from '../lib/toast';
@@ -62,7 +63,7 @@ import type {
   TranscriptReportSummary,
 } from '../lib/types';
 import type { ArtifactRef } from '../lib/builder-types';
-import { classNames } from '../lib/utils';
+import { classNames, statusLabel } from '../lib/utils';
 
 type BuildTab = 'prompt' | 'transcript' | 'builder-chat' | 'saved-artifacts';
 type StudioMode = 'prompt' | 'transcript';
@@ -644,7 +645,7 @@ export function BuilderChatWorkspace({
                 )}
               >
                 <Sparkles className="h-3.5 w-3.5" />
-                {session ? (session.mock_mode ? 'Fallback mode' : 'Live LLM') : 'Awaiting config'}
+                {session ? (session.mock_mode ? statusLabel('mock') : statusLabel('live')) : statusLabel('waiting')}
               </div>
             </div>
             {session?.mock_mode && session.mock_reason ? (
@@ -1885,15 +1886,36 @@ export function SavedArtifactsWorkspace({
               ))}
             </div>
           ) : savedBuildArtifactsQuery.isError ? (
-            <EmptyState text="Unable to load shared build artifacts right now." />
+            <EmptyState
+              state="degraded"
+              stateLabel="Degraded"
+              title="Unable to load shared build artifacts"
+              text="Unable to load shared build artifacts right now."
+              detail="Expected: shared build artifacts appear after UI, CLI, or API build output is persisted."
+              nextAction="retry this tab after the backend is reachable."
+            />
           ) : (
-            <EmptyState text="Shared CLI and API build artifacts will appear here as they are generated." />
+            <EmptyState
+              state="no-data"
+              stateLabel="No data yet"
+              title="No shared build artifacts yet"
+              text="Shared CLI and API build artifacts will appear here as they are generated."
+              detail="Expected: build artifacts appear after you generate, export, or save a draft."
+              nextAction="generate an agent, export from Builder Chat, or return after a CLI build."
+            />
           )}
         </ArtifactSection>
 
         <ArtifactSection title="Persisted Build Artifacts" count={localArtifacts.length}>
           {localArtifacts.length === 0 ? (
-            <EmptyState text="No saved build artifacts yet. Generate or export from any build tab to persist one here." />
+            <EmptyState
+              state="no-data"
+              stateLabel="No data yet"
+              title="No saved build artifacts yet"
+              text="No saved build artifacts yet. Generate or export from any build tab to persist one here."
+              detail="Expected: build artifacts appear after you generate, export, or save a draft."
+              nextAction="generate an agent, export from Builder Chat, or return after a CLI build."
+            />
           ) : (
             <div className="space-y-3">
               {localArtifacts.map((artifact) => (
@@ -1915,9 +1937,23 @@ export function SavedArtifactsWorkspace({
               ))}
             </div>
           ) : builderArtifactsQuery.isError ? (
-            <EmptyState text="Unable to load API artifacts right now." />
+            <EmptyState
+              state="degraded"
+              stateLabel="Degraded"
+              title="Unable to load API artifacts"
+              text="Unable to load API artifacts right now."
+              detail="Expected: server-backed artifacts appear after builder output is persisted."
+              nextAction="retry after the API is reachable."
+            />
           ) : (
-            <EmptyState text="Open this tab after creating builder artifacts to see the server-backed list." />
+            <EmptyState
+              state="no-data"
+              stateLabel="No data yet"
+              title="No API artifacts yet"
+              text="Open this tab after creating builder artifacts to see the server-backed list."
+              detail="Expected: build artifacts appear after you generate, export, or save a draft."
+              nextAction="generate an agent, export from Builder Chat, or return after a CLI build."
+            />
           )}
         </ArtifactSection>
 
@@ -1933,9 +1969,23 @@ export function SavedArtifactsWorkspace({
               ))}
             </div>
           ) : transcriptReportsQuery.isError ? (
-            <EmptyState text="Unable to load transcript reports right now." />
+            <EmptyState
+              state="degraded"
+              stateLabel="Degraded"
+              title="Unable to load transcript reports"
+              text="Unable to load transcript reports right now."
+              detail="Expected: transcript reports appear after uploads finish analysis."
+              nextAction="retry this tab or upload transcripts again."
+            />
           ) : (
-            <EmptyState text="Transcript reports will appear here after uploads are analyzed." />
+            <EmptyState
+              state="no-data"
+              stateLabel="No data yet"
+              title="No transcript reports yet"
+              text="Transcript reports will appear here after uploads are analyzed."
+              detail="Expected: transcript reports appear after uploads finish analysis."
+              nextAction="upload transcripts in the Transcript tab."
+            />
           )}
         </ArtifactSection>
       </div>
@@ -3065,11 +3115,30 @@ function TranscriptReportCard({ report }: { report: TranscriptReportSummary }) {
   );
 }
 
-function EmptyState({ text }: { text: string }) {
+function EmptyState({
+  text,
+  title,
+  detail,
+  state = 'no-data',
+  stateLabel,
+  nextAction,
+}: {
+  text: string;
+  title?: string;
+  detail?: string;
+  state?: EmptyStateKind;
+  stateLabel?: string;
+  nextAction?: string;
+}) {
   return (
-    <div className="rounded-2xl border border-dashed border-gray-200 bg-white px-4 py-5 text-sm text-gray-500">
-      {text}
-    </div>
+    <ProductEmptyState
+      icon={FolderOpen}
+      state={state}
+      stateLabel={stateLabel}
+      title={title ?? text}
+      description={detail ?? text}
+      nextAction={nextAction}
+    />
   );
 }
 

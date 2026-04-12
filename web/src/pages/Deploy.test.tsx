@@ -112,12 +112,12 @@ describe('Deploy', () => {
 
     renderPage();
 
-    await user.click(screen.getByRole('button', { name: 'Promote' }));
+    await user.click(screen.getByRole('button', { name: 'Promote canary' }));
 
     expect(promoteMutate).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: 'Confirm canary promotion' })).toBeInTheDocument();
 
-    await user.click(screen.getByRole('button', { name: 'Confirm promote' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm canary promotion' }));
 
     expect(promoteMutate).toHaveBeenCalledWith(
       { version: 8 },
@@ -150,5 +150,55 @@ describe('Deploy', () => {
       { version: 9, strategy: 'immediate' },
       expect.any(Object)
     );
+  });
+
+  it('explains missing deployment status as a no-data state with a next action', () => {
+    apiMocks.useDeployStatus.mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage();
+
+    expect(screen.getByText('No data yet')).toBeInTheDocument();
+    expect(
+      screen.getByText('Expected: deployment status appears after a config has been deployed.')
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: deploy a version or refresh after starting the server from a workspace.')
+    ).toBeInTheDocument();
+  });
+
+  it('uses canonical status and empty-state language for canary and history states', () => {
+    apiMocks.useDeployStatus.mockReturnValue({
+      data: {
+        active_version: 7,
+        canary_version: null,
+        total_versions: 9,
+        canary_status: null,
+        history: [
+          {
+            version: 7,
+            timestamp: '2026-03-29T12:00:00Z',
+            status: 'promoted',
+            scores: { composite: 0.91 },
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage();
+
+    expect(screen.getByText('Waiting')).toBeInTheDocument();
+    expect(screen.getByText('No active canary')).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: Deploy a candidate with the canary strategy to collect rollout evidence.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Promoted')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,15 @@
 export type TaskState = 'pending' | 'running' | 'completed' | 'failed' | 'interrupted';
 
+export type ProductStatusVariant = 'success' | 'error' | 'warning' | 'pending' | 'running';
+
+export interface ProductStatusMeta {
+  key: string;
+  label: string;
+  variant: ProductStatusVariant;
+}
+
+export type ProductStateKind = 'expected' | 'blocked' | 'degraded' | 'waiting';
+
 export interface TaskStatus {
   task_id: string;
   task_type: string;

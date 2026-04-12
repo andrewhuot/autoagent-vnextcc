@@ -384,6 +384,21 @@ describe('Optimize', () => {
     expect(await screen.findByText('Eval Page')).toBeInTheDocument();
   });
 
+  it('explains the blocked optimize state when no agent is selected', () => {
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+
+    renderOptimize('/optimize');
+
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Pick an agent to optimize' })).toBeInTheDocument();
+    expect(
+      screen.getByText('Next: Open Build to create a saved config, or select an existing agent from the library.')
+    ).toBeInTheDocument();
+  });
+
   it('shows richer history rows and expandable attempt details', async () => {
     const user = userEvent.setup();
     apiMocks.useStartOptimize.mockReturnValue({

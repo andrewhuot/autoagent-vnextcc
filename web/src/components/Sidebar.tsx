@@ -126,8 +126,12 @@ const GUIDED_FLOW_STEPS: GuidedFlowStep[] = [
       pathname === '/evals' || pathname.startsWith('/evals/') || pathname === '/results' || pathname === '/compare',
   },
   {
-    label: 'Improve',
-    matcher: (pathname) => pathname === '/optimize' || pathname === '/studio' || pathname === '/improvements',
+    label: 'Optimize',
+    matcher: (pathname) => pathname === '/optimize' || pathname === '/studio',
+  },
+  {
+    label: 'Review',
+    matcher: (pathname) => pathname === '/improvements',
   },
   {
     label: 'Deploy',
@@ -152,6 +156,7 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const location = useLocation();
   const [simpleMode, setSimpleMode] = useState(() => getSidebarMode() !== 'pro');
   const guidedFlow = getGuidedFlowState(location.pathname);
+  const guidedFlowSummary = `You're on ${guidedFlow.currentLabel}. Next up: ${guidedFlow.nextLabel}.`;
   const { data: reviewStats } = useUnifiedReviewStats();
   const pendingReviewCount = reviewStats?.total_pending ?? 0;
 
@@ -206,11 +211,9 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
                 Guided flow
               </p>
-              <p className="mt-2 text-sm font-medium text-slate-900">
-                You're on {guidedFlow.currentLabel}. Next up: {guidedFlow.nextLabel}.
-              </p>
+              <p className="mt-2 text-sm font-medium text-slate-900">{guidedFlowSummary}</p>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                Move left to right to keep the product feeling predictable: Setup, Build, Eval, Improve, then Deploy.
+                Move left to right to keep the product feeling predictable: Setup, Build, Eval, Optimize, Review, then Deploy.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
                 {GUIDED_FLOW_STEPS.map((step, index) => {

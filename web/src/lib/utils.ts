@@ -1,3 +1,5 @@
+import type { ProductStatusMeta, ProductStatusVariant } from './types';
+
 export function formatTimestamp(ts: string | number): string {
   const value =
     typeof ts === 'number'
@@ -55,8 +57,91 @@ export function scoreBgColor(score: number): string {
   return 'bg-red-500';
 }
 
-export function statusVariant(status: string): 'success' | 'error' | 'warning' | 'pending' | 'running' {
-  switch (status) {
+const PRODUCT_STATUS_META: Record<string, Omit<ProductStatusMeta, 'key'>> = {
+  accepted: { label: 'Accepted', variant: 'success' },
+  active: { label: 'Active', variant: 'success' },
+  awaiting_eval_run: { label: 'Waiting for eval', variant: 'pending' },
+  blocked: { label: 'Blocked', variant: 'error' },
+  candidate: { label: 'Candidate', variant: 'pending' },
+  completed: { label: 'Completed', variant: 'success' },
+  degraded: { label: 'Degraded', variant: 'warning' },
+  done: { label: 'Ready', variant: 'success' },
+  error: { label: 'Failed', variant: 'error' },
+  fail: { label: 'Failed', variant: 'error' },
+  failed: { label: 'Failed', variant: 'error' },
+  failure: { label: 'Failed', variant: 'error' },
+  interrupted: { label: 'Interrupted', variant: 'warning' },
+  live: { label: 'Live', variant: 'success' },
+  mock: { label: 'Preview mode', variant: 'warning' },
+  mixed: { label: 'Mixed', variant: 'warning' },
+  no_change: { label: 'No change', variant: 'warning' },
+  no_data: { label: 'No data', variant: 'pending' },
+  no_op: { label: 'No change', variant: 'warning' },
+  pending: { label: 'Pending', variant: 'pending' },
+  pending_review: { label: 'Review required', variant: 'pending' },
+  promote: { label: 'Promoted', variant: 'success' },
+  promoted: { label: 'Promoted', variant: 'success' },
+  queued: { label: 'Queued', variant: 'pending' },
+  ready: { label: 'Ready', variant: 'success' },
+  rejected: { label: 'Rejected', variant: 'error' },
+  rejected_human: { label: 'Rejected', variant: 'error' },
+  rejected_invalid: { label: 'Rejected', variant: 'warning' },
+  rejected_no_improvement: { label: 'Rejected', variant: 'warning' },
+  rejected_noop: { label: 'No change', variant: 'warning' },
+  rejected_quality: { label: 'Rejected', variant: 'warning' },
+  rejected_regression: { label: 'Rejected', variant: 'warning' },
+  rejected_safety: { label: 'Rejected', variant: 'warning' },
+  review_required: { label: 'Review required', variant: 'pending' },
+  rollback: { label: 'Rolled back', variant: 'warning' },
+  rolled_back: { label: 'Rolled back', variant: 'warning' },
+  running: { label: 'Running', variant: 'running' },
+  stopped: { label: 'Interrupted', variant: 'warning' },
+  success: { label: 'Success', variant: 'success' },
+  warning: { label: 'Warning', variant: 'warning' },
+  waiting: { label: 'Waiting', variant: 'pending' },
+};
+
+// Normalize backend and UI status variants so product copy stays consistent across surfaces.
+export function normalizeStatusKey(status: string): string {
+  return status.trim().toLowerCase().replace(/[\s-]+/g, '_');
+}
+
+function fallbackStatusLabel(status: string): string {
+  const normalized = normalizeStatusKey(status).replaceAll('_', ' ');
+  return normalized.replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+// Centralize operator-facing labels and variants without changing raw API status payloads.
+export function getProductStatusMeta(status: string): ProductStatusMeta {
+  const key = normalizeStatusKey(status);
+  const meta = PRODUCT_STATUS_META[key];
+  if (meta) {
+    return { key, ...meta };
+  }
+  return {
+    key,
+    label: fallbackStatusLabel(status),
+    variant: 'pending',
+  };
+}
+
+// Keep call sites from rephrasing the same status in slightly different ways.
+export function productStatusLabel(status: string): string {
+  return getProductStatusMeta(status).label;
+}
+
+// Share the same severity mapping between badges, empty states, and page-local pills.
+export function productStatusVariant(status: string): ProductStatusVariant {
+  return getProductStatusMeta(status).variant;
+}
+
+export function statusVariant(status: string): ProductStatusVariant {
+  const meta = getProductStatusMeta(status);
+  if (meta.key !== normalizeStatusKey(status) || meta.variant !== 'pending') {
+    return meta.variant;
+  }
+
+  switch (meta.key) {
     case 'completed':
     case 'accepted':
     case 'success':
@@ -91,10 +176,10 @@ export function statusVariant(status: string): 'success' | 'error' | 'warning' |
     case 'pending_review':
       return 'pending';
     default:
-      return 'pending';
+      return meta.variant;
   }
 }
 
 export function statusLabel(status: string): string {
-  return status.replaceAll('_', ' ');
+  return productStatusLabel(status);
 }
