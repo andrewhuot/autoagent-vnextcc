@@ -139,7 +139,7 @@ All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md
 ### Core loop
 
 - **Build workspace** — Prompt, transcript, builder chat, and saved artifacts in one place
-- **Agent Builder Workbench** — Live candidate-building harness with plan progress, artifacts, validation, review gate, and Eval handoff
+- **[Agent Builder Workbench](docs/features/workbench.md)** — Live candidate-building harness with plan progress, artifacts, validation, review gate, and Eval handoff
 - **Eval runs** — Run suites, inspect historical runs, and drill into case-level results
 - **Results Explorer** — Filter failures, annotate examples, export runs, and compare outcomes
 - **Compare** — Run or inspect pairwise config comparisons with significance summaries
