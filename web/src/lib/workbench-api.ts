@@ -56,6 +56,8 @@ export interface RunSummary {
   operationsApplied?: number;
   validation_status?: string | null;
   validationStatus?: string | null;
+  evidence_summary?: WorkbenchTerminalEvidenceSummary | null;
+  evidenceSummary?: WorkbenchTerminalEvidenceSummary | null;
   changes: Array<{
     operation: string;
     category: string;
@@ -397,12 +399,27 @@ export interface WorkbenchReviewGate {
   blocking_reasons: string[];
 }
 
+export interface WorkbenchTerminalEvidenceSummary {
+  structural_status?: string;
+  validation_status?: string;
+  improvement_status?: string;
+  correction_status?: string;
+  evidence_level?: string;
+  operations_applied?: number;
+  artifacts_observed?: number;
+  task_completions?: number;
+  stall_count?: number;
+  review_required?: boolean;
+}
+
 export interface WorkbenchHandoff {
   project_id: string;
   run_id: string;
   turn_id?: string | null;
   version: number;
   review_gate_status: string;
+  evidence_level?: string | null;
+  improvement_status?: string | null;
   active_artifact_id?: string | null;
   last_event_sequence: number;
   next_operator_action: string;
@@ -496,6 +513,7 @@ export interface WorkbenchRunHandoff {
     total_checks?: number;
     blocking?: boolean;
   };
+  evidence?: WorkbenchTerminalEvidenceSummary | null;
   latest_artifact?: {
     artifact_id?: string;
     task_id?: string;
@@ -550,6 +568,7 @@ export interface WorkbenchRun {
   budget?: WorkbenchBudget;
   telemetry_summary?: WorkbenchTelemetrySummary;
   summary?: RunSummary | null;
+  evidence_summary?: WorkbenchTerminalEvidenceSummary | null;
   failure_reason?: string | null;
   cancel_reason?: string | null;
   review_gate?: WorkbenchReviewGate | null;
@@ -818,6 +837,7 @@ export async function* iterateWorkbenchBuild(
     project_id: string;
     message: string;
     target?: WorkbenchTarget;
+    environment?: string;
     max_iterations?: number;
     max_seconds?: number;
     max_tokens?: number;
@@ -835,6 +855,7 @@ export async function* iterateWorkbenchBuild(
       project_id: body.project_id,
       follow_up: body.message,
       target: body.target,
+      environment: body.environment,
       max_iterations: body.max_iterations,
       max_seconds: body.max_seconds,
       max_tokens: body.max_tokens,

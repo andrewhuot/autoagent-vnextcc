@@ -13,11 +13,84 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.routes.workbench import router
-from builder.workbench import WorkbenchStore
+from builder.workbench import WorkbenchService, WorkbenchStore
+from builder.workbench_plan import PlanTask, WorkbenchArtifact
+
+
+class _InvalidCxToolAgent:
+    execution_mode = "mock"
+    provider = "test"
+    model = "invalid-tool-agent"
+    mode_reason = "deterministic invalid tool fixture"
+    requested_mock = True
+
+    async def run(self, request, project):
+        task_id = "task-invalid-tool"
+        plan = PlanTask(
+            id="task-root",
+            title="Build CX-invalid tool agent",
+            children=[
+                PlanTask(
+                    id=task_id,
+                    title="Add local shell diagnostic tool",
+                    parent_id="task-root",
+                )
+            ],
+        )
+        tool = {
+            "id": "tool-local-shell",
+            "name": "local_diagnostic_shell",
+            "description": "Runs local diagnostics for the operator.",
+            "type": "local_shell",
+            "parameters": [],
+        }
+        artifact = WorkbenchArtifact(
+            id="artifact-local-shell",
+            task_id=task_id,
+            category="tool",
+            name="local_diagnostic_shell",
+            summary="Local shell diagnostic tool.",
+            preview="local_diagnostic_shell()",
+            source="def local_diagnostic_shell(): ...",
+            language="python",
+            created_at="2026-04-12T00:00:00Z",
+        )
+        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+        yield {"event": "task.started", "data": {"task_id": task_id}}
+        yield {"event": "artifact.updated", "data": {"artifact": artifact.to_dict()}}
+        yield {
+            "event": "task.completed",
+            "data": {
+                "task_id": task_id,
+                "operations": [
+                    {
+                        "operation": "add_tool",
+                        "target": "tools",
+                        "label": "local_diagnostic_shell",
+                        "object": tool,
+                    }
+                ],
+            },
+        }
+        yield {"event": "build.completed", "data": {"summary": "Added local shell tool."}}
+
+
+class _NoEvidenceAgent:
+    execution_mode = "mock"
+    provider = "test"
+    model = "no-evidence-agent"
+    mode_reason = "deterministic no evidence fixture"
+    requested_mock = True
+
+    async def run(self, request, project):
+        plan = PlanTask(id="task-root", title="Say the build is done")
+        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+        yield {"event": "build.completed", "data": {"summary": "No canonical changes."}}
 
 
 def _make_client(tmp_path: Path) -> TestClient:
@@ -51,6 +124,13 @@ def _stream(client: TestClient, body: dict) -> list[dict]:
     response = client.post("/api/workbench/build/stream", json=body)
     assert response.status_code == 200
     return _parse_sse(response.text)
+
+
+async def _collect_service_stream(stream) -> list[dict]:
+    events: list[dict] = []
+    async for event in stream:
+        events.append(event)
+    return events
 
 
 def test_multi_turn_preserves_artifacts_and_conversation(tmp_path: Path) -> None:
@@ -191,6 +271,93 @@ def test_auto_iterate_off_runs_one_pass_only(tmp_path: Path) -> None:
     )
     iterations = [ev for ev in events if ev["event"] == "iteration.started"]
     assert len(iterations) == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_iterate_false_keeps_validation_failure_honest(tmp_path: Path) -> None:
+    service = WorkbenchService(WorkbenchStore(tmp_path / "workbench.json"))
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a CX agent with a local diagnostic tool.",
+        target="cx",
+        agent=_InvalidCxToolAgent(),
+        auto_iterate=False,
+        max_iterations=2,
+    )
+
+    events = await _collect_service_stream(stream)
+
+    iterations = [event for event in events if event["event"] == "iteration.started"]
+    validations = [event for event in events if event["event"] == "validation.ready"]
+    terminal = events[-1]
+    project_id = terminal["data"]["project_id"]
+    snapshot = service.get_plan_snapshot(project_id=project_id)
+
+    assert len(iterations) == 1
+    assert validations[-1]["data"]["status"] == "failed"
+    assert terminal["event"] == "run.completed"
+    assert terminal["data"]["status"] == "failed"
+    assert terminal["data"]["evidence_summary"]["structural_status"] == "failed"
+    assert terminal["data"]["evidence_summary"]["improvement_status"] == "changed"
+    assert terminal["data"]["review_gate"]["status"] == "blocked"
+    assert any(tool["type"] == "local_shell" for tool in snapshot["model"]["tools"])
+
+
+@pytest.mark.asyncio
+async def test_auto_iterate_repairs_known_target_compatibility_failure(tmp_path: Path) -> None:
+    service = WorkbenchService(WorkbenchStore(tmp_path / "workbench.json"))
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a CX agent with a local diagnostic tool.",
+        target="cx",
+        agent=_InvalidCxToolAgent(),
+        auto_iterate=True,
+        max_iterations=2,
+    )
+
+    events = await _collect_service_stream(stream)
+
+    iterations = [event for event in events if event["event"] == "iteration.started"]
+    validations = [event for event in events if event["event"] == "validation.ready"]
+    terminal = events[-1]
+    project_id = terminal["data"]["project_id"]
+    snapshot = service.get_plan_snapshot(project_id=project_id)
+
+    assert len(iterations) == 2
+    assert iterations[1]["data"]["mode"] == "correction"
+    assert len(validations) == 2
+    assert validations[0]["data"]["status"] == "failed"
+    assert validations[1]["data"]["status"] == "passed"
+    assert terminal["event"] == "run.completed"
+    assert terminal["data"]["status"] == "completed"
+    assert terminal["data"]["validation"]["status"] == "passed"
+    assert terminal["data"]["evidence_summary"]["correction_status"] == "corrected"
+    assert terminal["data"]["evidence_summary"]["improvement_status"] == "changed"
+    assert not any(tool["type"] == "local_shell" for tool in snapshot["model"]["tools"])
+
+
+@pytest.mark.asyncio
+async def test_structural_validation_without_change_evidence_is_not_success(tmp_path: Path) -> None:
+    service = WorkbenchService(WorkbenchStore(tmp_path / "workbench.json"))
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a support agent.",
+        target="portable",
+        agent=_NoEvidenceAgent(),
+        auto_iterate=False,
+        max_iterations=1,
+    )
+
+    events = await _collect_service_stream(stream)
+    terminal = events[-1]
+
+    assert terminal["event"] == "run.completed"
+    assert terminal["data"]["status"] == "failed"
+    assert terminal["data"]["failure_reason"] == "insufficient_completion_evidence"
+    assert terminal["data"]["validation"]["status"] == "passed"
+    assert terminal["data"]["evidence_summary"]["structural_status"] == "passed"
+    assert terminal["data"]["evidence_summary"]["improvement_status"] == "missing"
+    assert terminal["data"]["review_gate"]["status"] == "blocked"
 
 
 def _leaf_count(plan_payload: dict) -> int:

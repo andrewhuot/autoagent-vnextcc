@@ -370,6 +370,60 @@ describe('workbench-store', () => {
     expect(state.activity[0].kind).toBe('test');
   });
 
+  it('appends live stream events into the active run trace', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', run_id: 'run-1', turn_id: 'run-1', mode: 'initial', brief: 'Build' },
+    });
+    dispatch({
+      event: 'validation.ready',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        turn_id: 'run-1',
+        status: 'passed',
+        checks: [],
+      },
+    });
+
+    const events = useWorkbenchStore.getState().activeRun?.events ?? [];
+    expect(events.map((event) => event.event)).toEqual(['turn.started', 'validation.ready']);
+    expect(events[1].status).toBe('passed');
+  });
+
+  it('prefers authoritative terminal run events over observed stream events', () => {
+    dispatch({
+      event: 'turn.started',
+      data: { project_id: 'wb-42', run_id: 'run-1', turn_id: 'run-1', mode: 'initial', brief: 'Build' },
+    });
+    dispatch({
+      event: 'run.completed',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        status: 'completed',
+        phase: 'presenting',
+        run: makeRun({
+          status: 'completed',
+          phase: 'presenting',
+          events: [
+            {
+              sequence: 1,
+              event: 'persisted.only',
+              phase: 'terminal',
+              status: 'completed',
+              created_at: '2026-04-11T00:00:00Z',
+              data: {},
+            },
+          ],
+        }),
+      },
+    });
+
+    const events = useWorkbenchStore.getState().activeRun?.events ?? [];
+    expect(events.map((event) => event.event)).toEqual(['persisted.only']);
+  });
+
   it('stores error message on error event', () => {
     dispatch({ event: 'error', data: { message: 'Provider timed out' } });
     const state = useWorkbenchStore.getState();
@@ -565,6 +619,45 @@ describe('workbench-store — harness features', () => {
       elapsedMs: 2500,
       currentPhase: 'executing',
     });
+  });
+
+  it('hydrates harness state and run summary for operator review surfaces', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      projectName: 'Hydrated Harness',
+      target: 'portable',
+      environment: 'draft',
+      version: 2,
+      runSummary: {
+        run_id: 'run-1',
+        status: 'completed',
+        phase: 'presenting',
+        mode: 'mock',
+        provider: 'mock',
+        model: 'mock-workbench',
+        changes: [],
+        evidence_summary: {
+          structural_status: 'passed',
+          improvement_status: 'changed',
+          correction_status: 'not_needed',
+        },
+      },
+      harnessState: {
+        checkpoint_count: 1,
+        recent_checkpoints: [{ task_id: 'task-1' }],
+        latest_handoff: {
+          run_id: 'run-1',
+          next_action: 'Review generated artifacts.',
+          last_event: { sequence: 4, event: 'run.completed' },
+          progress: { total_tasks: 1, completed_tasks: 1 },
+          verification: { status: 'passed' },
+        },
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.runSummary?.evidence_summary?.improvement_status).toBe('changed');
+    expect(state.harnessState?.latest_handoff?.next_action).toBe('Review generated artifacts.');
   });
 
   it('stores heartbeat liveness and context budget from harness.heartbeat event', () => {

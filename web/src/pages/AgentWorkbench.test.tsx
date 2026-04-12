@@ -87,7 +87,7 @@ function installMockFetch(opts: {
     last_brief: '',
   };
 
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
     if (url.endsWith('/api/workbench/projects/default')) {
       return new Response(JSON.stringify(defaultProject), {
@@ -109,6 +109,12 @@ function installMockFetch(opts: {
     }
     if (url.endsWith('/api/workbench/build/stream')) {
       return new Response(opts.streamBody ?? '', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+    if (url.endsWith('/api/workbench/build/iterate')) {
+      return new Response('', {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
       });
@@ -357,5 +363,34 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('Review gate')).toBeInTheDocument();
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-test at Draft v2.')).toBeInTheDocument();
+  });
+
+  it('passes manual iteration budget controls to the iterate stream', async () => {
+    const user = userEvent.setup();
+    const fetchMock = installMockFetch();
+    renderWorkbench();
+
+    await screen.findByText('No artifacts yet');
+    useWorkbenchStore.setState({
+      projectId: 'wb-test',
+      buildStatus: 'done',
+      iterationCount: 1,
+      maxIterations: 5,
+      version: 2,
+    });
+
+    await user.click(await screen.findByRole('button', { name: 'Iterate' }));
+    await user.type(screen.getByLabelText('Iteration message'), 'Tighten the tool evidence');
+    await user.click(screen.getByRole('button', { name: 'Run' }));
+
+    await waitFor(() => {
+      const iterateCall = fetchMock.mock.calls.find(([input]) =>
+        String(input).endsWith('/api/workbench/build/iterate')
+      );
+      expect(iterateCall).toBeTruthy();
+      const body = JSON.parse(String(iterateCall?.[1]?.body ?? '{}'));
+      expect(body.max_iterations).toBe(5);
+      expect(body.environment).toBe('draft');
+    });
   });
 });

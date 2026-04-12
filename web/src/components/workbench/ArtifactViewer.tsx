@@ -573,50 +573,93 @@ function TraceWorkspace() {
 
 function ActivityWorkspace() {
   const activity = useWorkbenchStore((s) => s.activity);
-  const presentation = useWorkbenchStore((s) => s.presentation);
+  const presentationState = useWorkbenchStore((s) => s.presentation);
+  const activeRun = useWorkbenchStore((s) => s.activeRun);
+  const harnessState = useWorkbenchStore((s) => s.harnessState);
+  const runSummary = useWorkbenchStore((s) => s.runSummary);
+  const lastValidation = useWorkbenchStore((s) => s.lastValidation);
+  const presentation = presentationState ?? activeRun?.presentation ?? null;
+  const reviewGate = presentation?.review_gate ?? activeRun?.review_gate ?? null;
+  const handoff = presentation?.handoff ?? activeRun?.handoff ?? harnessState?.latest_handoff ?? null;
+  const handoffEvidence = handoff && 'evidence' in handoff ? handoff.evidence : null;
+  const handoffText = handoff
+    ? 'resume_prompt' in handoff && handoff.resume_prompt
+      ? handoff.resume_prompt
+      : 'next_action' in handoff
+        ? handoff.next_action
+        : handoff.next_operator_action
+    : '';
+  const handoffLastEvent = handoff
+    ? 'last_event_sequence' in handoff
+      ? handoff.last_event_sequence
+      : handoff.last_event?.sequence ?? 'unknown'
+    : 'unknown';
+  const evidence =
+    activeRun?.evidence_summary ??
+    activeRun?.summary?.evidence_summary ??
+    runSummary?.evidence_summary ??
+    handoffEvidence ??
+    null;
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
       <div className="max-w-3xl space-y-4">
-        {presentation && (
+        {(presentation || reviewGate || handoff || evidence || lastValidation) && (
           <section className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-3">
-            <h2 className="text-[13px] font-semibold text-[color:var(--wb-text)]">{presentation.summary}</h2>
-            <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
-              {presentation.next_actions.map((action) => (
-                <li key={action}>{action}</li>
-              ))}
-            </ul>
-            {presentation.review_gate && (
+            <h2 className="text-[13px] font-semibold text-[color:var(--wb-text)]">
+              {presentation?.summary ?? runSummary?.recommended_action ?? 'Run evidence status'}
+            </h2>
+            {presentation?.next_actions?.length ? (
+              <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
+                {presentation.next_actions.map((action) => (
+                  <li key={action}>{action}</li>
+                ))}
+              </ul>
+            ) : null}
+            {(evidence || lastValidation) && (
+              <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
+                <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Evidence status</h3>
+                <div className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
+                  <p>structural_validation: {evidence?.structural_status ?? lastValidation?.status ?? 'unknown'}</p>
+                  <p>improvement_evidence: {evidence?.improvement_status ?? 'unknown'}</p>
+                  {evidence?.correction_status ? <p>correction: {evidence.correction_status}</p> : null}
+                  {typeof evidence?.operations_applied === 'number' ? (
+                    <p>operations_applied: {evidence.operations_applied}</p>
+                  ) : null}
+                </div>
+              </div>
+            )}
+            {reviewGate && (
               <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Review gate</h3>
                   <span className="rounded-md bg-[color:var(--wb-bg-active)] px-2 py-0.5 text-[11px] text-[color:var(--wb-text-soft)]">
-                    {presentation.review_gate.status}
+                    {reviewGate.status}
                   </span>
                 </div>
                 <div className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
-                  {presentation.review_gate.checks.map((check) => (
+                  {reviewGate.checks.map((check) => (
                     <p key={check.name}>
                       {check.name}: {check.status}
                     </p>
                   ))}
                 </div>
-                {presentation.review_gate.blocking_reasons.length > 0 && (
+                {reviewGate.blocking_reasons.length > 0 && (
                   <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-error)]">
-                    {presentation.review_gate.blocking_reasons.map((reason) => (
+                    {reviewGate.blocking_reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>
                 )}
               </div>
             )}
-            {presentation.handoff && (
+            {handoff && (
               <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
                 <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Session handoff</h3>
                 <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
-                  {presentation.handoff.resume_prompt}
+                  {handoffText}
                 </p>
                 <p className="mt-2 font-mono text-[11px] text-[color:var(--wb-text-dim)]">
-                  run {presentation.handoff.run_id} | event {presentation.handoff.last_event_sequence}
+                  run {handoff.run_id} | event {handoffLastEvent}
                 </p>
               </div>
             )}
