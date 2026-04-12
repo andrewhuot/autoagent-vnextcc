@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { EvalRuns } from './EvalRuns';
 import { useActiveAgentStore } from '../lib/active-agent';
@@ -147,6 +147,23 @@ describe('EvalRuns', () => {
     );
   });
 
+  it('shows setup guidance before an eval is selected or complete', async () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage('/evals?agent=agent-v002');
+
+    const journey = await screen.findByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Eval')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: run eval')).toBeInTheDocument();
+    expect(within(journey).queryByText('Next: optimize candidate')).not.toBeInTheDocument();
+  });
+
   it('starts a new eval from the empty-state CTA when an agent is selected', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
@@ -191,6 +208,14 @@ describe('EvalRuns', () => {
       passed: 11,
       total: 12,
     });
+
+    const journey = await screen.findByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Eval')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: optimize candidate')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Optimize candidate' })).toHaveAttribute(
+      'href',
+      '/optimize?agent=agent-v002&evalRunId=task-123456'
+    );
 
     await user.click(await screen.findByRole('button', { name: 'Optimize' }));
     expect(await screen.findByText('Optimize Page')).toBeInTheDocument();

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -102,9 +102,10 @@ function installMockFetch(opts: {
     last_brief: '',
   };
 
-  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input.toString();
-    if (url.endsWith('/api/workbench/projects/default')) {
+    const method = init?.method ?? 'GET';
+    if (url.endsWith('/api/workbench/projects/default') && method === 'GET') {
       return new Response(JSON.stringify(defaultProject), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -174,6 +175,11 @@ describe('AgentWorkbench', () => {
 
     // Chat input is rendered.
     expect(screen.getByLabelText('Build request')).toBeInTheDocument();
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Workbench')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: build candidate')).toBeInTheDocument();
+    expect(within(journey).queryByText('Next: run eval')).not.toBeInTheDocument();
   });
 
   it('renders a plan tree and artifacts from the store', async () => {
@@ -251,6 +257,64 @@ describe('AgentWorkbench', () => {
     // Multi-turn feed renders artifacts under a per-turn "Artifacts (n)" heading.
     // "Artifacts" also appears in the workspace tab bar, so use getAllByText.
     expect(screen.getAllByText(/^Artifacts\b/).length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('recommends eval only when the Workbench candidate is ready', async () => {
+    installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-test',
+        name: 'Airline Support Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 2,
+        build_status: 'done',
+        plan: null,
+        artifacts: [],
+        model: {
+          project: { name: 'Airline Support Workbench', description: 'Airline support agent' },
+          agents: [
+            {
+              id: 'root',
+              name: 'Airline Support Agent',
+              role: 'Help travelers',
+              model: 'gpt-5.4-mini',
+              instructions: 'Help travelers safely.',
+              sub_agents: [],
+            },
+          ],
+          tools: [],
+          callbacks: [],
+          guardrails: [],
+          eval_suites: [],
+          environments: [{ id: 'draft', name: 'Draft', target: 'portable' }],
+          deployments: [],
+        },
+        exports: { adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        last_test: { run_id: 'test-1', status: 'passed', created_at: '2026-04-11T00:00:00Z', checks: [], trace: [] },
+        last_brief: 'Build an airline support agent',
+        run_summary: {
+          run_id: 'run-ready',
+          status: 'completed',
+          phase: 'presenting',
+          mode: 'initial',
+          provider: 'mock',
+          model: 'gpt-5.4-mini',
+          changes: [],
+          recommended_action: 'Run eval before optimizing.',
+        },
+      },
+    });
+
+    renderWorkbench();
+
+    const journey = await screen.findByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Workbench')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: run eval')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Run eval' })).toHaveAttribute(
+      'href',
+      '/evals?new=1'
+    );
   });
 
   it('pushes the user message immediately when the chat input is submitted', async () => {

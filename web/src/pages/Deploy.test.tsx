@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Deploy } from './Deploy';
 
@@ -100,6 +100,37 @@ describe('Deploy', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm rollback' }));
 
     expect(rollbackMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('guides operators to promote only when a canary is active', () => {
+    renderPage();
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Deploy')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: promote canary')).toBeInTheDocument();
+    expect(within(journey).getByRole('button', { name: 'Promote canary' })).toBeInTheDocument();
+  });
+
+  it('does not recommend canary promotion when no canary is active', () => {
+    apiMocks.useDeployStatus.mockReturnValue({
+      data: {
+        active_version: 7,
+        canary_version: null,
+        total_versions: 9,
+        canary_status: null,
+        history: [],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage();
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Deploy')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: start canary')).toBeInTheDocument();
+    expect(within(journey).queryByText('Next: promote canary')).not.toBeInTheDocument();
   });
 
   it('requires confirmation before promoting a canary', async () => {

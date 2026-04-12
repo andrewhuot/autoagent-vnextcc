@@ -42,6 +42,8 @@ import {
 } from 'lucide-react';
 import {
   getNavigationSections,
+  getOperatorJourneyRouteState,
+  OPERATOR_JOURNEY_STEPS,
   getSidebarMode,
   getSimpleNavigationSections,
   setSidebarMode,
@@ -106,52 +108,10 @@ interface SidebarProps {
   onClose: () => void;
 }
 
-interface GuidedFlowStep {
-  label: string;
-  matcher: (pathname: string) => boolean;
-}
-
-const GUIDED_FLOW_STEPS: GuidedFlowStep[] = [
-  {
-    label: 'Setup',
-    matcher: (pathname) => pathname === '/setup' || pathname === '/dashboard',
-  },
-  {
-    label: 'Build',
-    matcher: (pathname) => pathname === '/build',
-  },
-  {
-    label: 'Eval',
-    matcher: (pathname) =>
-      pathname === '/evals' || pathname.startsWith('/evals/') || pathname === '/results' || pathname === '/compare',
-  },
-  {
-    label: 'Improve',
-    matcher: (pathname) => pathname === '/optimize' || pathname === '/studio' || pathname === '/improvements',
-  },
-  {
-    label: 'Deploy',
-    matcher: (pathname) => pathname === '/deploy',
-  },
-];
-
-function getGuidedFlowState(pathname: string) {
-  const activeIndex = GUIDED_FLOW_STEPS.findIndex((step) => step.matcher(pathname));
-  const boundedIndex = activeIndex === -1 ? 0 : activeIndex;
-  const currentStep = GUIDED_FLOW_STEPS[boundedIndex];
-  const nextStep = GUIDED_FLOW_STEPS[boundedIndex + 1] ?? null;
-
-  return {
-    activeIndex: boundedIndex,
-    currentLabel: currentStep.label,
-    nextLabel: nextStep?.label ?? 'Done',
-  };
-}
-
 export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
   const location = useLocation();
   const [simpleMode, setSimpleMode] = useState(() => getSidebarMode() !== 'pro');
-  const guidedFlow = getGuidedFlowState(location.pathname);
+  const guidedFlow = getOperatorJourneyRouteState(location.pathname);
   const { data: reviewStats } = useUnifiedReviewStats();
   const pendingReviewCount = reviewStats?.total_pending ?? 0;
 
@@ -207,13 +167,13 @@ export function Sidebar({ mobileOpen, onClose }: SidebarProps) {
                 Guided flow
               </p>
               <p className="mt-2 text-sm font-medium text-slate-900">
-                You're on {guidedFlow.currentLabel}. Next up: {guidedFlow.nextLabel}.
+                You're on {guidedFlow.currentStep.label}. Next up: {guidedFlow.nextStep?.label ?? 'Done'}.
               </p>
               <p className="mt-1 text-xs leading-5 text-slate-600">
-                Move left to right to keep the product feeling predictable: Setup, Build, Eval, Improve, then Deploy.
+                Move left to right to keep the product feeling predictable: Build, Workbench, Eval, Optimize, Review, then Deploy.
               </p>
               <div className="mt-3 flex flex-wrap gap-2">
-                {GUIDED_FLOW_STEPS.map((step, index) => {
+                {OPERATOR_JOURNEY_STEPS.map((step, index) => {
                   const isActive = index === guidedFlow.activeIndex;
                   const isComplete = index < guidedFlow.activeIndex;
                   return (

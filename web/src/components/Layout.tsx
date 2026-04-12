@@ -76,11 +76,21 @@ export function getDemoJourneyContext(pathname: string, search = ''): DemoJourne
 
   if (normalizedPathname === '/build') {
     return {
-      stepLabel: 'Step 1 of 5',
+      stepLabel: 'Step 1 of 6',
       summary: 'Build the draft',
       detail:
-        'Shape the config in Build, then use Save & Run Eval to carry that exact saved draft into Eval Runs.',
+        'Shape the config in Build, then continue through Workbench or carry that exact saved draft into Eval Runs.',
       activeStep: 0,
+    };
+  }
+
+  if (normalizedPathname === '/workbench') {
+    return {
+      stepLabel: 'Step 2 of 6',
+      summary: 'Materialize the candidate',
+      detail:
+        'Use Workbench to produce artifacts, validation evidence, and a candidate that is ready for Eval.',
+      activeStep: 1,
     };
   }
 
@@ -89,7 +99,7 @@ export function getDemoJourneyContext(pathname: string, search = ''): DemoJourne
     const carriedFromBuild = params.get('new') === '1';
 
     return {
-      stepLabel: 'Step 2 of 5',
+      stepLabel: 'Step 3 of 6',
       summary: carriedFromBuild ? 'Run the saved draft from Build' : 'Launch and review evals',
       detail: carriedFromBuild
         ? 'The saved draft stays selected so you can launch the first run without re-choosing the config.'
@@ -100,31 +110,31 @@ export function getDemoJourneyContext(pathname: string, search = ''): DemoJourne
 
   if (normalizedPathname === '/optimize' || normalizedPathname === '/studio') {
     return {
-      stepLabel: 'Step 3 of 5',
+      stepLabel: 'Step 4 of 6',
       summary: 'Optimize the agent',
       detail:
         'Use eval results to search for better configs. The optimizer proposes changes you can accept, reject, or tweak.',
-      activeStep: 2,
+      activeStep: 3,
     };
   }
 
   if (normalizedPathname === '/improvements') {
     return {
-      stepLabel: 'Step 4 of 5',
+      stepLabel: 'Step 5 of 6',
       summary: 'Review improvements',
       detail:
         'Inspect proposed changes, compare before/after scores, and accept the improvements worth keeping.',
-      activeStep: 3,
+      activeStep: 4,
     };
   }
 
   if (normalizedPathname === '/deploy') {
     return {
-      stepLabel: 'Step 5 of 5',
+      stepLabel: 'Step 6 of 6',
       summary: 'Deploy to production',
       detail:
         'Ship the accepted config. Use canary deploys to test in production before promoting to 100%.',
-      activeStep: 4,
+      activeStep: 5,
     };
   }
 
@@ -138,6 +148,7 @@ function DemoJourneyStrip({
 }) {
   const steps = [
     { label: 'Build', href: '/build' },
+    { label: 'Workbench', href: '/workbench' },
     { label: 'Eval', href: '/evals' },
     { label: 'Optimize', href: '/optimize' },
     { label: 'Review', href: '/improvements' },

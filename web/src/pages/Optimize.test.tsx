@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Optimize } from './Optimize';
 import { useActiveAgentStore } from '../lib/active-agent';
@@ -319,6 +319,58 @@ describe('Optimize', () => {
           String(description).includes('awaiting human review')
       )
     ).toBe(true);
+  });
+
+  it('guides operators to review proposals only when proposals are pending', () => {
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+    apiMocks.usePendingReviews.mockReturnValue({
+      data: [
+        {
+          attempt_id: 'attempt-pending',
+          proposed_config: { prompts: { root: 'new' } },
+          current_config: { prompts: { root: 'old' } },
+          config_diff: '- root: old\n+ root: new',
+          score_before: 72,
+          score_after: 84,
+          change_description: 'Strengthen root prompt',
+          reasoning: 'Improve routing clarity and answer quality',
+          created_at: '2026-04-01T12:00:00.000Z',
+          strategy: 'simple',
+          selected_operator_family: 'prompts',
+          governance_notes: ['Protected safety floor at 99%.'],
+          deploy_strategy: 'immediate',
+        },
+      ],
+      isLoading: false,
+      refetch: vi.fn(),
+    });
+
+    renderOptimize('/optimize?agent=agent-v002&evalRunId=eval-run-1234');
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Optimize')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: review proposals')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Review proposals' })).toHaveAttribute(
+      'href',
+      '/improvements?tab=review'
+    );
+  });
+
+  it('does not show review guidance before an optimize proposal exists', () => {
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+
+    renderOptimize('/optimize?agent=agent-v002&evalRunId=eval-run-1234');
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Optimize')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: start optimization')).toBeInTheDocument();
+    expect(within(journey).queryByText('Next: review proposals')).not.toBeInTheDocument();
   });
 
   it('shows a prominent live progress section with step label and elapsed time', async () => {

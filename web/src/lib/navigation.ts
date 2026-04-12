@@ -373,4 +373,5 @@ export function getRouteRedirect(pathname: string): string | undefined {
   return undefined;
 }
 
+export { getOperatorJourneyRouteState, OPERATOR_JOURNEY_STEPS } from './operator-journey';
 export { COMMAND_GROUPS, COMMAND_TAXONOMY };

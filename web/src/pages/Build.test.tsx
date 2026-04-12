@@ -211,6 +211,15 @@ describe('Build', () => {
     ).toBeInTheDocument();
   });
 
+  it('does not recommend running eval until a draft is saved', () => {
+    renderPage();
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Build')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: create a draft')).toBeInTheDocument();
+    expect(within(journey).queryByText('Next: run eval')).not.toBeInTheDocument();
+  });
+
   it('switches to the builder chat workspace without losing the builder controls', async () => {
     const user = userEvent.setup();
     renderPage();
@@ -636,6 +645,13 @@ describe('Build', () => {
     await user.click(screen.getByRole('button', { name: 'Save to Workspace' }));
 
     expect(await screen.findByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Build')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: run eval')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Run eval' })).toHaveAttribute(
+      'href',
+      '/evals?agent=agent-v002&new=1'
+    );
     expect(screen.getAllByText('/tmp/workspace/configs/v002.yaml').length).toBeGreaterThan(0);
   });
 

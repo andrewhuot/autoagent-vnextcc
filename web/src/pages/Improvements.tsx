@@ -2,10 +2,12 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { UnifiedReviewQueue } from './UnifiedReviewQueue';
 import { Experiments } from './Experiments';
 import { Opportunities } from './Opportunities';
 import { useExperiments, useOptimizeHistory, useUnifiedReviewStats } from '../lib/api';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { formatTimestamp, statusVariant, classNames } from '../lib/utils';
 
 type ImprovementsTab = 'opportunities' | 'experiments' | 'review' | 'history';
@@ -77,6 +79,43 @@ function ImprovementsTabButton({
       {label}
     </button>
   );
+}
+
+/** Summarize Review readiness from the existing unified review counters. */
+function getReviewJourneySummary(input: { pendingCount: number; appliedCount: number }) {
+  if (input.pendingCount > 0) {
+    return createJourneyStatusSummary({
+      currentStep: 'review',
+      status: 'ready',
+      statusLabel: `${input.pendingCount} pending`,
+      summary: 'The unified review queue has proposal work waiting. Resolve it before Deploy.',
+      nextLabel: 'Review proposals',
+      nextDescription: 'Open the review tab and approve or reject each proposal.',
+      href: '/improvements?tab=review',
+    });
+  }
+
+  if (input.appliedCount > 0) {
+    return createJourneyStatusSummary({
+      currentStep: 'review',
+      status: 'ready',
+      statusLabel: `${input.appliedCount} approved`,
+      summary: 'Approved improvements are ready for deployment planning.',
+      nextLabel: 'Deploy approved improvements',
+      nextDescription: 'Open Deploy and start a canary for the approved config.',
+      href: '/deploy',
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'review',
+    status: 'waiting',
+    statusLabel: 'No review queue',
+    summary: 'No proposals are waiting for review yet. Optimize or inspect opportunities to produce a reviewable change.',
+    nextLabel: 'Find proposals',
+    nextDescription: 'Return to Optimize or Opportunities when you need the next proposal.',
+    href: '/optimize',
+  });
 }
 
 interface HistoryEntry {
@@ -263,6 +302,7 @@ export function Improvements() {
   const { data: reviewStats } = useUnifiedReviewStats();
   const pendingCount = reviewStats?.total_pending ?? 0;
   const appliedCount = reviewStats?.total_approved ?? 0;
+  const journeySummary = getReviewJourneySummary({ pendingCount, appliedCount });
 
   function selectTab(tab: ImprovementsTab) {
     const next = new URLSearchParams(searchParams);
@@ -293,6 +333,8 @@ export function Improvements() {
           </div>
         }
       />
+
+      <OperatorNextStepCard summary={journeySummary} />
 
       {appliedCount > 0 && (
         <section className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">

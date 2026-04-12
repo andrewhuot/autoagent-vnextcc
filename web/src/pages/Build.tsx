@@ -48,8 +48,10 @@ import {
   type BuilderSessionPayload,
 } from '../lib/builder-chat-api';
 import { PageHeader } from '../components/PageHeader';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { useActiveAgent } from '../lib/active-agent';
 import { getBuildWorkspaceContext } from '../lib/navigation';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { toastError, toastSuccess } from '../lib/toast';
 import type {
   AgentLibraryItem,
@@ -229,6 +231,34 @@ function navigateToEvalWorkflow(
   });
 }
 
+/** Convert saved draft evidence into the shared operator journey contract. */
+function getBuildOperatorJourneySummary(latestSavedCandidate: BuildArtifact | undefined) {
+  if (latestSavedCandidate) {
+    const href = latestSavedCandidate.agent_id
+      ? buildEvalRoute(latestSavedCandidate.agent_id, 'run')
+      : '/evals?new=1';
+    return createJourneyStatusSummary({
+      currentStep: 'build',
+      status: 'ready',
+      statusLabel: 'Candidate saved',
+      summary: `${latestSavedCandidate.title} is saved as a candidate. Keep the same config selected and run Eval before Optimize.`,
+      nextLabel: 'Run eval',
+      nextDescription: 'Launch Eval Runs with the saved candidate selected.',
+      href,
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'build',
+    status: 'waiting',
+    statusLabel: 'Draft needed',
+    summary: 'Start with a prompt, transcript, or builder chat brief, then save the best draft before Eval.',
+    nextLabel: 'Create a draft',
+    nextDescription: 'Generate or refine an agent candidate in this workspace.',
+    href: '/build',
+  });
+}
+
 /**
  * Unified build workspace that combines prompt-led studio, transcript-led studio, builder chat,
  * and saved artifacts in one tabbed surface.
@@ -238,6 +268,8 @@ export function Build() {
   const [savedArtifacts, setSavedArtifacts] = useState<BuildArtifact[]>(loadStoredBuildArtifacts);
   const activeTab = parseBuildTab(searchParams.get('tab')) ?? 'prompt';
   const workspaceHeader = getBuildWorkspaceContext(activeTab);
+  const latestSavedCandidate = savedArtifacts.find((artifact) => artifact.status === 'complete');
+  const journeySummary = getBuildOperatorJourneySummary(latestSavedCandidate);
 
   useEffect(() => {
     try {
@@ -267,6 +299,8 @@ export function Build() {
         title={workspaceHeader.title}
         description={workspaceHeader.description}
       />
+
+      <OperatorNextStepCard summary={journeySummary} />
 
       <BuildJourneyPanel activeTab={activeTab} />
 
@@ -488,6 +522,7 @@ export function BuilderChatWorkspace({
 
     onArtifactCreated?.({
       artifact_id: saved.artifact_id,
+      agent_id: agent.id,
       title: session?.config?.agent_name ?? agent.name,
       summary: `Saved builder chat config for ${session?.config?.agent_name ?? agent.name}`,
       source: 'builder_chat',
@@ -1029,6 +1064,7 @@ export function StudioWorkspace({
       transcriptReportId?: string;
       builderSessionId?: string;
       status?: BuildArtifact['status'];
+      agentId?: string;
     }
   ) {
     const artifactId = artifactIdRef.current ?? crypto.randomUUID();
@@ -1037,6 +1073,7 @@ export function StudioWorkspace({
     artifactCreatedAtRef.current = createdAt;
     onArtifactCreated?.({
       artifact_id: artifactId,
+      agent_id: options?.agentId,
       title,
       summary,
       source,
@@ -1323,6 +1360,7 @@ export function StudioWorkspace({
         promptUsed: currentMode === 'prompt' ? prompt.trim() : undefined,
         transcriptReportId: transcriptReport?.report_id,
         status: 'complete',
+        agentId: agent.id,
       }
     );
   }

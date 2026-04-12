@@ -6,13 +6,40 @@ import { EmptyState } from '../components/EmptyState';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { toastError, toastSuccess } from '../lib/toast';
 import { formatPercent, formatTimestamp, statusVariant } from '../lib/utils';
+import type { DeployStatus } from '../lib/types';
 
 type PendingConfirmation =
   | { type: 'rollback'; canaryVersion: number | null }
   | { type: 'deploy'; version: number; strategy: 'immediate' }
   | { type: 'promote'; canaryVersion: number | null };
+
+/** Translate deploy status into the shared journey card without changing rollout behavior. */
+function getDeployJourneySummary(deployStatus: DeployStatus) {
+  if (deployStatus.canary_status) {
+    return createJourneyStatusSummary({
+      currentStep: 'deploy',
+      status: 'ready',
+      statusLabel: `Canary v${deployStatus.canary_version ?? deployStatus.canary_status.canary_version}`,
+      summary: 'A canary is active. Promote it only after reviewing the canary verdict and traffic evidence.',
+      nextLabel: 'Promote canary',
+      nextDescription: 'Confirm promotion when the canary is ready to become the active version.',
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'deploy',
+    status: 'waiting',
+    statusLabel: 'No active canary',
+    summary: 'Start a canary from a candidate version before promoting production traffic.',
+    nextLabel: 'Start canary',
+    nextDescription: 'Open the deploy form, choose a candidate version, and keep the canary strategy selected.',
+    href: '/deploy?new=1',
+  });
+}
 
 export function Deploy() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -172,6 +199,8 @@ export function Deploy() {
     );
   }
 
+  const journeySummary = getDeployJourneySummary(deployStatus);
+
   return (
     <div className="space-y-6">
       <PageHeader
@@ -198,6 +227,11 @@ export function Deploy() {
           Could not load deployment status.
         </div>
       )}
+
+      <OperatorNextStepCard
+        summary={journeySummary}
+        onAction={deployStatus.canary_status ? handlePromote : undefined}
+      />
 
       {pendingConfirmation && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-4">
