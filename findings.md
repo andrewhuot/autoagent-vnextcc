@@ -412,3 +412,20 @@
 - Playwright maintained flow: `PLAYWRIGHT_BASE_URL=http://localhost:5180 npx playwright test tests/builder-flow.spec.ts` passed with 2 tests.
 - Manual browser verification on `http://localhost:5180/build?tab=builder-chat` covered create, inspect, test, mock fallback, configured `Tool: change_booking`, save, and `/evals?agent=agent-v003&new=1` handoff to `Start First Evaluation`.
 - Full web build remains blocked outside this Build scope: `npm run build` fails on unused `NormalizedFallback` imports in `src/lib/provider-fallback.test.ts` and `src/pages/AgentImprover.tsx`.
+
+## Cohesive Four Merge Campaign Notes - 2026-04-12
+
+- Required source context read:
+  - `2026-04-12-cohesive-product-hardening.md` defines the intended spine: guided operator journey, Workbench -> Eval -> Optimize handoff, restart/history continuity, and final UI language polish.
+  - `workbench-harness-claude-code-audit-codex.md` emphasizes truthful Workbench semantics, durable state hydration, explicit handoff contracts, and avoiding overclaiming autonomous/resume behavior.
+- Branch refs confirmed:
+  - `feat/cohesive-journey-guidance-codex` -> `7414223`
+  - `feat/cohesive-workbench-eval-optimize-ux-codex` -> `cdb52d4`
+  - `feat/cohesive-restart-continuity-codex` -> `e90bcf2`
+  - `feat/cohesive-product-polish-codex` -> `3dd1c12`
+  - `origin/master` -> `2e32c26`
+- Touched-file overlap:
+  - Journey guidance broadly touches core pages, sidebar/layout, navigation, shared types, and adds `OperatorNextStepCard` plus `operator-journey`.
+  - Workbench handoff focuses on `builder/workbench_bridge.py`, Workbench API/types/store-facing frontend, ArtifactViewer, AgentWorkbench, and Optimize.
+  - Restart continuity touches backend tasks/events/eval, builder chat service, builder/chat API types, Workbench store/layout/feed, Build/EvalRuns/EventLog/Improvements.
+  - Product polish touches status/empty-state utilities/components and many of the same core pages/tests; likely best merged last so copy/labels normalize the combined result.
