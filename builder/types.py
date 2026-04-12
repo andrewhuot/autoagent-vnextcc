@@ -349,6 +349,35 @@ class TraceBookmark:
     notes: str = ""
 
 
+class ReleaseStatus(str, Enum):
+    """Lifecycle states for release candidates.
+
+    Matches the PRD promotion model:
+    Draft → Reviewed → Candidate → Staging → Production → Archived
+    Plus rolled_back as an exit state from any active stage.
+    """
+
+    DRAFT = "draft"
+    REVIEWED = "reviewed"
+    CANDIDATE = "candidate"
+    STAGING = "staging"
+    PRODUCTION = "production"
+    ARCHIVED = "archived"
+    ROLLED_BACK = "rolled_back"
+
+
+# Valid forward transitions in the promotion lifecycle.
+RELEASE_TRANSITIONS: dict[str, set[str]] = {
+    "draft": {"reviewed", "archived"},
+    "reviewed": {"candidate", "draft", "archived"},
+    "candidate": {"staging", "reviewed", "archived"},
+    "staging": {"production", "candidate", "rolled_back"},
+    "production": {"archived", "rolled_back"},
+    "archived": set(),
+    "rolled_back": {"draft"},
+}
+
+
 @dataclass
 class ReleaseCandidate:
     """Release artifact linking changes, evals, and deployment target."""
@@ -360,15 +389,17 @@ class ReleaseCandidate:
     version: str = ""
     artifact_ids: list[str] = field(default_factory=list)
     eval_bundle_id: str | None = None
-    status: str = "draft"  # draft | approved | deployed | rolled_back
+    status: str = "draft"
     deployment_target: str = ""
     created_at: float = field(default_factory=now_ts)
     updated_at: float = field(default_factory=now_ts)
     approved_at: float | None = None
+    approved_by: str | None = None
     deployed_at: float | None = None
     rolled_back_at: float | None = None
     rollback_from_id: str | None = None
     changelog: str = ""
+    promotion_evidence: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -381,6 +412,8 @@ __all__ = [
     "ApprovalStatus",
     "RiskLevel",
     "PrivilegedAction",
+    "ReleaseStatus",
+    "RELEASE_TRANSITIONS",
     "BuilderProject",
     "BuilderSession",
     "BuilderTask",

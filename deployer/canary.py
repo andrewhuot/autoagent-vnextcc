@@ -1,5 +1,7 @@
 """Canary deployment orchestration and verdict execution."""
 
+from __future__ import annotations
+
 import random
 import time
 from dataclasses import dataclass

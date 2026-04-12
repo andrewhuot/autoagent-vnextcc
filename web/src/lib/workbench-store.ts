@@ -884,35 +884,6 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       return;
     }
 
-    if (name === 'iteration.started') {
-      const incoming = data as {
-        id?: string;
-        message?: string;
-        artifact_count?: number;
-        timestamp?: number;
-      };
-      set((state) => {
-        // Guard against double-counting from optimistic startIteration()
-        const lastEntry = state.iterationHistory[state.iterationHistory.length - 1];
-        if (lastEntry && lastEntry.id.startsWith('iter-local-')) {
-          return {};
-        }
-        const nextIterationNumber = state.iterationCount + 1;
-        const entry: IterationEntry = {
-          id: incoming.id ?? `iter-${Date.now()}`,
-          iterationNumber: nextIterationNumber,
-          message: incoming.message ?? '',
-          timestamp: incoming.timestamp ?? Date.now(),
-          artifactCount: incoming.artifact_count ?? state.artifacts.length,
-        };
-        return {
-          iterationCount: nextIterationNumber,
-          iterationHistory: [...state.iterationHistory, entry],
-          previousVersionArtifacts: state.artifacts,
-        };
-      });
-      return;
-    }
   },
 
   setActiveArtifact: (id) =>

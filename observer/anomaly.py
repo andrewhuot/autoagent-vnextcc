@@ -1,5 +1,7 @@
 """2-sigma anomaly detection for health metrics."""
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
 from .metrics import HealthMetrics

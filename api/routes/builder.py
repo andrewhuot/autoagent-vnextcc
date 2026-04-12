@@ -19,6 +19,8 @@ from builder.types import (
     BuilderSession,
     ExecutionMode,
     PrivilegedAction,
+    RELEASE_TRANSITIONS,
+    ReleaseCandidate,
     SpecialistRole,
     TaskStatus,
     now_ts,
@@ -116,6 +118,24 @@ class BuilderSaveRequest(BaseModel):
 class BuilderPreviewRequest(BaseModel):
     session_id: str
     message: str = Field(min_length=1)
+
+
+class CreateReleaseRequest(BaseModel):
+    task_id: str = ""
+    session_id: str = ""
+    project_id: str
+    version: str
+    artifact_ids: list[str] = Field(default_factory=list)
+    eval_bundle_id: str | None = None
+    deployment_target: str = ""
+    changelog: str = ""
+
+
+class PromoteReleaseRequest(BaseModel):
+    target_status: str
+    approver: str = "operator"
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    note: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -659,3 +679,152 @@ async def invoke_specialist(
         extra_context=body.extra_context,
     )
     return _jsonable(payload)
+
+
+# ---------------------------------------------------------------------------
+# Release candidates
+# ---------------------------------------------------------------------------
+
+
+@router.get("/releases")
+async def list_releases(
+    request: Request,
+    project_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    store = _state(request, "builder_store")
+    releases = store.list_releases(project_id=project_id, status=status, limit=1000)
+    return [_jsonable(release) for release in releases]
+
+
+@router.post("/releases")
+async def create_release(request: Request, body: CreateReleaseRequest) -> dict[str, Any]:
+    store = _state(request, "builder_store")
+    release = ReleaseCandidate(
+        task_id=body.task_id,
+        session_id=body.session_id,
+        project_id=body.project_id,
+        version=body.version,
+        artifact_ids=body.artifact_ids,
+        eval_bundle_id=body.eval_bundle_id,
+        deployment_target=body.deployment_target,
+        changelog=body.changelog,
+    )
+    store.save_release(release)
+
+    # Emit lifecycle event
+    broker = getattr(request.app.state, "builder_events", None)
+    if broker is not None:
+        broker.publish(
+            BuilderEventType.TASK_PROGRESS,
+            session_id=body.session_id,
+            task_id=body.task_id,
+            payload={"action": "release_created", "release_id": release.release_id, "version": body.version},
+        )
+    return _jsonable(release)
+
+
+@router.get("/releases/{release_id}")
+async def get_release(request: Request, release_id: str) -> dict[str, Any]:
+    store = _state(request, "builder_store")
+    release = store.get_release(release_id)
+    if release is None:
+        raise HTTPException(status_code=404, detail="Release not found")
+    return _jsonable(release)
+
+
+@router.post("/releases/{release_id}/promote")
+async def promote_release(
+    request: Request,
+    release_id: str,
+    body: PromoteReleaseRequest,
+) -> dict[str, Any]:
+    """Advance a release through its lifecycle with provenance tracking."""
+    store = _state(request, "builder_store")
+    release = store.get_release(release_id)
+    if release is None:
+        raise HTTPException(status_code=404, detail="Release not found")
+
+    current = release.status
+    target = body.target_status
+
+    # Validate the transition is allowed
+    allowed = RELEASE_TRANSITIONS.get(current, set())
+    if target not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot transition from '{current}' to '{target}'. Allowed: {sorted(allowed)}",
+        )
+
+    # Apply the transition
+    release.status = target
+    release.updated_at = now_ts()
+
+    if target in ("reviewed", "candidate", "staging"):
+        release.approved_by = body.approver
+        release.approved_at = now_ts()
+    elif target == "production":
+        release.approved_by = body.approver
+        release.approved_at = release.approved_at or now_ts()
+        release.deployed_at = now_ts()
+    elif target == "rolled_back":
+        release.rolled_back_at = now_ts()
+
+    # Record promotion evidence
+    release.promotion_evidence.append({
+        "from_status": current,
+        "to_status": target,
+        "approver": body.approver,
+        "timestamp": now_ts(),
+        "evidence": body.evidence,
+        "note": body.note,
+    })
+
+    store.save_release(release)
+
+    # Emit lifecycle event
+    broker = getattr(request.app.state, "builder_events", None)
+    if broker is not None:
+        broker.publish(
+            BuilderEventType.TASK_PROGRESS,
+            session_id=release.session_id,
+            task_id=release.task_id,
+            payload={
+                "action": "release_promoted",
+                "release_id": release_id,
+                "from_status": current,
+                "to_status": target,
+                "approver": body.approver,
+            },
+        )
+    return _jsonable(release)
+
+
+@router.post("/releases/{release_id}/rollback")
+async def rollback_release(request: Request, release_id: str) -> dict[str, Any]:
+    """Roll back a release to draft state."""
+    store = _state(request, "builder_store")
+    release = store.get_release(release_id)
+    if release is None:
+        raise HTTPException(status_code=404, detail="Release not found")
+
+    allowed = RELEASE_TRANSITIONS.get(release.status, set())
+    if "rolled_back" not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot rollback from '{release.status}'. Allowed transitions: {sorted(allowed)}",
+        )
+
+    old_status = release.status
+    release.status = "rolled_back"
+    release.rolled_back_at = now_ts()
+    release.updated_at = now_ts()
+    release.promotion_evidence.append({
+        "from_status": old_status,
+        "to_status": "rolled_back",
+        "approver": "system",
+        "timestamp": now_ts(),
+        "note": "Rollback triggered",
+    })
+    store.save_release(release)
+    return _jsonable(release)

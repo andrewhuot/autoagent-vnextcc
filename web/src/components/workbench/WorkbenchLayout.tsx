@@ -92,16 +92,14 @@ export function WorkbenchLayout({
           </button>
           <button
             type="button"
-            disabled={buildStatus !== 'done'}
+            disabled
             className={classNames(
               'rounded-md px-3 py-1 text-[12px] font-medium transition',
-              buildStatus === 'done'
-                ? 'bg-[color:var(--wb-accent)] text-[color:var(--wb-accent-fg)] hover:opacity-90'
-                : 'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]'
+              'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)] opacity-50'
             )}
-            title={buildStatus === 'done' ? 'Candidate is ready for review' : 'Complete a harness run first'}
+            title="Coming soon — promotion flow under development"
           >
-            {buildStatus === 'done' ? 'Candidate ready' : 'Create agent'}
+            Review candidate
           </button>
         </div>
         {/* Harness metrics — renders only when a build is active or metrics exist */}
@@ -136,6 +134,18 @@ function StatusPill({ status }: { status: string }) {
   } else if (status === 'error') {
     className = 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]';
     label = 'Error';
+  } else if (status === 'queued') {
+    className = 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400';
+    label = 'Queued';
+  } else if (status === 'reflecting') {
+    className = 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400';
+    label = 'Reflecting';
+  } else if (status === 'presenting') {
+    className = 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400';
+    label = 'Presenting';
+  } else if (status === 'cancelled') {
+    className = 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]';
+    label = 'Cancelled';
   }
   return (
     <span

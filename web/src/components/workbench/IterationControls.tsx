@@ -31,10 +31,10 @@ export function IterationControls({ onIterate }: IterationControlsProps) {
   const [iterateMessage, setIterateMessage] = useState('');
   const [showIterateInput, setShowIterateInput] = useState(false);
 
-  // Only render when a build has completed and we're not currently building.
-  if (buildStatus !== 'done' && buildStatus !== 'idle') return null;
+  // Only render when a build has completed, been cancelled, or is idle.
+  if (buildStatus !== 'done' && buildStatus !== 'idle' && buildStatus !== 'cancelled') return null;
   // No controls needed if there's been no work yet.
-  if (buildStatus === 'idle' && iterationCount === 0) return null;
+  if ((buildStatus === 'idle' || buildStatus === 'cancelled') && iterationCount === 0) return null;
 
   const hasPreviousVersions = version > 1;
   const diffActive = diffTargetVersion !== null;

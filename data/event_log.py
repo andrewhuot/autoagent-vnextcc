@@ -35,6 +35,14 @@ VALID_EVENT_TYPES = {
     # Context Workbench events
     "context_analyzed",
     "context_simulation_run",
+    # Builder lifecycle events (bridged from EventBroker)
+    "builder_task_started",
+    "builder_task_completed",
+    "builder_task_failed",
+    "builder_session_opened",
+    "builder_session_closed",
+    "builder_eval_started",
+    "builder_eval_completed",
 }
 
 
@@ -66,6 +74,16 @@ class EventLog:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_ts ON system_events(timestamp DESC)"
             )
+            # Add session_id column for builder event cross-reference (migration-safe)
+            try:
+                conn.execute(
+                    "ALTER TABLE system_events ADD COLUMN session_id TEXT"
+                )
+            except sqlite3.OperationalError:
+                pass  # Column already exists
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_session ON system_events(session_id)"
+            )
             conn.commit()
 
     def append(
@@ -75,6 +93,7 @@ class EventLog:
         payload: dict[str, Any] | None = None,
         cycle_id: str | None = None,
         experiment_id: str | None = None,
+        session_id: str | None = None,
     ) -> int:
         """Append a new event and return inserted row id."""
         if event_type not in VALID_EVENT_TYPES:
@@ -83,8 +102,8 @@ class EventLog:
             cursor = conn.execute(
                 """
                 INSERT INTO system_events
-                    (timestamp, event_type, payload, cycle_id, experiment_id)
-                VALUES (?, ?, ?, ?, ?)
+                    (timestamp, event_type, payload, cycle_id, experiment_id, session_id)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     time.time(),
@@ -92,6 +111,7 @@ class EventLog:
                     json.dumps(payload or {}, sort_keys=True, default=str),
                     cycle_id,
                     experiment_id,
+                    session_id,
                 ),
             )
             conn.commit()
@@ -102,30 +122,32 @@ class EventLog:
         *,
         limit: int = 100,
         event_type: str | None = None,
+        session_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List recent events in reverse-chronological order."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if event_type:
+            clauses.append("event_type = ?")
+            params.append(event_type)
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+
         with sqlite3.connect(self.db_path) as conn:
-            if event_type:
-                rows = conn.execute(
-                    """
-                    SELECT id, timestamp, event_type, payload, cycle_id, experiment_id
-                    FROM system_events
-                    WHERE event_type = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (event_type, limit),
-                ).fetchall()
-            else:
-                rows = conn.execute(
-                    """
-                    SELECT id, timestamp, event_type, payload, cycle_id, experiment_id
-                    FROM system_events
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
+            rows = conn.execute(
+                f"""
+                SELECT id, timestamp, event_type, payload, cycle_id,
+                       experiment_id, session_id
+                FROM system_events
+                {where}
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
 
         return [
             {
@@ -135,6 +157,7 @@ class EventLog:
                 "payload": json.loads(row[3]) if row[3] else {},
                 "cycle_id": row[4],
                 "experiment_id": row[5],
+                "session_id": row[6],
             }
             for row in rows
         ]
