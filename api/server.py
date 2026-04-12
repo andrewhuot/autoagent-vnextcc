@@ -261,7 +261,9 @@ async def lifespan(app: FastAPI):
     deployer = Deployer(configs_dir=CONFIGS_DIR, store=conversation_store)
 
     # Infrastructure
-    task_manager = TaskManager()
+    task_manager = TaskManager(
+        db_path=os.environ.get("AGENTLAB_TASKS_DB", ".agentlab/tasks.db"),
+    )
     ws_manager = ConnectionManager()
 
     # Builder workspace services
@@ -292,7 +294,17 @@ async def lifespan(app: FastAPI):
     builder_metrics = BuilderMetricsService(builder_store, builder_permissions)
     builder_artifacts = ArtifactCardFactory()
 
+    # Eagerly create the builder chat service with SQLite persistence
+    from builder.chat_service import BuilderChatService
+
+    builder_chat_service = BuilderChatService(
+        studio_service=transcript_intelligence_service,
+        build_artifact_store=build_artifact_store,
+        db_path=os.environ.get("AGENTLAB_BUILDER_CHAT_DB", ".agentlab/builder_chat_sessions.db"),
+    )
+
     # Attach to app.state so route handlers can access them
+    app.state.builder_chat_service = builder_chat_service
     app.state.conversation_store = conversation_store
     app.state.optimization_memory = optimization_memory
     app.state.version_manager = version_manager

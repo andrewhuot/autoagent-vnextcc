@@ -175,8 +175,9 @@ async def list_cx_agents(
 
 
 @router.post("/import", response_model=CxImportResponse, status_code=201)
-async def import_cx_agent(body: CxImportRequest) -> CxImportResponse:
+async def import_cx_agent(body: CxImportRequest, request: Request) -> CxImportResponse:
     """Import a CX agent into AgentLab format."""
+    import yaml
     from cx_studio import CxAuth, CxClient, CxImporter
     from cx_studio.types import CxAgentRef
     try:
@@ -189,6 +190,15 @@ async def import_cx_agent(body: CxImportRequest) -> CxImportResponse:
             output_dir=body.output_dir,
             include_test_cases=body.include_test_cases,
         )
+
+        # Register the imported config with the running server's version manager
+        version_manager = getattr(request.app.state, "version_manager", None)
+        if version_manager is not None and result.config_path:
+            config_path = Path(result.config_path)
+            if config_path.exists():
+                config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                version_manager.save_version(config, scores={}, status="candidate")
+
         return CxImportResponse(
             config_path=result.config_path,
             eval_path=result.eval_path,

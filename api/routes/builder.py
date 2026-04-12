@@ -180,6 +180,13 @@ def _chat_service(request: Request) -> BuilderChatService:
 # ---------------------------------------------------------------------------
 
 
+@router.get("/chat/sessions")
+async def list_chat_sessions(request: Request, limit: int = 50) -> list[dict[str, Any]]:
+    """List recent conversational builder sessions."""
+    service = _chat_service(request)
+    return service.list_sessions(limit=limit)
+
+
 @router.post("/chat")
 async def builder_chat(request: Request, body: BuilderChatRequest) -> dict[str, Any]:
     service = _chat_service(request)

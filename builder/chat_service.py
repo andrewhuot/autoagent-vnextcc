@@ -1,9 +1,15 @@
-"""Conversational builder service backed by real generation/refinement helpers."""
+"""Conversational builder service backed by real generation/refinement helpers.
+
+Chat sessions are persisted to SQLite so they survive server restarts.
+"""
 
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
 import re
+import sqlite3
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -29,18 +35,82 @@ def _slugify(value: str) -> str:
 
 
 class BuilderChatService:
-    """Manage conversational builder sessions with truthful live/mock behavior."""
+    """Manage conversational builder sessions with truthful live/mock behavior.
+
+    Sessions are persisted to a SQLite database so they survive server
+    restarts.  On startup, previously-saved sessions are loaded back into
+    memory for fast access.
+    """
 
     def __init__(
         self,
         *,
         studio_service: TranscriptIntelligenceService | None = None,
         build_artifact_store: BuildArtifactStore | None = None,
+        db_path: str = ".agentlab/builder_chat_sessions.db",
     ) -> None:
-        """Initialize the in-memory session store and shared dependencies."""
+        """Initialize the session store and shared dependencies."""
         self._sessions: dict[str, BuilderChatSession] = {}
         self._studio_service = studio_service or TranscriptIntelligenceService()
         self._build_artifact_store = build_artifact_store
+        self._db_path = db_path
+        self._init_db()
+        self._load_persisted_sessions()
+
+    # ------------------------------------------------------------------
+    # SQLite persistence
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> None:
+        """Create the chat_sessions table if it does not exist."""
+        Path(self._db_path).parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chat_sessions (
+                    session_id TEXT PRIMARY KEY,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    payload    TEXT NOT NULL
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_sessions_updated
+                ON chat_sessions (updated_at DESC)
+            """)
+
+    def _load_persisted_sessions(self) -> None:
+        """Load saved sessions from the database on startup."""
+        with sqlite3.connect(self._db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                "SELECT * FROM chat_sessions ORDER BY updated_at DESC LIMIT 200"
+            ).fetchall()
+
+        for row in rows:
+            try:
+                session = _deserialize_session(row["payload"])
+                if session is not None:
+                    self._sessions[session.session_id] = session
+            except Exception:
+                continue
+
+    def _persist_session(self, session: BuilderChatSession) -> None:
+        """Write or update a session row in the database."""
+        payload = _serialize_session(session)
+        with sqlite3.connect(self._db_path) as conn:
+            conn.execute(
+                """INSERT INTO chat_sessions (session_id, created_at, updated_at, payload)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(session_id) DO UPDATE SET
+                       updated_at = excluded.updated_at,
+                       payload = excluded.payload
+                """,
+                (session.session_id, session.created_at, session.updated_at, payload),
+            )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def handle_message(self, message: str, session_id: str | None = None) -> dict[str, Any]:
         """Apply one conversational message to a builder session."""
@@ -52,6 +122,7 @@ class BuilderChatService:
         session.messages.append(BuilderChatMessage(role="assistant", content=assistant_reply))
         session.updated_at = now_ts()
         self._sessions[session.session_id] = session
+        self._persist_session(session)
         return self.serialize_session(session)
 
     def get_session(self, session_id: str) -> dict[str, Any] | None:
@@ -60,6 +131,25 @@ class BuilderChatService:
         if session is None:
             return None
         return self.serialize_session(session)
+
+    def list_sessions(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Return a summary list of recent chat sessions."""
+        sessions = sorted(
+            self._sessions.values(),
+            key=lambda s: s.updated_at,
+            reverse=True,
+        )[:limit]
+        return [
+            {
+                "session_id": s.session_id,
+                "agent_name": s.config.agent_name,
+                "message_count": len(s.messages),
+                "mock_mode": s.mock_mode,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+            }
+            for s in sessions
+        ]
 
     def export_session(self, session_id: str, format_name: str = "yaml") -> dict[str, str] | None:
         """Serialize one builder config for download."""
@@ -125,6 +215,10 @@ class BuilderChatService:
             "updated_at": session.updated_at,
         }
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
     def _get_or_create_session(self, session_id: str | None) -> BuilderChatSession:
         """Return an existing session or create a new one."""
         if session_id and session_id in self._sessions:
@@ -141,6 +235,7 @@ class BuilderChatService:
             )
         )
         self._sessions[session.session_id] = session
+        self._persist_session(session)
         return session
 
     def _apply_message(self, session: BuilderChatSession, message: str) -> str:
@@ -286,6 +381,86 @@ class BuilderChatService:
             "eval_criteria": [asdict(criterion) for criterion in config.eval_criteria],
             "metadata": config.metadata,
         }
+
+
+# ------------------------------------------------------------------
+# Serialization helpers for session persistence
+# ------------------------------------------------------------------
+
+def _serialize_session(session: BuilderChatSession) -> str:
+    """Serialize a session to JSON for database storage."""
+    data = {
+        "session_id": session.session_id,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "messages": [asdict(m) for m in session.messages],
+        "config": asdict(session.config),
+        "generated_config": session.generated_config,
+        "mock_mode": session.mock_mode,
+        "mock_reason": session.mock_reason,
+        "evals": asdict(session.evals) if session.evals else None,
+    }
+    return json.dumps(data, default=str)
+
+
+def _deserialize_session(raw: str) -> BuilderChatSession | None:
+    """Reconstruct a session from its JSON representation."""
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        return None
+
+    session = BuilderChatSession.__new__(BuilderChatSession)
+    session.session_id = data["session_id"]
+    session.created_at = data["created_at"]
+    session.updated_at = data["updated_at"]
+    session.mock_mode = data.get("mock_mode", True)
+    session.mock_reason = data.get("mock_reason", "")
+    session.generated_config = data.get("generated_config")
+
+    session.messages = [
+        BuilderChatMessage(
+            message_id=m.get("message_id", ""),
+            role=m.get("role", "assistant"),
+            content=m.get("content", ""),
+            created_at=m.get("created_at", 0.0),
+        )
+        for m in data.get("messages", [])
+    ]
+
+    cfg = data.get("config", {})
+    session.config = BuilderConfigDraft(
+        agent_name=cfg.get("agent_name", "Customer Support Agent"),
+        model=cfg.get("model", ""),
+        system_prompt=cfg.get("system_prompt", ""),
+        tools=[
+            BuilderToolDraft(name=t["name"], description=t["description"], when_to_use=t.get("when_to_use", ""))
+            for t in cfg.get("tools", []) if isinstance(t, dict)
+        ],
+        routing_rules=[
+            BuilderRoutingRuleDraft(name=r["name"], intent=r["intent"], description=r.get("description", ""))
+            for r in cfg.get("routing_rules", []) if isinstance(r, dict)
+        ],
+        policies=[
+            BuilderPolicyDraft(name=p["name"], description=p.get("description", ""))
+            for p in cfg.get("policies", []) if isinstance(p, dict)
+        ],
+        eval_criteria=[
+            BuilderEvalCriterionDraft(name=e["name"], description=e.get("description", ""))
+            for e in cfg.get("eval_criteria", []) if isinstance(e, dict)
+        ],
+        metadata=cfg.get("metadata", {}),
+    )
+
+    evals_data = data.get("evals")
+    if evals_data and isinstance(evals_data, dict):
+        session.evals = BuilderEvalDraft(
+            case_count=evals_data.get("case_count", 0),
+            scenarios=evals_data.get("scenarios", []),
+        )
+    else:
+        session.evals = None
+
+    return session
 
 
 def copy_dict(value: dict[str, Any]) -> dict[str, Any]:
