@@ -20,6 +20,7 @@ class SkillRecord:
     tags: list[str] = field(default_factory=list)
     effectiveness: dict[str, Any] = field(default_factory=dict)
     source: str = ""
+    skill_layer: str = ""  # "build", "runtime", or "" (unclassified)
     created_at: str = ""
     updated_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -42,6 +43,7 @@ class SkillRecord:
             tags=list(data.get("tags", [])),
             effectiveness=dict(data.get("effectiveness", {})),
             source=data.get("source", ""),
+            skill_layer=data.get("skill_layer", ""),
             created_at=data.get("created_at", ""),
             updated_at=data.get("updated_at", ""),
             metadata=dict(data.get("metadata", {})),

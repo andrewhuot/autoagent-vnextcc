@@ -15,6 +15,7 @@ import type {
   PlanTask,
   PlanTaskStatus,
   ReflectionEntry,
+  SkillContext,
   WorkbenchArtifact,
   WorkbenchCanonicalModel,
   WorkbenchCompatibilityDiagnostic,
@@ -177,6 +178,10 @@ interface WorkbenchState {
   previousVersionArtifacts: WorkbenchArtifact[];
   /** Which version number is currently selected for diff (null = none). */
   diffTargetVersion: number | null;
+
+  // --- skill context from the harness
+  /** Skill context summary from the most recent build.completed event. */
+  skillContext: SkillContext | null;
 }
 
 interface WorkbenchActions {
@@ -261,6 +266,7 @@ const INITIAL_STATE: WorkbenchState = {
   reflections: [],
   previousVersionArtifacts: [],
   diffTargetVersion: null,
+  skillContext: null,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -642,6 +648,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
     if (name === 'artifact.updated') {
       const incoming = data.artifact as WorkbenchArtifact;
+      // Attach skill_layer from the event envelope to the artifact
+      if (data.skill_layer && !incoming.skill_layer) {
+        incoming.skill_layer = data.skill_layer as WorkbenchArtifact['skill_layer'];
+      }
       const turnId =
         (data.turn_id as string | undefined) ?? incoming.turn_id ?? null;
       set((state) => {
@@ -708,11 +718,13 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     if (name === 'build.completed') {
       // A single iteration finished. Multi-turn status transitions now live
       // in turn.completed; here we just acknowledge the pass ended.
+      const incomingSkillContext = data.skill_context as SkillContext | undefined;
       set((state) => ({
         buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
         version: (data.version as number) ?? state.version,
         activeRun: mergeRun(state.activeRun, data),
+        skillContext: incomingSkillContext ?? state.skillContext,
       }));
       return;
     }
