@@ -116,6 +116,7 @@ export function AgentWorkbench() {
           // page reload restores the running log exactly where it stopped.
           conversation: snapshot.conversation,
           turns: snapshot.turns,
+          harnessState: snapshot.harness_state,
         });
       } catch (error) {
         if (cancelled) return;

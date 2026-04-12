@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.routes.workbench import router
-from builder.workbench import WorkbenchStore, build_review_gate
+from builder.workbench import WorkbenchService, WorkbenchStore, build_review_gate
 from builder.workbench_agent import (
     BuildRequest,
     MockWorkbenchBuilderAgent,
@@ -236,6 +236,13 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     final_project_id = events[-1]["data"]["project_id"]
     assert final_project_id.startswith("wb-")
     assert events[-1]["data"]["run_id"].startswith("run-")
+    handoff = events[-1]["data"]["handoff"]
+    assert handoff["run_id"] == events[-1]["data"]["run_id"]
+    assert handoff["last_event"]["event"] == "run.completed"
+    assert handoff["progress"]["total_tasks"] >= 5
+    assert handoff["progress"]["completed_tasks"] == handoff["progress"]["total_tasks"]
+    assert handoff["verification"]["status"] == "passed"
+    assert handoff["next_action"]
 
     # Task status lifecycle is consistent.
     tasks_started = {ev["data"]["task_id"] for ev in events if ev["event"] == "task.started"}
@@ -247,6 +254,42 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     # group events by turn even when multi-iteration loops run.
     turn_ids = {ev["data"].get("turn_id") for ev in events if ev["data"].get("turn_id")}
     assert len(turn_ids) == 1
+
+
+@pytest.mark.asyncio
+async def test_harness_metrics_update_snapshot_harness_state(tmp_path: Path) -> None:
+    """Harness metrics should survive streaming as durable snapshot state."""
+
+    class MetricsAgent:
+        async def run(self, request: BuildRequest, project: dict) -> object:
+            yield {
+                "event": "harness.metrics",
+                "data": {
+                    "steps_completed": 2,
+                    "total_steps": 4,
+                    "tokens_used": 123,
+                    "cost_usd": 0.001,
+                    "elapsed_ms": 50,
+                    "current_phase": "executing",
+                },
+            }
+            yield {"event": "build.completed", "data": {"operations": []}}
+
+    store = WorkbenchStore(tmp_path / "workbench.json")
+    service = WorkbenchService(store)
+
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a support agent.",
+        agent=MetricsAgent(),
+    )
+    events = [event async for event in stream]
+    project_id = events[-1]["data"]["project_id"]
+
+    snapshot = service.get_plan_snapshot(project_id=project_id)
+    assert snapshot["harness_state"]["last_metrics"]["tokens_used"] == 123
+    assert snapshot["harness_state"]["latest_handoff"]["run_id"] == events[-1]["data"]["run_id"]
+    assert snapshot["harness_state"]["latest_handoff"]["metrics"]["tokens_used"] == 123
 
 
 def test_build_stream_runs_reflect_and_present_phases(tmp_path: Path) -> None:

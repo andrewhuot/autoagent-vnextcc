@@ -150,6 +150,7 @@ class BuilderExecutionEngine:
         task.status = TaskStatus.CANCELLED
         task.completed_at = now_ts()
         task.updated_at = now_ts()
+        self._clear_completion_blockers(task)
         task.error = reason or task.error
         self._store.save_task(task)
 
@@ -172,6 +173,7 @@ class BuilderExecutionEngine:
         task.completed_at = now_ts()
         task.updated_at = now_ts()
         task.progress = 100
+        self._clear_completion_blockers(task)
         if artifact_ids:
             task.artifact_ids = artifact_ids
 
@@ -195,6 +197,7 @@ class BuilderExecutionEngine:
         task.completed_at = now_ts()
         task.updated_at = now_ts()
         task.error = error
+        self._clear_completion_blockers(task)
         self._store.save_task(task)
 
         self._events.publish(
@@ -367,6 +370,22 @@ class BuilderExecutionEngine:
         self._store.save_worktree(worktree)
         return worktree
 
+    def _has_completion_evidence(self, task: BuilderTask) -> bool:
+        """Return whether a task has durable proof that completion is real."""
+        if task.artifact_ids or task.proposal_ids or task.approval_ids or task.sandbox_run_id:
+            return True
+        evidence_keys = (
+            "validation_result",
+            "eval_bundle_id",
+            "verified_no_artifact_reason",
+        )
+        return any(bool(task.metadata.get(key)) for key in evidence_keys)
+
+    def _clear_completion_blockers(self, task: BuilderTask) -> None:
+        """Remove progress-blocker metadata once a task reaches terminal state."""
+        task.metadata.pop("progress_clamped_from", None)
+        task.metadata.pop("completion_blocked_reason", None)
+
     # ------------------------------------------------------------------
     # Dispatch helpers
     # ------------------------------------------------------------------
@@ -385,7 +404,28 @@ class BuilderExecutionEngine:
         if task is None:
             return None
 
-        task.progress = max(0, min(progress, 100))
+        requested_progress = progress
+        next_progress = max(0, min(progress, 100))
+        terminal_statuses = {TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED}
+        if (
+            next_progress >= 100
+            and task.status not in terminal_statuses
+            and not self._has_completion_evidence(task)
+        ):
+            next_progress = 99
+            task.metadata["progress_clamped_from"] = requested_progress
+            task.metadata[
+                "completion_blocked_reason"
+            ] = (
+                "Progress cannot reach 100 without completion evidence; use complete_task() "
+                "or attach an artifact, proposal, approval, sandbox run, validation result, "
+                "eval bundle, or verified no-artifact reason."
+            )
+        else:
+            task.metadata.pop("progress_clamped_from", None)
+            task.metadata.pop("completion_blocked_reason", None)
+
+        task.progress = next_progress
         task.current_step = current_step
         task.tool_in_use = tool_in_use
         task.updated_at = now_ts()
@@ -405,6 +445,8 @@ class BuilderExecutionEngine:
                 "current_step": task.current_step,
                 "tool_in_use": task.tool_in_use,
                 "active_specialist": task.active_specialist.value,
+                "progress_clamped_from": task.metadata.get("progress_clamped_from"),
+                "completion_blocked_reason": task.metadata.get("completion_blocked_reason"),
             },
         )
         return task

@@ -266,6 +266,19 @@ describe('workbench-store', () => {
           validation_status: 'passed',
           next_actions: ['Review artifacts.'],
         },
+        handoff: {
+          run_id: 'run-1',
+          phase: 'present',
+          status: 'completed',
+          next_action: 'Review generated artifacts.',
+          progress: {
+            total_tasks: 3,
+            completed_tasks: 3,
+          },
+          verification: {
+            status: 'passed',
+          },
+        },
         project: {
           project_id: 'wb-42',
           name: 'Harness Workbench',
@@ -328,6 +341,8 @@ describe('workbench-store', () => {
     expect(state.canonicalModel?.agents[0].name).toBe('Harness Agent');
     expect(state.lastTest?.status).toBe('passed');
     expect(state.activeRun?.run_id).toBe('run-1');
+    expect(state.activeRun?.handoff?.next_action).toBe('Review generated artifacts.');
+    expect(state.activeRun?.handoff?.progress.completed_tasks).toBe(3);
     expect(state.exports?.adk.files['agent.py']).toContain('root_agent');
     expect(state.activity[0].kind).toBe('test');
   });
@@ -490,6 +505,31 @@ describe('workbench-store — harness features', () => {
     expect(state.harnessMetrics?.currentPhase).toBe('executing');
     expect(state.harnessMetrics?.stepsCompleted).toBe(2);
     expect(state.harnessMetrics?.tokensUsed).toBe(1200);
+  });
+
+  it('hydrates harness metrics from persisted harness_state', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      target: 'portable',
+      version: 1,
+      harnessState: {
+        checkpoint_count: 0,
+        last_metrics: {
+          steps_completed: 3,
+          total_steps: 5,
+          tokens_used: 250,
+          cost_usd: 0.004,
+          elapsed_ms: 900,
+          current_phase: 'reflecting',
+        },
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.harnessMetrics?.stepsCompleted).toBe(3);
+    expect(state.harnessMetrics?.totalSteps).toBe(5);
+    expect(state.harnessMetrics?.tokensUsed).toBe(250);
+    expect(state.harnessMetrics?.currentPhase).toBe('reflecting');
   });
 
   it('stores reflections from reflection.completed event', () => {

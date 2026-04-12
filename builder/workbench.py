@@ -88,6 +88,14 @@ def _positive_float(value: float | None) -> float | None:
     return value if value > 0 else None
 
 
+def _int_or_zero(value: Any) -> int:
+    """Coerce model-supplied count fields without letting bad metrics crash."""
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _normalize_budget(
     *,
     max_iterations: int = 3,
@@ -161,6 +169,121 @@ def _estimate_tokens_for_event(event_name: str, data: dict[str, Any]) -> int:
         # Keep budget enforcement anchored to provider deltas and harness metrics.
         return 0
     return 0
+
+
+def _iter_plan_nodes(plan: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Flatten a persisted plan tree for compact progress summaries."""
+    if not isinstance(plan, dict):
+        return []
+    nodes: list[dict[str, Any]] = []
+
+    def visit(node: dict[str, Any]) -> None:
+        nodes.append(node)
+        for child in node.get("children") or []:
+            if isinstance(child, dict):
+                visit(child)
+
+    visit(plan)
+    return nodes
+
+
+def _plan_progress_summary(
+    plan: dict[str, Any] | None,
+    *,
+    metrics: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return operator-facing progress without requiring full plan context."""
+    nodes = _iter_plan_nodes(plan)
+    leaves = [node for node in nodes if not node.get("children")]
+    if leaves:
+        completed = sum(1 for node in leaves if str(node.get("status") or "") in {"done", "completed"})
+        running = sum(1 for node in leaves if str(node.get("status") or "") == "running")
+        blocked = sum(1 for node in leaves if str(node.get("status") or "") in {"error", "failed", "blocked"})
+        current = next(
+            (
+                node
+                for node in leaves
+                if str(node.get("status") or "") in {"running", "pending", "error", "failed", "blocked"}
+            ),
+            None,
+        )
+        return {
+            "total_tasks": len(leaves),
+            "completed_tasks": completed,
+            "running_tasks": running,
+            "blocked_tasks": blocked,
+            "current_task": _task_progress_summary(current),
+        }
+
+    metrics = metrics if isinstance(metrics, dict) else {}
+    total_steps = _int_or_zero(metrics.get("total_steps") or metrics.get("steps_total"))
+    completed_steps = _int_or_zero(metrics.get("steps_completed"))
+    return {
+        "total_tasks": total_steps,
+        "completed_tasks": min(completed_steps, total_steps) if total_steps else completed_steps,
+        "running_tasks": 1 if total_steps and completed_steps < total_steps else 0,
+        "blocked_tasks": 0,
+        "current_task": None,
+    }
+
+
+def _task_progress_summary(task: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the small task subset that is safe to repeat in handoff state."""
+    if not isinstance(task, dict):
+        return None
+    return {
+        "task_id": task.get("id") or task.get("task_id"),
+        "title": task.get("title"),
+        "status": task.get("status"),
+    }
+
+
+def _verification_summary(validation: dict[str, Any] | None) -> dict[str, Any]:
+    """Summarize validation so recovery views can tell if proof ran."""
+    if not isinstance(validation, dict):
+        return {
+            "status": "not_run",
+            "passed_checks": 0,
+            "total_checks": 0,
+            "blocking": True,
+        }
+    checks = [check for check in validation.get("checks", []) if isinstance(check, dict)]
+    passed = sum(1 for check in checks if check.get("passed") is True)
+    status = str(validation.get("status") or "unknown")
+    return {
+        "status": status,
+        "passed_checks": passed,
+        "total_checks": len(checks),
+        "blocking": status != "passed",
+    }
+
+
+def _latest_artifact_summary(project: dict[str, Any]) -> dict[str, Any] | None:
+    """Return a compact pointer to the newest generated artifact."""
+    artifacts = [item for item in project.get("artifacts", []) if isinstance(item, dict)]
+    if not artifacts:
+        return None
+    artifact = artifacts[-1]
+    return {
+        "artifact_id": artifact.get("id"),
+        "task_id": artifact.get("task_id"),
+        "name": artifact.get("name"),
+        "category": artifact.get("category"),
+        "summary": artifact.get("summary"),
+    }
+
+
+def _last_event_summary(event: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Expose the last replayable event without copying nested payloads."""
+    if not isinstance(event, dict):
+        return None
+    return {
+        "sequence": event.get("sequence"),
+        "event": event.get("event"),
+        "phase": event.get("phase"),
+        "status": event.get("status"),
+        "created_at": event.get("created_at"),
+    }
 
 
 def _default_execution_metadata() -> dict[str, Any]:
@@ -873,7 +996,12 @@ class WorkbenchService:
                         data["version"] = project.get("version")
                         self.store.save_project(project)
 
-                    elif event_name in ("harness.metrics", "reflection.completed", "iteration.started"):
+                    elif event_name == "harness.metrics":
+                        # Additive harness metrics become the recovery progress
+                        # fallback when a run has not emitted a plan yet.
+                        project.setdefault("harness_state", {"checkpoints": []})["last_metrics"] = copy.deepcopy(data)
+
+                    elif event_name in ("reflection.completed", "iteration.started"):
                         # Additive harness events — persist and pass through.
                         pass
 
@@ -1153,7 +1281,10 @@ class WorkbenchService:
                         data["version"] = project.get("version")
                         self.store.save_project(project)
 
-                    elif event_name in ("harness.metrics", "reflection.completed"):
+                    elif event_name == "harness.metrics":
+                        project.setdefault("harness_state", {"checkpoints": []})["last_metrics"] = copy.deepcopy(data)
+
+                    elif event_name == "reflection.completed":
                         pass  # persist and yield below
 
                     elif event_name == "error":
@@ -1230,10 +1361,117 @@ class WorkbenchService:
         """Build a harness_state summary for snapshot hydration."""
         hs = project.get("harness_state") or {}
         checkpoints = hs.get("checkpoints") or []
+        checkpoints = checkpoints if isinstance(checkpoints, list) else []
+        latest_handoff = hs.get("latest_handoff")
+        active_run = self._active_run(project)
+        if latest_handoff is None and isinstance(active_run, dict):
+            latest_handoff = active_run.get("handoff")
         return {
             "checkpoint_count": len(checkpoints),
+            "recent_checkpoints": copy.deepcopy(checkpoints[-5:]),
             "last_metrics": hs.get("last_metrics"),
+            "latest_handoff": copy.deepcopy(latest_handoff),
         }
+
+    def _refresh_run_handoff(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        last_event: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Persist the compact recovery contract for a run and project."""
+        handoff = self._build_run_handoff(project, run, last_event=last_event)
+        run["handoff"] = handoff
+        harness_state = project.setdefault("harness_state", {"checkpoints": []})
+        harness_state.setdefault("checkpoints", [])
+        harness_state["latest_handoff"] = copy.deepcopy(handoff)
+        return handoff
+
+    def _build_run_handoff(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        last_event: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Build the durable operator handoff derived from persisted run state."""
+        harness_state = project.get("harness_state") if isinstance(project.get("harness_state"), dict) else {}
+        metrics = harness_state.get("last_metrics") if isinstance(harness_state, dict) else None
+        metrics = metrics if isinstance(metrics, dict) else None
+        validation = run.get("validation") if isinstance(run.get("validation"), dict) else project.get("last_test")
+        budget = run.get("budget") if isinstance(run.get("budget"), dict) else {}
+        breach = budget.get("breach") if isinstance(budget.get("breach"), dict) else None
+        checkpoints = harness_state.get("checkpoints") if isinstance(harness_state, dict) else []
+        checkpoints = checkpoints if isinstance(checkpoints, list) else []
+        handoff = {
+            "project_id": project.get("project_id"),
+            "run_id": run.get("run_id"),
+            "turn_id": run.get("turn_id") or run.get("run_id"),
+            "iteration_id": run.get("iteration_id"),
+            "phase": run.get("phase"),
+            "status": run.get("status"),
+            "updated_at": run.get("updated_at") or _now_iso(),
+            "last_event": _last_event_summary(last_event),
+            "progress": _plan_progress_summary(project.get("plan"), metrics=metrics),
+            "metrics": copy.deepcopy(metrics),
+            "verification": _verification_summary(validation if isinstance(validation, dict) else None),
+            "latest_artifact": _latest_artifact_summary(project),
+            "recent_checkpoints": copy.deepcopy((checkpoints or [])[-3:]),
+            "budget": {
+                "usage": copy.deepcopy(budget.get("usage") or {}),
+                "breach": copy.deepcopy(breach),
+            },
+            "failure_reason": run.get("failure_reason"),
+            "cancel_reason": run.get("cancel_reason"),
+            "recovery": None,
+        }
+        if run.get("failure_reason") == "stale_interrupted":
+            handoff["recovery"] = {
+                "reason": "stale_interrupted",
+                "recovered_at": run.get("recovered_at"),
+                "last_update_at": run.get("updated_at"),
+                "checkpoint_count": len(checkpoints or []),
+            }
+        handoff["next_action"] = self._handoff_next_action(
+            run,
+            verification=handoff["verification"],
+            breach=breach,
+        )
+        return handoff
+
+    def _handoff_next_action(
+        self,
+        run: dict[str, Any],
+        *,
+        verification: dict[str, Any],
+        breach: dict[str, Any] | None,
+    ) -> str:
+        """Choose one concrete next step for the operator handoff."""
+        status = str(run.get("status") or "")
+        if run.get("failure_reason") == "stale_interrupted":
+            return "Run was interrupted after process recovery; review the last event and restart from preserved artifacts."
+        if status == RUN_STATUS_CANCELLED:
+            return "Run was cancelled; review preserved artifacts or start a follow-up turn."
+        if breach:
+            kind = str(breach.get("kind") or "budget")
+            return f"Resolve the {kind} budget breach or raise the budget before retrying."
+        if verification.get("status") == "failed":
+            return "Review failed validation checks before promoting this build."
+        if status == RUN_STATUS_FAILED:
+            return "Review the failure reason, latest event, and validation state before retrying."
+        if status == RUN_STATUS_COMPLETED:
+            return "Review generated artifacts and run or extend evals before promotion."
+        phase = str(run.get("phase") or "")
+        if phase == PHASE_PLANNING:
+            return "Wait for plan.ready, then check task coverage before execution."
+        if phase == PHASE_EXECUTING:
+            return "Watch task progress and verify artifacts appear before completion."
+        if phase == PHASE_REFLECTING:
+            return "Wait for validation.ready before accepting completion."
+        if phase == PHASE_PRESENTING:
+            return "Review the presentation summary and generated outputs."
+        return "Continue monitoring the run log for the next durable event."
 
     def rollback(self, *, project_id: str, version: int) -> dict[str, Any]:
         """Create a new version from an earlier canonical snapshot."""
@@ -1367,6 +1605,7 @@ class WorkbenchService:
         }
         project.setdefault("runs", {})[run_id] = run
         project["active_run_id"] = run_id
+        self._refresh_run_handoff(project, run)
         return run
 
     def _active_run(self, project: dict[str, Any]) -> dict[str, Any] | None:
@@ -1896,6 +2135,13 @@ class WorkbenchService:
         events.append(event)
         run["updated_at"] = event["created_at"]
         self._update_telemetry_summary(run, telemetry, event_count=len(events))
+        handoff = self._refresh_run_handoff(project, run, last_event=event)
+        data["handoff"] = copy.deepcopy(handoff)
+        if isinstance(data.get("run"), dict):
+            data["run"]["handoff"] = copy.deepcopy(handoff)
+        event["data"]["handoff"] = copy.deepcopy(handoff)
+        if isinstance(event["data"].get("run"), dict):
+            event["data"]["run"]["handoff"] = copy.deepcopy(handoff)
         project.setdefault("runs", {})[run["run_id"]] = run
         return event
 

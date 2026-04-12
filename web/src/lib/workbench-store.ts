@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import type {
   BuildStreamEvent,
   HarnessMetrics,
+  WorkbenchHarnessState,
   IterationEntry,
   PlanTask,
   PlanTaskStatus,
@@ -199,6 +200,7 @@ interface WorkbenchActions {
     lastBrief?: string;
     conversation?: WorkbenchConversationMessage[];
     turns?: WorkbenchTurnRecord[];
+    harnessState?: WorkbenchHarnessState | null;
   }) => void;
   beginBuild: (brief: string) => void;
   setAbortController: (controller: AbortController | null) => void;
@@ -344,6 +346,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           : snapshot.messages
             ? snapshot.messages.map(messageFromApi)
             : state.messages;
+      const hydratedHarnessMetrics = harnessMetricsFromWire(
+        snapshot.harnessState?.last_metrics,
+        state.harnessMetrics
+      );
 
       return {
         projectId: snapshot.projectId,
@@ -364,6 +370,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         buildStatus: snapshot.buildStatus ?? state.buildStatus,
         lastBrief: snapshot.lastBrief ?? state.lastBrief,
         error: null,
+        harnessMetrics: hydratedHarnessMetrics,
         turns,
         activeTurnId: turns.length > 0 ? turns[turns.length - 1].turnId : null,
       };
@@ -784,7 +791,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           project?.activity ??
           state.activity,
         messages: project?.messages ? project.messages.map(messageFromApi) : state.messages,
-        activeRun: run ?? mergeRun(state.activeRun, data),
+        activeRun: mergeRun(run ?? state.activeRun, data),
         presentation: presentation ?? run?.presentation ?? state.presentation,
         error: null,
       }));
@@ -796,7 +803,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'error',
         abortController: null,
-        activeRun: run ?? mergeRun(state.activeRun, data),
+        activeRun: mergeRun(run ?? state.activeRun, data),
         error: String((data as { error?: string; message?: string }).error ?? (data as { message?: string }).message ?? 'Build failed.'),
       }));
       return;
@@ -816,7 +823,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'cancelled',
         abortController: null,
-        activeRun: run ?? mergeRun(state.activeRun, data),
+        activeRun: mergeRun(run ?? state.activeRun, data),
         error: reason,
       }));
       return;
@@ -854,14 +861,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         current_phase?: HarnessMetrics['currentPhase'];
       };
       set((state) => ({
-        harnessMetrics: {
-          stepsCompleted: incoming.steps_completed ?? state.harnessMetrics?.stepsCompleted ?? 0,
-          totalSteps: incoming.total_steps ?? state.harnessMetrics?.totalSteps ?? 0,
-          tokensUsed: incoming.tokens_used ?? state.harnessMetrics?.tokensUsed ?? 0,
-          costUsd: incoming.cost_usd ?? state.harnessMetrics?.costUsd ?? 0,
-          elapsedMs: incoming.elapsed_ms ?? state.harnessMetrics?.elapsedMs ?? 0,
-          currentPhase: incoming.current_phase ?? state.harnessMetrics?.currentPhase ?? 'idle',
-        },
+        harnessMetrics: harnessMetricsFromWire(incoming, state.harnessMetrics),
         activeRun: mergeRunBudgetFromMetrics(mergeRun(state.activeRun, data), incoming),
       }));
       return;
@@ -991,6 +991,23 @@ function messageFromApi(message: WorkbenchMessage): AssistantMessage {
   };
 }
 
+type HarnessMetricsWire = NonNullable<WorkbenchHarnessState['last_metrics']>;
+
+function harnessMetricsFromWire(
+  incoming: HarnessMetricsWire | null | undefined,
+  current: HarnessMetrics | null
+): HarnessMetrics | null {
+  if (!incoming) return current;
+  return {
+    stepsCompleted: incoming.steps_completed ?? current?.stepsCompleted ?? 0,
+    totalSteps: incoming.total_steps ?? current?.totalSteps ?? 0,
+    tokensUsed: incoming.tokens_used ?? current?.tokensUsed ?? 0,
+    costUsd: incoming.cost_usd ?? current?.costUsd ?? 0,
+    elapsedMs: incoming.elapsed_ms ?? current?.elapsedMs ?? 0,
+    currentPhase: incoming.current_phase ?? current?.currentPhase ?? 'idle',
+  };
+}
+
 function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): WorkbenchRun | null {
   const runId = data.run_id as string | undefined;
   if (!runId) return current;
@@ -998,6 +1015,7 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
   const budget = data.budget ?? incomingRun?.budget ?? current?.budget;
   const telemetrySummary =
     data.telemetry_summary ?? incomingRun?.telemetry_summary ?? current?.telemetry_summary;
+  const handoff = data.handoff ?? incomingRun?.handoff ?? current?.handoff ?? null;
   return {
     ...(current ?? {
       run_id: runId,
@@ -1044,11 +1062,7 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
       incomingRun?.review_gate ??
       current?.review_gate ??
       null,
-    handoff:
-      (data.handoff as WorkbenchRun['handoff'] | undefined) ??
-      incomingRun?.handoff ??
-      current?.handoff ??
-      null,
+    handoff: handoff as WorkbenchRun['handoff'],
     validation:
       (data.validation as WorkbenchTestResult | undefined) ??
       incomingRun?.validation ??

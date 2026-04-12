@@ -1,5 +1,53 @@
 # Findings & Decisions
 
+## Model Harness Engineering Campaign - Codex
+
+### Mission
+
+- Improve AgentLab's model harness for long-running agent loop quality, context and memory management, durable progress and handoff engineering, orchestration clarity, operator visibility, verification discipline, and anti-fake-progress behavior.
+- Preserve current architecture where sound and ship one coherent high-leverage slice.
+- Required deliverables: `working-docs/model-harness-engineering-analysis-codex.md`, `working-docs/model-harness-engineering-plan-codex.md`, implementation, tests, commit, push, and completion event.
+
+### Initial Environment Findings
+
+- Working directory is `/Users/andrew/Desktop/agentlab-model-harness-engineering-codex`.
+- Branch is `feat/model-harness-engineering-codex`.
+- Initial worktree was clean before planning-file creation.
+- No project-local `AGENTS.md` file was found by `find . -maxdepth 2 -name AGENTS.md`; user-supplied working agreements are the active instructions.
+- Existing `findings.md` already contains prior AgentLab/Workbench harness research and implementation notes; this campaign appends a fresh section.
+
+### External Harness Research Findings
+
+- Claude Code frames the harness loop as gather context, act, verify, and repeat, with the user able to interrupt and steer at any point. Effective harnesses should therefore surface where the loop is and what can be verified.
+- Claude Code context guidance reinforces that conversation history is not durable state. Persistent instructions, memory, and repo files should carry long-lived decisions because compaction can lose early detail.
+- Anthropic's long-running-agent guidance identifies two failure modes to guard against: trying to do too much at once, and prematurely declaring completion after seeing partial progress. Their mitigations are feature lists, incremental progress, progress files, clean git commits, and a basic startup verification path.
+- Anthropic's application harness design emphasizes planner/generator/evaluator separation, concrete sprint contracts, evaluator logs with actionable failures, and skeptical QA rather than self-praise.
+- Anthropic's managed-agents design separates brain, hands, and session log. The durable session log lives outside the model context and exposes event slices so a restarted harness can recover without a special surviving process.
+- OpenAI's harness-engineering guidance emphasizes agent-legible repo knowledge, active execution plans and decision logs, typed and mechanically enforced boundaries, direct app/log/metric legibility, and feedback loops that turn repeated failures into tools or guardrails.
+
+### Codebase Reconnaissance Findings
+
+- `docs/plans/2026-04-11-workbench-model-harness-refactor.md` shows the latest Workbench vertical slice already implemented durable `run-*` envelopes, persisted messages/events, reflect/present lifecycle events, validation, presentation manifests, and frontend workspace tabs.
+- `builder/workbench.py` now owns the main model harness lifecycle. `run_build_stream()` creates a run, persists events, updates canonical model state, runs reflect/present, and ends in `run.completed`.
+- `builder/workbench.py` stores each run's `events`, `messages`, `validation`, `presentation`, `budget`, and `telemetry_summary`, and `get_plan_snapshot()` hydrates the active run plus turns, conversation, and a compact `harness_state`.
+- `builder/harness.py` contains a deterministic `HarnessExecutionEngine` with plan/execute/checkpoint/reflect/present events and iteration support. It is agent-legible and testable, but checkpoint persistence errors are intentionally non-fatal and invisible.
+- `api/routes/workbench.py` exposes streaming build, iterate, snapshot, validation, rollback, and server-side cancel endpoints.
+- `web/src/lib/workbench-store.ts` stores run state, turn state, validation, active run, harness metrics, reflections, and cancellation events. The frontend consumes terminal `run.completed` rather than trusting `build.completed` as completion.
+- Existing tests cover run lifecycle, reflect/present event order, persisted plan/artifacts/messages, failed runs, cancellation UI state, harness metrics, iteration, and harness_state checkpoint summaries.
+- Remaining high-leverage gap: persisted run data is detailed but not distilled into a stable handoff/progress contract. Operators and resumed harnesses can inspect raw event arrays, but there is no concise "current task / last event / verification state / next action / recovery reason" digest analogous to a long-running agent progress file.
+- Related gap: `harness_state` snapshot currently returns only `checkpoint_count` and `last_metrics`; it does not expose recent checkpoints or a recovery digest that would help steer or resume after refresh/stale recovery.
+- Subagent backend inspection confirmed the older Builder Workspace uses durable SQLite sessions/tasks/artifacts, but its `EventBroker` remains in-memory and task progress can be set to 100 without artifacts, evals, approval, validation, or terminal status.
+- Subagent Workbench inspection confirmed `auto_iterate` is advertised but not a real corrective loop yet, checkpointing is not resumability yet, and final verification remains shallow. Those are valuable follow-ups but larger than the safest coherent slice for this pass.
+
+### Selected Implementation Slice
+
+- Add a Workbench run `handoff`/progress manifest maintained from durable events. It should summarize current phase/status, last event, current task, completed/total task counts, latest artifact, verification state, next action, recent checkpoints, stale recovery details, and telemetry/budget pointers.
+- Expose the manifest in `active_run`, terminal run payloads, and `harness_state.latest_handoff` so reloads and handoffs no longer require parsing the raw event array.
+- Persist `harness_state.last_metrics` from `harness.metrics` events and expose recent checkpoints, not only a count.
+- Add an evidence-safe Builder task progress clamp: non-terminal `progress_task(..., progress >= 100)` should stop at 99 and record a reason, preventing a running task from presenting as complete without using `complete_task()`.
+- Keep all changes additive and test-focused.
+
+
 ## Workbench Model Harness Refactor Campaign
 
 ### Mission

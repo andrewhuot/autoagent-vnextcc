@@ -180,6 +180,7 @@ export interface WorkbenchPlanSnapshot {
   last_brief?: string;
   conversation?: WorkbenchConversationMessage[];
   turns?: WorkbenchTurnRecord[];
+  harness_state?: WorkbenchHarnessState;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -408,6 +409,71 @@ export interface WorkbenchTelemetrySummary {
   budget_breach?: Record<string, unknown> | null;
 }
 
+export interface WorkbenchRunHandoff {
+  project_id?: string;
+  run_id: string;
+  turn_id?: string | null;
+  iteration_id?: string | null;
+  phase?: string;
+  status?: string;
+  updated_at?: string;
+  last_event: {
+    sequence?: number;
+    event?: string;
+    phase?: string;
+    status?: string;
+    created_at?: string;
+  } | null;
+  progress: {
+    total_tasks: number;
+    completed_tasks: number;
+    running_tasks?: number;
+    blocked_tasks?: number;
+    current_task?: {
+      task_id?: string;
+      title?: string;
+      status?: string;
+    } | null;
+  };
+  metrics?: Record<string, unknown> | null;
+  verification: {
+    status: string;
+    passed_checks?: number;
+    total_checks?: number;
+    blocking?: boolean;
+  };
+  latest_artifact?: {
+    artifact_id?: string;
+    task_id?: string;
+    name?: string;
+    category?: string;
+    summary?: string;
+  } | null;
+  recent_checkpoints?: Record<string, unknown>[];
+  budget?: {
+    usage?: Record<string, unknown>;
+    breach?: Record<string, unknown> | null;
+  };
+  failure_reason?: string | null;
+  cancel_reason?: string | null;
+  recovery?: Record<string, unknown> | null;
+  next_action: string;
+}
+
+export interface WorkbenchHarnessState {
+  checkpoint_count: number;
+  recent_checkpoints?: Record<string, unknown>[];
+  last_metrics?: {
+    steps_completed?: number;
+    total_steps?: number;
+    tokens_used?: number;
+    cost_usd?: number;
+    elapsed_ms?: number;
+    current_phase?: HarnessMetrics['currentPhase'];
+  } | null;
+  latest_handoff?: WorkbenchRunHandoff | null;
+}
+
 export interface WorkbenchRun {
   run_id: string;
   project_id?: string;
@@ -431,7 +497,7 @@ export interface WorkbenchRun {
   failure_reason?: string | null;
   cancel_reason?: string | null;
   review_gate?: WorkbenchReviewGate | null;
-  handoff?: WorkbenchHandoff | null;
+  handoff?: WorkbenchRunHandoff | WorkbenchHandoff | null;
   events: WorkbenchRunEvent[];
   messages: WorkbenchMessage[];
   validation: WorkbenchTestResult | null;
