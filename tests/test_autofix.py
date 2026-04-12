@@ -15,6 +15,7 @@ from optimizer.autofix_proposers import (
 )
 from optimizer.autofix_vertex import VertexPromptOptimizer
 from optimizer.mutations import MutationRegistry, create_default_registry
+from shared.canonical_patch import ComponentPatchOperation, ComponentReference, TypedPatchBundle
 
 
 # ---------------------------------------------------------------------------
@@ -41,9 +42,34 @@ def _make_proposal(
         affected_eval_slices=kwargs.get("affected_eval_slices", ["default"]),  # type: ignore[arg-type]
         cost_impact_estimate=kwargs.get("cost_impact_estimate", 0.01),  # type: ignore[arg-type]
         diff_preview=kwargs.get("diff_preview", "Rewrite root prompt"),  # type: ignore[arg-type]
+        patch_bundle=kwargs.get("patch_bundle"),  # type: ignore[arg-type]
         status=status,
         created_at=created_at or time.time(),
     )
+
+
+def _support_keyword_patch_bundle(path: str = "/routing_rules/0") -> dict:
+    """Build a typed patch bundle that appends one routing keyword."""
+    bundle = TypedPatchBundle(
+        bundle_id="bundle-support-refund",
+        title="Add support refund route keyword",
+        operations=[
+            ComponentPatchOperation(
+                op="append",
+                component=ComponentReference(
+                    component_id="root:routing_rule:support",
+                    component_type="routing_rule",
+                    name="support",
+                    path=path,
+                ),
+                field_path="keywords",
+                value=["refund"],
+                rationale="Refund examples should route to support.",
+            )
+        ],
+        source="autofix-test",
+    )
+    return bundle.model_dump(mode="python")
 
 
 @pytest.fixture()
@@ -100,11 +126,12 @@ class TestAutoFixProposal:
 
     def test_to_dict(self) -> None:
         """Serialize a proposal to dict."""
-        p = _make_proposal()
+        p = _make_proposal(patch_bundle=_support_keyword_patch_bundle())
         d = p.to_dict()
         assert d["proposal_id"] == "test123456ab"
         assert d["mutation_name"] == "instruction_rewrite"
         assert d["params"] == {"target": "root", "text": "test prompt"}
+        assert d["patch_bundle"]["bundle_id"] == "bundle-support-refund"
         assert d["status"] == "pending"
         assert isinstance(d["created_at"], float)
 
@@ -125,12 +152,15 @@ class TestAutoFixProposal:
             "evaluated_at": 1001.0,
             "eval_result": {"score": 0.85},
             "applied_at": None,
+            "patch_bundle": _support_keyword_patch_bundle(),
         }
         p = AutoFixProposal.from_dict(d)
         assert p.proposal_id == "abc123"
         assert p.mutation_name == "few_shot_edit"
         assert p.expected_lift == 0.2
         assert p.eval_result == {"score": 0.85}
+        assert p.patch_bundle is not None
+        assert p.patch_bundle["bundle_id"] == "bundle-support-refund"
         assert p.evaluated_at == 1001.0
 
     def test_round_trip(self) -> None:
@@ -167,6 +197,23 @@ class TestAutoFixStore:
         assert retrieved.proposal_id == "save-get-01"
         assert retrieved.mutation_name == "instruction_rewrite"
         assert retrieved.params == {"target": "root", "text": "test prompt"}
+
+    def test_save_and_get_preserves_patch_bundle(self, store: AutoFixStore) -> None:
+        """Patch bundle metadata must survive SQLite persistence for review/apply."""
+        p = _make_proposal(
+            proposal_id="save-patch-01",
+            mutation_name="component_patch",
+            surface="routing",
+            params={},
+            patch_bundle=_support_keyword_patch_bundle(),
+        )
+        store.save(p)
+
+        retrieved = store.get("save-patch-01")
+
+        assert retrieved is not None
+        assert retrieved.patch_bundle is not None
+        assert retrieved.patch_bundle["bundle_id"] == "bundle-support-refund"
 
     def test_get_nonexistent(self, store: AutoFixStore) -> None:
         """Getting a non-existent proposal returns None."""
@@ -333,6 +380,57 @@ class TestAutoFixEngine:
         assert new_config["model"] == "gpt-3.5-turbo"
         # Original config unchanged
         assert sample_config["model"] == "gpt-4"
+
+    def test_apply_proposal_uses_patch_bundle_without_registry_operator(
+        self,
+        store: AutoFixStore,
+        registry: MutationRegistry,
+    ) -> None:
+        """Typed patch bundles are the apply authority when present."""
+        current_config = {
+            "routing": {"rules": [{"specialist": "support", "keywords": ["help"], "patterns": []}]},
+            "thresholds": {"max_turns": 9},
+        }
+        proposal = _make_proposal(
+            proposal_id="apply-patch-01",
+            mutation_name="component_patch",
+            surface="routing",
+            params={},
+            patch_bundle=_support_keyword_patch_bundle(),
+        )
+        store.save(proposal)
+        engine = AutoFixEngine(proposers=[], mutation_registry=registry, store=store)
+
+        new_config, message = engine.apply("apply-patch-01", current_config)
+
+        assert "component patch bundle" in message.lower()
+        assert new_config["routing"]["rules"][0]["keywords"] == ["help", "refund"]
+        assert new_config["thresholds"] == {"max_turns": 9}
+        assert store.get("apply-patch-01").status == "applied"  # type: ignore[union-attr]
+
+    def test_apply_invalid_patch_bundle_does_not_mark_proposal_applied(
+        self,
+        store: AutoFixStore,
+        registry: MutationRegistry,
+    ) -> None:
+        """Invalid canonical patch bundles should fail before status mutation."""
+        current_config = {
+            "routing": {"rules": [{"specialist": "support", "keywords": ["help"], "patterns": []}]},
+        }
+        proposal = _make_proposal(
+            proposal_id="apply-patch-invalid",
+            mutation_name="component_patch",
+            surface="routing",
+            params={},
+            patch_bundle=_support_keyword_patch_bundle(path="/routing_rules/99"),
+        )
+        store.save(proposal)
+        engine = AutoFixEngine(proposers=[], mutation_registry=registry, store=store)
+
+        with pytest.raises(ValueError, match="Invalid patch bundle"):
+            engine.apply("apply-patch-invalid", current_config)
+
+        assert store.get("apply-patch-invalid").status == "pending"  # type: ignore[union-attr]
 
     def test_apply_nonexistent_proposal(
         self, store: AutoFixStore, registry: MutationRegistry

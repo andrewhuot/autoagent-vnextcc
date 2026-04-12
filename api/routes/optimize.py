@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +101,7 @@ def _build_failure_samples_from_eval_result_set(
             "tool_calls": tool_calls if isinstance(tool_calls, list) else [],
             "specialist_used": str(actual.get("specialist_used") or ""),
             "latency_ms": float(actual.get("latency_ms") or 0.0),
+            "component_attributions": list(getattr(example, "component_attributions", []) or []),
         })
         if len(samples) >= limit:
             break
@@ -129,6 +131,7 @@ def _build_failure_samples_from_eval_payload(
             "tool_calls": [],
             "specialist_used": str(case.get("specialist_used") or ""),
             "latency_ms": float(case.get("latency_ms") or 0.0),
+            "component_attributions": list(case.get("component_attributions", []) or []),
         })
         if len(samples) >= limit:
             break
@@ -402,6 +405,12 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                     if pending_review_store is None:
                         raise HTTPException(status_code=500, detail="Pending review store is not configured")
                     attempt_id = recent_attempt.attempt_id if recent_attempt is not None else task.task_id
+                    patch_bundle = None
+                    if recent_attempt is not None and recent_attempt.patch_bundle:
+                        try:
+                            patch_bundle = json.loads(recent_attempt.patch_bundle)
+                        except json.JSONDecodeError:
+                            patch_bundle = None
                     pending_review = PendingReview(
                         attempt_id=attempt_id,
                         proposed_config=new_config,
@@ -417,6 +426,7 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                         governance_notes=diagnostics.governance_notes,
                         deploy_scores=scores_dict,
                         deploy_strategy=deploy_strategy,
+                        patch_bundle=patch_bundle,
                     )
                     pending_review_store.save_review(pending_review)
                     if recent_attempt is not None:

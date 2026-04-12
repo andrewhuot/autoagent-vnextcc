@@ -38,6 +38,10 @@ def test_mock_proposer_uses_scoped_routing_failures_to_expand_matching_rule_keyw
     assert proposal is not None
     assert proposal.config_section == "routing"
     assert "scoped eval failures" in proposal.change_description.lower()
+    assert proposal.patch_bundle is not None
+    operations = proposal.patch_bundle["operations"]
+    assert operations[0]["component"]["component_type"] == "routing_rule"
+    assert operations[0]["field_path"] == "keywords"
     support_keywords = proposal.new_config["routing"]["rules"][0]["keywords"]
     recommendation_keywords = proposal.new_config["routing"]["rules"][2]["keywords"]
     assert "acceptance" in support_keywords

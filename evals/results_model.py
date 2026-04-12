@@ -143,6 +143,7 @@ class ExampleResult:
     scores: dict[str, GraderScore]
     passed: bool
     failure_reasons: list[str]
+    component_attributions: list[dict[str, Any]] = field(default_factory=list)
     annotations: list[Annotation] = field(default_factory=list)
     category: str = "unknown"
 
@@ -156,6 +157,7 @@ class ExampleResult:
             "scores": {key: value.to_dict() for key, value in self.scores.items()},
             "passed": self.passed,
             "failure_reasons": self.failure_reasons,
+            "component_attributions": self.component_attributions,
             "annotations": [annotation.to_dict() for annotation in self.annotations],
             "category": self.category,
         }
@@ -175,6 +177,11 @@ class ExampleResult:
             },
             passed=bool(payload.get("passed", False)),
             failure_reasons=[str(item) for item in list(payload.get("failure_reasons", []) or [])],
+            component_attributions=[
+                dict(item)
+                for item in list(payload.get("component_attributions", []) or [])
+                if isinstance(item, dict)
+            ],
             annotations=[
                 Annotation.from_dict(dict(item))
                 for item in list(payload.get("annotations", []) or [])
@@ -292,6 +299,7 @@ def _example_result_from_eval(result: EvalResult, case: TestCase | None) -> Exam
         scores=scores,
         passed=result.passed,
         failure_reasons=list(result.failure_reasons or []),
+        component_attributions=list(result.component_attributions or []),
         annotations=[],
         category=result.category,
     )

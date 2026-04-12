@@ -34,6 +34,7 @@ def _serialize_proposal(proposal: AutoFixProposal) -> dict[str, Any]:
         "risk_class": proposal.risk_class,
         "cost_impact_estimate": proposal.cost_impact_estimate,
         "diff_preview": proposal.diff_preview,
+        "patch_bundle": proposal.patch_bundle,
         "status": proposal.status,
         "rationale": _proposal_rationale(proposal),
     }

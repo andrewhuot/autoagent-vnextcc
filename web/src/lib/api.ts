@@ -2655,6 +2655,7 @@ export function useUnifiedReviews(poll = true) {
           strategy: string | null;
           operator_family: string | null;
           has_detailed_audit: boolean;
+          patch_bundle?: Record<string, unknown> | null;
         }>
       >('/reviews/pending');
       return items.map((item) => ({
@@ -2672,6 +2673,7 @@ export function useUnifiedReviews(poll = true) {
         strategy: item.strategy ?? null,
         operator_family: item.operator_family ?? null,
         has_detailed_audit: item.has_detailed_audit ?? false,
+        patch_bundle: item.patch_bundle ?? null,
       }));
     },
     refetchInterval: poll ? 8000 : false,

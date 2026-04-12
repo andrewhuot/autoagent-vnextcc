@@ -69,6 +69,7 @@ def _pending_review_to_unified(review: Any) -> UnifiedReviewItem:
         strategy=data.get("strategy"),
         operator_family=data.get("selected_operator_family"),
         has_detailed_audit=False,
+        patch_bundle=data.get("patch_bundle"),
     )
 
 
@@ -147,6 +148,7 @@ def _change_card_to_unified(card: Any) -> UnifiedReviewItem:
         strategy=None,
         operator_family=None,
         has_detailed_audit=True,
+        patch_bundle=data.get("patch_bundle"),
     )
 
 

@@ -52,10 +52,20 @@ class EvalResultsStore:
                     expected_json TEXT,
                     actual_json TEXT NOT NULL,
                     failure_reasons TEXT NOT NULL,
+                    component_attributions TEXT NOT NULL DEFAULT '[]',
                     PRIMARY KEY (run_id, example_id)
                 )
                 """
             )
+            example_columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(result_examples)").fetchall()
+            }
+            if "component_attributions" not in example_columns:
+                conn.execute(
+                    "ALTER TABLE result_examples "
+                    "ADD COLUMN component_attributions TEXT NOT NULL DEFAULT '[]'"
+                )
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS result_scores (
@@ -116,8 +126,9 @@ class EvalResultsStore:
                         input_json,
                         expected_json,
                         actual_json,
-                        failure_reasons
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        failure_reasons,
+                        component_attributions
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         result_set.run_id,
@@ -129,6 +140,7 @@ class EvalResultsStore:
                         json.dumps(example.expected) if example.expected is not None else None,
                         json.dumps(example.actual),
                         json.dumps(example.failure_reasons),
+                        json.dumps(example.component_attributions),
                     ),
                 )
                 for metric_name, metric in example.scores.items():
@@ -298,7 +310,8 @@ class EvalResultsStore:
         with self._connect() as conn:
             example_row = conn.execute(
                 """
-                SELECT example_id, category, passed, input_json, expected_json, actual_json, failure_reasons
+                SELECT example_id, category, passed, input_json, expected_json, actual_json,
+                       failure_reasons, component_attributions
                 FROM result_examples
                 WHERE run_id = ? AND example_id = ?
                 """,
@@ -337,6 +350,7 @@ class EvalResultsStore:
             },
             passed=bool(example_row["passed"]),
             failure_reasons=json.loads(example_row["failure_reasons"]),
+            component_attributions=json.loads(example_row["component_attributions"]),
             annotations=[
                 Annotation(
                     author=row["author"],

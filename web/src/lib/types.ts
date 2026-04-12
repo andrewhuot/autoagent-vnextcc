@@ -352,6 +352,7 @@ export interface EvalResultExample {
   scores: Record<string, EvalResultsMetricScore>;
   passed: boolean;
   failure_reasons: string[];
+  component_attributions?: Array<Record<string, unknown>>;
   annotations: ResultAnnotation[];
   category: string;
 }
@@ -514,6 +515,7 @@ export interface PendingReview {
   governance_notes: string[];
   deploy_scores?: Record<string, unknown>;
   deploy_strategy: string;
+  patch_bundle?: Record<string, unknown> | null;
 }
 
 export interface PendingReviewActionResult {
@@ -832,6 +834,7 @@ export interface AutoFixProposal {
   risk_class: string;
   cost_impact_estimate: number;
   diff_preview: string;
+  patch_bundle?: Record<string, unknown> | null;
   status: string;
   rationale: string;
 }
@@ -1110,6 +1113,7 @@ export interface UnifiedReviewItem {
   strategy: string | null;
   operator_family: string | null;
   has_detailed_audit: boolean;
+  patch_bundle?: Record<string, unknown> | null;
 }
 
 export interface UnifiedReviewStats {

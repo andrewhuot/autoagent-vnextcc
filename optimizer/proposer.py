@@ -7,6 +7,9 @@ import json
 import re
 from dataclasses import dataclass
 
+from shared.canonical_ir_convert import from_config_dict
+from shared.canonical_patch import ComponentPatchOperation, TypedPatchBundle, find_component_reference
+
 from .providers import LLMRequest, LLMRouter
 
 _ROUTING_STOP_WORDS = {
@@ -40,12 +43,29 @@ _ROUTING_STOP_WORDS = {
 }
 
 
+def _flatten_component_attributions(failure_samples: list[dict]) -> list[dict]:
+    """Collect component-attribution payloads from optimizer failure samples."""
+    attributions: list[dict] = []
+    for sample in failure_samples:
+        raw_attributions = sample.get("component_attributions", [])
+        if isinstance(raw_attributions, dict):
+            attributions.append(dict(raw_attributions))
+        elif isinstance(raw_attributions, list):
+            attributions.extend(
+                dict(item)
+                for item in raw_attributions
+                if isinstance(item, dict)
+            )
+    return attributions
+
+
 @dataclass
 class Proposal:
     change_description: str
     config_section: str  # which section of config was changed
     new_config: dict  # the full modified config
     reasoning: str
+    patch_bundle: dict | None = None
 
 
 class Proposer:
@@ -152,6 +172,11 @@ class Proposer:
                     reasoning=(
                         "Dominant failure bucket is routing_error. "
                         "Expanded runtime routing keywords using the selected eval failure messages."
+                    ),
+                    patch_bundle=self._routing_patch_bundle(
+                        current_config=current_config,
+                        dynamic_additions=dynamic_additions,
+                        failure_samples=failure_samples or [],
                     ),
                 )
             if rules:
@@ -341,6 +366,7 @@ class Proposer:
                 config_section=str(parsed.get("config_section") or "unknown"),
                 new_config=new_config,
                 reasoning=str(parsed.get("reasoning") or "No reasoning provided"),
+                patch_bundle=parsed.get("patch_bundle") if isinstance(parsed.get("patch_bundle"), dict) else None,
             )
         except Exception:
             # Production-safe fallback keeps loop alive during provider outages.
@@ -417,6 +443,41 @@ class Proposer:
             seen.add(token)
             keywords.append(token.replace("_", " "))
         return sorted(keywords, key=len, reverse=True)
+
+    @staticmethod
+    def _routing_patch_bundle(
+        *,
+        current_config: dict,
+        dynamic_additions: dict[str, list[str]],
+        failure_samples: list[dict],
+    ) -> dict | None:
+        """Build a typed routing patch bundle for mined keyword repairs."""
+        agent = from_config_dict(current_config, name="root")
+        operations: list[ComponentPatchOperation] = []
+        for specialist, keywords in dynamic_additions.items():
+            component = find_component_reference(agent, "routing_rule", specialist)
+            if component is None:
+                continue
+            operations.append(
+                ComponentPatchOperation(
+                    op="append",
+                    component=component,
+                    field_path="keywords",
+                    value=keywords,
+                    rationale="Mined routing keywords from scoped eval failures.",
+                )
+            )
+        if not operations:
+            return None
+        bundle = TypedPatchBundle(
+            bundle_id="proposal-routing-keywords",
+            title="Route scoped eval failures to expected specialists",
+            operations=operations,
+            source="optimizer.proposer.mock",
+            component_attributions=_flatten_component_attributions(failure_samples),
+            metadata={"failure_sample_count": len(failure_samples)},
+        )
+        return bundle.model_dump(mode="python")
 
     @staticmethod
     def _extract_json_payload(text: str) -> dict | None:

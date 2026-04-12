@@ -29,6 +29,7 @@ class EvalResult:
     expected_payload: dict[str, Any] | None = None
     actual_output: dict[str, Any] = field(default_factory=dict)
     failure_reasons: list[str] = field(default_factory=list)
+    component_attributions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass

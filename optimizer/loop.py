@@ -39,6 +39,23 @@ from .skill_engine import SkillEngine
 from .skill_autolearner import SkillAutoLearner
 
 
+def _patch_bundle_touches_surface(patch_bundle: dict[str, Any], surface: str) -> bool:
+    """Return whether a typed patch declares an operation on an immutable surface."""
+    surface_lower = surface.strip().lower()
+    for operation in patch_bundle.get("operations", []) or []:
+        if not isinstance(operation, dict):
+            continue
+        component = operation.get("component", {})
+        if not isinstance(component, dict):
+            continue
+        component_type = str(component.get("component_type", "")).lower()
+        component_name = str(component.get("name", "")).lower()
+        component_path = str(component.get("path", "")).lower()
+        if surface_lower in {component_type, component_name} or surface_lower in component_path:
+            return True
+    return False
+
+
 @dataclass
 class StrategyDiagnostics:
     """Snapshot of latest strategy cycle details."""
@@ -276,6 +293,7 @@ class Optimizer:
             candidate_config_raw=proposal.new_config,
             change_description=proposal.change_description,
             config_section=proposal.config_section,
+            patch_bundle=proposal.patch_bundle,
         )
 
     # ------------------------------------------------------------------
@@ -450,11 +468,21 @@ class Optimizer:
         candidate_config_raw: dict[str, Any],
         change_description: str,
         config_section: str,
+        patch_bundle: dict[str, Any] | None = None,
     ) -> tuple[dict | None, str]:
         """Validate, evaluate, gate, significance-check, and log candidate config."""
         # Check immutable surface violations
         if self.immutable_surfaces and candidate_config_raw:
             for surface in self.immutable_surfaces:
+                if patch_bundle and _patch_bundle_touches_surface(patch_bundle, surface):
+                    self._log_rejected_attempt(
+                        health_report=health_report,
+                        change_description=change_description,
+                        config_section=config_section,
+                        rejection_status="rejected_immutable",
+                        rejection_reason=f"Mutation touches immutable surface: {surface}",
+                    )
+                    return None, f"REJECTED (rejected_immutable): Mutation touches immutable surface: {surface}"
                 if surface in str(candidate_config_raw):
                     self._log_rejected_attempt(
                         health_report=health_report,
@@ -578,6 +606,9 @@ class Optimizer:
                 }
             ),
             skills_applied=skills_applied_json,
+            patch_bundle=json.dumps(patch_bundle, sort_keys=True, default=str)
+            if patch_bundle is not None
+            else "",
         )
         self.memory.log(attempt)
 

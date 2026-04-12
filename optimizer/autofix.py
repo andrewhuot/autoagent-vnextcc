@@ -13,6 +13,9 @@ import time
 import uuid
 from dataclasses import dataclass, field
 
+from agent.config.schema import validate_config
+from shared.canonical_patch import patch_bundle_to_config
+
 
 @dataclass
 class AutoFixProposal:
@@ -32,6 +35,7 @@ class AutoFixProposal:
     evaluated_at: float | None = None
     eval_result: dict | None = None
     applied_at: float | None = None
+    patch_bundle: dict | None = None
 
     def to_dict(self) -> dict:
         """Serialize the proposal to a plain dict."""
@@ -50,6 +54,7 @@ class AutoFixProposal:
             "evaluated_at": self.evaluated_at,
             "eval_result": self.eval_result,
             "applied_at": self.applied_at,
+            "patch_bundle": self.patch_bundle,
         }
 
     @classmethod
@@ -70,6 +75,7 @@ class AutoFixProposal:
             evaluated_at=data.get("evaluated_at"),
             eval_result=data.get("eval_result"),
             applied_at=data.get("applied_at"),
+            patch_bundle=data.get("patch_bundle"),
         )
 
 
@@ -134,10 +140,17 @@ class AutoFixStore:
                     created_at REAL NOT NULL,
                     evaluated_at REAL,
                     eval_result TEXT,
-                    applied_at REAL
+                    applied_at REAL,
+                    patch_bundle TEXT
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(proposals)").fetchall()
+            }
+            if "patch_bundle" not in columns:
+                conn.execute("ALTER TABLE proposals ADD COLUMN patch_bundle TEXT")
             conn.commit()
 
     def save(self, proposal: AutoFixProposal) -> None:
@@ -149,8 +162,8 @@ class AutoFixStore:
                     (proposal_id, mutation_name, surface, params, expected_lift,
                      risk_class, affected_eval_slices, cost_impact_estimate,
                      diff_preview, status, created_at, evaluated_at,
-                     eval_result, applied_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     eval_result, applied_at, patch_bundle)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     proposal.proposal_id,
@@ -169,6 +182,9 @@ class AutoFixStore:
                     if proposal.eval_result is not None
                     else None,
                     proposal.applied_at,
+                    json.dumps(proposal.patch_bundle, sort_keys=True, default=str)
+                    if proposal.patch_bundle is not None
+                    else None,
                 ),
             )
             conn.commit()
@@ -181,7 +197,7 @@ class AutoFixStore:
                 SELECT proposal_id, mutation_name, surface, params, expected_lift,
                        risk_class, affected_eval_slices, cost_impact_estimate,
                        diff_preview, status, created_at, evaluated_at,
-                       eval_result, applied_at
+                       eval_result, applied_at, patch_bundle
                 FROM proposals
                 WHERE proposal_id = ?
                 """,
@@ -202,7 +218,7 @@ class AutoFixStore:
                     SELECT proposal_id, mutation_name, surface, params, expected_lift,
                            risk_class, affected_eval_slices, cost_impact_estimate,
                            diff_preview, status, created_at, evaluated_at,
-                           eval_result, applied_at
+                           eval_result, applied_at, patch_bundle
                     FROM proposals
                     WHERE status = ?
                     ORDER BY created_at DESC
@@ -216,7 +232,7 @@ class AutoFixStore:
                     SELECT proposal_id, mutation_name, surface, params, expected_lift,
                            risk_class, affected_eval_slices, cost_impact_estimate,
                            diff_preview, status, created_at, evaluated_at,
-                           eval_result, applied_at
+                           eval_result, applied_at, patch_bundle
                     FROM proposals
                     ORDER BY created_at DESC
                     LIMIT ?
@@ -265,6 +281,7 @@ class AutoFixStore:
             evaluated_at=row[11],
             eval_result=json.loads(row[12]) if row[12] is not None else None,
             applied_at=row[13],
+            patch_bundle=json.loads(row[14]) if len(row) > 14 and row[14] is not None else None,
         )
 
 
@@ -312,18 +329,26 @@ class AutoFixEngine:
         if proposal is None:
             raise KeyError(f"Proposal '{proposal_id}' not found")
 
-        operator = self.mutation_registry.get(proposal.mutation_name)
-        if operator is None:
-            raise KeyError(
-                f"Mutation operator '{proposal.mutation_name}' not found in registry"
-            )
-
-        new_config = operator.apply(copy.deepcopy(current_config), proposal.params)
+        if proposal.patch_bundle is not None:
+            new_config = patch_bundle_to_config(current_config, proposal.patch_bundle, agent_name="root")
+            validate_config(new_config)
+            status_detail = f"Applied component patch bundle (proposal {proposal_id})"
+        else:
+            if self.mutation_registry is None:
+                raise RuntimeError("Mutation registry is required to apply legacy proposals")
+            operator = self.mutation_registry.get(proposal.mutation_name)
+            if operator is None:
+                raise KeyError(
+                    f"Mutation operator '{proposal.mutation_name}' not found in registry"
+                )
+            new_config = operator.apply(copy.deepcopy(current_config), proposal.params)
+            validate_config(new_config)
+            status_detail = f"Applied {proposal.mutation_name} (proposal {proposal_id})"
 
         now = time.time()
         self.store.update_status(proposal_id, "applied", applied_at=now)
 
-        return new_config, f"Applied {proposal.mutation_name} (proposal {proposal_id})"
+        return new_config, status_detail
 
     def reject(self, proposal_id: str) -> str:
         """Mark a proposal as rejected so it is removed from the apply queue."""

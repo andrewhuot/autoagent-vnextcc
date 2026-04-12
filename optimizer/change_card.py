@@ -76,6 +76,7 @@ class ProposedChangeCard:
     candidate_config_path: str = ""
     source_eval_path: str = ""
     memory_context: str | None = None
+    patch_bundle: dict[str, Any] | None = None
     status: str = "pending"  # pending, applied, rejected
     created_at: float = field(default_factory=time.time)
     rejection_reason: str = ""
@@ -116,6 +117,7 @@ class ProposedChangeCard:
             "candidate_config_path": self.candidate_config_path,
             "source_eval_path": self.source_eval_path,
             "memory_context": self.memory_context,
+            "patch_bundle": self.patch_bundle,
             "status": self.status,
             "created_at": self.created_at,
             "rejection_reason": self.rejection_reason,
@@ -153,6 +155,7 @@ class ProposedChangeCard:
             candidate_config_path=data.get("candidate_config_path", ""),
             source_eval_path=data.get("source_eval_path", ""),
             memory_context=data.get("memory_context"),
+            patch_bundle=data.get("patch_bundle"),
             status=data.get("status", "pending"),
             created_at=data.get("created_at", 0.0),
             rejection_reason=data.get("rejection_reason", ""),

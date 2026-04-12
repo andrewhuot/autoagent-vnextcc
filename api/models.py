@@ -387,6 +387,10 @@ class ResultExampleResponse(BaseModel):
     scores: dict[str, ResultMetricScore] = Field(default_factory=dict, description="Per-metric scores")
     passed: bool = Field(False, description="Whether the example passed")
     failure_reasons: list[str] = Field(default_factory=list, description="Structured failure reasons")
+    component_attributions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Component-aware failure credit assignments",
+    )
     annotations: list[ResultAnnotationResponse] = Field(default_factory=list, description="Human notes")
     category: str = Field("unknown", description="Eval category")
 
@@ -707,6 +711,10 @@ class PendingReview(BaseModel):
         "immediate",
         description="Deployment strategy to use when the review is approved",
     )
+    patch_bundle: Optional[dict[str, Any]] = Field(
+        None,
+        description="Typed canonical component patch bundle for validation and review",
+    )
 
 
 class PendingReviewActionResponse(BaseModel):
@@ -753,6 +761,10 @@ class UnifiedReviewItem(BaseModel):
     has_detailed_audit: bool = Field(
         False,
         description="Whether the source store has a full audit trail (change cards do)",
+    )
+    patch_bundle: Optional[dict[str, Any]] = Field(
+        None,
+        description="Typed canonical component patch bundle when the source provides one",
     )
 
 

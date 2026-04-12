@@ -441,6 +441,14 @@ class EvalRunner:
             actual_output=dict(agent_result),
             failure_reasons=failure_reasons,
         )
+        from .component_attribution import attribute_eval_failure
+
+        eval_result.component_attributions = attribute_eval_failure(
+            case=case,
+            agent_result=agent_result,
+            eval_result=eval_result,
+            config=config,
+        )
 
         for name, evaluator in self._custom_evaluators.items():
             try:
@@ -977,6 +985,7 @@ class EvalRunner:
                 "expected_payload": result.expected_payload,
                 "actual_output": result.actual_output,
                 "failure_reasons": result.failure_reasons,
+                "component_attributions": result.component_attributions,
             }
             for result in score.results
         ]
@@ -1033,6 +1042,11 @@ class EvalRunner:
                 ),
                 actual_output=dict(item.get("actual_output", {}) or {}),
                 failure_reasons=[str(reason) for reason in list(item.get("failure_reasons", []) or [])],
+                component_attributions=[
+                    dict(attribution)
+                    for attribution in list(item.get("component_attributions", []) or [])
+                    if isinstance(attribution, dict)
+                ],
             )
             for item in case_payloads
         ]
