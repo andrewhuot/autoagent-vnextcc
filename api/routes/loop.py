@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import traceback
 from pathlib import Path
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -76,6 +79,7 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
 
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
+    event_log = getattr(request.app.state, "event_log", None)
     observer = request.app.state.observer
     optimizer = request.app.state.optimizer
     deployer = request.app.state.deployer
@@ -237,21 +241,30 @@ async def start_loop(body: LoopStartRequest, request: Request) -> LoopStatusResp
             )
 
             # Best-effort websocket broadcast
+            broadcast_payload = {
+                "type": "loop_cycle",
+                "task_id": task.task_id,
+                "cycle": cycle_num,
+                "total_cycles": cycles,
+                "success_rate": cycle_info["health_success_rate"],
+                "optimized": cycle_info["optimization_run"],
+            }
             try:
                 loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    ws_manager.broadcast({
-                        "type": "loop_cycle",
-                        "task_id": task.task_id,
-                        "cycle": cycle_num,
-                        "total_cycles": cycles,
-                        "success_rate": cycle_info["health_success_rate"],
-                        "optimized": cycle_info["optimization_run"],
-                    })
-                )
+                loop.run_until_complete(ws_manager.broadcast(broadcast_payload))
                 loop.close()
             except Exception:
                 pass
+
+            # Bridge to system event log for unified observability
+            if event_log is not None:
+                try:
+                    event_log.append(
+                        event_type="loop_cycle_broadcast",
+                        payload=broadcast_payload,
+                    )
+                except Exception:
+                    LOG.debug("Failed to bridge loop broadcast to event log", exc_info=True)
 
             if cycle_num < cycles and not _loop_stop_event.is_set():
                 wait_seconds = scheduler.seconds_until_next(

@@ -264,6 +264,11 @@ async def lifespan(app: FastAPI):
     task_manager = TaskManager()
     ws_manager = ConnectionManager()
 
+    # System event log — created early so downstream components can bridge to it
+    from data.event_log import EventLog
+
+    event_log = EventLog()
+
     # Builder workspace services
     from builder import (
         ArtifactCardFactory,
@@ -275,13 +280,19 @@ async def lifespan(app: FastAPI):
         EventBroker,
         PermissionManager,
     )
+    from builder.events import DurableEventStore
 
     builder_store = BuilderStore(
         db_path=os.environ.get("AGENTLAB_BUILDER_DB", ".agentlab/builder.db"),
     )
     builder_project_manager = BuilderProjectManager(builder_store)
     builder_orchestrator = BuilderOrchestrator(builder_store)
-    builder_events = EventBroker()
+    builder_events = EventBroker(
+        durable_store=DurableEventStore(
+            db_path=os.environ.get("AGENTLAB_BUILDER_EVENTS_DB", ".agentlab/builder_events.db"),
+        ),
+        system_event_log=event_log,
+    )
     builder_permissions = PermissionManager(builder_store)
     builder_execution = BuilderExecutionEngine(
         store=builder_store,
@@ -345,12 +356,11 @@ async def lifespan(app: FastAPI):
     app.state.tracing_middleware = getattr(eval_runner, "tracing_middleware")
 
     # Production controls (from R2 simplicity thesis)
-    from data.event_log import EventLog
     from optimizer.cost_tracker import CostTracker
     from optimizer.human_control import HumanControlStore
 
     app.state.control_store = HumanControlStore()
-    app.state.event_log = EventLog()
+    app.state.event_log = event_log  # Use the instance created earlier for EventBroker bridge
     app.state.cost_tracker = CostTracker(
         db_path=runtime.budget.tracker_db_path,
         per_cycle_budget_dollars=runtime.budget.per_cycle_dollars,

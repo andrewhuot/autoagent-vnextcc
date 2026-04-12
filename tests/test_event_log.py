@@ -479,6 +479,11 @@ def test_all_valid_event_types_are_accepted(tmp_path: Path) -> None:
         "builder_session_closed",
         "builder_eval_started",
         "builder_eval_completed",
+        # Broadcast events (bridged from WebSocket broadcasts)
+        "eval_completed_broadcast",
+        "optimize_completed_broadcast",
+        "optimize_pending_review_broadcast",
+        "loop_cycle_broadcast",
     }
 
     assert VALID_EVENT_TYPES == expected_types

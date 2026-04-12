@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+LOG = logging.getLogger(__name__)
 
 import yaml
 from fastapi import APIRouter, HTTPException, Request
@@ -287,6 +290,7 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
 
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
+    event_log = getattr(request.app.state, "event_log", None)
     observer = request.app.state.observer
     optimizer = request.app.state.optimizer
     deployer = request.app.state.deployer
@@ -453,20 +457,34 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
             task.result = result
 
             # Best-effort websocket broadcast
+            broadcast_payload = {
+                "type": broadcast_type,
+                "task_id": task.task_id,
+                "attempt_id": pending_review.attempt_id if pending_review is not None else None,
+                "accepted": new_config is not None,
+                "status": result["status_message"],
+            }
             try:
                 loop = asyncio.new_event_loop()
-                loop.run_until_complete(
-                    ws_manager.broadcast({
-                        "type": broadcast_type,
-                        "task_id": task.task_id,
-                        "attempt_id": pending_review.attempt_id if pending_review is not None else None,
-                        "accepted": new_config is not None,
-                        "status": result["status_message"],
-                    })
-                )
+                loop.run_until_complete(ws_manager.broadcast(broadcast_payload))
                 loop.close()
             except Exception:
                 pass
+
+            # Bridge to system event log for unified observability
+            if event_log is not None:
+                try:
+                    log_event_type = (
+                        "optimize_pending_review_broadcast"
+                        if broadcast_type == "optimize_pending_review"
+                        else "optimize_completed_broadcast"
+                    )
+                    event_log.append(
+                        event_type=log_event_type,
+                        payload=broadcast_payload,
+                    )
+                except Exception:
+                    LOG.debug("Failed to bridge optimize broadcast to event log", exc_info=True)
 
             return result
         finally:
