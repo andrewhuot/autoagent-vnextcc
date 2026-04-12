@@ -507,6 +507,43 @@ describe('workbench-store — harness features', () => {
     expect(state.harnessMetrics?.tokensUsed).toBe(1200);
   });
 
+  it('stores heartbeat liveness and context budget from harness.heartbeat event', () => {
+    dispatch({
+      event: 'harness.heartbeat',
+      data: {
+        context_budget: {
+          total_tokens: 900,
+          conversation_tokens: 300,
+          plan_tokens: 200,
+          artifact_tokens: 250,
+          model_tokens: 150,
+          conversation_count: 4,
+          artifact_count: 2,
+        },
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.lastHeartbeatAt).toBeGreaterThan(0);
+    expect(state.harnessMetrics?.contextBudget?.totalTokens).toBe(900);
+    expect(state.harnessMetrics?.contextBudget?.artifactCount).toBe(2);
+  });
+
+  it('increments stall count from progress.stall event', () => {
+    dispatch({
+      event: 'progress.stall',
+      data: { task_id: 'task-role', type: 'no_output' },
+    });
+    dispatch({
+      event: 'progress.stall',
+      data: { task_id: 'task-tool', type: 'no_output' },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.stallCount).toBe(2);
+    expect(state.lastHeartbeatAt).toBeGreaterThan(0);
+  });
+
   it('hydrates harness metrics from persisted harness_state', () => {
     useWorkbenchStore.getState().hydrate({
       projectId: 'wb-42',

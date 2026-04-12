@@ -413,14 +413,20 @@ def test_completed_run_exposes_review_gate_and_handoff(tmp_path: Path) -> None:
     assert checks["human_review"]["status"] == "required"
     assert completed["review_gate"] == review_gate
 
-    handoff = presentation["handoff"]
-    assert handoff["project_id"] == completed["project_id"]
-    assert handoff["run_id"] == completed["run_id"]
-    assert handoff["version"] == completed["version"]
-    assert handoff["review_gate_status"] == "review_required"
-    assert handoff["last_event_sequence"] >= 1
-    assert "Resume Workbench project" in handoff["resume_prompt"]
-    assert completed["handoff"] == handoff
+    presentation_handoff = presentation["handoff"]
+    assert presentation_handoff["project_id"] == completed["project_id"]
+    assert presentation_handoff["run_id"] == completed["run_id"]
+    assert presentation_handoff["version"] == completed["version"]
+    assert presentation_handoff["review_gate_status"] == "review_required"
+    assert presentation_handoff["last_event_sequence"] >= 1
+    assert "Resume Workbench project" in presentation_handoff["resume_prompt"]
+
+    durable_handoff = completed["handoff"]
+    assert durable_handoff["project_id"] == completed["project_id"]
+    assert durable_handoff["run_id"] == completed["run_id"]
+    assert durable_handoff["last_event"]["event"] == "run.completed"
+    assert durable_handoff["verification"]["status"] == "passed"
+    assert durable_handoff["next_action"]
 
 
 def test_review_gate_blocks_failed_validation_and_invalid_compatibility() -> None:

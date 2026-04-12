@@ -178,6 +178,10 @@ interface WorkbenchState {
   previousVersionArtifacts: WorkbenchArtifact[];
   /** Which version number is currently selected for diff (null = none). */
   diffTargetVersion: number | null;
+  /** Timestamp of the most recent heartbeat or event from the harness. */
+  lastHeartbeatAt: number;
+  /** Number of progress stalls detected in the current run. */
+  stallCount: number;
 }
 
 interface WorkbenchActions {
@@ -263,6 +267,8 @@ const INITIAL_STATE: WorkbenchState = {
   reflections: [],
   previousVersionArtifacts: [],
   diffTargetVersion: null,
+  lastHeartbeatAt: 0,
+  stallCount: 0,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -400,6 +406,8 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       activeArtifactId: state.activeArtifactId,
       error: null,
       currentIterationIndex: 0,
+      lastHeartbeatAt: Date.now(),
+      stallCount: 0,
     })),
 
   setAbortController: (controller) => set(() => ({ abortController: controller })),
@@ -886,6 +894,67 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       return;
     }
 
+
+    if (name === 'harness.heartbeat') {
+      const incoming = data as {
+        context_budget?: ContextBudgetWire;
+      };
+      const contextBudget = contextBudgetFromWire(incoming.context_budget);
+      set((state) => ({
+        lastHeartbeatAt: Date.now(),
+        harnessMetrics: contextBudget
+          ? {
+              stepsCompleted: state.harnessMetrics?.stepsCompleted ?? 0,
+              totalSteps: state.harnessMetrics?.totalSteps ?? 0,
+              tokensUsed: state.harnessMetrics?.tokensUsed ?? 0,
+              costUsd: state.harnessMetrics?.costUsd ?? 0,
+              elapsedMs: state.harnessMetrics?.elapsedMs ?? 0,
+              currentPhase: state.harnessMetrics?.currentPhase ?? 'idle',
+              contextBudget,
+            }
+          : state.harnessMetrics,
+      }));
+      return;
+    }
+
+    if (name === 'progress.stall') {
+      set((state) => {
+        const stallCount = (state.stallCount ?? 0) + 1;
+        return { stallCount, lastHeartbeatAt: Date.now() };
+      });
+      return;
+    }
+
+    if (name === 'iteration.started') {
+      const incoming = data as {
+        id?: string;
+        message?: string;
+        artifact_count?: number;
+        timestamp?: number;
+      };
+      set((state) => {
+        // Guard against double-counting from optimistic startIteration()
+        const lastEntry = state.iterationHistory[state.iterationHistory.length - 1];
+        if (lastEntry && lastEntry.id.startsWith('iter-local-')) {
+          return {};
+        }
+        const nextIterationNumber = state.iterationCount + 1;
+        const entry: IterationEntry = {
+          id: incoming.id ?? `iter-${Date.now()}`,
+          iterationNumber: nextIterationNumber,
+          message: incoming.message ?? '',
+          timestamp: incoming.timestamp ?? Date.now(),
+          artifactCount: incoming.artifact_count ?? state.artifacts.length,
+        };
+        return {
+          iterationCount: nextIterationNumber,
+          iterationHistory: [...state.iterationHistory, entry],
+          previousVersionArtifacts: state.artifacts,
+        };
+      });
+      return;
+    }
+
   },
 
   setActiveArtifact: (id) =>
@@ -993,6 +1062,31 @@ function messageFromApi(message: WorkbenchMessage): AssistantMessage {
 
 type HarnessMetricsWire = NonNullable<WorkbenchHarnessState['last_metrics']>;
 
+type ContextBudgetWire = {
+  total_tokens?: number;
+  conversation_tokens?: number;
+  plan_tokens?: number;
+  artifact_tokens?: number;
+  model_tokens?: number;
+  conversation_count?: number;
+  artifact_count?: number;
+};
+
+function contextBudgetFromWire(
+  incoming: ContextBudgetWire | null | undefined
+): HarnessMetrics['contextBudget'] | undefined {
+  if (!incoming) return undefined;
+  return {
+    totalTokens: incoming.total_tokens ?? 0,
+    conversationTokens: incoming.conversation_tokens ?? 0,
+    planTokens: incoming.plan_tokens ?? 0,
+    artifactTokens: incoming.artifact_tokens ?? 0,
+    modelTokens: incoming.model_tokens ?? 0,
+    conversationCount: incoming.conversation_count ?? 0,
+    artifactCount: incoming.artifact_count ?? 0,
+  };
+}
+
 function harnessMetricsFromWire(
   incoming: HarnessMetricsWire | null | undefined,
   current: HarnessMetrics | null
@@ -1005,6 +1099,7 @@ function harnessMetricsFromWire(
     costUsd: incoming.cost_usd ?? current?.costUsd ?? 0,
     elapsedMs: incoming.elapsed_ms ?? current?.elapsedMs ?? 0,
     currentPhase: incoming.current_phase ?? current?.currentPhase ?? 'idle',
+    contextBudget: current?.contextBudget,
   };
 }
 
@@ -1016,6 +1111,7 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
   const telemetrySummary =
     data.telemetry_summary ?? incomingRun?.telemetry_summary ?? current?.telemetry_summary;
   const handoff = data.handoff ?? incomingRun?.handoff ?? current?.handoff ?? null;
+  const summary = data.summary ?? incomingRun?.summary ?? current?.summary ?? null;
   return {
     ...(current ?? {
       run_id: runId,
@@ -1047,6 +1143,7 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
       (data.mode_reason as string | undefined) ?? incomingRun?.mode_reason ?? current?.mode_reason,
     budget: budget as WorkbenchRun['budget'],
     telemetry_summary: telemetrySummary as WorkbenchRun['telemetry_summary'],
+    summary: summary as WorkbenchRun['summary'],
     failure_reason:
       (data.failure_reason as string | null | undefined) ??
       incomingRun?.failure_reason ??

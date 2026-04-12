@@ -9,6 +9,15 @@ export interface HarnessMetrics {
   costUsd: number;
   elapsedMs: number;
   currentPhase: 'planning' | 'executing' | 'reflecting' | 'presenting' | 'idle';
+  contextBudget?: {
+    totalTokens: number;
+    conversationTokens: number;
+    planTokens: number;
+    artifactTokens: number;
+    modelTokens: number;
+    conversationCount: number;
+    artifactCount: number;
+  };
 }
 
 export interface IterationEntry {
@@ -25,6 +34,35 @@ export interface ReflectionEntry {
   qualityScore: number;
   suggestions: string[];
   timestamp: number;
+}
+
+export interface RunSummary {
+  run_id?: string;
+  runId?: string;
+  status: string;
+  phase: string;
+  mode: string;
+  provider: string;
+  model: string;
+  duration_ms?: number;
+  durationMs?: number;
+  tokens_used?: number;
+  tokensUsed?: number;
+  cost_usd?: number;
+  costUsd?: number;
+  artifacts_produced?: number;
+  artifactsProduced?: number;
+  operations_applied?: number;
+  operationsApplied?: number;
+  validation_status?: string | null;
+  validationStatus?: string | null;
+  changes: Array<{
+    operation: string;
+    category: string;
+    name: string;
+  }>;
+  recommended_action?: string;
+  recommendedAction?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +142,8 @@ export interface BuildStreamEvent {
     | 'run.recovered'
     | 'harness.metrics'
     | 'reflection.completed'
-    | 'iteration.started'
+    | 'harness.heartbeat'
+    | 'progress.stall'
     | 'error'
     | string;
   data: Record<string, unknown>;
@@ -181,6 +220,7 @@ export interface WorkbenchPlanSnapshot {
   conversation?: WorkbenchConversationMessage[];
   turns?: WorkbenchTurnRecord[];
   harness_state?: WorkbenchHarnessState;
+  run_summary?: RunSummary | null;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -494,10 +534,11 @@ export interface WorkbenchRun {
   mode_reason?: string;
   budget?: WorkbenchBudget;
   telemetry_summary?: WorkbenchTelemetrySummary;
+  summary?: RunSummary | null;
   failure_reason?: string | null;
   cancel_reason?: string | null;
   review_gate?: WorkbenchReviewGate | null;
-  handoff?: WorkbenchRunHandoff | WorkbenchHandoff | null;
+  handoff?: WorkbenchRunHandoff | null;
   events: WorkbenchRunEvent[];
   messages: WorkbenchMessage[];
   validation: WorkbenchTestResult | null;
