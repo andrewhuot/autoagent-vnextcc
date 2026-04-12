@@ -292,6 +292,135 @@ async def test_harness_metrics_update_snapshot_harness_state(tmp_path: Path) -> 
     assert snapshot["harness_state"]["latest_handoff"]["metrics"]["tokens_used"] == 123
 
 
+class RepairableCompatibilityAgent:
+    """Emit a deterministic target-incompatible tool for auto-iteration tests."""
+
+    async def run(self, request: BuildRequest, project: dict) -> object:
+        task = PlanTask(
+            id="task-local-shell",
+            title="Add local shell diagnostics",
+            description="Add a diagnostics tool that is invalid for CX export.",
+        )
+        plan = PlanTask(
+            id="task-root",
+            title="Build diagnostics agent",
+            description="Build an agent with one repairable compatibility issue.",
+            children=[task],
+        )
+        tool = {
+            "id": "tool-local-shell-diagnostics",
+            "name": "local_shell_diagnostics",
+            "description": "Run a local shell command for diagnostics.",
+            "type": "local_shell",
+            "parameters": ["command"],
+        }
+        artifact = WorkbenchArtifact(
+            id="artifact-local-shell",
+            task_id=task.id,
+            category="tool",
+            name="local_shell_diagnostics",
+            summary="Local shell diagnostics tool.",
+            preview="local_shell_diagnostics(command)",
+            source="def local_shell_diagnostics(command: str) -> dict: ...",
+            language="python",
+            created_at="2026-04-12T00:00:00Z",
+        )
+        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+        yield {
+            "event": "message.delta",
+            "data": {
+                "task_id": task.id,
+                "text": "Adding local shell diagnostics before validation.",
+            },
+        }
+        yield {"event": "task.started", "data": {"task_id": task.id}}
+        yield {"event": "artifact.updated", "data": {"artifact": artifact.to_dict()}}
+        yield {
+            "event": "task.completed",
+            "data": {
+                "task_id": task.id,
+                "operations": [
+                    {
+                        "operation": "add_tool",
+                        "target": "tools",
+                        "label": "local_shell_diagnostics",
+                        "object": tool,
+                    }
+                ],
+            },
+        }
+        yield {"event": "build.completed", "data": {"summary": "Added diagnostics tool."}}
+
+
+@pytest.mark.asyncio
+async def test_auto_iterate_repairs_target_compatibility_failure(tmp_path: Path) -> None:
+    """auto_iterate=True should perform a real validation-driven correction."""
+
+    store = WorkbenchStore(tmp_path / "workbench.json")
+    service = WorkbenchService(store)
+
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a diagnostics agent with a local shell tool.",
+        target="cx",
+        auto_iterate=True,
+        max_iterations=2,
+        agent=RepairableCompatibilityAgent(),
+    )
+    events = [event async for event in stream]
+
+    iterations = [event for event in events if event["event"] == "iteration.started"]
+    validations = [event for event in events if event["event"] == "validation.ready"]
+    assert len(iterations) == 2
+    assert iterations[1]["data"]["mode"] == "correction"
+    assert iterations[1]["data"]["reason"] == "validation_failed"
+    assert validations[0]["data"]["validation"]["status"] == "failed"
+    assert validations[-1]["data"]["validation"]["status"] == "passed"
+
+    terminal = events[-1]
+    assert terminal["event"] == "run.completed"
+    assert terminal["data"]["status"] == "completed"
+    assert terminal["data"]["validation"]["status"] == "passed"
+
+    snapshot = service.get_plan_snapshot(project_id=terminal["data"]["project_id"])
+    repaired_tool = next(
+        tool for tool in snapshot["model"]["tools"]
+        if tool["id"] == "tool-local-shell-diagnostics"
+    )
+    assert repaired_tool["type"] == "function_tool"
+    assert repaired_tool["parameters"] == ["query"]
+    turn = snapshot["turns"][-1]
+    assert len(turn["iterations"]) == 2
+    assert turn["iterations"][-1]["mode"] == "correction"
+
+
+@pytest.mark.asyncio
+async def test_auto_iterate_off_keeps_target_compatibility_failure_one_pass(
+    tmp_path: Path,
+) -> None:
+    """auto_iterate=False should remain an honest single-pass failed run."""
+
+    store = WorkbenchStore(tmp_path / "workbench.json")
+    service = WorkbenchService(store)
+
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a diagnostics agent with a local shell tool.",
+        target="cx",
+        auto_iterate=False,
+        max_iterations=2,
+        agent=RepairableCompatibilityAgent(),
+    )
+    events = [event async for event in stream]
+
+    iterations = [event for event in events if event["event"] == "iteration.started"]
+    assert len(iterations) == 1
+    terminal = events[-1]
+    assert terminal["event"] == "run.completed"
+    assert terminal["data"]["status"] == "failed"
+    assert terminal["data"]["validation"]["status"] == "failed"
+
+
 def test_build_stream_runs_reflect_and_present_phases(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
 

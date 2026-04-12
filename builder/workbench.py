@@ -955,6 +955,8 @@ class WorkbenchService:
                 started_model=started_model,
                 mode="initial",
                 brief=brief,
+                auto_iterate=auto_iterate,
+                max_iterations=max_iterations,
             ):
                 yield event
 
@@ -1075,6 +1077,8 @@ class WorkbenchService:
                 started_model=started_model,
                 mode="follow_up",
                 brief=follow_up,
+                auto_iterate=False,
+                max_iterations=max_iterations,
             ):
                 yield event
 
@@ -1763,6 +1767,8 @@ class WorkbenchService:
         started_model: dict[str, Any],
         mode: str,
         brief: str,
+        auto_iterate: bool = False,
+        max_iterations: int = 1,
         heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
     ) -> Any:
         """Process agent events from a source iterator, yielding enriched stream events.
@@ -1813,8 +1819,8 @@ class WorkbenchService:
                     yield {"event": event_name, "data": enriched_hb}
                     continue
 
-                # Filter agent-emitted iteration.started in follow_up mode
-                if mode == "follow_up" and event_name == "iteration.started":
+                # Iteration lifecycle is service-owned for non-initial passes.
+                if mode in {"follow_up", "correction"} and event_name == "iteration.started":
                     continue
 
                 # Cooperative cancellation check
@@ -2014,6 +2020,8 @@ class WorkbenchService:
                 project=project,
                 run=run,
                 operations=operations_for_version,
+                auto_iterate=auto_iterate,
+                max_iterations=max_iterations,
             ):
                 yield terminal
 
@@ -2049,6 +2057,275 @@ class WorkbenchService:
             "task_id": task_id,
             "message": "Step completed with no artifacts or operations.",
         }
+
+    def _failed_validation_checks(self, validation: dict[str, Any]) -> list[str]:
+        """Return failed deterministic validation check names."""
+        checks = validation.get("checks") if isinstance(validation, dict) else []
+        failed: list[str] = []
+        for check in checks if isinstance(checks, list) else []:
+            if isinstance(check, dict) and not bool(check.get("passed")):
+                failed.append(str(check.get("name") or "unknown"))
+        return failed
+
+    def _auto_correction_operations(
+        self,
+        project: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Build deterministic correction operations for known validation failures.
+
+        The first supported class is target compatibility. This is intentionally
+        narrow: autonomous iteration should repair evidence-backed structural
+        failures, not imply it can solve arbitrary quality or eval failures.
+        """
+        failed_checks = set(self._failed_validation_checks(validation))
+        if "target_compatibility" not in failed_checks:
+            return []
+
+        target = str(project.get("target") or "portable")
+        model = project.get("model") if isinstance(project.get("model"), dict) else {}
+        tools = {
+            str(tool.get("id") or ""): tool
+            for tool in model.get("tools", [])
+            if isinstance(tool, dict)
+        }
+        diagnostics = project.get("compatibility") or build_compatibility_diagnostics(
+            model,
+            target=target,
+        )
+        operations: list[dict[str, Any]] = []
+        for diagnostic in diagnostics if isinstance(diagnostics, list) else []:
+            if not isinstance(diagnostic, dict):
+                continue
+            if diagnostic.get("status") != "invalid":
+                continue
+            tool_id = str(diagnostic.get("object_id") or "")
+            tool = tools.get(tool_id)
+            if not isinstance(tool, dict):
+                continue
+            tool_type = str(tool.get("type") or "function_tool")
+            if not (
+                (target == "cx" and tool_type == "local_shell")
+                or (target == "adk" and tool_type == "cx_widget")
+            ):
+                continue
+
+            repaired = copy.deepcopy(tool)
+            repaired["type"] = "function_tool"
+            repaired["parameters"] = ["query"]
+            description = str(repaired.get("description") or "").strip()
+            suffix = "Converted to a portable function tool after target validation failed."
+            repaired["description"] = f"{description} {suffix}".strip()
+            operations.append(
+                {
+                    "operation": "update_tool",
+                    "target": f"tools.{tool_id}",
+                    "label": str(tool.get("name") or tool_id),
+                    "reason": "target_compatibility",
+                    "previous_type": tool_type,
+                    "object": repaired,
+                }
+            )
+        return operations
+
+    def _should_auto_correct(
+        self,
+        *,
+        run: dict[str, Any],
+        turn: dict[str, Any] | None,
+        validation: dict[str, Any],
+        operations: list[dict[str, Any]],
+        auto_iterate: bool,
+        max_iterations: int,
+    ) -> bool:
+        """Return whether the run should launch one more correction iteration."""
+        if not auto_iterate:
+            return False
+        if validation.get("status") != "failed":
+            return False
+        if not operations:
+            return False
+        current_iterations = len((turn or {}).get("iterations") or [])
+        budget = run.get("budget") if isinstance(run.get("budget"), dict) else {}
+        limits = budget.get("limits") if isinstance(budget.get("limits"), dict) else {}
+        limit = int(limits.get("max_iterations") or max_iterations or 1)
+        return current_iterations < max(1, limit)
+
+    async def _auto_correction_source(
+        self,
+        *,
+        project: dict[str, Any],
+        failed_checks: list[str],
+        operations: list[dict[str, Any]],
+        brief: str,
+    ) -> Any:
+        """Yield a service-owned correction pass as normal agent events."""
+        from builder.workbench_plan import PlanTask, WorkbenchArtifact
+
+        task_id = f"task-auto-correct-{new_id()}"
+        task = PlanTask(
+            id=task_id,
+            title="Repair validation failure",
+            description="Apply deterministic corrections for failed validation checks.",
+        )
+        plan = PlanTask(
+            id=f"task-auto-correct-root-{new_id()}",
+            title="Autonomous validation correction",
+            description=brief,
+            children=[task],
+        )
+        repaired_names = [
+            str((operation.get("object") or {}).get("name") or operation.get("label") or "object")
+            for operation in operations
+            if isinstance(operation, dict)
+        ]
+        source_lines = [
+            "# Autonomous validation correction",
+            "",
+            f"Failed checks: {', '.join(failed_checks) or 'unknown'}",
+            f"Corrected objects: {', '.join(repaired_names) or 'none'}",
+            "",
+            "This pass only applies deterministic compatibility repairs.",
+        ]
+        artifact = WorkbenchArtifact(
+            id=f"artifact-auto-correction-{new_id()}",
+            task_id=task_id,
+            category="note",
+            name="Validation correction",
+            summary="Deterministic correction applied after Workbench validation failed.",
+            preview="\n".join(source_lines[:4]),
+            source="\n".join(source_lines),
+            language="markdown",
+            created_at=_now_iso(),
+        )
+        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+        yield {
+            "event": "message.delta",
+            "data": {
+                "task_id": task_id,
+                "text": "Validation failed; applying deterministic compatibility repairs.",
+            },
+        }
+        yield {"event": "task.started", "data": {"task_id": task_id}}
+        yield {
+            "event": "task.progress",
+            "data": {
+                "task_id": task_id,
+                "note": "Repairing target-incompatible canonical objects.",
+            },
+        }
+        yield {"event": "artifact.updated", "data": {"artifact": artifact.to_dict()}}
+        yield {
+            "event": "task.completed",
+            "data": {
+                "task_id": task_id,
+                "operations": copy.deepcopy(operations),
+            },
+        }
+        yield {
+            "event": "harness.metrics",
+            "data": {
+                "steps_completed": 1,
+                "total_steps": 1,
+                "tokens_used": max(1, len(json.dumps(operations, default=str)) // 4),
+                "cost_usd": 0.0,
+                "elapsed_ms": _elapsed_ms_since(project.get("created_at")),
+                "current_phase": PHASE_EXECUTING,
+            },
+        }
+        yield {
+            "event": "build.completed",
+            "data": {
+                "summary": "Applied deterministic validation correction.",
+                "operations": copy.deepcopy(operations),
+            },
+        }
+
+    async def _run_auto_correction_stream(
+        self,
+        *,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        validation: dict[str, Any],
+        failed_operations: list[dict[str, Any]],
+        correction_operations: list[dict[str, Any]],
+        max_iterations: int,
+    ) -> Any:
+        """Start and process one service-owned autonomous correction iteration."""
+        turn = self._current_turn(project, run)
+        previous_iteration = self._current_iteration(project, run)
+        if previous_iteration is not None:
+            previous_iteration["validation"] = {
+                "run_id": validation.get("run_id"),
+                "status": validation.get("status"),
+                "checks": validation.get("checks", []),
+            }
+            self._complete_iteration_record(
+                previous_iteration,
+                status=RUN_STATUS_FAILED,
+                operations=failed_operations,
+                plan=project.get("plan"),
+            )
+        if turn is None:
+            turn = self._start_turn(project, run, brief=str(run.get("brief") or ""), mode="initial")
+
+        failed_checks = self._failed_validation_checks(validation)
+        correction_brief = (
+            "Autonomous correction for failed validation checks: "
+            f"{', '.join(failed_checks) or 'unknown'}."
+        )
+        iteration = self._start_iteration_record(
+            turn,
+            brief=correction_brief,
+            mode="correction",
+        )
+        run["iteration_id"] = iteration["iteration_id"]
+        run["phase"] = PHASE_PLANNING
+        run["status"] = RUN_STATUS_RUNNING
+        project["build_status"] = RUN_STATUS_RUNNING
+
+        started_payload = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration["iteration_id"],
+            "index": iteration["index"],
+            "iteration_number": iteration["index"] + 1,
+            "mode": "correction",
+            "message": correction_brief,
+            "reason": "validation_failed",
+            "failed_checks": failed_checks,
+            "correction_operations": len(correction_operations),
+            "artifact_count": len(project.get("artifacts", [])),
+        }
+        event_payload = self._prepare_stream_event(
+            project,
+            run,
+            "iteration.started",
+            started_payload,
+        )
+        self._record_run_event(project, run, "iteration.started", event_payload)
+        self.store.save_project(project)
+        yield {"event": "iteration.started", "data": event_payload}
+
+        started_model = copy.deepcopy(project.get("model") or {})
+        source = self._auto_correction_source(
+            project=project,
+            failed_checks=failed_checks,
+            operations=correction_operations,
+            brief=correction_brief,
+        )
+        async for event in self._process_agent_events(
+            source_iter=source,
+            project=project,
+            run=run,
+            started_model=started_model,
+            mode="correction",
+            brief=correction_brief,
+            auto_iterate=True,
+            max_iterations=max_iterations,
+        ):
+            yield event
 
     def _estimate_context_size(
         self, project: dict[str, Any],
@@ -2422,6 +2699,8 @@ class WorkbenchService:
         operations: list[dict[str, Any]],
         turn: dict[str, Any] | None = None,
         iteration: dict[str, Any] | None = None,
+        auto_iterate: bool = False,
+        max_iterations: int = 1,
     ) -> Any:
         """Run reflection, produce presentation data, and emit terminal events."""
         turn = turn or self._current_turn(project, run)
@@ -2485,6 +2764,26 @@ class WorkbenchService:
         self._record_run_event(project, run, "validation.ready", validation_ready)
         self.store.save_project(project)
         yield {"event": "validation.ready", "data": validation_ready}
+
+        correction_operations = self._auto_correction_operations(project, validation)
+        if self._should_auto_correct(
+            run=run,
+            turn=turn,
+            validation=validation,
+            operations=correction_operations,
+            auto_iterate=auto_iterate,
+            max_iterations=max_iterations,
+        ):
+            async for correction_event in self._run_auto_correction_stream(
+                project=project,
+                run=run,
+                validation=validation,
+                failed_operations=operations,
+                correction_operations=correction_operations,
+                max_iterations=max_iterations,
+            ):
+                yield correction_event
+            return
 
         run["phase"] = PHASE_PRESENTING
         run["status"] = RUN_STATUS_PRESENTING
@@ -3017,6 +3316,23 @@ def apply_operations(model: dict[str, Any], operations: list[dict[str, Any]]) ->
         obj = copy.deepcopy(operation.get("object") or {})
         if op == "add_tool":
             next_model["tools"] = _dedupe_by_id([*next_model.get("tools", []), obj])
+        elif op == "update_tool":
+            tool_id = str(obj.get("id") or operation.get("object_id") or "")
+            if not tool_id:
+                continue
+            tools: list[dict[str, Any]] = []
+            replaced = False
+            for tool in next_model.get("tools", []):
+                if isinstance(tool, dict) and str(tool.get("id") or "") == tool_id:
+                    merged = copy.deepcopy(tool)
+                    merged.update(obj)
+                    tools.append(merged)
+                    replaced = True
+                else:
+                    tools.append(copy.deepcopy(tool))
+            if not replaced and obj:
+                tools.append(obj)
+            next_model["tools"] = _dedupe_by_id(tools)
         elif op == "add_callback":
             next_model["callbacks"] = _dedupe_by_id([*next_model.get("callbacks", []), obj])
         elif op == "add_guardrail":

@@ -1,5 +1,49 @@
 # Findings & Decisions
 
+## Workbench Harness Claude-Code Audit - Codex
+
+### Mission
+
+- Audit AgentLab Workbench / model harness against Claude-Code-like operational qualities: truthful long-running loop, durable state/recovery, grounded artifacts, useful iteration, and evidence-driven improvement.
+- Produce `working-docs/workbench-harness-claude-code-audit-codex.md` and `working-docs/workbench-harness-claude-code-fix-plan-codex.md`.
+- Implement the highest-value fixes with tests, verify, commit, push, and send the required completion event.
+
+### Initial Context
+
+- Working directory is `/Users/andrew/Desktop/agentlab-workbench-harness-claude-code-audit-codex`.
+- Branch is `feat/workbench-harness-claude-code-audit-codex`; it initially pointed at `origin/master` / `master` commit `888fe0a`.
+- Initial tracked worktree was clean before planning-file creation.
+- No project-local `AGENTS.md` was found with repo-scoped `rg --files`; user-supplied working agreements are active.
+- Claude Code reference themes for comparison: gather context / act / verify loop, tool-backed actions, durable session logs, resume/fork semantics, checkpoints, permissions, interruptibility, and explicit verification targets.
+
+### Reconnaissance Findings
+
+- Current Workbench has already landed several foundational fixes: durable run envelopes, `events`, `messages`, validation/presentation output, handoff manifests, stale recovery, server cancellation, budgets, telemetry, review gates, explicit live/mock metadata, and builder progress clamping.
+- The largest remaining fake-progress risk found locally is `auto_iterate`: API docs and frontend copy describe a self-correcting validation loop, but `WorkbenchService` never uses the parameter to start a correction pass after validation fails.
+- Existing autonomous-loop tests are too weak: they accept one `iteration.started` event even when `auto_iterate=True`, so a no-op auto-iteration implementation still passes.
+- The optimizer/improver stack exists as a separate optimization API and Agent Improver local-draft UI. Workbench terminal handoff tells the operator to run or extend evals before promotion, but there is no structured optimizer handoff connecting a Workbench run's validation evidence, generated config, and review state to the optimizer path.
+
+### Implementation Results
+
+- Added the required audit and fix-plan documents under `working-docs/`.
+- Added regression coverage for a repairable target-compatibility failure: a CX-targeted run that emits a `local_shell` tool now fails in one pass when `auto_iterate` is off, and produces a `correction` iteration that updates the tool to `function_tool` when `auto_iterate` is on.
+- Implemented service-owned autonomous correction after `validation.ready`, before presentation, capped by the run iteration budget.
+- Added `update_tool` operation support so correction passes mutate canonical state instead of adding duplicate tools.
+- Updated the frontend store to keep live run events on `activeRun.events`, hydrate durable harness state/run summaries, and keep Activity handoff details visible even when only `activeRun.handoff` is available.
+- Forwarded `maxIterations` through manual Workbench iteration requests.
+
+### Verification Results
+
+- Red regression observed: `test_auto_iterate_repairs_target_compatibility_failure` failed with one iteration before the fix.
+- `.venv/bin/python -m pytest tests/test_workbench_streaming.py::test_auto_iterate_repairs_target_compatibility_failure tests/test_workbench_streaming.py::test_auto_iterate_off_keeps_target_compatibility_failure_one_pass -q`: passed.
+- `.venv/bin/python -m pytest tests/test_harness.py tests/test_workbench_harness_eng.py tests/test_workbench_streaming.py tests/test_workbench_p0_hardening.py tests/test_builder_execution.py tests/test_workbench_multi_turn.py -q`: 130 passed.
+- `.venv/bin/python -m pytest tests/test_optimize_api.py -q`: 11 passed.
+- `npm run test -- src/lib/workbench-store.test.ts src/pages/AgentWorkbench.test.tsx src/components/workbench/ArtifactViewer.test.tsx`: 49 passed.
+- `npm run build`: passed with existing Vite large-chunk warning.
+- `npm run test`: 53 files passed, 355 tests passed after rerun. One first full-run attempt hit a transient existing Build-page assertion; isolated rerun passed, then full rerun passed.
+- `python3 -m py_compile builder/workbench.py`: passed.
+- `git diff --check`: passed.
+
 ## Model Harness Engineering Campaign - Codex
 
 ### Mission

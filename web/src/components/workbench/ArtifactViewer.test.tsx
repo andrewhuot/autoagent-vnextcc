@@ -208,4 +208,64 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-filter at Draft v2.')).toBeInTheDocument();
   });
+
+  it('renders active run handoff details without a presentation payload', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      activeWorkspaceTab: 'activity',
+      presentation: null,
+      activeRun: {
+        run_id: 'run-2',
+        project_id: 'wb-filter',
+        brief: 'Build an agent',
+        target: 'portable',
+        environment: 'draft',
+        status: 'failed',
+        phase: 'terminal',
+        started_version: 1,
+        completed_version: 1,
+        created_at: '2026-04-12T00:00:00Z',
+        completed_at: '2026-04-12T00:00:02Z',
+        error: 'Run interrupted after process recovery.',
+        events: [],
+        messages: [],
+        validation: null,
+        presentation: null,
+        handoff: {
+          project_id: 'wb-filter',
+          run_id: 'run-2',
+          turn_id: 'turn-2',
+          phase: 'terminal',
+          status: 'failed',
+          updated_at: '2026-04-12T00:00:02Z',
+          last_event: {
+            sequence: 7,
+            event: 'run.recovered',
+            phase: 'terminal',
+            status: 'failed',
+            created_at: '2026-04-12T00:00:02Z',
+          },
+          progress: {
+            total_tasks: 4,
+            completed_tasks: 2,
+          },
+          verification: {
+            status: 'failed',
+          },
+          next_action: 'Review the last event and restart from preserved artifacts.',
+          recent_checkpoints: [{ checkpoint_id: 'checkpoint-1' }],
+        },
+      },
+    });
+
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(screen.getByText('Session handoff')).toBeInTheDocument();
+    expect(
+      screen.getByText('Review the last event and restart from preserved artifacts.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('run run-2 | run.recovered')).toBeInTheDocument();
+    expect(screen.getByText('Checkpoints preserved: 1')).toBeInTheDocument();
+  });
 });

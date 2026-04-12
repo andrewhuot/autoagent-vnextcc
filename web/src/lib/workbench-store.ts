@@ -11,6 +11,7 @@ import { create } from 'zustand';
 import type {
   BuildStreamEvent,
   HarnessMetrics,
+  RunSummary,
   WorkbenchHarnessState,
   IterationEntry,
   PlanTask,
@@ -25,6 +26,7 @@ import type {
   WorkbenchMessage,
   WorkbenchPresentation,
   WorkbenchRun,
+  WorkbenchRunHandoff,
   WorkbenchTestResult,
   WorkbenchActivity,
   WorkbenchTarget,
@@ -180,6 +182,8 @@ interface WorkbenchState {
   activity: WorkbenchActivity[];
   activeRun: WorkbenchRun | null;
   presentation: WorkbenchPresentation | null;
+  harnessState: WorkbenchHarnessState | null;
+  runSummary: RunSummary | null;
 
   // --- abort controller for the in-flight stream
   abortController: AbortController | null;
@@ -224,6 +228,7 @@ interface WorkbenchActions {
     conversation?: WorkbenchConversationMessage[];
     turns?: WorkbenchTurnRecord[];
     harnessState?: WorkbenchHarnessState | null;
+    runSummary?: RunSummary | null;
   }) => void;
   beginBuild: (brief: string) => void;
   setAbortController: (controller: AbortController | null) => void;
@@ -279,6 +284,8 @@ const INITIAL_STATE: WorkbenchState = {
   activity: [],
   activeRun: null,
   presentation: null,
+  harnessState: null,
+  runSummary: null,
   abortController: null,
   harnessMetrics: null,
   iterationCount: 0,
@@ -375,6 +382,12 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       const activeRun = snapshot.activeRun ?? state.activeRun;
       const buildStatus = snapshot.buildStatus ?? state.buildStatus;
       const hydratedMetrics = metricsFromHarnessState(snapshot.harnessState);
+      const harnessState = snapshot.harnessState ?? state.harnessState;
+      const runSummary =
+        snapshot.runSummary ??
+        snapshot.activeRun?.summary ??
+        activeRun?.summary ??
+        state.runSummary;
 
       return {
         projectId: snapshot.projectId,
@@ -392,6 +405,8 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         activity: snapshot.activity ?? state.activity,
         activeRun,
         presentation: snapshot.activeRun?.presentation ?? state.presentation,
+        harnessState,
+        runSummary,
         buildStatus,
         lastBrief: snapshot.lastBrief ?? state.lastBrief,
         error: deriveHydrationNotice(activeRun, buildStatus),
@@ -445,6 +460,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
   dispatchEvent: (event) => {
     const { event: name, data } = event;
+    const mergeActiveRun = (
+      current: WorkbenchRun | null,
+      payload: Record<string, unknown> = data
+    ) => mergeRun(current, payload, name);
 
     if (name === 'turn.started') {
       const turnId = String(data.turn_id ?? '');
@@ -479,7 +498,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           turns: nextTurns,
           messages: nextMessages,
           projectId: (data.project_id as string) ?? state.projectId,
-          activeRun: mergeRun(state.activeRun, data),
+          activeRun: mergeActiveRun(state.activeRun),
           currentIterationIndex: 0,
           error: null,
         };
@@ -521,7 +540,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           previousVersionArtifacts: alreadyCounted
             ? state.previousVersionArtifacts
             : state.artifacts,
-          activeRun: mergeRun(state.activeRun, data),
+          activeRun: mergeActiveRun(state.activeRun),
           turns: state.turns.map((turn) =>
             turn.turnId === (data.turn_id as string)
               ? { ...turn, iterationCount: iterationIndex + 1 }
@@ -538,7 +557,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       const checks = (data.checks as WorkbenchValidationCheck[] | undefined) ?? [];
       set((state) => ({
         lastValidation: { status, checks, turnId },
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         turns: state.turns.map((turn) =>
           turn.turnId === turnId
             ? { ...turn, validation: { status, checks } }
@@ -563,7 +582,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
                 ? state.buildStatus
                 : 'done',
         abortController: null,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         turns: state.turns.map((turn) =>
           turn.turnId === turnId
             ? {
@@ -586,7 +605,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         plan,
         buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         turns: turnId
           ? state.turns.map((turn) =>
               turn.turnId === turnId ? { ...turn, plan } : turn
@@ -610,6 +629,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         recomputeParentStatus(nextPlan);
         return {
           plan: nextPlan,
+          activeRun: mergeActiveRun(state.activeRun),
           turns: turnId
             ? state.turns.map((turn) =>
                 turn.turnId === turnId ? { ...turn, plan: nextPlan } : turn
@@ -632,6 +652,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         }
         return {
           plan: nextPlan,
+          activeRun: mergeActiveRun(state.activeRun),
           turns: turnId
             ? state.turns.map((turn) =>
                 turn.turnId === turnId ? { ...turn, plan: nextPlan } : turn
@@ -669,7 +690,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
             turnId,
           });
         }
-        return { messages };
+        return { messages, activeRun: mergeActiveRun(state.activeRun) };
       });
       return;
     }
@@ -697,6 +718,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         return {
           artifacts,
           plan: nextPlan ?? state.plan,
+          activeRun: mergeActiveRun(state.activeRun),
           activeArtifactId:
             state.activeArtifactId && userSelectedRecently
               ? state.activeArtifactId
@@ -733,6 +755,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         recomputeParentStatus(nextPlan);
         return {
           plan: nextPlan,
+          activeRun: mergeActiveRun(state.activeRun),
           turns: turnId
             ? state.turns.map((turn) =>
                 turn.turnId === turnId ? { ...turn, plan: nextPlan } : turn
@@ -751,7 +774,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
         version: (data.version as number) ?? state.version,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         skillContext: incomingSkillContext ?? state.skillContext,
       }));
       return;
@@ -760,7 +783,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     if (name === 'reflect.started') {
       set((state) => ({
         buildStatus: 'reflecting',
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
       }));
       return;
     }
@@ -770,7 +793,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: validation?.status === 'failed' ? 'error' : 'reflecting',
         lastTest: validation ?? state.lastTest,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
       }));
       return;
     }
@@ -781,7 +804,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         buildStatus: 'presenting',
         presentation: presentation ?? state.presentation,
         activeArtifactId: presentation?.active_artifact_id ?? state.activeArtifactId,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
       }));
       return;
     }
@@ -824,7 +847,11 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           project?.activity ??
           state.activity,
         messages: project?.messages ? project.messages.map(messageFromApi) : state.messages,
-        activeRun: mergeRun(run ?? state.activeRun, data),
+        activeRun: mergeActiveRun(run ?? state.activeRun),
+        runSummary:
+          (data.summary as RunSummary | undefined) ??
+          run?.summary ??
+          state.runSummary,
         presentation: presentation ?? run?.presentation ?? state.presentation,
         error: null,
       }));
@@ -836,7 +863,11 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'error',
         abortController: null,
-        activeRun: mergeRun(run ?? state.activeRun, data),
+        activeRun: mergeActiveRun(run ?? state.activeRun),
+        runSummary:
+          (data.summary as RunSummary | undefined) ??
+          run?.summary ??
+          state.runSummary,
         error: String((data as { error?: string; message?: string }).error ?? (data as { message?: string }).message ?? 'Build failed.'),
       }));
       return;
@@ -844,7 +875,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
     if (name === 'run.cancel_requested') {
       set((state) => ({
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         error: String((data as { cancel_reason?: string }).cancel_reason ?? 'Run cancellation requested.'),
       }));
       return;
@@ -856,7 +887,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'cancelled',
         abortController: null,
-        activeRun: mergeRun(run ?? state.activeRun, data),
+        activeRun: mergeActiveRun(run ?? state.activeRun),
         error: reason,
       }));
       return;
@@ -866,7 +897,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'error',
         abortController: null,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         error: String((data as { message?: string }).message ?? 'Run recovered from an interrupted state.'),
       }));
       return;
@@ -876,7 +907,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       set((state) => ({
         buildStatus: 'error',
         abortController: null,
-        activeRun: mergeRun(state.activeRun, data),
+        activeRun: mergeActiveRun(state.activeRun),
         error: String((data as { message?: string }).message ?? 'Build failed.'),
       }));
       return;
@@ -895,7 +926,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       };
       set((state) => ({
         harnessMetrics: harnessMetricsFromWire(incoming, state.harnessMetrics),
-        activeRun: mergeRunBudgetFromMetrics(mergeRun(state.activeRun, data), incoming),
+        activeRun: mergeRunBudgetFromMetrics(mergeActiveRun(state.activeRun), incoming),
       }));
       return;
     }
@@ -915,7 +946,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         suggestions: incoming.suggestions ?? [],
         timestamp: incoming.timestamp ?? Date.now(),
       };
-      set((state) => ({ reflections: [...state.reflections, entry] }));
+      set((state) => ({
+        reflections: [...state.reflections, entry],
+        activeRun: mergeActiveRun(state.activeRun),
+      }));
       return;
     }
 
@@ -938,6 +972,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
               contextBudget,
             }
           : state.harnessMetrics,
+        activeRun: mergeActiveRun(state.activeRun),
       }));
       return;
     }
@@ -945,7 +980,11 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     if (name === 'progress.stall') {
       set((state) => {
         const stallCount = (state.stallCount ?? 0) + 1;
-        return { stallCount, lastHeartbeatAt: Date.now() };
+        return {
+          stallCount,
+          lastHeartbeatAt: Date.now(),
+          activeRun: mergeActiveRun(state.activeRun),
+        };
       });
       return;
     }
@@ -1139,7 +1178,11 @@ function harnessMetricsFromWire(
   };
 }
 
-function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): WorkbenchRun | null {
+function mergeRun(
+  current: WorkbenchRun | null,
+  data: Record<string, unknown>,
+  eventName?: string
+): WorkbenchRun | null {
   const runId = data.run_id as string | undefined;
   if (!runId) return current;
   const incomingRun = data.run as WorkbenchRun | undefined;
@@ -1148,6 +1191,12 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
     data.telemetry_summary ?? incomingRun?.telemetry_summary ?? current?.telemetry_summary;
   const handoff = data.handoff ?? incomingRun?.handoff ?? current?.handoff ?? null;
   const summary = data.summary ?? incomingRun?.summary ?? current?.summary ?? null;
+  const events = mergeRunEvents({
+    currentEvents: current?.events ?? [],
+    incomingEvents: incomingRun?.events,
+    data,
+    eventName,
+  });
   return {
     ...(current ?? {
       run_id: runId,
@@ -1196,6 +1245,7 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
       current?.review_gate ??
       null,
     handoff: handoff as WorkbenchRun['handoff'],
+    events,
     validation:
       (data.validation as WorkbenchTestResult | undefined) ??
       incomingRun?.validation ??
@@ -1207,6 +1257,52 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
       current?.presentation ??
       null,
   };
+}
+
+function mergeRunEvents({
+  currentEvents,
+  incomingEvents,
+  data,
+  eventName,
+}: {
+  currentEvents: WorkbenchRun['events'];
+  incomingEvents?: WorkbenchRun['events'];
+  data: Record<string, unknown>;
+  eventName?: string;
+}): WorkbenchRun['events'] {
+  const baseSource =
+    incomingEvents && incomingEvents.length > 0 ? incomingEvents : currentEvents;
+  const base = [...(baseSource ?? [])];
+  if (!eventName) return base;
+  const handoff = data.handoff as WorkbenchRunHandoff | undefined;
+  const lastEvent = handoff?.last_event;
+  const sequence = Number(
+    lastEvent?.sequence ??
+      (data.sequence as number | undefined) ??
+      (base.length + 1)
+  );
+  if (base.some((event) => event.sequence === sequence && event.event === eventName)) {
+    return base;
+  }
+  const {
+    run: _run,
+    project: _project,
+    ...eventData
+  } = data;
+  return [
+    ...base,
+    {
+      sequence,
+      event: eventName,
+      phase: String(data.phase ?? lastEvent?.phase ?? ''),
+      status: String(data.status ?? lastEvent?.status ?? ''),
+      created_at:
+        String(lastEvent?.created_at ?? '') ||
+        new Date().toISOString(),
+      data: eventData,
+      telemetry: data.telemetry as WorkbenchRun['events'][number]['telemetry'],
+    },
+  ];
 }
 
 function mergeRunBudgetFromMetrics(

@@ -262,6 +262,62 @@ describe('workbench-store', () => {
     expect(state.turns[0].iterationCount).toBe(2);
   });
 
+  it('keeps live stream events on the active run before terminal hydration', () => {
+    dispatch({
+      event: 'turn.started',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        turn_id: 'turn-1',
+        mode: 'initial',
+        brief: 'go',
+        phase: 'planning',
+        status: 'running',
+        handoff: {
+          run_id: 'run-1',
+          next_action: 'Watch the run.',
+          progress: { total_tasks: 0, completed_tasks: 0 },
+          verification: { status: 'pending' },
+          last_event: {
+            sequence: 1,
+            event: 'turn.started',
+            phase: 'planning',
+            status: 'running',
+            created_at: '2026-04-12T00:00:00Z',
+          },
+        },
+      },
+    });
+    dispatch({
+      event: 'plan.ready',
+      data: {
+        project_id: 'wb-42',
+        run_id: 'run-1',
+        turn_id: 'turn-1',
+        phase: 'planning',
+        status: 'running',
+        plan: makePlan(),
+        handoff: {
+          run_id: 'run-1',
+          next_action: 'Check the plan.',
+          progress: { total_tasks: 1, completed_tasks: 0 },
+          verification: { status: 'pending' },
+          last_event: {
+            sequence: 2,
+            event: 'plan.ready',
+            phase: 'planning',
+            status: 'running',
+            created_at: '2026-04-12T00:00:01Z',
+          },
+        },
+      },
+    });
+
+    const events = useWorkbenchStore.getState().activeRun?.events ?? [];
+    expect(events.map((event) => event.event)).toEqual(['turn.started', 'plan.ready']);
+    expect(events[1].sequence).toBe(2);
+  });
+
   it('stores terminal run payloads from run.completed', () => {
     dispatch({ event: 'plan.ready', data: { project_id: 'wb-42', run_id: 'run-1', plan: makePlan() } });
     dispatch({
@@ -565,6 +621,48 @@ describe('workbench-store — harness features', () => {
       elapsedMs: 2500,
       currentPhase: 'executing',
     });
+  });
+
+  it('hydrates durable harness state and run summary from snapshots', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      projectName: 'Hydrated Harness',
+      target: 'portable',
+      environment: 'draft',
+      version: 2,
+      harnessState: {
+        checkpoint_count: 1,
+        latest_handoff: {
+          run_id: 'run-1',
+          phase: 'terminal',
+          status: 'completed',
+          last_event: { sequence: 9, event: 'run.completed' },
+          progress: { total_tasks: 2, completed_tasks: 2 },
+          verification: { status: 'passed' },
+          next_action: 'Review artifacts and run evals.',
+        },
+      },
+      runSummary: {
+        run_id: 'run-1',
+        status: 'completed',
+        phase: 'presenting',
+        mode: 'mock',
+        provider: 'mock',
+        model: 'mock-workbench',
+        validation_status: 'passed',
+        changes: [],
+        recommended_action: 'Review artifacts and approve for deployment.',
+      },
+    });
+
+    const state = useWorkbenchStore.getState();
+    expect(state.harnessState?.checkpoint_count).toBe(1);
+    expect(state.harnessState?.latest_handoff?.next_action).toBe(
+      'Review artifacts and run evals.'
+    );
+    expect(state.runSummary?.recommended_action).toBe(
+      'Review artifacts and approve for deployment.'
+    );
   });
 
   it('stores heartbeat liveness and context budget from harness.heartbeat event', () => {
