@@ -43,6 +43,11 @@ VALID_EVENT_TYPES = {
     "builder_session_closed",
     "builder_eval_started",
     "builder_eval_completed",
+    # Broadcast events (bridged from WebSocket broadcasts for unified observability)
+    "eval_completed_broadcast",
+    "optimize_completed_broadcast",
+    "optimize_pending_review_broadcast",
+    "loop_cycle_broadcast",
 }
 
 

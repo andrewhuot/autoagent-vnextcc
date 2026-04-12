@@ -98,6 +98,7 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
     eval_runner = request.app.state.eval_runner
+    event_log = getattr(request.app.state, "event_log", None)
     runtime = getattr(request.app.state, "runtime_config", load_runtime_config())
     requested_live = requested_live_mode(runtime)
 
@@ -186,20 +187,29 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
         task.result = result
 
         # Best-effort websocket broadcast
+        broadcast_payload = {
+            "type": "eval_complete",
+            "task_id": task.task_id,
+            "composite": score.composite,
+            "passed": score.passed_cases,
+            "total": score.total_cases,
+        }
         try:
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(
-                ws_manager.broadcast({
-                    "type": "eval_complete",
-                    "task_id": task.task_id,
-                    "composite": score.composite,
-                    "passed": score.passed_cases,
-                    "total": score.total_cases,
-                })
-            )
+            loop.run_until_complete(ws_manager.broadcast(broadcast_payload))
             loop.close()
         except Exception:
             pass
+
+        # Bridge to system event log for unified observability
+        if event_log is not None:
+            try:
+                event_log.append(
+                    event_type="eval_completed_broadcast",
+                    payload=broadcast_payload,
+                )
+            except Exception:
+                LOG.debug("Failed to bridge eval broadcast to event log", exc_info=True)
 
         return result
 
