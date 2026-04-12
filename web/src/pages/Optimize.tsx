@@ -65,6 +65,13 @@ interface OptimizeJourneyState {
   evalRunId?: string;
 }
 
+interface WorkbenchOptimizeContext {
+  projectId: string | null;
+  candidateName: string;
+  configPath: string | null;
+  evalHref: string;
+}
+
 interface PersistedOptimizeResult {
   agent: AgentLibraryItem | null;
   taskId: string;
@@ -102,6 +109,43 @@ const optimizeTabs: Array<{ key: OptimizeTab; label: string }> = [
   { key: 'run', label: 'Run' },
   { key: 'live', label: 'Live' },
 ];
+
+function buildWorkbenchEvalHref(context: {
+  projectId: string | null;
+  candidateName: string;
+  configPath: string | null;
+}): string {
+  const params = new URLSearchParams();
+  params.set('new', '1');
+  params.set('from', 'workbench');
+  if (context.projectId) {
+    params.set('workbenchProjectId', context.projectId);
+  }
+  params.set('candidate', context.candidateName);
+  if (context.configPath) {
+    params.set('configPath', context.configPath);
+  }
+  return `/evals?${params.toString()}`;
+}
+
+function parseWorkbenchOptimizeContext(searchParams: URLSearchParams): WorkbenchOptimizeContext | null {
+  const source = searchParams.get('from') ?? searchParams.get('source');
+  if (source !== 'workbench') {
+    return null;
+  }
+  const projectId = searchParams.get('workbenchProjectId') ?? searchParams.get('projectId');
+  const candidateName =
+    searchParams.get('candidate') ??
+    searchParams.get('agentName') ??
+    'Workbench candidate';
+  const configPath = searchParams.get('configPath');
+  return {
+    projectId,
+    candidateName,
+    configPath,
+    evalHref: buildWorkbenchEvalHref({ projectId, candidateName, configPath }),
+  };
+}
 
 const optimizeProgressSteps = [
   {
@@ -489,6 +533,10 @@ export function Optimize() {
 
   const journeyState = (location.state as OptimizeJourneyState | null) ?? null;
   const selectedEvalRunId = journeyState?.evalRunId ?? searchParams.get('evalRunId');
+  const workbenchContext = useMemo(
+    () => parseWorkbenchOptimizeContext(searchParams),
+    [searchParams]
+  );
 
   useEffect(() => {
     if (selectionHydrated) {
@@ -560,6 +608,38 @@ export function Optimize() {
         </section>
       )}
 
+      {workbenchContext && !selectedEvalRunId && (
+        <section className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-amber-950">Run Eval first</p>
+              <p className="mt-1 text-sm leading-6 text-amber-900">
+                {workbenchContext.candidateName} is saved, but Optimize needs a completed Eval run from this Workbench candidate.
+              </p>
+              {workbenchContext.configPath ? (
+                <p className="mt-2 break-all font-mono text-xs text-amber-800">{workbenchContext.configPath}</p>
+              ) : null}
+            </div>
+            <Link
+              to={workbenchContext.evalHref}
+              className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
+            >
+              Open Eval with this candidate
+            </Link>
+          </div>
+        </section>
+      )}
+
+      {workbenchContext && selectedEvalRunId && (
+        <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
+          <p className="font-semibold">Workbench Eval context ready</p>
+          <p className="mt-1">
+            Eval run <span className="font-mono">{selectedEvalRunId}</span> is ready to seed Optimize for{' '}
+            <span className="font-semibold">{workbenchContext.candidateName}</span>.
+          </p>
+        </section>
+      )}
+
       <section className="rounded-lg border border-gray-200 bg-white p-2">
         <div className="flex flex-wrap gap-1">
           {optimizeTabs.map((tab) => (
@@ -575,7 +655,11 @@ export function Optimize() {
 
       {visitedTabs.has('run') && (
         <section hidden={activeTab !== 'run'}>
-          <OptimizeRunSection activeAgent={activeAgent} evalRunId={selectedEvalRunId} />
+          <OptimizeRunSection
+            activeAgent={activeAgent}
+            evalRunId={selectedEvalRunId}
+            workbenchContext={workbenchContext}
+          />
         </section>
       )}
       {visitedTabs.has('live') && (
@@ -593,9 +677,11 @@ export function Optimize() {
 function OptimizeRunSection({
   activeAgent,
   evalRunId,
+  workbenchContext,
 }: {
   activeAgent: AgentLibraryItem | null;
   evalRunId: string | null;
+  workbenchContext: WorkbenchOptimizeContext | null;
 }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -728,10 +814,24 @@ function OptimizeRunSection({
   }, [history]);
 
   const attempts = history || [];
+  const workbenchAgent: AgentLibraryItem | null =
+    !activeAgent && workbenchContext?.configPath
+      ? {
+          id: `workbench-${workbenchContext.projectId ?? 'candidate'}`,
+          name: workbenchContext.candidateName,
+          model: 'workbench',
+          created_at: new Date().toISOString(),
+          source: 'built',
+          config_path: workbenchContext.configPath,
+          status: 'candidate',
+        }
+      : null;
+  const effectiveAgent = activeAgent ?? workbenchAgent;
+  const isWorkbenchEvalMissing = Boolean(workbenchContext && !evalRunId);
   const progressValue = getProgressValue(taskStatus.data?.status, taskStatus.data?.progress);
   const progressLabel = getProgressLabel(taskStatus.data?.status, taskStatus.data?.progress);
   const progressDescription = getProgressDescription(progressLabel);
-  const activeRunAgent = activeTaskAgent ?? activeAgent ?? null;
+  const activeRunAgent = activeTaskAgent ?? effectiveAgent ?? null;
   const activeTaskStart = taskStatus.data?.created_at ?? activeTaskStartedAt;
   const elapsedSeconds =
     activeTaskStart && Number.isFinite(Date.parse(activeTaskStart))
@@ -751,7 +851,7 @@ function OptimizeRunSection({
         )
       : null;
 
-  const resultActionAgent = latestResult?.agent ?? completedRun?.agent ?? activeTaskAgent ?? activeAgent;
+  const resultActionAgent = latestResult?.agent ?? completedRun?.agent ?? activeTaskAgent ?? effectiveAgent;
   const hasFailure = taskStatus.data?.status === 'failed';
 
   function navigateToEval(agent: AgentLibraryItem | null) {
@@ -803,7 +903,12 @@ function OptimizeRunSection({
   }
 
   function handleStart(forceOverride?: boolean) {
-    if (!activeAgent) {
+    if (isWorkbenchEvalMissing) {
+      toastError('Run Eval first', 'Optimize needs a completed Eval run from this Workbench candidate.');
+      return;
+    }
+
+    if (!effectiveAgent) {
       toastError('Select an agent', 'Pick an agent from the library before starting optimization.');
       return;
     }
@@ -829,7 +934,7 @@ function OptimizeRunSection({
         window: windowSize,
         force: requestedForce,
         require_human_approval: requireHumanApproval,
-        config_path: activeAgent.config_path,
+        config_path: effectiveAgent.config_path,
         eval_run_id: evalRunId ?? undefined,
         mode: optimizeMode,
         objective,
@@ -841,11 +946,11 @@ function OptimizeRunSection({
       {
         onSuccess: (response) => {
           setActiveTaskId(response.task_id);
-          setActiveTaskAgent(activeAgent);
+          setActiveTaskAgent(effectiveAgent);
           setActiveTaskStartedAt(new Date().toISOString());
           toastInfo(
             `Optimization ${response.task_id.slice(0, 8)} started`,
-            `Running against ${activeAgent.name}.`
+            `Running against ${effectiveAgent.name}.`
           );
         },
         onError: (error) => {
@@ -1211,7 +1316,7 @@ function OptimizeRunSection({
                 <button
                   type="button"
                   onClick={() => handleStart(true)}
-                  disabled={startOptimize.isPending || taskIsRunning || !activeAgent}
+                  disabled={startOptimize.isPending || taskIsRunning || !effectiveAgent || isWorkbenchEvalMissing}
                   className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
                 >
                   <RotateCcw className="h-4 w-4" />
@@ -1230,10 +1335,12 @@ function OptimizeRunSection({
                 Ready to optimize
               </div>
               <h3 className="mt-4 text-3xl font-semibold tracking-tight text-gray-900">
-                {activeAgent ? `Optimize ${activeAgent.name}` : 'Select an agent to begin'}
+                {effectiveAgent ? `Optimize ${effectiveAgent.name}` : 'Select an agent to begin'}
               </h3>
               <p className="mt-2 text-sm leading-relaxed text-gray-600">
-                {activeAgent
+                {isWorkbenchEvalMissing
+                  ? 'Run Eval on this Workbench candidate first so Optimize has failure evidence to improve.'
+                  : effectiveAgent
                   ? 'Run a cycle to inspect recent failures, evaluate new candidates, and promote safe improvements into the active config.'
                   : 'Pick a saved agent above so Optimize and Eval can stay on the same configuration.'}
               </p>
@@ -1286,10 +1393,10 @@ function OptimizeRunSection({
             <div className="mt-4 rounded-2xl border border-gray-200 bg-gray-50 p-4">
               <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Selected agent</p>
               <p className="mt-2 text-lg font-semibold text-gray-900">
-                {activeAgent ? activeAgent.name : 'Choose an agent from the library'}
+                {effectiveAgent ? effectiveAgent.name : 'Choose an agent from the library'}
               </p>
               <p className="mt-1 text-sm text-gray-600">
-                {activeAgent ? activeAgent.config_path : 'The optimizer needs a saved config before it can start.'}
+                {effectiveAgent ? effectiveAgent.config_path : 'The optimizer needs a saved config before it can start.'}
               </p>
               {evalRunId ? (
                 <p className="mt-2 text-xs text-sky-700">
@@ -1304,7 +1411,7 @@ function OptimizeRunSection({
             <button
               type="button"
               onClick={() => handleStart()}
-              disabled={startOptimize.isPending || taskIsRunning || !activeAgent}
+              disabled={startOptimize.isPending || taskIsRunning || !effectiveAgent || isWorkbenchEvalMissing}
               className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gray-900 px-4 py-3 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
             >
               <Play className="h-4 w-4" />
@@ -1328,6 +1435,8 @@ function OptimizeRunSection({
             <p className="mt-3 text-xs text-gray-500">
               {activeAgent
                 ? `This run will use ${activeAgent.name} and its saved config.`
+                : workbenchAgent
+                ? `This run will use ${workbenchAgent.name} and its saved Workbench config.`
                 : 'Choose an agent above before you start the optimizer.'}
             </p>
           </div>

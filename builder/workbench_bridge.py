@@ -11,6 +11,7 @@ import copy
 import hashlib
 import json
 from typing import Any
+from urllib.parse import urlencode
 
 from pydantic import BaseModel, Field
 
@@ -69,6 +70,12 @@ class WorkbenchBridgeEvaluationStep(BaseModel):
     request: WorkbenchEvalRunRequest | None = None
     start_endpoint: str = "/api/eval/run"
     blocking_reasons: list[str] = Field(default_factory=list)
+    readiness_state: str = "blocked"
+    label: str = "Eval blocked"
+    description: str = "Resolve the Workbench blockers before running Eval."
+    primary_action_label: str | None = None
+    primary_action_target: str | None = None
+    prerequisite_step: str | None = None
 
 
 class WorkbenchBridgeOptimizationStep(BaseModel):
@@ -79,6 +86,12 @@ class WorkbenchBridgeOptimizationStep(BaseModel):
     request_template: WorkbenchOptimizeRequest | None = None
     start_endpoint: str = "/api/optimize/run"
     blocking_reasons: list[str] = Field(default_factory=list)
+    readiness_state: str = "blocked"
+    label: str = "Optimize blocked"
+    description: str = "Resolve Eval prerequisites before starting Optimize."
+    primary_action_label: str | None = None
+    primary_action_target: str | None = None
+    prerequisite_step: str | None = None
 
 
 class WorkbenchImprovementHandoff(BaseModel):
@@ -243,21 +256,48 @@ def _build_evaluation_step(
 ) -> WorkbenchBridgeEvaluationStep:
     """Build Eval readiness from candidate materialization state."""
     if machine_blockers:
-        return WorkbenchBridgeEvaluationStep(status="blocked", blocking_reasons=machine_blockers)
+        draft_only = _is_draft_only_candidate(candidate, machine_blockers)
+        return WorkbenchBridgeEvaluationStep(
+            status="blocked",
+            blocking_reasons=machine_blockers,
+            readiness_state="draft_only" if draft_only else "blocked",
+            label="Draft only" if draft_only else "Eval blocked",
+            description=(
+                "Finish a Workbench run that produces a generated config before opening Eval."
+                if draft_only
+                else "Resolve the Workbench blockers before running Eval for this candidate."
+            ),
+            primary_action_label="Return to Workbench",
+            primary_action_target="/workbench",
+            prerequisite_step="finish_workbench_candidate" if draft_only else "resolve_workbench_blockers",
+        )
     if not candidate.config_path:
         return WorkbenchBridgeEvaluationStep(
             status="needs_saved_config",
+            readiness_state="needs_materialization",
+            label="Save candidate before Eval",
+            description="The Workbench candidate passed validation, but Eval needs a saved config file first.",
+            primary_action_label="Save candidate and open Eval",
+            primary_action_target=_eval_handoff_target(candidate),
+            prerequisite_step="materialize_candidate",
             blocking_reasons=["Materialize the Workbench candidate config before starting Eval."],
         )
+    request = WorkbenchEvalRunRequest(
+        config_path=candidate.config_path,
+        category=category,
+        dataset_path=dataset_path,
+        generated_suite_id=generated_suite_id,
+        split=split,
+    )
     return WorkbenchBridgeEvaluationStep(
         status="ready",
-        request=WorkbenchEvalRunRequest(
-            config_path=candidate.config_path,
-            category=category,
-            dataset_path=dataset_path,
-            generated_suite_id=generated_suite_id,
-            split=split,
-        ),
+        readiness_state="ready_for_eval",
+        label="Ready for Eval",
+        description="The Workbench candidate is saved and ready for an Eval run.",
+        primary_action_label="Open Eval with this candidate",
+        primary_action_target=_eval_handoff_target(candidate, request=request),
+        prerequisite_step=None,
+        request=request,
         blocking_reasons=[],
     )
 
@@ -270,16 +310,33 @@ def _build_optimization_step(
 ) -> WorkbenchBridgeOptimizationStep:
     """Build Optimize readiness while preserving Eval as a required predecessor."""
     if evaluation.status == "blocked":
+        draft_only = evaluation.readiness_state == "draft_only"
         return WorkbenchBridgeOptimizationStep(
             status="blocked",
             request_template=None,
             blocking_reasons=list(evaluation.blocking_reasons),
+            readiness_state="draft_only" if draft_only else "blocked",
+            label="Draft only" if draft_only else "Optimize blocked",
+            description=(
+                "Finish a Workbench run and create an Eval-ready candidate before starting Optimize."
+                if draft_only
+                else "Resolve Eval blockers before Optimize can use this Workbench candidate."
+            ),
+            primary_action_label=evaluation.primary_action_label,
+            primary_action_target=evaluation.primary_action_target,
+            prerequisite_step=evaluation.prerequisite_step,
         )
     if evaluation.status != "ready" or not candidate.config_path:
         return WorkbenchBridgeOptimizationStep(
             status="blocked",
             request_template=None,
             blocking_reasons=["Start Eval only after the Workbench candidate has a saved config path."],
+            readiness_state="needs_eval_candidate",
+            label="Eval candidate not ready",
+            description="Save the Workbench candidate and run Eval before starting Optimize.",
+            primary_action_label=evaluation.primary_action_label,
+            primary_action_target=evaluation.primary_action_target,
+            prerequisite_step=evaluation.prerequisite_step or "materialize_candidate",
         )
     template = WorkbenchOptimizeRequest(
         config_path=candidate.config_path,
@@ -290,11 +347,23 @@ def _build_optimization_step(
             status="ready",
             request_template=template,
             blocking_reasons=[],
+            readiness_state="ready_for_optimize",
+            label="Ready for Optimize",
+            description="Eval has run for this Workbench candidate, so Optimize can use that failure context.",
+            primary_action_label="Start Optimize from Eval run",
+            primary_action_target=_optimize_handoff_target(candidate, eval_run_id=eval_run_id),
+            prerequisite_step=None,
         )
     return WorkbenchBridgeOptimizationStep(
         status="awaiting_eval_run",
         request_template=template,
         blocking_reasons=["Run Eval first; Optimize requires a completed eval run."],
+        readiness_state="awaiting_eval_run",
+        label="Run Eval before Optimize",
+        description="Optimize is waiting for a completed Eval run for this saved Workbench candidate.",
+        primary_action_label="Open Eval with this candidate",
+        primary_action_target=evaluation.primary_action_target,
+        prerequisite_step="complete_eval_run",
     )
 
 
@@ -331,6 +400,56 @@ def _hash_payload(payload: dict[str, Any]) -> str:
     """Build a stable hash for generated config identity checks."""
     raw = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
     return f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def _eval_handoff_target(
+    candidate: WorkbenchBridgeCandidate,
+    *,
+    request: WorkbenchEvalRunRequest | None = None,
+) -> str:
+    """Build a product route that preserves the Workbench candidate context."""
+    params: dict[str, str] = {
+        "new": "1",
+        "from": "workbench",
+        "workbenchProjectId": candidate.project_id,
+        "candidate": candidate.agent_name,
+    }
+    config_path = request.config_path if request else candidate.config_path
+    if config_path:
+        params["configPath"] = config_path
+    if request and request.generated_suite_id:
+        params["generatedSuiteId"] = request.generated_suite_id
+    if request and request.dataset_path:
+        params["datasetPath"] = request.dataset_path
+    if request and request.category:
+        params["category"] = request.category
+    if request and request.split:
+        params["split"] = request.split
+    return f"/evals?{urlencode(params)}"
+
+
+def _optimize_handoff_target(candidate: WorkbenchBridgeCandidate, *, eval_run_id: str) -> str:
+    """Build an Optimize route scoped to a completed Workbench Eval run."""
+    params: dict[str, str] = {
+        "from": "workbench",
+        "workbenchProjectId": candidate.project_id,
+        "candidate": candidate.agent_name,
+        "evalRunId": eval_run_id,
+    }
+    if candidate.config_path:
+        params["configPath"] = candidate.config_path
+    return f"/optimize?{urlencode(params)}"
+
+
+def _is_draft_only_candidate(candidate: WorkbenchBridgeCandidate, reasons: list[str]) -> bool:
+    """Return whether blockers describe a draft that has not produced a candidate yet."""
+    validation_status = candidate.validation_status.lower()
+    if validation_status not in {"missing", "not_run", "unknown"}:
+        return False
+    lowered = [reason.lower() for reason in reasons]
+    return any("no generated config" in reason for reason in lowered) or any(
+        "has not completed" in reason for reason in lowered
+    )
 
 
 def _dedupe(values: list[str]) -> list[str]:

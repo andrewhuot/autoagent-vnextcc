@@ -575,6 +575,12 @@ export interface WorkbenchBridgeCandidate {
 
 export interface WorkbenchBridgeEvaluationStep {
   status: 'ready' | 'blocked' | 'needs_saved_config' | string;
+  readiness_state?: string;
+  label?: string;
+  description?: string;
+  primary_action_label?: string | null;
+  primary_action_target?: string | null;
+  prerequisite_step?: string | null;
   request?: WorkbenchBridgeEvalRequest | null;
   start_endpoint: string;
   blocking_reasons: string[];
@@ -582,6 +588,12 @@ export interface WorkbenchBridgeEvaluationStep {
 
 export interface WorkbenchBridgeOptimizationStep {
   status: 'ready' | 'blocked' | 'awaiting_eval_run' | string;
+  readiness_state?: string;
+  label?: string;
+  description?: string;
+  primary_action_label?: string | null;
+  primary_action_target?: string | null;
+  prerequisite_step?: string | null;
   requires_eval_run: boolean;
   request_template?: WorkbenchBridgeOptimizeRequest | null;
   start_endpoint: string;
@@ -597,6 +609,22 @@ export interface WorkbenchImprovementBridge {
   review_gate?: WorkbenchReviewGate | Record<string, unknown>;
   validation?: WorkbenchTestResult | Record<string, unknown>;
   created_from?: string;
+}
+
+export interface WorkbenchEvalBridgeResponse {
+  bridge: WorkbenchImprovementBridge;
+  save_result: {
+    config_path: string;
+    eval_cases_path?: string | null;
+    [key: string]: unknown;
+  };
+  eval_request?: WorkbenchBridgeEvalRequest | null;
+  optimize_request_template?: WorkbenchBridgeOptimizeRequest | null;
+  next?: {
+    start_eval_endpoint?: string;
+    start_optimize_endpoint?: string;
+    optimize_requires_eval_run?: boolean;
+  };
 }
 
 export interface WorkbenchHarnessState {
@@ -813,6 +841,22 @@ export function cancelWorkbenchRun(
       ...(projectId ? { project_id: projectId } : {}),
       reason,
     }),
+  });
+}
+
+/** Materialize a Workbench candidate and return its typed Eval handoff. */
+export function createWorkbenchEvalBridge(
+  projectId: string,
+  body: {
+    category?: string | null;
+    dataset_path?: string | null;
+    generated_suite_id?: string | null;
+    split?: string;
+  } = {}
+): Promise<WorkbenchEvalBridgeResponse> {
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/bridge/eval`, {
+    method: 'POST',
+    body: JSON.stringify(body),
   });
 }
 

@@ -214,6 +214,11 @@ describe('ArtifactViewer', () => {
           },
           evaluation: {
             status: 'ready',
+            readiness_state: 'ready_for_eval',
+            label: 'Ready for Eval',
+            description: 'The Workbench candidate is saved and ready for an Eval run.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml',
             request: {
               config_path: '/workspace/configs/v003.yaml',
               split: 'all',
@@ -223,6 +228,11 @@ describe('ArtifactViewer', () => {
           },
           optimization: {
             status: 'awaiting_eval_run',
+            readiness_state: 'awaiting_eval_run',
+            label: 'Run Eval before Optimize',
+            description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml',
             requires_eval_run: true,
             request_template: {
               config_path: '/workspace/configs/v003.yaml',
@@ -254,8 +264,82 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('Resume Workbench project wb-filter at Draft v2.')).toBeInTheDocument();
     expect(screen.getByText('Eval and optimize bridge')).toBeInTheDocument();
     expect(screen.getByText('Eval ready')).toBeInTheDocument();
+    expect(screen.getByText('Ready for Eval')).toBeInTheDocument();
+    expect(screen.getByText('The Workbench candidate is saved and ready for an Eval run.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Eval with this candidate' })).toHaveAttribute(
+      'href',
+      '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml'
+    );
     expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
     expect(screen.getByText('Optimize waiting for eval')).toBeInTheDocument();
+    expect(screen.getByText('Run Eval before Optimize')).toBeInTheDocument();
+  });
+
+  it('explains when the bridge still needs materialization before eval', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      activeWorkspaceTab: 'activity',
+      presentation: {
+        run_id: 'run-3',
+        version: 2,
+        summary: 'Candidate passed validation.',
+        artifact_ids: ['art-agent'],
+        active_artifact_id: 'art-agent',
+        generated_outputs: ['agent.py'],
+        validation_status: 'passed',
+        next_actions: ['Save candidate and run eval.'],
+        improvement_bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          candidate: {
+            project_id: 'wb-filter',
+            run_id: 'run-3',
+            version: 2,
+            target: 'portable',
+            environment: 'draft',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:def456',
+            config_path: null,
+            eval_cases_path: null,
+            export_targets: ['adk'],
+          },
+          evaluation: {
+            status: 'needs_saved_config',
+            readiness_state: 'needs_materialization',
+            label: 'Save candidate before Eval',
+            description: 'The Workbench candidate passed validation, but Eval needs a saved config file first.',
+            primary_action_label: 'Save candidate and open Eval',
+            primary_action_target: '/evals?new=1',
+            prerequisite_step: 'materialize_candidate',
+            request: null,
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: ['Materialize the Workbench candidate config before starting Eval.'],
+          },
+          optimization: {
+            status: 'blocked',
+            readiness_state: 'needs_eval_candidate',
+            label: 'Eval candidate not ready',
+            description: 'Save the Workbench candidate and run Eval before starting Optimize.',
+            primary_action_label: 'Save candidate and open Eval',
+            primary_action_target: '/evals?new=1',
+            prerequisite_step: 'materialize_candidate',
+            requires_eval_run: true,
+            request_template: null,
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: ['Start Eval only after the Workbench candidate has a saved config path.'],
+          },
+        },
+      },
+    });
+
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(screen.getByText('Save candidate before Eval')).toBeInTheDocument();
+    expect(screen.getByText('The Workbench candidate passed validation, but Eval needs a saved config file first.')).toBeInTheDocument();
+    expect(screen.getByText('Eval candidate not ready')).toBeInTheDocument();
+    expect(screen.getByText('Save the Workbench candidate and run Eval before starting Optimize.')).toBeInTheDocument();
   });
 
   it('renders durable handoff and evidence details without presentation state', async () => {

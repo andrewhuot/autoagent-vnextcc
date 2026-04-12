@@ -687,11 +687,38 @@ function ActivityWorkspace() {
                       ? 'Eval ready'
                       : `Eval ${improvementBridge.evaluation.status}`}
                   </p>
+                  {improvementBridge.evaluation.label && (
+                    <p className="font-medium text-[color:var(--wb-text)]">
+                      {improvementBridge.evaluation.label}
+                    </p>
+                  )}
+                  {improvementBridge.evaluation.description && (
+                    <p>{improvementBridge.evaluation.description}</p>
+                  )}
                   <p>
                     {improvementBridge.optimization.status === 'awaiting_eval_run'
                       ? 'Optimize waiting for eval'
                       : `Optimize ${improvementBridge.optimization.status}`}
                   </p>
+                  {improvementBridge.optimization.label && (
+                    <p className="font-medium text-[color:var(--wb-text)]">
+                      {improvementBridge.optimization.label}
+                    </p>
+                  )}
+                  {improvementBridge.optimization.description && (
+                    <p>{improvementBridge.optimization.description}</p>
+                  )}
+                  {improvementBridge.evaluation.primary_action_label &&
+                    improvementBridge.evaluation.primary_action_target && (
+                      <p className="pt-2">
+                        <a
+                          href={improvementBridge.evaluation.primary_action_target}
+                          className="inline-flex rounded-md bg-[color:var(--wb-text)] px-2.5 py-1.5 text-[12px] font-medium text-[color:var(--wb-bg)] transition hover:opacity-90"
+                        >
+                          {improvementBridge.evaluation.primary_action_label}
+                        </a>
+                      </p>
+                    )}
                 </div>
                 {improvementBridge.evaluation.blocking_reasons.length > 0 && (
                   <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-error)]">

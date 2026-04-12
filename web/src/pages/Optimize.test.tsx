@@ -222,6 +222,55 @@ describe('Optimize', () => {
     );
   });
 
+  it('explains that Workbench candidates must run Eval before Optimize', () => {
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
+
+    renderOptimize(
+      '/optimize?from=workbench&workbenchProjectId=wb-test&candidate=Airline%20Support%20Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml'
+    );
+
+    expect(screen.getByText('Run Eval first')).toBeInTheDocument();
+    expect(
+      screen.getByText('Airline Support Agent is saved, but Optimize needs a completed Eval run from this Workbench candidate.')
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Open Eval with this candidate' })).toHaveAttribute(
+      'href',
+      '/evals?new=1&from=workbench&workbenchProjectId=wb-test&candidate=Airline+Support+Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml'
+    );
+    expect(screen.getByRole('button', { name: 'Start Optimization' })).toBeDisabled();
+  });
+
+  it('starts Optimize from a Workbench candidate after Eval is complete', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'opt-workbench-123', message: 'Optimization started' });
+    });
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate,
+      isPending: false,
+    });
+
+    renderOptimize(
+      '/optimize?from=workbench&workbenchProjectId=wb-test&candidate=Airline%20Support%20Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml&evalRunId=eval-workbench-123'
+    );
+
+    expect(screen.getByText('Workbench Eval context ready')).toBeInTheDocument();
+    expect(screen.getByText(/eval-work/)).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Start Optimization' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config_path: '/workspace/configs/workbench-v003.yaml',
+        eval_run_id: 'eval-workbench-123',
+      }),
+      expect.any(Object)
+    );
+  });
+
   it('warns before starting a new run when a review is already pending', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
