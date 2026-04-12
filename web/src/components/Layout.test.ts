@@ -48,6 +48,18 @@ vi.mock('../lib/api', () => ({
   useUpdateHunkStatus: () => ({ mutate: vi.fn(), isPending: false }),
   useChangeAuditSummary: () => ({ data: null }),
   useChangeAudit: () => ({ data: null }),
+  useUnifiedReviewStats: () => ({
+    data: {
+      total_pending: 0,
+      optimizer_pending: 0,
+      change_card_pending: 0,
+      total_approved: 0,
+      total_rejected: 0,
+    },
+  }),
+  useUnifiedReviews: () => ({ data: [], isLoading: false, isError: false }),
+  useApproveUnifiedReview: () => ({ mutate: vi.fn(), isPending: false }),
+  useRejectUnifiedReview: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 function installLocalStorageMock(initial: Record<string, string> = {}) {

@@ -78,6 +78,21 @@ function buildSessionPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function jsonResponse(payload: unknown, status = 200): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => payload,
+    text: async () => (typeof payload === 'string' ? payload : JSON.stringify(payload)),
+  } as Response;
+}
+
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === 'string') return input;
+  if (input instanceof URL) return input.toString();
+  return input.url;
+}
+
 function renderPage() {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -98,6 +113,29 @@ function renderPage() {
 describe('Builder', () => {
   const fetchMock = vi.fn();
 
+  function installFetchRoutes(options: {
+    chat?: unknown;
+    save?: unknown;
+    exportConfig?: unknown;
+  } = {}) {
+    fetchMock.mockImplementation((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.startsWith('/api/builder/chat/sessions')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url === '/api/builder/chat' && options.chat) {
+        return Promise.resolve(jsonResponse(options.chat));
+      }
+      if (url === '/api/agents' && options.save) {
+        return Promise.resolve(jsonResponse(options.save));
+      }
+      if (url === '/api/builder/export' && options.exportConfig) {
+        return Promise.resolve(jsonResponse(options.exportConfig));
+      }
+      return Promise.resolve(jsonResponse({ detail: `Unexpected test request: ${url}` }, 500));
+    });
+  }
+
   beforeEach(() => {
     fetchMock.mockReset();
     vi.stubGlobal('fetch', fetchMock);
@@ -108,6 +146,7 @@ describe('Builder', () => {
         revokeObjectURL: vi.fn(),
       })
     );
+    installFetchRoutes();
   });
 
   it('renders the builder-chat workspace layout', () => {
@@ -121,10 +160,7 @@ describe('Builder', () => {
 
   it('sends a prompt and updates the chat and preview', async () => {
     const user = userEvent.setup();
-    fetchMock.mockResolvedValueOnce({
-      ok: true,
-      json: async () => buildSessionPayload(),
-    });
+    installFetchRoutes({ chat: buildSessionPayload() });
 
     renderPage();
 
@@ -147,35 +183,30 @@ describe('Builder', () => {
 
   it('saves the current draft before continuing to eval', async () => {
     const user = userEvent.setup();
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => buildSessionPayload(),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          agent: {
-            id: 'agent-v002',
-            name: 'Airline Customer Support Agent',
-            model: 'gpt-4o',
-            created_at: '2026-04-01T12:00:00.000Z',
-            source: 'built',
-            config_path: '/workspace/agents/airline.yaml',
-            status: 'ready',
-            config: buildSessionPayload().config,
-          },
-          save_result: {
-            artifact_id: 'artifact-123',
-            config_path: '/workspace/agents/airline.yaml',
-            config_version: 2,
-            eval_cases_path: '/workspace/evals/airline.yaml',
-            runtime_config_path: '/workspace/runtime/airline.yaml',
-            workspace_path: '/workspace',
-            actual_config_yaml: 'agent_name: Airline Customer Support Agent',
-          },
-        }),
-      });
+    installFetchRoutes({
+      chat: buildSessionPayload(),
+      save: {
+        agent: {
+          id: 'agent-v002',
+          name: 'Airline Customer Support Agent',
+          model: 'gpt-4o',
+          created_at: '2026-04-01T12:00:00.000Z',
+          source: 'built',
+          config_path: '/workspace/agents/airline.yaml',
+          status: 'ready',
+          config: buildSessionPayload().config,
+        },
+        save_result: {
+          artifact_id: 'artifact-123',
+          config_path: '/workspace/agents/airline.yaml',
+          config_version: 2,
+          eval_cases_path: '/workspace/evals/airline.yaml',
+          runtime_config_path: '/workspace/runtime/airline.yaml',
+          workspace_path: '/workspace',
+          actual_config_yaml: 'agent_name: Airline Customer Support Agent',
+        },
+      },
+    });
 
     renderPage();
 
@@ -198,19 +229,14 @@ describe('Builder', () => {
 
   it('exports the current config from the modal config view', async () => {
     const user = userEvent.setup();
-    fetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => buildSessionPayload(),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          filename: 'airline-customer-support-agent.yaml',
-          content: 'agent_name: Airline Customer Support Agent',
-          content_type: 'application/x-yaml',
-        }),
-      });
+    installFetchRoutes({
+      chat: buildSessionPayload(),
+      exportConfig: {
+        filename: 'airline-customer-support-agent.yaml',
+        content: 'agent_name: Airline Customer Support Agent',
+        content_type: 'application/x-yaml',
+      },
+    });
 
     renderPage();
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 
 from api.models import (
@@ -19,11 +20,16 @@ from api.models import (
 from api.tasks import TaskManager, Task
 
 
+def make_task_manager(tmp_path: Path) -> TaskManager:
+    """Create an isolated task manager so persisted history cannot leak between tests."""
+    return TaskManager(db_path=str(tmp_path / "tasks.db"))
+
+
 class TestTaskManager:
     """Test background task manager."""
 
-    def test_create_and_run_task(self):
-        tm = TaskManager()
+    def test_create_and_run_task(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         task = tm.create_task("eval", lambda t: {"score": 0.85})
         # Give thread time to complete
         time.sleep(0.1)
@@ -32,8 +38,8 @@ class TestTaskManager:
         assert updated.status == "completed"
         assert updated.result == {"score": 0.85}
 
-    def test_task_captures_errors(self):
-        tm = TaskManager()
+    def test_task_captures_errors(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         task = tm.create_task("eval", lambda t: (_ for _ in ()).throw(ValueError("test error")))
         time.sleep(0.1)
         updated = tm.get_task(task.task_id)
@@ -41,8 +47,8 @@ class TestTaskManager:
         assert updated.status == "failed"
         assert "test error" in (updated.error or "")
 
-    def test_task_progress_updates(self):
-        tm = TaskManager()
+    def test_task_progress_updates(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
 
         def work(task: Task):
             task.progress = 50
@@ -56,8 +62,8 @@ class TestTaskManager:
         assert updated.progress == 100  # auto-set to 100 on completion
         assert updated.result == {"halfway": True}
 
-    def test_update_task(self):
-        tm = TaskManager()
+    def test_update_task(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         task = tm.create_task("eval", lambda t: time.sleep(0.5))
         # Update while running
         tm.update_task(task.task_id, progress=50)
@@ -65,16 +71,16 @@ class TestTaskManager:
         assert updated is not None
         assert updated.progress == 50
 
-    def test_list_tasks(self):
-        tm = TaskManager()
+    def test_list_tasks(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         tm.create_task("eval", lambda t: None)
         tm.create_task("optimize", lambda t: None)
         time.sleep(0.1)
         tasks = tm.list_tasks()
         assert len(tasks) == 2
 
-    def test_list_tasks_by_type(self):
-        tm = TaskManager()
+    def test_list_tasks_by_type(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         tm.create_task("eval", lambda t: None)
         tm.create_task("optimize", lambda t: None)
         tm.create_task("eval", lambda t: None)
@@ -82,12 +88,12 @@ class TestTaskManager:
         eval_tasks = tm.list_tasks(task_type="eval")
         assert len(eval_tasks) == 2
 
-    def test_get_nonexistent_task(self):
-        tm = TaskManager()
+    def test_get_nonexistent_task(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         assert tm.get_task("nonexistent") is None
 
-    def test_task_to_dict(self):
-        tm = TaskManager()
+    def test_task_to_dict(self, tmp_path: Path):
+        tm = make_task_manager(tmp_path)
         task = tm.create_task("eval", lambda t: {"done": True})
         time.sleep(0.1)
         d = task.to_dict()

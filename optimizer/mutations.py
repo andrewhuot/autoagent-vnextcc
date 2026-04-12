@@ -400,7 +400,7 @@ def _validate_workflow_edit(config: dict[str, Any]) -> bool:
 
 
 def create_default_registry() -> MutationRegistry:
-    """Create a MutationRegistry pre-populated with the 13 first-party operators."""
+    """Create a MutationRegistry pre-populated with the 14 first-party operators."""
     registry = MutationRegistry()
 
     registry.register(

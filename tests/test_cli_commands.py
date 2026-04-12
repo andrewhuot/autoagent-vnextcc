@@ -697,15 +697,19 @@ class TestDoctorCommand:
         assert "google:" in result.output.lower()
         assert "gemini-2.5-pro ready" in result.output
 
-    def test_doctor_status_line_reports_ready_workspace(self, runner, tmp_dir):
+    def test_doctor_status_line_reports_ready_workspace(self, runner, tmp_dir, monkeypatch):
         """Mock-mode workspaces should still report a healthy doctor summary."""
-        config_file = os.path.join(tmp_dir, "agentlab.yaml")
-        Path(config_file).write_text("optimizer:\n  use_mock: true\n", encoding="utf-8")
+        workspace = Path(tmp_dir) / "doctor-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+        assert init_result.exit_code == 0, init_result.output
+        monkeypatch.chdir(workspace)
+
+        config_file = workspace / "agentlab.yaml"
         env = {
             k: v for k, v in os.environ.items()
             if k not in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY")
         }
-        result = runner.invoke(cli, ["doctor", "--config", config_file], env=env)
+        result = runner.invoke(cli, ["doctor", "--config", str(config_file)], env=env)
         assert result.exit_code == 0
         assert "Status: All checks passed" in result.output
 

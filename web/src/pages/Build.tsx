@@ -357,8 +357,9 @@ export function BuilderChatWorkspace({
   }
   const builderYamlPreview = session?.config ? builderConfigToYaml(session.config) : '';
   const builderPreviewModeNotice = !session || session.mock_mode;
+  const builderHasDraft = Boolean(session?.session_id && session?.config);
   const builderEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
-  const builderEvalHelperText = !session?.session_id
+  const builderEvalHelperText = !builderHasDraft
     ? 'Start with a draft on the left. Once the agent looks right, Save & Run Eval opens Eval Runs with this config already selected.'
     : savedAgent
       ? 'Draft saved. Open Eval Runs with this exact config already selected.'
@@ -394,7 +395,7 @@ export function BuilderChatWorkspace({
   }
 
   async function handleExport() {
-    if (!session?.session_id || busy) {
+    if (!session?.session_id || !session.config || busy) {
       return;
     }
 
@@ -443,7 +444,7 @@ export function BuilderChatWorkspace({
 
   async function handlePreview() {
     const message = previewComposer.trim();
-    if (!session?.session_id || !message || busy) {
+    if (!session?.session_id || !session.config || !message || busy) {
       return;
     }
 
@@ -487,8 +488,8 @@ export function BuilderChatWorkspace({
 
     onArtifactCreated?.({
       artifact_id: saved.artifact_id,
-      title: session?.config.agent_name ?? agent.name,
-      summary: `Saved builder chat config for ${session?.config.agent_name ?? agent.name}`,
+      title: session?.config?.agent_name ?? agent.name,
+      summary: `Saved builder chat config for ${session?.config?.agent_name ?? agent.name}`,
       source: 'builder_chat',
       status: 'complete',
       created_at: createdAt,
@@ -499,7 +500,7 @@ export function BuilderChatWorkspace({
   }
 
   async function saveCurrentBuilderAgent(options?: { showToast?: boolean }) {
-    if (!session?.session_id || busy) {
+    if (!session?.session_id || !session.config || busy) {
       return null;
     }
 
@@ -577,7 +578,6 @@ export function BuilderChatWorkspace({
 
   const builderIterationCount = countUserTurns(messages);
   const builderLastChange = getLastUserTurn(messages);
-  const builderHasDraft = Boolean(session?.session_id && session.config);
   const builderHasPreview = Boolean(previewResult);
   const builderHasSaved = Boolean(savedAgent || saveResult);
 
@@ -779,23 +779,23 @@ export function BuilderChatWorkspace({
                     data-testid="builder-preview-agent-name"
                     className="mt-2 truncate text-base font-semibold text-gray-900"
                   >
-                    {session?.config.agent_name ?? 'Draft pending'}
+                    {session?.config?.agent_name ?? 'Draft pending'}
                   </p>
                 </div>
                 <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
-                  {session?.config.model ?? 'Model pending'}
+                  {session?.config?.model ?? 'Model pending'}
                 </span>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                <StatPill testId="builder-stat-tools" label={`${session?.stats.tool_count ?? 0} tools`} />
+                <StatPill testId="builder-stat-tools" label={`${session?.stats?.tool_count ?? 0} tools`} />
                 <StatPill
                   testId="builder-stat-policies"
-                  label={`${session?.stats.policy_count ?? 0} policies`}
+                  label={`${session?.stats?.policy_count ?? 0} policies`}
                 />
                 <StatPill
                   testId="builder-stat-routes"
-                  label={`${session?.stats.routing_rule_count ?? 0} routes`}
+                  label={`${session?.stats?.routing_rule_count ?? 0} routes`}
                 />
               </div>
             </div>
@@ -847,7 +847,7 @@ export function BuilderChatWorkspace({
                 <button
                   type="button"
                   onClick={() => void handlePreview()}
-                  disabled={!session?.session_id || !previewComposer.trim() || busy}
+                  disabled={!builderHasDraft || !previewComposer.trim() || busy}
                   className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Play className="h-4 w-4" />
@@ -856,7 +856,7 @@ export function BuilderChatWorkspace({
                 <button
                   type="button"
                   onClick={() => void handleSave()}
-                  disabled={!session?.session_id || busy}
+                  disabled={!builderHasDraft || busy}
                   className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FolderOpen className="h-4 w-4" />
@@ -889,7 +889,7 @@ export function BuilderChatWorkspace({
               <button
                 data-testid="builder-run-eval"
                 onClick={() => void handleContinueToEval()}
-                disabled={!session?.session_id || busy}
+                disabled={!builderHasDraft || busy}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 <Play className="h-4 w-4" />

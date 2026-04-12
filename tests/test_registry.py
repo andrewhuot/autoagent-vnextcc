@@ -550,4 +550,4 @@ class TestMutationSurfaceExtensions:
 
     def test_total_operator_count(self) -> None:
         registry = create_default_registry()
-        assert len(registry.list_all()) == 13
+        assert len(registry.list_all()) == 14

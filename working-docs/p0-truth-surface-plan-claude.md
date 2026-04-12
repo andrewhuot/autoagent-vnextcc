@@ -1,8 +1,8 @@
 # P0 Truth-Surface Alignment Plan
 
-**Date:** 2026-04-12  
-**Agent:** Claude Opus 4.6  
-**Branch:** feat/p0-truth-surface-alignment-claude  
+**Date:** 2026-04-12
+**Agent:** Claude Opus 4.6
+**Branch:** feat/p0-truth-surface-alignment-claude
 **Issue:** Close surfaced-feature truth gap — product must not imply workflows that aren't wired end-to-end.
 
 ---
@@ -72,7 +72,7 @@ This session targets the **truth gap** specifically: making what users see match
 - Remove `canary_verdict: ""` and `deploy_message: ""` from response
 - Add explicit `"note": "Eval and canary deployment are separate steps — use /api/eval/run and /api/deploy/canary after applying."`
 
-#### 3.2 Context report endpoint  
+#### 3.2 Context report endpoint
 - Add honest response when no data: `"note": "No traces analyzed yet. Run per-trace analysis first via /api/context/analysis/{trace_id}."`
 
 #### 3.3 Drift endpoint

@@ -253,12 +253,13 @@ describe('Build', () => {
     await user.type(screen.getByTestId('builder-composer'), 'Build a refund agent');
     await user.click(screen.getByTestId('builder-send'));
 
+    expect(await screen.findByText('Refund Rescue')).toBeInTheDocument();
     expect(await screen.findByRole('heading', { name: 'Test Agent' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Live Config' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View Config' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save to Workspace' })).toBeInTheDocument();
     expect(
-      screen.getByText('Next: save this draft, then open Eval Runs with the same config preselected.')
+      await screen.findByText('Next: save this draft, then open Eval Runs with the same config preselected.')
     ).toBeInTheDocument();
 
     await user.click(screen.getByRole('button', { name: 'View Config' }));

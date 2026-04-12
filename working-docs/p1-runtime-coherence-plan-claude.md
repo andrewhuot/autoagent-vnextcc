@@ -1,7 +1,7 @@
 # P1 Runtime Coherence Plan
-**Date:** 2026-04-12  
-**Author:** Claude Opus 4.6  
-**Branch:** feat/p1-runtime-coherence-claude  
+**Date:** 2026-04-12
+**Author:** Claude Opus 4.6
+**Branch:** feat/p1-runtime-coherence-claude
 **Issue:** #7 — Reduce user-facing runtime fragmentation
 
 ---

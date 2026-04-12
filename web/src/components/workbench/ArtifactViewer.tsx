@@ -600,6 +600,7 @@ function ActivityWorkspace() {
     runSummary?.evidence_summary ??
     handoffEvidence ??
     null;
+  const improvementBridge = presentation?.improvement_bridge ?? null;
   return (
     <div className="min-h-0 flex-1 overflow-auto p-4">
       <div className="max-w-3xl space-y-4">
@@ -663,45 +664,45 @@ function ActivityWorkspace() {
                 </p>
               </div>
             )}
-            {presentation.improvement_bridge && (
+            {improvementBridge && (
               <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
                 <div className="flex items-center justify-between gap-3">
                   <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Eval and optimize bridge</h3>
                   <span className="rounded-md bg-[color:var(--wb-bg-active)] px-2 py-0.5 text-[11px] text-[color:var(--wb-text-soft)]">
-                    v{presentation.improvement_bridge.schema_version}
+                    v{improvementBridge.schema_version}
                   </span>
                 </div>
                 <div className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
                   <p>
-                    Candidate {presentation.improvement_bridge.candidate.agent_name ?? 'Workbench Agent'} ·{' '}
-                    {presentation.improvement_bridge.candidate.target}
+                    Candidate {improvementBridge.candidate.agent_name ?? 'Workbench Agent'} ·{' '}
+                    {improvementBridge.candidate.target}
                   </p>
-                  {presentation.improvement_bridge.candidate.config_path && (
+                  {improvementBridge.candidate.config_path && (
                     <p className="break-all font-mono text-[11px] text-[color:var(--wb-text-dim)]">
-                      {presentation.improvement_bridge.candidate.config_path}
+                      {improvementBridge.candidate.config_path}
                     </p>
                   )}
                   <p>
-                    {presentation.improvement_bridge.evaluation.status === 'ready'
+                    {improvementBridge.evaluation.status === 'ready'
                       ? 'Eval ready'
-                      : `Eval ${presentation.improvement_bridge.evaluation.status}`}
+                      : `Eval ${improvementBridge.evaluation.status}`}
                   </p>
                   <p>
-                    {presentation.improvement_bridge.optimization.status === 'awaiting_eval_run'
+                    {improvementBridge.optimization.status === 'awaiting_eval_run'
                       ? 'Optimize waiting for eval'
-                      : `Optimize ${presentation.improvement_bridge.optimization.status}`}
+                      : `Optimize ${improvementBridge.optimization.status}`}
                   </p>
                 </div>
-                {presentation.improvement_bridge.evaluation.blocking_reasons.length > 0 && (
+                {improvementBridge.evaluation.blocking_reasons.length > 0 && (
                   <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-error)]">
-                    {presentation.improvement_bridge.evaluation.blocking_reasons.map((reason) => (
+                    {improvementBridge.evaluation.blocking_reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>
                 )}
-                {presentation.improvement_bridge.optimization.blocking_reasons.length > 0 && (
+                {improvementBridge.optimization.blocking_reasons.length > 0 && (
                   <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-dim)]">
-                    {presentation.improvement_bridge.optimization.blocking_reasons.map((reason) => (
+                    {improvementBridge.optimization.blocking_reasons.map((reason) => (
                       <li key={reason}>{reason}</li>
                     ))}
                   </ul>

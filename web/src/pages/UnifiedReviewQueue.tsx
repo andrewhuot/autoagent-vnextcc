@@ -346,7 +346,10 @@ export function UnifiedReviewQueue({ embedded = false }: UnifiedReviewQueueProps
   }
 
   return (
-    <div className="space-y-5">
+    <div
+      aria-label={embedded ? 'Embedded unified review queue' : 'Unified review queue'}
+      className="space-y-5"
+    >
       {/* Summary stats */}
       <section className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-4">

@@ -1,8 +1,8 @@
 # P0 End-to-End Journey Fixes — Implementation Plan
 
-**Date:** 2026-04-12  
-**Author:** Claude Opus 4.6  
-**Branch:** feat/p0-end-to-end-journeys-claude  
+**Date:** 2026-04-12
+**Author:** Claude Opus 4.6
+**Branch:** feat/p0-end-to-end-journeys-claude
 **Issue:** #3 — Fix broken end-to-end journeys
 
 ---

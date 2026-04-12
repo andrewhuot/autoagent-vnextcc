@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   useDeployStatus: vi.fn(),
   useConfigs: vi.fn(),
   useDeploy: vi.fn(),
+  usePromoteCanary: vi.fn(),
   useRollback: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ vi.mock('../lib/api', () => ({
   useDeployStatus: apiMocks.useDeployStatus,
   useConfigs: apiMocks.useConfigs,
   useDeploy: apiMocks.useDeploy,
+  usePromoteCanary: apiMocks.usePromoteCanary,
   useRollback: apiMocks.useRollback,
 }));
 
@@ -70,6 +72,10 @@ describe('Deploy', () => {
       mutate: vi.fn(),
       isPending: false,
     });
+    apiMocks.usePromoteCanary.mockReturnValue({
+      mutate: vi.fn(),
+      isPending: false,
+    });
     apiMocks.useRollback.mockReturnValue({
       mutate: vi.fn(),
       isPending: false,
@@ -94,6 +100,29 @@ describe('Deploy', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm rollback' }));
 
     expect(rollbackMutate).toHaveBeenCalledTimes(1);
+  });
+
+  it('requires confirmation before promoting a canary', async () => {
+    const user = userEvent.setup();
+    const promoteMutate = vi.fn();
+    apiMocks.usePromoteCanary.mockReturnValue({
+      mutate: promoteMutate,
+      isPending: false,
+    });
+
+    renderPage();
+
+    await user.click(screen.getByRole('button', { name: 'Promote' }));
+
+    expect(promoteMutate).not.toHaveBeenCalled();
+    expect(screen.getByRole('heading', { name: 'Confirm canary promotion' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Confirm promote' }));
+
+    expect(promoteMutate).toHaveBeenCalledWith(
+      { version: 8 },
+      expect.any(Object)
+    );
   });
 
   it('requires confirmation before an immediate deploy', async () => {
