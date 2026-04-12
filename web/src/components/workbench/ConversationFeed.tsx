@@ -26,8 +26,14 @@ import type { WorkbenchArtifact } from '../../lib/workbench-api';
 import { AssistantMessageCard } from './AssistantMessageCard';
 import { ArtifactCard } from './ArtifactCard';
 import { PlanTreeView } from './PlanTreeView';
+import { ReflectionCard } from './ReflectionCard';
 
-export function ConversationFeed() {
+interface ConversationFeedProps {
+  /** Called when the user clicks "Apply" on a reflection suggestion. */
+  onApplySuggestion?: (suggestion: string) => void;
+}
+
+export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = {}) {
   const plan = useWorkbenchStore((s) => s.plan);
   const messages = useWorkbenchStore((s) => s.messages);
   const artifacts = useWorkbenchStore((s) => s.artifacts);
@@ -38,6 +44,7 @@ export function ConversationFeed() {
   const currentIterationIndex = useWorkbenchStore(
     (s) => s.currentIterationIndex
   );
+  const reflections = useWorkbenchStore((s) => s.reflections);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -52,6 +59,7 @@ export function ConversationFeed() {
     buildStatus,
     turns.length,
     currentIterationIndex,
+    reflections.length,
   ]);
 
   const runningTask = plan
@@ -117,6 +125,19 @@ export function ConversationFeed() {
             />
           );
         })}
+
+        {/* Reflection cards from the harness reflect phase */}
+        {reflections.length > 0 && (
+          <div className="flex flex-col gap-2">
+            {reflections.map((reflection) => (
+              <ReflectionCard
+                key={reflection.id}
+                reflection={reflection}
+                onApplySuggestion={onApplySuggestion ?? (() => {})}
+              />
+            ))}
+          </div>
+        )}
 
         {buildStatus === 'done' && turns.length > 0 && (
           <div className="flex items-center gap-2 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-success-weak)] px-3 py-2 text-[12px] text-[color:var(--wb-success)]">

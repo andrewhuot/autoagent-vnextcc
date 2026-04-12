@@ -164,6 +164,7 @@ async def lifespan(app: FastAPI):
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
     from shared.build_artifact_store import BuildArtifactStore
     from shared.transcript_report_store import TranscriptReportStore
+    from builder.workbench import WorkbenchStore
 
     runtime = load_runtime_with_mode_preference()
     startup_epoch = time.time()
@@ -321,6 +322,9 @@ async def lifespan(app: FastAPI):
     app.state.builder_execution = builder_execution
     app.state.builder_metrics = builder_metrics
     app.state.builder_artifacts = builder_artifacts
+    app.state.workbench_store = WorkbenchStore(
+        os.environ.get("AGENTLAB_WORKBENCH_STORE", ".agentlab/workbench_projects.json")
+    )
     app.state.runtime_config = runtime
     app.state.dead_letter_queue = dead_letter_queue
     app.state.checkpoint_store = checkpoint_store

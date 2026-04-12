@@ -10,11 +10,21 @@
 import { create } from 'zustand';
 import type {
   BuildStreamEvent,
+  HarnessMetrics,
+  IterationEntry,
   PlanTask,
   PlanTaskStatus,
+  ReflectionEntry,
   WorkbenchArtifact,
   WorkbenchCanonicalModel,
+  WorkbenchCompatibilityDiagnostic,
   WorkbenchConversationMessage,
+  WorkbenchExports,
+  WorkbenchMessage,
+  WorkbenchPresentation,
+  WorkbenchRun,
+  WorkbenchTestResult,
+  WorkbenchActivity,
   WorkbenchTarget,
   WorkbenchTurnRecord,
   WorkbenchValidationCheck,
@@ -28,6 +38,7 @@ import {
 /** One assistant narration bubble shown inline in the conversation feed. */
 export interface AssistantMessage {
   id: string;
+  role: 'user' | 'assistant';
   taskId: string | null;
   text: string;
   createdAt: number;
@@ -52,7 +63,7 @@ export interface WorkbenchTurn {
 }
 
 /** Active artifact view mode on the right pane. */
-export type ArtifactView = 'preview' | 'source';
+export type ArtifactView = 'preview' | 'source' | 'diff';
 
 /** Category filter for the artifact tab bar in the right pane. */
 export type ArtifactCategoryFilter =
@@ -62,6 +73,9 @@ export type ArtifactCategoryFilter =
   | 'guardrail'
   | 'eval'
   | 'environment';
+
+/** Right-side workspace surfaces backed by the latest harness payload. */
+export type WorkspaceTab = 'artifacts' | 'agent' | 'source' | 'evals' | 'trace' | 'activity';
 
 /** High-level lifecycle of the page-wide build flow. */
 export type BuildStatus = 'idle' | 'starting' | 'running' | 'done' | 'error';
@@ -130,13 +144,30 @@ interface WorkbenchState {
   activeArtifactId: string | null;
   activeArtifactView: ArtifactView;
   activeCategory: ArtifactCategoryFilter;
+  activeWorkspaceTab: WorkspaceTab;
   userSelectedArtifactAt: number;
 
   // --- canonical model snapshot for the right-pane "agent" tab
   canonicalModel: WorkbenchCanonicalModel | null;
+  exports: WorkbenchExports | null;
+  compatibility: WorkbenchCompatibilityDiagnostic[];
+  lastTest: WorkbenchTestResult | null;
+  activity: WorkbenchActivity[];
+  activeRun: WorkbenchRun | null;
+  presentation: WorkbenchPresentation | null;
 
   // --- abort controller for the in-flight stream
   abortController: AbortController | null;
+
+  // --- harness metrics and iteration tracking
+  harnessMetrics: HarnessMetrics | null;
+  iterationCount: number;
+  iterationHistory: IterationEntry[];
+  reflections: ReflectionEntry[];
+  /** Snapshot of artifacts from the previous iteration, used for diff comparison. */
+  previousVersionArtifacts: WorkbenchArtifact[];
+  /** Which version number is currently selected for diff (null = none). */
+  diffTargetVersion: number | null;
 }
 
 interface WorkbenchActions {
@@ -148,7 +179,13 @@ interface WorkbenchActions {
     version: number;
     plan?: PlanTask | null;
     artifacts?: WorkbenchArtifact[];
+    messages?: WorkbenchMessage[];
     canonicalModel?: WorkbenchCanonicalModel | null;
+    exports?: WorkbenchExports | null;
+    compatibility?: WorkbenchCompatibilityDiagnostic[];
+    lastTest?: WorkbenchTestResult | null;
+    activity?: WorkbenchActivity[];
+    activeRun?: WorkbenchRun | null;
     buildStatus?: BuildStatus;
     lastBrief?: string;
     conversation?: WorkbenchConversationMessage[];
@@ -161,6 +198,7 @@ interface WorkbenchActions {
   setActiveArtifact: (id: string | null) => void;
   setActiveArtifactView: (view: ArtifactView) => void;
   setActiveCategory: (category: ArtifactCategoryFilter) => void;
+  setActiveWorkspaceTab: (tab: WorkspaceTab) => void;
   setTarget: (target: WorkbenchTarget) => void;
   setError: (error: string | null) => void;
   setTheme: (theme: WorkbenchTheme) => void;
@@ -168,6 +206,12 @@ interface WorkbenchActions {
   setAutoIterate: (autoIterate: boolean) => void;
   setMaxIterations: (max: number) => void;
   reset: () => void;
+
+  // --- harness actions
+  /** Begin a follow-up iteration on the completed build. */
+  startIteration: (message: string) => void;
+  /** Pin a specific version's artifact snapshot for side-by-side diff. */
+  selectVersionForDiff: (version: number | null) => void;
 }
 
 const INITIAL_STATE: WorkbenchState = {
@@ -192,9 +236,22 @@ const INITIAL_STATE: WorkbenchState = {
   activeArtifactId: null,
   activeArtifactView: 'preview',
   activeCategory: 'all',
+  activeWorkspaceTab: 'artifacts',
   userSelectedArtifactAt: 0,
   canonicalModel: null,
+  exports: null,
+  compatibility: [],
+  lastTest: null,
+  activity: [],
+  activeRun: null,
+  presentation: null,
   abortController: null,
+  harnessMetrics: null,
+  iterationCount: 0,
+  iterationHistory: [],
+  reflections: [],
+  previousVersionArtifacts: [],
+  diffTargetVersion: null,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -206,13 +263,16 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
   hydrate: (rawSnapshot) =>
     set((state) => {
       let snapshot = rawSnapshot;
+
+      // Build messages from the conversation log when available (master
+      // multi-turn model), falling back to the API messages array (harness
+      // run model) so both hydration paths work.
       const messagesFromConversation: AssistantMessage[] = (
         snapshot.conversation ?? []
       )
         .filter((message) => (message.content ?? '').trim().length > 0)
         .map((message, index) => {
           const role = message.role === 'assistant' ? 'assist' : 'user';
-          // Preserve deterministic ids so React key churn is minimal.
           const baseId = message.id ?? `msg-${role}-${index}`;
           const id =
             role === 'assist'
@@ -220,6 +280,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
               : `msg-user-${baseId}`;
           return {
             id,
+            role: message.role === 'assistant' ? 'assistant' as const : 'user' as const,
             taskId: message.task_id ?? null,
             text: message.content,
             createdAt: Date.parse(message.created_at ?? '') || Date.now(),
@@ -239,11 +300,9 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         validation: turn.validation ?? null,
       }));
 
-      // Legacy fallback: if the snapshot carries a plan but the backend
-      // didn't give us explicit turn records (e.g. a project built before
-      // multi-turn was wired up, or a unit-test harness passing only the
-      // plan shape), synthesize a single turn so the feed renders without
-      // special casing. Keeps the UI code multi-turn-only.
+      // Legacy fallback: synthesize a single turn from the plan so the
+      // feed renders without special-casing (works for pre-multi-turn
+      // projects and test harnesses that only pass a plan shape).
       if (turns.length === 0 && snapshot.plan) {
         const syntheticTurnId =
           (snapshot.plan as PlanTask).id ?? `turn-legacy-${Date.now()}`;
@@ -258,8 +317,6 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           iterationCount: 1,
           validation: null,
         });
-        // Stamp legacy artifacts with the synthetic turn id so they group
-        // correctly under the synthesized turn block.
         if (snapshot.artifacts) {
           snapshot = {
             ...snapshot,
@@ -270,6 +327,15 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         }
       }
 
+      // Prefer conversation-derived messages, then API messages, then keep
+      // whatever the store already had.
+      const messages =
+        messagesFromConversation.length > 0
+          ? messagesFromConversation
+          : snapshot.messages
+            ? snapshot.messages.map(messageFromApi)
+            : state.messages;
+
       return {
         projectId: snapshot.projectId,
         projectName: snapshot.projectName ?? state.projectName,
@@ -278,16 +344,19 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         version: snapshot.version,
         plan: snapshot.plan ?? null,
         artifacts: snapshot.artifacts ?? [],
+        messages,
         canonicalModel: snapshot.canonicalModel ?? null,
+        exports: snapshot.exports ?? state.exports,
+        compatibility: snapshot.compatibility ?? state.compatibility,
+        lastTest: snapshot.lastTest ?? state.lastTest,
+        activity: snapshot.activity ?? state.activity,
+        activeRun: snapshot.activeRun ?? state.activeRun,
+        presentation: snapshot.activeRun?.presentation ?? state.presentation,
         buildStatus: snapshot.buildStatus ?? state.buildStatus,
         lastBrief: snapshot.lastBrief ?? state.lastBrief,
         error: null,
         turns,
         activeTurnId: turns.length > 0 ? turns[turns.length - 1].turnId : null,
-        messages:
-          messagesFromConversation.length > 0
-            ? messagesFromConversation
-            : state.messages,
       };
     }),
 
@@ -304,6 +373,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         ...state.messages,
         {
           id: `msg-user-${Date.now()}`,
+          role: 'user',
           taskId: null,
           text: brief,
           createdAt: Date.now(),
@@ -371,14 +441,45 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
     if (name === 'iteration.started') {
       const iterationIndex = Number(data.index ?? 0);
-      set((state) => ({
-        currentIterationIndex: iterationIndex,
-        turns: state.turns.map((turn) =>
-          turn.turnId === (data.turn_id as string)
-            ? { ...turn, iterationCount: iterationIndex + 1 }
-            : turn
-        ),
-      }));
+      const incoming = data as {
+        id?: string;
+        message?: string;
+        artifact_count?: number;
+        timestamp?: number;
+        iteration_number?: number;
+      };
+      set((state) => {
+        // Guard against double-counting from optimistic startIteration()
+        const lastEntry = state.iterationHistory[state.iterationHistory.length - 1];
+        const alreadyCounted = lastEntry && lastEntry.id.startsWith('iter-local-');
+        const nextIterationNumber = alreadyCounted
+          ? state.iterationCount
+          : state.iterationCount + 1;
+        const newEntry: IterationEntry | null = alreadyCounted
+          ? null
+          : {
+              id: incoming.id ?? `iter-${Date.now()}`,
+              iterationNumber: nextIterationNumber,
+              message: incoming.message ?? '',
+              timestamp: incoming.timestamp ?? Date.now(),
+              artifactCount: incoming.artifact_count ?? state.artifacts.length,
+            };
+        return {
+          currentIterationIndex: iterationIndex,
+          iterationCount: nextIterationNumber,
+          iterationHistory: newEntry
+            ? [...state.iterationHistory, newEntry]
+            : state.iterationHistory,
+          previousVersionArtifacts: alreadyCounted
+            ? state.previousVersionArtifacts
+            : state.artifacts,
+          turns: state.turns.map((turn) =>
+            turn.turnId === (data.turn_id as string)
+              ? { ...turn, iterationCount: iterationIndex + 1 }
+              : turn
+          ),
+        };
+      });
       return;
     }
 
@@ -425,6 +526,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         plan,
         buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
+        activeRun: mergeRun(state.activeRun, data),
         turns: turnId
           ? state.turns.map((turn) =>
               turn.turnId === turnId ? { ...turn, plan } : turn
@@ -500,6 +602,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         } else {
           messages.push({
             id: `msg-assist-${createdAt}-${messages.length}`,
+            role: 'assistant',
             taskId,
             text: text.trim(),
             createdAt,
@@ -580,8 +683,93 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       // A single iteration finished. Multi-turn status transitions now live
       // in turn.completed; here we just acknowledge the pass ended.
       set((state) => ({
+        buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
         version: (data.version as number) ?? state.version,
+        activeRun: mergeRun(state.activeRun, data),
+      }));
+      return;
+    }
+
+    if (name === 'reflect.started') {
+      set((state) => ({
+        buildStatus: 'running',
+        activeRun: mergeRun(state.activeRun, data),
+      }));
+      return;
+    }
+
+    if (name === 'reflect.completed') {
+      const validation = data.validation as WorkbenchTestResult | undefined;
+      set((state) => ({
+        buildStatus: validation?.status === 'failed' ? 'error' : 'running',
+        lastTest: validation ?? state.lastTest,
+        activeRun: mergeRun(state.activeRun, data),
+      }));
+      return;
+    }
+
+    if (name === 'present.ready') {
+      const presentation = data.presentation as WorkbenchPresentation | undefined;
+      set((state) => ({
+        buildStatus: 'running',
+        presentation: presentation ?? state.presentation,
+        activeArtifactId: presentation?.active_artifact_id ?? state.activeArtifactId,
+        activeRun: mergeRun(state.activeRun, data),
+      }));
+      return;
+    }
+
+    if (name === 'run.completed') {
+      const project = data.project as Partial<{
+        name: string;
+        target: WorkbenchTarget;
+        environment: string;
+        version: number;
+        model: WorkbenchCanonicalModel;
+        exports: WorkbenchExports;
+        compatibility: WorkbenchCompatibilityDiagnostic[];
+        last_test: WorkbenchTestResult | null;
+        activity: WorkbenchActivity[];
+        messages: WorkbenchMessage[];
+      }> | undefined;
+      const validation = data.validation as WorkbenchTestResult | undefined;
+      const run = data.run as WorkbenchRun | undefined;
+      const presentation = data.presentation as WorkbenchPresentation | undefined;
+      set((state) => ({
+        buildStatus: data.status === 'completed' ? 'done' : 'error',
+        abortController: null,
+        projectId: (data.project_id as string) ?? state.projectId,
+        projectName: project?.name ?? state.projectName,
+        target: project?.target ?? state.target,
+        environment: project?.environment ?? state.environment,
+        version: (data.version as number) ?? project?.version ?? state.version,
+        canonicalModel: project?.model ?? state.canonicalModel,
+        exports: (data.exports as WorkbenchExports | undefined) ?? project?.exports ?? state.exports,
+        compatibility:
+          (data.compatibility as WorkbenchCompatibilityDiagnostic[] | undefined) ??
+          project?.compatibility ??
+          state.compatibility,
+        lastTest: validation ?? project?.last_test ?? state.lastTest,
+        activity:
+          (data.activity as WorkbenchActivity[] | undefined) ??
+          project?.activity ??
+          state.activity,
+        messages: project?.messages ? project.messages.map(messageFromApi) : state.messages,
+        activeRun: run ?? mergeRun(state.activeRun, data),
+        presentation: presentation ?? run?.presentation ?? state.presentation,
+        error: null,
+      }));
+      return;
+    }
+
+    if (name === 'run.failed') {
+      const run = data.run as WorkbenchRun | undefined;
+      set((state) => ({
+        buildStatus: 'error',
+        abortController: null,
+        activeRun: run ?? mergeRun(state.activeRun, data),
+        error: String((data as { error?: string; message?: string }).error ?? (data as { message?: string }).message ?? 'Build failed.'),
       }));
       return;
     }
@@ -594,6 +782,79 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       }));
       return;
     }
+
+    // --- Harness-specific events (additive) ---
+
+    if (name === 'harness.metrics') {
+      const incoming = data as {
+        steps_completed?: number;
+        total_steps?: number;
+        tokens_used?: number;
+        cost_usd?: number;
+        elapsed_ms?: number;
+        current_phase?: HarnessMetrics['currentPhase'];
+      };
+      set((state) => ({
+        harnessMetrics: {
+          stepsCompleted: incoming.steps_completed ?? state.harnessMetrics?.stepsCompleted ?? 0,
+          totalSteps: incoming.total_steps ?? state.harnessMetrics?.totalSteps ?? 0,
+          tokensUsed: incoming.tokens_used ?? state.harnessMetrics?.tokensUsed ?? 0,
+          costUsd: incoming.cost_usd ?? state.harnessMetrics?.costUsd ?? 0,
+          elapsedMs: incoming.elapsed_ms ?? state.harnessMetrics?.elapsedMs ?? 0,
+          currentPhase: incoming.current_phase ?? state.harnessMetrics?.currentPhase ?? 'idle',
+        },
+      }));
+      return;
+    }
+
+    if (name === 'reflection.completed') {
+      const incoming = data as {
+        id?: string;
+        task_id?: string;
+        quality_score?: number;
+        suggestions?: string[];
+        timestamp?: number;
+      };
+      const entry: ReflectionEntry = {
+        id: incoming.id ?? `reflect-${Date.now()}`,
+        taskId: incoming.task_id ?? '',
+        qualityScore: incoming.quality_score ?? 0,
+        suggestions: incoming.suggestions ?? [],
+        timestamp: incoming.timestamp ?? Date.now(),
+      };
+      set((state) => ({ reflections: [...state.reflections, entry] }));
+      return;
+    }
+
+    if (name === 'iteration.started') {
+      const incoming = data as {
+        id?: string;
+        message?: string;
+        artifact_count?: number;
+        timestamp?: number;
+      };
+      set((state) => {
+        // Guard against double-counting from optimistic startIteration()
+        const lastEntry = state.iterationHistory[state.iterationHistory.length - 1];
+        if (lastEntry && lastEntry.id.startsWith('iter-local-')) {
+          return {};
+        }
+        const nextIterationNumber = state.iterationCount + 1;
+        const entry: IterationEntry = {
+          id: incoming.id ?? `iter-${Date.now()}`,
+          iterationNumber: nextIterationNumber,
+          message: incoming.message ?? '',
+          timestamp: incoming.timestamp ?? Date.now(),
+          artifactCount: incoming.artifact_count ?? state.artifacts.length,
+        };
+        return {
+          iterationCount: nextIterationNumber,
+          iterationHistory: [...state.iterationHistory, entry],
+          previousVersionArtifacts: state.artifacts,
+        };
+      });
+      return;
+    }
   },
 
   setActiveArtifact: (id) =>
@@ -604,7 +865,21 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
   setActiveArtifactView: (view) => set(() => ({ activeArtifactView: view })),
 
-  setActiveCategory: (category) => set(() => ({ activeCategory: category })),
+  setActiveCategory: (category) =>
+    set((state) => {
+      const matching =
+        category === 'all'
+          ? state.artifacts
+          : state.artifacts.filter((artifact) => artifact.category === category);
+      const nextActive = matching[matching.length - 1]?.id ?? state.activeArtifactId;
+      return {
+        activeCategory: category,
+        activeArtifactId: nextActive,
+        userSelectedArtifactAt: Date.now(),
+      };
+    }),
+
+  setActiveWorkspaceTab: (tab) => set(() => ({ activeWorkspaceTab: tab })),
 
   setTarget: (target) => set(() => ({ target })),
 
@@ -635,7 +910,85 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       autoIterate: state.autoIterate,
       maxIterations: state.maxIterations,
     })),
+
+  startIteration: (message) =>
+    set((state) => {
+      const nextIterationNumber = state.iterationCount + 1;
+      const entry: IterationEntry = {
+        id: `iter-local-${Date.now()}`,
+        iterationNumber: nextIterationNumber,
+        message,
+        timestamp: Date.now(),
+        artifactCount: state.artifacts.length,
+      };
+      return {
+        buildStatus: 'starting' as BuildStatus,
+        plan: null,
+        artifacts: [],
+        previousVersionArtifacts: state.artifacts,
+        messages: [
+          ...state.messages,
+          {
+            id: `msg-user-${Date.now()}`,
+            role: 'user' as const,
+            taskId: null,
+            text: message,
+            createdAt: Date.now(),
+          },
+        ],
+        lastBrief: message,
+        activeArtifactId: null,
+        error: null,
+        iterationCount: nextIterationNumber,
+        iterationHistory: [...state.iterationHistory, entry],
+      };
+    }),
+
+  selectVersionForDiff: (version) =>
+    set(() => ({
+      diffTargetVersion: version,
+    })),
 }));
+
+function messageFromApi(message: WorkbenchMessage): AssistantMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    taskId: message.task_id,
+    text: message.text,
+    createdAt: Date.parse(message.created_at) || Date.now(),
+  };
+}
+
+function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): WorkbenchRun | null {
+  const runId = data.run_id as string | undefined;
+  if (!runId) return current;
+  return {
+    ...(current ?? {
+      run_id: runId,
+      brief: '',
+      target: 'portable',
+      environment: 'draft',
+      status: 'running',
+      phase: 'plan',
+      started_version: 0,
+      completed_version: null,
+      created_at: new Date().toISOString(),
+      completed_at: null,
+      error: null,
+      events: [],
+      messages: [],
+      validation: null,
+      presentation: null,
+    }),
+    run_id: runId,
+    project_id: (data.project_id as string | undefined) ?? current?.project_id,
+    status: (data.status as string | undefined) ?? current?.status ?? 'running',
+    phase: (data.phase as string | undefined) ?? current?.phase ?? 'plan',
+    validation: (data.validation as WorkbenchTestResult | undefined) ?? current?.validation ?? null,
+    presentation: (data.presentation as WorkbenchPresentation | undefined) ?? current?.presentation ?? null,
+  };
+}
 
 /** Deep-clone a plan tree. Keeps reducers pure without pulling in Immer. */
 function cloneTree(task: PlanTask): PlanTask {

@@ -222,7 +222,8 @@ describe('AgentWorkbench', () => {
     // active preview filename in the right pane — that's intentional.
     expect(screen.getAllByText('Airline Support Role').length).toBeGreaterThanOrEqual(1);
     // Multi-turn feed renders artifacts under a per-turn "Artifacts (n)" heading.
-    expect(screen.getByText(/^Artifacts\b/)).toBeInTheDocument();
+    // "Artifacts" also appears in the workspace tab bar, so use getAllByText.
+    expect(screen.getAllByText(/^Artifacts\b/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('pushes the user message immediately when the chat input is submitted', async () => {

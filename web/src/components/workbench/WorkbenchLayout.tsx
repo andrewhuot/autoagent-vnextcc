@@ -17,15 +17,23 @@ import { ArrowLeft, Moon, Sparkles, Sun } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import { useWorkbenchStore } from '../../lib/workbench-store';
 import { summarizePlan } from '../../lib/workbench-plan';
+import { HarnessMetricsBar } from './HarnessMetricsBar';
 
 interface WorkbenchLayoutProps {
   left: ReactNode;
   right: ReactNode;
   footer?: ReactNode;
+  iterationControls?: ReactNode;
   onBack?: () => void;
 }
 
-export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayoutProps) {
+export function WorkbenchLayout({
+  left,
+  right,
+  footer,
+  iterationControls,
+  onBack,
+}: WorkbenchLayoutProps) {
   const projectName = useWorkbenchStore((s) => s.projectName);
   const target = useWorkbenchStore((s) => s.target);
   const version = useWorkbenchStore((s) => s.version);
@@ -84,18 +92,30 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
           </button>
           <button
             type="button"
-            className="rounded-md bg-[color:var(--wb-accent)] px-3 py-1 text-[12px] font-medium text-[color:var(--wb-accent-fg)] hover:opacity-90"
+            disabled={buildStatus !== 'done'}
+            className={classNames(
+              'rounded-md px-3 py-1 text-[12px] font-medium transition',
+              buildStatus === 'done'
+                ? 'bg-[color:var(--wb-accent)] text-[color:var(--wb-accent-fg)] hover:opacity-90'
+                : 'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]'
+            )}
+            title={buildStatus === 'done' ? 'Candidate is ready for review' : 'Complete a harness run first'}
           >
-            Create agent
+            {buildStatus === 'done' ? 'Candidate ready' : 'Create agent'}
           </button>
+        </div>
+        {/* Harness metrics — renders only when a build is active or metrics exist */}
+        <div className="px-4 pb-2">
+          <HarnessMetricsBar />
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[440px_minmax(0,1fr)]">
-        {/* Left pane: conversation + chat input + plan tree */}
+        {/* Left pane: conversation + chat input + iteration controls */}
         <div className="flex min-h-0 flex-col border-b border-[color:var(--wb-border)] lg:border-b-0 lg:border-r">
           <div className="flex min-h-0 flex-1 flex-col">{left}</div>
           {footer}
+          {iterationControls}
         </div>
         {/* Right pane: artifact viewer */}
         <div className="min-h-0 overflow-hidden">{right}</div>

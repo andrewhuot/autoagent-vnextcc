@@ -1,4 +1,33 @@
 // ---------------------------------------------------------------------------
+// Harness types (Phase 3 — iteration, reflection, metrics)
+// ---------------------------------------------------------------------------
+
+export interface HarnessMetrics {
+  stepsCompleted: number;
+  totalSteps: number;
+  tokensUsed: number;
+  costUsd: number;
+  elapsedMs: number;
+  currentPhase: 'planning' | 'executing' | 'reflecting' | 'presenting' | 'idle';
+}
+
+export interface IterationEntry {
+  id: string;
+  iterationNumber: number;
+  message: string;
+  timestamp: number;
+  artifactCount: number;
+}
+
+export interface ReflectionEntry {
+  id: string;
+  taskId: string;
+  qualityScore: number;
+  suggestions: string[];
+  timestamp: number;
+}
+
+// ---------------------------------------------------------------------------
 // Streaming builder types (Phase 1+2)
 // ---------------------------------------------------------------------------
 
@@ -65,6 +94,14 @@ export interface BuildStreamEvent {
     | 'artifact.updated'
     | 'task.completed'
     | 'build.completed'
+    | 'reflect.started'
+    | 'reflect.completed'
+    | 'present.ready'
+    | 'run.completed'
+    | 'run.failed'
+    | 'harness.metrics'
+    | 'reflection.completed'
+    | 'iteration.started'
     | 'error'
     | string;
   data: Record<string, unknown>;
@@ -129,16 +166,17 @@ export interface WorkbenchPlanSnapshot {
   build_status: 'idle' | 'running' | 'error' | 'done' | string;
   plan: PlanTask | null;
   artifacts: WorkbenchArtifact[];
+  messages: WorkbenchMessage[];
   model: WorkbenchCanonicalModel | null;
   exports: WorkbenchExports | null;
   compatibility: WorkbenchCompatibilityDiagnostic[];
+  last_test: WorkbenchTestResult | null;
+  activity: WorkbenchActivity[];
+  active_run: WorkbenchRun | null;
+  runs: WorkbenchRun[];
   last_brief?: string;
   conversation?: WorkbenchConversationMessage[];
   turns?: WorkbenchTurnRecord[];
-  last_test?: {
-    status?: string;
-    checks?: WorkbenchValidationCheck[];
-  } | null;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -263,6 +301,56 @@ export interface WorkbenchActivity {
   diff: Array<{ field: string; before: unknown; after: unknown }>;
 }
 
+export interface WorkbenchMessage {
+  id: string;
+  run_id?: string;
+  role: 'user' | 'assistant';
+  task_id: string | null;
+  text: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WorkbenchPresentation {
+  run_id: string;
+  version: number;
+  summary: string;
+  artifact_ids: string[];
+  active_artifact_id: string | null;
+  generated_outputs: string[];
+  validation_status: WorkbenchTestStatus | string | null;
+  next_actions: string[];
+}
+
+export interface WorkbenchRunEvent {
+  sequence: number;
+  event: string;
+  phase: string;
+  status: string;
+  created_at: string;
+  data: Record<string, unknown>;
+}
+
+export interface WorkbenchRun {
+  run_id: string;
+  project_id?: string;
+  brief: string;
+  target: WorkbenchTarget | string;
+  environment: string;
+  status: string;
+  phase: string;
+  started_version: number;
+  completed_version: number | null;
+  created_at: string;
+  updated_at?: string;
+  completed_at: string | null;
+  error: string | null;
+  events: WorkbenchRunEvent[];
+  messages: WorkbenchMessage[];
+  validation: WorkbenchTestResult | null;
+  presentation: WorkbenchPresentation | null;
+}
+
 export interface WorkbenchProject {
   project_id: string;
   name: string;
@@ -274,6 +362,11 @@ export interface WorkbenchProject {
   compatibility: WorkbenchCompatibilityDiagnostic[];
   exports: WorkbenchExports;
   last_test: WorkbenchTestResult | null;
+  messages?: WorkbenchMessage[];
+  runs?: Record<string, WorkbenchRun> | WorkbenchRun[];
+  active_run_id?: string | null;
+  active_run?: WorkbenchRun | null;
+  build_status?: string;
   versions: WorkbenchVersion[];
   activity: WorkbenchActivity[];
   rolled_back_from_version?: number;
@@ -470,6 +563,77 @@ export async function* streamWorkbenchBuild(
   }
 
   // Flush a trailing frame if the server closed without a final blank line.
+  const tail = buffer.trim();
+  if (tail) {
+    const parsed = parseSseFrame(tail);
+    if (parsed) yield parsed;
+  }
+}
+
+/**
+ * POST a follow-up message to an existing build and yield SSE events.
+ * Hits /api/workbench/build/iterate which continues from the current
+ * canonical model rather than starting fresh.
+ */
+export async function* iterateWorkbenchBuild(
+  body: {
+    project_id: string;
+    message: string;
+    target?: WorkbenchTarget;
+  },
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<BuildStreamEvent> {
+  const response = await fetch('/api/workbench/build/iterate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify({
+      project_id: body.project_id,
+      follow_up: body.message,
+      target: body.target,
+    }),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    let message = `Workbench iterate failed (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload && typeof payload === 'object' && typeof payload.detail === 'string') {
+        message = payload.detail;
+      }
+    } catch {
+      const text = await response.text().catch(() => '');
+      if (text.trim()) message = text.trim();
+    }
+    throw new WorkbenchApiError(message, response.status);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new WorkbenchApiError('Iterate stream has no body', 500);
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+
+    let separatorIndex = buffer.indexOf('\n\n');
+    while (separatorIndex !== -1) {
+      const rawFrame = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      const parsed = parseSseFrame(rawFrame);
+      if (parsed) yield parsed;
+      separatorIndex = buffer.indexOf('\n\n');
+    }
+  }
+
   const tail = buffer.trim();
   if (tail) {
     const parsed = parseSseFrame(tail);

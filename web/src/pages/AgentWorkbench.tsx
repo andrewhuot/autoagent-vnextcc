@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef } from 'react';
 import {
   getDefaultWorkbenchProject,
   getWorkbenchPlanSnapshot,
+  iterateWorkbenchBuild,
   streamWorkbenchBuild,
   type WorkbenchTarget,
 } from '../lib/workbench-api';
@@ -28,14 +29,17 @@ import { WorkbenchLayout } from '../components/workbench/WorkbenchLayout';
 import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
+import { IterationControls } from '../components/workbench/IterationControls';
 
 export function AgentWorkbench() {
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
   const beginBuild = useWorkbenchStore((s) => s.beginBuild);
+  const startIteration = useWorkbenchStore((s) => s.startIteration);
   const dispatchEvent = useWorkbenchStore((s) => s.dispatchEvent);
   const setAbortController = useWorkbenchStore((s) => s.setAbortController);
   const target = useWorkbenchStore((s) => s.target);
+  const environment = useWorkbenchStore((s) => s.environment);
   const setError = useWorkbenchStore((s) => s.setError);
   const reset = useWorkbenchStore((s) => s.reset);
   const autoIterate = useWorkbenchStore((s) => s.autoIterate);
@@ -58,6 +62,12 @@ export function AgentWorkbench() {
           environment: payload.project.environment,
           version: payload.project.version,
           canonicalModel: payload.project.model,
+          exports: payload.project.exports,
+          compatibility: payload.project.compatibility,
+          lastTest: payload.project.last_test,
+          activity: payload.project.activity,
+          activeRun: payload.project.active_run ?? null,
+          messages: payload.project.messages ?? [],
         });
         // Follow-up: load any persisted plan snapshot for this project.
         const snapshot = await getWorkbenchPlanSnapshot(payload.project.project_id);
@@ -70,11 +80,20 @@ export function AgentWorkbench() {
           version: snapshot.version,
           plan: snapshot.plan,
           artifacts: snapshot.artifacts ?? [],
+          messages: snapshot.messages ?? [],
           canonicalModel: snapshot.model ?? null,
+          exports: snapshot.exports ?? null,
+          compatibility: snapshot.compatibility ?? [],
+          lastTest: snapshot.last_test ?? null,
+          activity: snapshot.activity ?? [],
+          activeRun: snapshot.active_run ?? null,
           buildStatus:
             snapshot.build_status === 'running'
+              || snapshot.build_status === 'reflecting'
               ? 'running'
-              : snapshot.build_status === 'error'
+              : snapshot.build_status === 'completed'
+                ? 'done'
+                : snapshot.build_status === 'error' || snapshot.build_status === 'failed'
                 ? 'error'
                 : 'idle',
           lastBrief: snapshot.last_brief,
@@ -129,6 +148,21 @@ export function AgentWorkbench() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Stream consumer — shared between fresh builds and iterations
+  // ---------------------------------------------------------------------------
+  const consumeStream = useCallback(
+    async (stream: AsyncIterable<import('../lib/workbench-api').BuildStreamEvent>) => {
+      for await (const event of stream) {
+        dispatchEvent(event);
+      }
+    },
+    [dispatchEvent]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Fresh build handler
+  // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
     async (brief: string) => {
       beginBuild(brief);
@@ -142,14 +176,13 @@ export function AgentWorkbench() {
             project_id: projectId ?? null,
             brief,
             target,
+            environment,
             auto_iterate: autoIterate,
             max_iterations: maxIterations,
           },
           { signal: controller.signal }
         );
-        for await (const event of stream) {
-          dispatchEvent(event);
-        }
+        await consumeStream(stream);
       } catch (error) {
         if ((error as Error).name === 'AbortError') return;
         setError(error instanceof Error ? error.message : 'Build failed');
@@ -160,24 +193,55 @@ export function AgentWorkbench() {
         }
       }
     },
-    [
-      autoIterate,
-      beginBuild,
-      dispatchEvent,
-      maxIterations,
-      projectId,
-      setAbortController,
-      setError,
-      target,
-    ]
+    [autoIterate, beginBuild, consumeStream, environment, maxIterations, projectId, setAbortController, setError, target]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Iteration handler — called by IterationControls and ReflectionCard
+  // ---------------------------------------------------------------------------
+  const handleIterate = useCallback(
+    async (message: string) => {
+      const currentProjectId = useWorkbenchStore.getState().projectId;
+      if (!currentProjectId) {
+        await handleSubmit(message);
+        return;
+      }
+
+      startIteration(message);
+      const controller = new AbortController();
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = controller;
+      setAbortController(controller);
+      try {
+        const stream = iterateWorkbenchBuild(
+          {
+            project_id: currentProjectId,
+            message,
+            target,
+          },
+          { signal: controller.signal }
+        );
+        await consumeStream(stream);
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        setError(error instanceof Error ? error.message : 'Iteration failed');
+      } finally {
+        if (activeControllerRef.current === controller) {
+          activeControllerRef.current = null;
+          setAbortController(null);
+        }
+      }
+    },
+    [consumeStream, handleSubmit, setAbortController, setError, startIteration, target]
   );
 
   return (
     <div className="px-4 pb-6 pt-2">
       <WorkbenchLayout
-        left={<ConversationFeed />}
+        left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
         footer={<ChatInput onSubmit={handleSubmit} />}
+        iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>
   );

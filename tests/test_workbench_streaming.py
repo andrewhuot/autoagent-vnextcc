@@ -223,18 +223,16 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     events = _parse_sse(response.text)
     assert events, "expected at least one SSE event"
 
-    # Multi-turn structure: turn.started wraps the run, plan.ready is the
-    # second event, build.completed closes the agent pass, and
-    # turn.completed is the final event consumed by the UI.
+    # Structure: plan.ready first, then build.completed, reflect/present
+    # phases, and a terminal run.completed.  Every event carries a turn_id
+    # so the UI can group events even across multi-iteration loops.
     event_names = [ev["event"] for ev in events]
-    assert event_names[0] == "turn.started"
-    assert event_names[1] == "iteration.started"
-    assert event_names[2] == "plan.ready"
-    assert event_names[-1] == "turn.completed"
+    assert event_names[0] == "plan.ready"
     assert "build.completed" in event_names
-    assert "validation.ready" in event_names
+    assert events[-1]["event"] == "run.completed"
     final_project_id = events[-1]["data"]["project_id"]
     assert final_project_id.startswith("wb-")
+    assert events[-1]["data"]["run_id"].startswith("run-")
 
     # Task status lifecycle is consistent.
     tasks_started = {ev["data"]["task_id"] for ev in events if ev["event"] == "task.started"}
@@ -246,6 +244,40 @@ def test_build_stream_endpoint_emits_sse_events(tmp_path: Path) -> None:
     # group events by turn even when multi-iteration loops run.
     turn_ids = {ev["data"].get("turn_id") for ev in events if ev["data"].get("turn_id")}
     assert len(turn_ids) == 1
+
+
+def test_build_stream_runs_reflect_and_present_phases(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+
+    response = client.post(
+        "/api/workbench/build/stream",
+        json={
+            "brief": "Build an airline support agent with flight status tools.",
+            "target": "portable",
+            "mock": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = _parse_sse(response.text)
+    names = [event["event"] for event in events]
+    assert "build.completed" in names
+    assert "reflect.started" in names
+    assert "reflect.completed" in names
+    assert "present.ready" in names
+    assert names[-1] == "run.completed"
+    assert names.index("build.completed") < names.index("reflect.started")
+    assert names.index("reflect.completed") < names.index("present.ready")
+    assert names.index("present.ready") < names.index("run.completed")
+
+    run_completed = events[-1]["data"]
+    assert run_completed["status"] == "completed"
+    assert run_completed["phase"] == "present"
+    assert run_completed["version"] >= 2
+    assert run_completed["validation"]["status"] == "passed"
+    assert run_completed["presentation"]["next_actions"]
+    assert run_completed["project"]["model"]["tools"]
+    assert run_completed["exports"]["adk"]["files"]["agent.py"]
 
 
 def test_build_stream_persists_plan_and_artifacts(tmp_path: Path) -> None:
@@ -263,7 +295,12 @@ def test_build_stream_persists_plan_and_artifacts(tmp_path: Path) -> None:
     body = snapshot.json()
 
     assert body["project_id"] == project_id
-    assert body["build_status"] == "idle"
+    assert body["build_status"] == "completed"
+    assert body["active_run"]["status"] == "completed"
+    assert body["active_run"]["phase"] == "present"
+    assert body["active_run"]["validation"]["status"] == "passed"
+    assert len(body["active_run"]["events"]) >= len(events)
+    assert body["messages"], "assistant narration should survive reload"
     assert body["plan"] is not None
     assert body["plan"]["status"] in {PlanTaskStatus.DONE.value, PlanTaskStatus.RUNNING.value}
     assert len(body["artifacts"]) >= 3
@@ -312,4 +349,33 @@ def test_build_stream_existing_project_appends_version(tmp_path: Path) -> None:
     snapshot = client.get(f"/api/workbench/projects/{project_id}/plan").json()
     assert snapshot["version"] > starting_version
     assert snapshot["plan"] is not None
-    assert snapshot["build_status"] == "idle"
+    assert snapshot["build_status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_run_build_stream_marks_run_failed_when_agent_raises(tmp_path: Path) -> None:
+    store = WorkbenchStore(tmp_path / "workbench.json")
+    from builder.workbench import WorkbenchService
+
+    class FailingAgent:
+        """Test agent that raises after the project/run has been created."""
+
+        async def run(self, request: BuildRequest, project: dict) -> object:
+            raise RuntimeError("planner crashed")
+            yield  # pragma: no cover
+
+    service = WorkbenchService(store)
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a support agent.",
+        target="portable",
+        agent=FailingAgent(),
+    )
+
+    events = [event async for event in stream]
+    assert [event["event"] for event in events][-2:] == ["error", "run.failed"]
+    project_id = events[-1]["data"]["project_id"]
+    snapshot = service.get_plan_snapshot(project_id=project_id)
+    assert snapshot["build_status"] == "failed"
+    assert snapshot["active_run"]["status"] == "failed"
+    assert snapshot["active_run"]["error"] == "planner crashed"
