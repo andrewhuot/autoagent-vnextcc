@@ -57,6 +57,11 @@ export interface BuildStreamEvent {
     | 'artifact.updated'
     | 'task.completed'
     | 'build.completed'
+    | 'reflect.started'
+    | 'reflect.completed'
+    | 'present.ready'
+    | 'run.completed'
+    | 'run.failed'
     | 'error'
     | string;
   data: Record<string, unknown>;
@@ -71,9 +76,14 @@ export interface WorkbenchPlanSnapshot {
   build_status: 'idle' | 'running' | 'error' | 'done' | string;
   plan: PlanTask | null;
   artifacts: WorkbenchArtifact[];
+  messages: WorkbenchMessage[];
   model: WorkbenchCanonicalModel | null;
   exports: WorkbenchExports | null;
   compatibility: WorkbenchCompatibilityDiagnostic[];
+  last_test: WorkbenchTestResult | null;
+  activity: WorkbenchActivity[];
+  active_run: WorkbenchRun | null;
+  runs: WorkbenchRun[];
   last_brief?: string;
 }
 
@@ -199,6 +209,56 @@ export interface WorkbenchActivity {
   diff: Array<{ field: string; before: unknown; after: unknown }>;
 }
 
+export interface WorkbenchMessage {
+  id: string;
+  run_id?: string;
+  role: 'user' | 'assistant';
+  task_id: string | null;
+  text: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WorkbenchPresentation {
+  run_id: string;
+  version: number;
+  summary: string;
+  artifact_ids: string[];
+  active_artifact_id: string | null;
+  generated_outputs: string[];
+  validation_status: WorkbenchTestStatus | string | null;
+  next_actions: string[];
+}
+
+export interface WorkbenchRunEvent {
+  sequence: number;
+  event: string;
+  phase: string;
+  status: string;
+  created_at: string;
+  data: Record<string, unknown>;
+}
+
+export interface WorkbenchRun {
+  run_id: string;
+  project_id?: string;
+  brief: string;
+  target: WorkbenchTarget | string;
+  environment: string;
+  status: string;
+  phase: string;
+  started_version: number;
+  completed_version: number | null;
+  created_at: string;
+  updated_at?: string;
+  completed_at: string | null;
+  error: string | null;
+  events: WorkbenchRunEvent[];
+  messages: WorkbenchMessage[];
+  validation: WorkbenchTestResult | null;
+  presentation: WorkbenchPresentation | null;
+}
+
 export interface WorkbenchProject {
   project_id: string;
   name: string;
@@ -210,6 +270,11 @@ export interface WorkbenchProject {
   compatibility: WorkbenchCompatibilityDiagnostic[];
   exports: WorkbenchExports;
   last_test: WorkbenchTestResult | null;
+  messages?: WorkbenchMessage[];
+  runs?: Record<string, WorkbenchRun> | WorkbenchRun[];
+  active_run_id?: string | null;
+  active_run?: WorkbenchRun | null;
+  build_status?: string;
   versions: WorkbenchVersion[];
   activity: WorkbenchActivity[];
   rolled_back_from_version?: number;

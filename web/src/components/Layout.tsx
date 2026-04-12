@@ -35,6 +35,7 @@ function toBreadcrumbItems(labels: string[]): BreadcrumbItem[] {
   });
 }
 
+// eslint-disable-next-line react-refresh/only-export-components
 export function getRouteContext(pathname: string, search = ''): RouteContext {
   const normalizedPathname = pathname.split('?')[0]?.split('#')[0] ?? pathname;
 
@@ -69,6 +70,7 @@ export function getRouteContext(pathname: string, search = ''): RouteContext {
 }
 
 // Surface a lightweight demo narrative in shared chrome so Build and Eval pages feel connected.
+// eslint-disable-next-line react-refresh/only-export-components
 export function getDemoJourneyContext(pathname: string, search = ''): DemoJourneyContext | null {
   const normalizedPathname = pathname.split('?')[0]?.split('#')[0] ?? pathname;
 
@@ -229,6 +231,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const title = routeContext.title;
   const crumbItems = routeContext.breadcrumbs;
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const isWorkbenchRoute = location.pathname === '/workbench';
 
   useGlobalShortcuts();
 
@@ -291,10 +294,14 @@ export function Layout({ children }: { children: ReactNode }) {
 
         {demoJourneyContext ? <DemoJourneyStrip context={demoJourneyContext} /> : null}
 
-        <main className="flex-1 px-5 py-6 sm:px-6">
+        <main className={isWorkbenchRoute ? 'flex-1 px-2 py-3 sm:px-3' : 'flex-1 px-5 py-6 sm:px-6'}>
           <div
             key={location.pathname}
-            className="mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]"
+            className={
+              isWorkbenchRoute
+                ? 'mx-auto w-full max-w-none animate-[fadeIn_150ms_ease-out]'
+                : 'mx-auto w-full max-w-6xl animate-[fadeIn_150ms_ease-out]'
+            }
           >
             {children}
           </div>

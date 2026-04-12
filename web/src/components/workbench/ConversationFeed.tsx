@@ -41,8 +41,10 @@ export function ConversationFeed() {
       )
     : null;
 
-  const userMessages = messages.filter((m) => m.id.startsWith('msg-user-'));
-  const assistantMessages = messages.filter((m) => m.id.startsWith('msg-assist-'));
+  const userMessages = messages.filter((m) => m.role === 'user' || m.id.startsWith('msg-user-'));
+  const assistantMessages = messages.filter(
+    (m) => m.role === 'assistant' || m.id.startsWith('msg-assist-')
+  );
 
   return (
     <div

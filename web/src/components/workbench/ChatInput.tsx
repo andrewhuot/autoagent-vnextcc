@@ -46,8 +46,10 @@ export function ChatInput({ onSubmit, placeholder = 'Describe what you\u2019d li
       >
         <button
           type="button"
-          className="mb-0.5 rounded p-1 text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
-          aria-label="Attach"
+          disabled
+          className="mb-0.5 cursor-not-allowed rounded p-1 text-[color:var(--wb-text-muted)]"
+          aria-label="Attachments unavailable"
+          title="Attachments are not enabled for this harness run yet"
           tabIndex={-1}
         >
           <Paperclip className="h-4 w-4" />

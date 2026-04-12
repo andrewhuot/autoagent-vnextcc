@@ -1,5 +1,86 @@
 # Findings & Decisions
 
+## Workbench Model Harness Refactor Campaign
+
+### Mission
+
+- Transform Workbench into a true model harness for building agents.
+- Target experience: natural-language instruction on the left, builder agent plan/act/reflect/present loop behind the scenes, live artifacts/results/preview on the right.
+- Deliver code, tests, architecture note, commit, push, and completion event on `feat/workbench-model-harness-ralph-codex`.
+
+### Initial Environment Findings
+
+- Working directory is `/Users/andrew/Desktop/agentlab-workbench-model-harness-ralph`.
+- Branch is `feat/workbench-model-harness-ralph-codex`.
+- Initial worktree was clean.
+- No relevant memory hits for AgentLab/Workbench/model harness/Ralph in `/Users/andrew/.codex/memories/MEMORY.md`.
+- Project-local `AGENTLAB.md` is sparse project memory; user-supplied AGENTS instructions are the effective working agreement for this run.
+- Existing `findings.md` already contains prior Workbench planning and implementation notes, including an additive `/workbench` route, `builder/workbench.py`, `/api/workbench`, deterministic natural-language planning, artifact previews, validation, versioning, and previous verification results.
+
+### External Harness Research Findings
+
+- Claude Code guidance emphasizes conversational iteration, interrupt/steer behavior, exploration before implementation, and verification targets the agent can check against.
+- Anthropic long-running harness guidance emphasizes persistent progress notes, feature/state files, running a basic test at session start, and self-verification before marking work complete.
+- Anthropic app harness guidance points toward explicit planner/generator/evaluator style phases and using the harness to keep an agent on a concrete build contract.
+- Anthropic Managed Agents guidance reinforces separating session state, harness lifecycle, and execution/review surfaces so user control and recovery remain legible.
+- OpenAI harness engineering emphasizes repo-local structured knowledge, first-class plans and decision logs, typed/validated boundaries, feedback loops, and agent-legible architecture over one giant instruction blob.
+
+### Architecture Direction
+
+- Keep `/workbench` as the focused harness surface and evolve the existing backend rather than starting another parallel model.
+- Add a durable harness-run concept with clear phases: plan, act/build, reflect/validate, present.
+- Persist phase events, current step, artifacts, validation results, and next actions server-side so refresh and iteration are trustworthy.
+- Treat generated source/config/test/preview artifacts as compiled outputs from canonical project state, not the canonical state itself.
+- The frontend should render run state from the API: queued/running/completed/failed, step timeline, artifacts, preview, and user controls.
+
+### Open Questions To Resolve During Recon
+
+- How much of the existing `builder/workbench.py` already has run/session state and how much is still request/response-only?
+- Whether current tests assert a mocky plan/apply split or can be extended to assert end-to-end harness run behavior.
+- Whether frontend currently polls/fetches durable state or derives progress locally after a request.
+
+### Reconnaissance Findings
+
+- Current backend already had `WorkbenchStore`, `WorkbenchService`, `WorkbenchBuilderAgent`, `PlanTask`, `WorkbenchArtifact`, `/api/workbench/build/stream`, and a live/mock agent split.
+- The streaming path persisted plan/artifacts and applied operations, but did not have a first-class run envelope, persisted event replay, persisted assistant narration, reflect/present phases, or automatic validation after streaming completion.
+- The synchronous plan/apply API already validates apply/rollback and deterministic compatibility; this campaign kept it intact.
+- Existing Builder Workspace primitives (`BuilderStore`, `BuilderExecutionEngine`, `EventBroker`, `BuilderOrchestrator`) remain the right future durable substrate, but this vertical slice can safely add run state inside current Workbench JSON persistence.
+- Current frontend already had a two-pane Workbench shell, Zustand stream reducers, SSE parser, plan tree, artifact cards, and artifact/source preview.
+- Frontend gaps were: right pane only artifact gallery, stream completion did not hydrate final version/model/exports/activity, category filtering could show stale active artifacts, refreshed messages were not supported, shared layout constrained Workbench width, and `Create agent` / paperclip looked active without behavior.
+
+### Implementation Findings
+
+- Added durable Workbench run envelopes with `run_id`, phase, status, started/completed versions, persisted messages, replayable events, validation, presentation, and errors.
+- Streaming events are enriched with `project_id`, `run_id`, phase, and status.
+- Streaming now completes through `build.completed -> reflect.started -> reflect.completed -> present.ready -> run.completed`.
+- Reflection compiles exports, runs `run_workbench_validation`, stores `last_test`, and records activity.
+- Presentation publishes artifact IDs, generated output names, validation status, and next actions.
+- Stream failures now persist `build_status = failed`, run status/error, and terminal `run.failed`.
+- `get_plan_snapshot` now returns messages, active run, runs, last test, activity, exports, and compatibility.
+- `api.server` now initializes `app.state.workbench_store` from `AGENTLAB_WORKBENCH_STORE` or the default `.agentlab/workbench_projects.json`.
+- Frontend store now tracks active run, presentation, exports, compatibility, validation, activity, workspace tab, and persisted messages.
+- `build.completed` no longer marks the UI done; `run.completed` is the terminal success event.
+- Right pane now has tabs for Artifacts, Agent Card, Source Code, Evals, Trace, and Activity.
+- Artifact category selection now switches the active artifact into the selected category.
+- Workbench gets a full-width layout exception in shared `Layout`.
+- Misleading inert controls were softened: attachments are disabled, and `Create agent` is disabled until a completed run.
+
+### Verification Results For This Campaign
+
+- Red backend test run initially failed on missing terminal `run.completed`, missing `reflect.started`, stale `idle` status, and unpersisted exception state.
+- Red frontend test run initially failed on premature `build.completed` done state, ignored `run.completed`, and artifact category mismatch.
+- `.venv/bin/python -m pytest tests/test_workbench_streaming.py -q`: 13 passed.
+- `.venv/bin/python -m pytest tests/test_workbench_api.py tests/test_workbench_streaming.py tests/test_workbench_agent_live.py -q`: 25 passed.
+- `npm run test -- src/lib/workbench-store.test.ts src/components/workbench/ArtifactViewer.test.tsx`: 13 passed.
+- `npm run test -- src/pages/AgentWorkbench.test.tsx src/lib/workbench-store.test.ts src/components/workbench/ArtifactViewer.test.tsx src/lib/navigation.test.ts`: 26 passed.
+- `npm run test`: 48 files passed, 291 tests passed; output includes jsdom's known `Not implemented: navigation to another Document` message.
+- `npm run build`: passed with Vite's existing large-chunk warning.
+- `npx eslint <touched Workbench/Layout files>`: passed.
+- `.venv/bin/python -m py_compile builder/workbench.py builder/workbench_agent.py builder/workbench_plan.py api/routes/workbench.py api/server.py`: passed.
+- `git diff --check`: passed.
+- Browser smoke on `/workbench`: passed prompt submit, `Candidate ready`, Agent Card, Source Code, Evals, Trace, and Activity tab checks. Workbench network calls returned 200 and no console warning/error appeared before local server shutdown.
+- `.venv/bin/python -m pytest -q`: 3578 passed, 3 failed, 19 warnings. The failures are unrelated to Workbench: `tests/test_mutations.py::test_create_default_registry_has_13_operators`, `tests/test_mutations.py::test_register_duplicate_overwrites`, and `tests/test_registry.py::TestMutationSurfaceExtensions::test_total_operator_count` expect 13 mutation operators while the current registry returns 14.
+
 ## Agent Builder Workbench Planning Campaign
 
 ### Requirements

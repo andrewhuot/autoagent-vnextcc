@@ -36,6 +36,7 @@ export function AgentWorkbench() {
   const dispatchEvent = useWorkbenchStore((s) => s.dispatchEvent);
   const setAbortController = useWorkbenchStore((s) => s.setAbortController);
   const target = useWorkbenchStore((s) => s.target);
+  const environment = useWorkbenchStore((s) => s.environment);
   const setError = useWorkbenchStore((s) => s.setError);
   const reset = useWorkbenchStore((s) => s.reset);
 
@@ -56,6 +57,12 @@ export function AgentWorkbench() {
           environment: payload.project.environment,
           version: payload.project.version,
           canonicalModel: payload.project.model,
+          exports: payload.project.exports,
+          compatibility: payload.project.compatibility,
+          lastTest: payload.project.last_test,
+          activity: payload.project.activity,
+          activeRun: payload.project.active_run ?? null,
+          messages: payload.project.messages ?? [],
         });
         // Follow-up: load any persisted plan snapshot for this project.
         const snapshot = await getWorkbenchPlanSnapshot(payload.project.project_id);
@@ -68,11 +75,20 @@ export function AgentWorkbench() {
           version: snapshot.version,
           plan: snapshot.plan,
           artifacts: snapshot.artifacts ?? [],
+          messages: snapshot.messages ?? [],
           canonicalModel: snapshot.model ?? null,
+          exports: snapshot.exports ?? null,
+          compatibility: snapshot.compatibility ?? [],
+          lastTest: snapshot.last_test ?? null,
+          activity: snapshot.activity ?? [],
+          activeRun: snapshot.active_run ?? null,
           buildStatus:
             snapshot.build_status === 'running'
+              || snapshot.build_status === 'reflecting'
               ? 'running'
-              : snapshot.build_status === 'error'
+              : snapshot.build_status === 'completed'
+                ? 'done'
+                : snapshot.build_status === 'error' || snapshot.build_status === 'failed'
                 ? 'error'
                 : 'idle',
           lastBrief: snapshot.last_brief,
@@ -136,6 +152,7 @@ export function AgentWorkbench() {
             project_id: projectId ?? null,
             brief,
             target,
+            environment,
           },
           { signal: controller.signal }
         );
@@ -152,7 +169,7 @@ export function AgentWorkbench() {
         }
       }
     },
-    [beginBuild, dispatchEvent, projectId, setAbortController, setError, target]
+    [beginBuild, dispatchEvent, environment, projectId, setAbortController, setError, target]
   );
 
   return (

@@ -84,9 +84,16 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
           </button>
           <button
             type="button"
-            className="rounded-md bg-[color:var(--wb-accent)] px-3 py-1 text-[12px] font-medium text-[color:var(--wb-accent-fg)] hover:opacity-90"
+            disabled={buildStatus !== 'done'}
+            className={classNames(
+              'rounded-md px-3 py-1 text-[12px] font-medium transition',
+              buildStatus === 'done'
+                ? 'bg-[color:var(--wb-accent)] text-[color:var(--wb-accent-fg)] hover:opacity-90'
+                : 'cursor-not-allowed bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]'
+            )}
+            title={buildStatus === 'done' ? 'Candidate is ready for review' : 'Complete a harness run first'}
           >
-            Create agent
+            {buildStatus === 'done' ? 'Candidate ready' : 'Create agent'}
           </button>
         </div>
       </header>

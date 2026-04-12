@@ -147,10 +147,14 @@ class WorkbenchStore:
             "environment": environment,
             "version": 1,
             "draft_badge": "Draft v1",
+            "build_status": "idle",
+            "active_run_id": None,
             "model": model,
             "compatibility": build_compatibility_diagnostics(model, target=target),
             "exports": compile_workbench_exports(model),
             "last_test": None,
+            "messages": [],
+            "runs": {},
             "versions": [
                 {
                     "version": 1,
@@ -363,9 +367,28 @@ class WorkbenchService:
             )
         project.setdefault("plan", None)
         project.setdefault("artifacts", [])
+        project.setdefault("messages", [])
+        project.setdefault("runs", {})
         project.setdefault("build_status", "running")
         project["build_status"] = "running"
         project["last_brief"] = brief
+        project["target"] = target
+        project["environment"] = environment
+        started_model = copy.deepcopy(project["model"])
+        run = self._start_run(
+            project,
+            brief=brief,
+            target=target,
+            environment=environment,
+        )
+        self._append_message(
+            project,
+            run,
+            role="user",
+            text=brief,
+            task_id=None,
+            append_to_previous=False,
+        )
         self.store.save_project(project)
 
         plan_root: PlanTask | None = None
@@ -379,95 +402,137 @@ class WorkbenchService:
         async def _stream() -> Any:
             nonlocal plan_root
             operations_for_version: list[dict[str, Any]] = []
-            async for event in runner.run(request, project):
-                event_name = str(event.get("event") or "")
-                data = event.get("data") or {}
+            try:
+                async for event in runner.run(request, project):
+                    event_name = str(event.get("event") or "")
+                    data = copy.deepcopy(event.get("data") or {})
 
-                if event_name == "plan.ready":
-                    plan_root = PlanTask.from_dict(data["plan"])
-                    project["plan"] = plan_root.to_dict()
-                    project["artifacts"] = []
-                    self.store.save_project(project)
-
-                elif event_name == "task.started" and plan_root is not None:
-                    task = find_task(plan_root, str(data.get("task_id") or ""))
-                    if task is not None:
-                        task.status = PlanTaskStatus.RUNNING.value
-                        task.started_at = _now_iso()
-                        recompute_parent_status(plan_root)
+                    if event_name == "plan.ready":
+                        run["phase"] = "plan"
+                        plan_root = PlanTask.from_dict(data["plan"])
                         project["plan"] = plan_root.to_dict()
+                        project["artifacts"] = []
                         self.store.save_project(project)
 
-                elif event_name == "task.progress" and plan_root is not None:
-                    task = find_task(plan_root, str(data.get("task_id") or ""))
-                    note = str(data.get("note") or "")
-                    if task is not None and note:
-                        task.log.append(note)
-                        project["plan"] = plan_root.to_dict()
+                    elif event_name == "message.delta":
+                        run["phase"] = "plan" if plan_root is None else "build"
+                        self._append_message(
+                            project,
+                            run,
+                            role="assistant",
+                            text=str(data.get("text") or ""),
+                            task_id=str(data.get("task_id") or "") or None,
+                            append_to_previous=True,
+                        )
                         self.store.save_project(project)
 
-                elif event_name == "artifact.updated" and plan_root is not None:
-                    artifact_payload = data.get("artifact") or {}
-                    artifact = WorkbenchArtifact.from_dict(artifact_payload)
-                    artifacts = list(project.get("artifacts", []))
-                    artifacts = [a for a in artifacts if a.get("id") != artifact.id]
-                    artifacts.append(artifact.to_dict())
-                    project["artifacts"] = artifacts
-                    task = find_task(plan_root, artifact.task_id)
-                    if task is not None and artifact.id not in task.artifact_ids:
-                        task.artifact_ids.append(artifact.id)
-                        project["plan"] = plan_root.to_dict()
-                    self.store.save_project(project)
+                    elif event_name == "task.started" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        if task is not None:
+                            task.status = PlanTaskStatus.RUNNING.value
+                            task.started_at = _now_iso()
+                            recompute_parent_status(plan_root)
+                            project["plan"] = plan_root.to_dict()
+                            self.store.save_project(project)
 
-                elif event_name == "task.completed" and plan_root is not None:
-                    task = find_task(plan_root, str(data.get("task_id") or ""))
-                    if task is not None:
-                        task.status = PlanTaskStatus.DONE.value
-                        task.completed_at = _now_iso()
-                        recompute_parent_status(plan_root)
-                        project["plan"] = plan_root.to_dict()
-                    operations = list(data.get("operations") or [])
-                    if operations:
-                        operations_for_version.extend(operations)
-                        project["model"] = apply_operations(project["model"], operations)
-                        project["compatibility"] = build_compatibility_diagnostics(
-                            project["model"],
-                            target=str(project.get("target") or "portable"),
-                        )
-                        project["exports"] = compile_workbench_exports(project["model"])
-                    self.store.save_project(project)
+                    elif event_name == "task.progress" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        note = str(data.get("note") or "")
+                        if task is not None and note:
+                            task.log.append(note)
+                            project["plan"] = plan_root.to_dict()
+                            self.store.save_project(project)
 
-                elif event_name == "build.completed":
-                    if operations_for_version:
-                        project["version"] = int(project.get("version") or 1) + 1
-                        project["draft_badge"] = f"Draft v{project['version']}"
-                        self._add_version(
-                            project,
-                            summary=f"Built {len(operations_for_version)} change(s) from brief",
-                        )
-                        self._add_activity(
-                            project,
-                            kind="build",
-                            summary=brief.strip()[:120] or "Built agent from brief.",
-                            diff=build_model_diff(
-                                project["versions"][-2]["model"]
-                                if len(project.get("versions", [])) >= 2
-                                else project["model"],
+                    elif event_name == "artifact.updated" and plan_root is not None:
+                        run["phase"] = "build"
+                        artifact_payload = data.get("artifact") or {}
+                        artifact = WorkbenchArtifact.from_dict(artifact_payload)
+                        artifacts = list(project.get("artifacts", []))
+                        artifacts = [a for a in artifacts if a.get("id") != artifact.id]
+                        artifacts.append(artifact.to_dict())
+                        project["artifacts"] = artifacts
+                        task = find_task(plan_root, artifact.task_id)
+                        if task is not None and artifact.id not in task.artifact_ids:
+                            task.artifact_ids.append(artifact.id)
+                            project["plan"] = plan_root.to_dict()
+                        self.store.save_project(project)
+
+                    elif event_name == "task.completed" and plan_root is not None:
+                        run["phase"] = "build"
+                        task = find_task(plan_root, str(data.get("task_id") or ""))
+                        if task is not None:
+                            task.status = PlanTaskStatus.DONE.value
+                            task.completed_at = _now_iso()
+                            recompute_parent_status(plan_root)
+                            project["plan"] = plan_root.to_dict()
+                        operations = list(data.get("operations") or [])
+                        if operations:
+                            operations_for_version.extend(operations)
+                            project["model"] = apply_operations(project["model"], operations)
+                            project["compatibility"] = build_compatibility_diagnostics(
                                 project["model"],
-                                operations_for_version,
-                            ),
-                        )
-                    project["build_status"] = "idle"
-                    self.store.save_project(project)
+                                target=str(project.get("target") or "portable"),
+                            )
+                            project["exports"] = compile_workbench_exports(project["model"])
+                        self.store.save_project(project)
 
-                elif event_name == "error":
-                    project["build_status"] = "error"
-                    self.store.save_project(project)
+                    elif event_name == "build.completed":
+                        run["phase"] = "build"
+                        if operations_for_version:
+                            project["version"] = int(project.get("version") or 1) + 1
+                            project["draft_badge"] = f"Draft v{project['version']}"
+                            self._add_version(
+                                project,
+                                summary=f"Built {len(operations_for_version)} change(s) from brief",
+                            )
+                            self._add_activity(
+                                project,
+                                kind="build",
+                                summary=brief.strip()[:120] or "Built agent from brief.",
+                                diff=build_model_diff(
+                                    started_model,
+                                    project["model"],
+                                    operations_for_version,
+                                ),
+                            )
+                        data["operations"] = operations_for_version
+                        data["version"] = project.get("version")
+                        self.store.save_project(project)
 
-                # Always enrich the event with the current project_id so the
-                # frontend can correlate even when a build creates a new one.
-                data.setdefault("project_id", project["project_id"])
-                yield {"event": event_name, "data": data}
+                    elif event_name == "error":
+                        async for failure in self._fail_run_stream(
+                            project,
+                            run,
+                            message=str(data.get("message") or "Build failed."),
+                        ):
+                            yield failure
+                        return
+
+                    # Always enrich the event with the current IDs so the
+                    # frontend can correlate even when a build creates a new one.
+                    data.setdefault("project_id", project["project_id"])
+                    data.setdefault("run_id", run["run_id"])
+                    data.setdefault("phase", run.get("phase", "build"))
+                    data.setdefault("status", run.get("status", "running"))
+                    self._record_run_event(project, run, event_name, data)
+                    self.store.save_project(project)
+                    yield {"event": event_name, "data": data}
+
+                async for terminal_event in self._complete_run_stream(
+                    project=project,
+                    run=run,
+                    operations=operations_for_version,
+                ):
+                    yield terminal_event
+            except Exception as exc:  # noqa: BLE001 - persist failure before surfacing it
+                async for failure in self._fail_run_stream(
+                    project,
+                    run,
+                    message=str(exc),
+                ):
+                    yield failure
 
         return _stream()
 
@@ -483,9 +548,14 @@ class WorkbenchService:
             "build_status": project.get("build_status", "idle"),
             "plan": project.get("plan"),
             "artifacts": list(project.get("artifacts", [])),
+            "messages": list(project.get("messages", [])),
             "model": project.get("model"),
             "exports": project.get("exports"),
             "compatibility": project.get("compatibility"),
+            "last_test": project.get("last_test"),
+            "activity": list(project.get("activity", [])),
+            "active_run": self._active_run(project),
+            "runs": list(project.get("runs", {}).values()),
             "last_brief": project.get("last_brief"),
         }
 
@@ -564,6 +634,262 @@ class WorkbenchService:
                 "diff": diff,
             },
         )
+
+    def _start_run(
+        self,
+        project: dict[str, Any],
+        *,
+        brief: str,
+        target: str,
+        environment: str,
+    ) -> dict[str, Any]:
+        """Create the durable run envelope for one builder-agent request."""
+        run_id = f"run-{new_id()}"
+        run = {
+            "run_id": run_id,
+            "project_id": project["project_id"],
+            "brief": brief,
+            "target": target,
+            "environment": environment,
+            "status": "running",
+            "phase": "plan",
+            "started_version": int(project.get("version") or 1),
+            "completed_version": None,
+            "created_at": _now_iso(),
+            "updated_at": _now_iso(),
+            "completed_at": None,
+            "error": None,
+            "events": [],
+            "messages": [],
+            "validation": None,
+            "presentation": None,
+        }
+        project.setdefault("runs", {})[run_id] = run
+        project["active_run_id"] = run_id
+        return run
+
+    def _active_run(self, project: dict[str, Any]) -> dict[str, Any] | None:
+        """Return the currently selected run for snapshot hydration."""
+        run_id = project.get("active_run_id")
+        runs = project.get("runs", {})
+        if isinstance(run_id, str) and isinstance(runs, dict):
+            run = runs.get(run_id)
+            return copy.deepcopy(run) if isinstance(run, dict) else None
+        if isinstance(runs, dict) and runs:
+            newest = sorted(runs.values(), key=lambda item: item.get("created_at", ""))[-1]
+            return copy.deepcopy(newest)
+        return None
+
+    def _record_run_event(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        event_name: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append one replayable event to the active run."""
+        events = run.setdefault("events", [])
+        event = {
+            "sequence": len(events) + 1,
+            "event": event_name,
+            "phase": data.get("phase") or run.get("phase"),
+            "status": data.get("status") or run.get("status"),
+            "created_at": _now_iso(),
+            "data": copy.deepcopy(data),
+        }
+        events.append(event)
+        run["updated_at"] = event["created_at"]
+        project.setdefault("runs", {})[run["run_id"]] = run
+        return event
+
+    def _append_message(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        role: str,
+        text: str,
+        task_id: str | None,
+        append_to_previous: bool,
+    ) -> None:
+        """Persist user and assistant narration so refreshes keep context."""
+        if not text:
+            return
+        for collection in (project.setdefault("messages", []), run.setdefault("messages", [])):
+            last = collection[-1] if collection else None
+            if (
+                append_to_previous
+                and isinstance(last, dict)
+                and last.get("role") == role
+                and last.get("task_id") == task_id
+                and last.get("run_id") == run["run_id"]
+            ):
+                last["text"] = f"{last.get('text', '')}{text}".strip()
+                last["updated_at"] = _now_iso()
+                continue
+            collection.append(
+                {
+                    "id": f"message-{new_id()}",
+                    "run_id": run["run_id"],
+                    "role": role,
+                    "task_id": task_id,
+                    "text": text.strip(),
+                    "created_at": _now_iso(),
+                }
+            )
+
+    async def _complete_run_stream(
+        self,
+        *,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        operations: list[dict[str, Any]],
+    ) -> Any:
+        """Run reflection, produce presentation data, and emit terminal events."""
+        run["phase"] = "reflect"
+        project["build_status"] = "reflecting"
+        reflect_started = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "phase": "reflect",
+            "status": "running",
+            "checks": ["canonical_model_present", "exports_compile", "target_compatibility"],
+        }
+        self._record_run_event(project, run, "reflect.started", reflect_started)
+        self.store.save_project(project)
+        yield {"event": "reflect.started", "data": reflect_started}
+
+        project["exports"] = compile_workbench_exports(project["model"])
+        project["compatibility"] = build_compatibility_diagnostics(
+            project["model"],
+            target=str(project.get("target") or "portable"),
+        )
+        validation = run_workbench_validation(project)
+        project["last_test"] = validation
+        run["validation"] = validation
+        self._add_activity(
+            project,
+            kind="test",
+            summary=f"Harness reflection {validation['status']}.",
+            diff=[{"field": "last_test", "before": None, "after": validation["status"]}],
+        )
+        reflect_completed = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "phase": "reflect",
+            "status": validation["status"],
+            "validation": validation,
+        }
+        self._record_run_event(project, run, "reflect.completed", reflect_completed)
+        self.store.save_project(project)
+        yield {"event": "reflect.completed", "data": reflect_completed}
+
+        run["phase"] = "present"
+        presentation = build_presentation_manifest(project, run=run, operations=operations)
+        run["presentation"] = presentation
+        present_ready = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "phase": "present",
+            "status": "ready",
+            "presentation": presentation,
+        }
+        self._record_run_event(project, run, "present.ready", present_ready)
+        self.store.save_project(project)
+        yield {"event": "present.ready", "data": present_ready}
+
+        final_status = "completed" if validation["status"] == "passed" else "failed"
+        run["status"] = final_status
+        run["completed_version"] = int(project.get("version") or 1)
+        run["completed_at"] = _now_iso()
+        project["build_status"] = final_status
+        payload = build_run_completion_payload(project, run)
+        self._record_run_event(project, run, "run.completed", payload)
+        self.store.save_project(project)
+        yield {"event": "run.completed", "data": payload}
+
+    async def _fail_run_stream(
+        self,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        *,
+        message: str,
+    ) -> Any:
+        """Persist and emit a failed terminal run state."""
+        run["status"] = "failed"
+        run["phase"] = "failed"
+        run["error"] = message
+        run["completed_at"] = _now_iso()
+        project["build_status"] = "failed"
+        error_payload = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "phase": "failed",
+            "status": "failed",
+            "message": message,
+        }
+        self._record_run_event(project, run, "error", error_payload)
+        self.store.save_project(project)
+        yield {"event": "error", "data": error_payload}
+
+        failed_payload = build_run_completion_payload(project, run)
+        self._record_run_event(project, run, "run.failed", failed_payload)
+        self.store.save_project(project)
+        yield {"event": "run.failed", "data": failed_payload}
+
+
+def build_presentation_manifest(
+    project: dict[str, Any],
+    *,
+    run: dict[str, Any],
+    operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Summarize the completed harness run for the right-side workspace."""
+    artifacts = list(project.get("artifacts", []))
+    latest_artifact = artifacts[-1] if artifacts else None
+    invalid = [
+        item
+        for item in project.get("compatibility", [])
+        if isinstance(item, dict) and item.get("status") == "invalid"
+    ]
+    next_actions = [
+        "Review the generated artifacts and source previews.",
+        "Run or extend the evaluation suite before saving to Agent Library.",
+    ]
+    if invalid:
+        next_actions.insert(0, "Resolve invalid target compatibility before deployment.")
+    else:
+        next_actions.append("Promote the candidate into Eval Runs or Deploy when ready.")
+    return {
+        "run_id": run["run_id"],
+        "version": int(project.get("version") or 1),
+        "summary": f"Built {len(operations)} canonical change(s) and refreshed generated outputs.",
+        "artifact_ids": [artifact.get("id") for artifact in artifacts if artifact.get("id")],
+        "active_artifact_id": latest_artifact.get("id") if isinstance(latest_artifact, dict) else None,
+        "generated_outputs": sorted((project.get("exports", {}).get("adk", {}).get("files") or {}).keys()),
+        "validation_status": (project.get("last_test") or {}).get("status"),
+        "next_actions": next_actions,
+    }
+
+
+def build_run_completion_payload(project: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
+    """Build a terminal SSE payload with all state the UI needs to stay honest."""
+    prepared = prepare_project_payload(project)
+    return {
+        "project_id": project["project_id"],
+        "run_id": run["run_id"],
+        "phase": run.get("phase"),
+        "status": run.get("status"),
+        "version": int(project.get("version") or 1),
+        "validation": run.get("validation") or project.get("last_test"),
+        "presentation": run.get("presentation"),
+        "project": prepared,
+        "exports": prepared.get("exports"),
+        "compatibility": prepared.get("compatibility"),
+        "activity": prepared.get("activity", []),
+        "messages": prepared.get("messages", []),
+        "run": copy.deepcopy(run),
+    }
 
 
 def build_change_plan(
