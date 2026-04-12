@@ -1,110 +1,59 @@
-# Pro-Mode Prompt Optimization
+# Prompt Optimization
 
-Research-grade prompt optimization algorithms. Set `search_strategy: pro` to access MIPROv2, BootstrapFewShot, GEPA, and SIMBA.
+AgentLab supports three optimization strategy tiers, each providing progressively more sophisticated search over the instruction and example space.
 
-## Overview
+## Strategy tiers
 
-Pro-mode optimization goes beyond simple mutation-and-eval cycles. It uses structured search algorithms from the prompt optimization literature to explore the instruction/example space more efficiently.
-
-The `ProSearchStrategy` orchestrates algorithm selection and execution, integrating with the existing eval runner, gates, and experiment tracking.
+| Strategy | Config value | What it does |
+|----------|-------------|--------------|
+| **Standard** | `simple` | Deterministic mutation-and-eval cycles. Fast, predictable, low cost. |
+| **Advanced** | `adaptive` | Hybrid Search Orchestrator (HSO) with bandit-based operator selection. Adapts to which mutation families are most effective. |
+| **Research** | `full` | HSO + curriculum ordering + constrained Pareto archive. Multi-objective optimization across quality, safety, latency, and cost. |
 
 ## Configuration
 
-Enable pro-mode in `agentlab.yaml`:
+Set the strategy in `agentlab.yaml`:
 
 ```yaml
 optimizer:
-  search_strategy: pro
+  search_strategy: full    # simple | adaptive | full
+  bandit_policy: thompson  # ucb | thompson
 ```
 
-Fine-tune with a `ProConfig`:
+Or select a mode in the web UI Optimize page (standard / advanced / research), which maps to these strategies automatically.
 
-```yaml
-optimizer:
-  pro:
-    algorithm: auto           # auto | miprov2 | bootstrap_fewshot | gepa | simba
-    budget_dollars: 5.0       # Total budget for the optimization run
-    max_iterations: 20        # Maximum iterations per algorithm
-    population_size: 10       # Population size (GEPA)
-    num_demos: 5              # Number of few-shot demos (BootstrapFewShot)
-    num_candidates: 8         # Candidates per iteration (MIPROv2)
-    top_k: 3                  # Top-k selection (SIMBA)
-```
+## How the research strategy works
 
-## Algorithm selection
+Research mode (`search_strategy: full`) activates:
 
-In `auto` mode, the orchestrator picks the best algorithm based on budget:
+1. **Hybrid Search Orchestrator** — Uses a bandit selector to allocate budget across operator families (instruction rewrite, example selection, tool description refinement, etc.)
+2. **Constrained Pareto Archive** — Maintains a Pareto front across multiple objectives, ensuring optimization doesn't sacrifice safety for quality
+3. **Anti-Goodhart Guards** — Dual holdout (fixed + rolling), drift-aware baseline re-anchoring, judge variance rejection
 
-| Budget | Algorithm | Reason |
-|--------|-----------|--------|
-| < $1 | BootstrapFewShot | Lowest cost, good for few-shot optimization |
-| >= $1 | MIPROv2 | Best general-purpose, strong exploration |
+This provides genuine multi-objective prompt optimization with statistical rigor.
 
-You can also specify an algorithm directly:
+## Pro-mode algorithms (experimental, not production-ready)
 
-```yaml
-optimizer:
-  pro:
-    algorithm: gepa
-```
+> **Status:** The following algorithms are implemented but not yet wired for production use. They exist in the codebase as `optimizer/pro/` modules but require additional integration work before they are reachable from standard user paths.
 
-## The four algorithms
+AgentLab contains implementations of four research-grade prompt optimization algorithms:
 
-### MIPROv2
+- **MIPROv2** — Meta-prompting with Bayesian surrogate model
+- **BootstrapFewShot** — Teacher-student demo generation for few-shot selection
+- **GEPA** — Population-based evolutionary search with LLM-guided crossover
+- **SIMBA** — Iterative hill-climbing with perturbation and top-k selection
 
-Meta-prompting with Bayesian optimization. The strongest general-purpose algorithm.
+These are intended for a future `pro` strategy tier. Currently:
+- The `search_strategy` config field does not accept `"pro"` as a value (Pydantic validation rejects it). Valid values are `simple`, `adaptive`, and `full`.
+- The internal `SearchStrategy.PRO` enum value and `_optimize_pro()` code path exist but use a mock provider and are not connected to live LLM routing
+- Algorithm selection logic (`ProSearchStrategy`) is functional but awaits provider integration
 
-**How it works:**
-1. **Meta-prompting** -- An LLM generates candidate instructions by analyzing the task and failure patterns
-2. **Bayesian search** -- Uses a kNN surrogate model to predict which (instruction, example_set) combinations are likely to score well
-3. **Evaluation** -- Top candidates are evaluated against the full eval suite
-4. **Selection** -- The best-scoring candidate is promoted
-
-MIPROv2 explores the joint space of instructions and example sets, making it effective for both instruction tuning and few-shot selection.
-
-### BootstrapFewShot
-
-Teacher-student demo generation for few-shot optimization.
-
-**How it works:**
-1. **Teacher generation** -- A strong model generates demonstrations for eval cases
-2. **Scoring** -- Each demo is scored by the eval suite
-3. **Subset selection** -- The best-scoring subset of demos is selected as few-shot examples
-4. **Validation** -- The selected set is validated against the holdout
-
-BootstrapFewShot is the cheapest algorithm and works well when the main bottleneck is few-shot example quality.
-
-### GEPA
-
-Population-based evolutionary search with LLM-guided crossover and mutation.
-
-**How it works:**
-1. **Initialization** -- Create a population of instruction/config variants
-2. **Tournament selection** -- Select parents via tournament
-3. **LLM crossover** -- An LLM combines the best elements of two parents
-4. **LLM mutation** -- An LLM introduces targeted variations
-5. **Evaluation** -- Score the new generation
-6. **Repeat** -- Iterate until budget exhaustion or convergence
-
-GEPA excels when the search space is large and you want diverse exploration.
-
-### SIMBA
-
-Iterative hill-climbing with perturbation and top-k selection.
-
-**How it works:**
-1. **Start** -- Begin with the current best config
-2. **Perturbation** -- Generate k variations of the current best
-3. **Evaluation** -- Score all variations
-4. **Selection** -- Keep the top-k performers
-5. **Repeat** -- Perturb the new best and iterate
-
-SIMBA is simple and effective for local refinement when you already have a good starting point.
+**Do not rely on these algorithms for production optimization.** Use `search_strategy: full` for the most capable production-ready optimization.
 
 ## Example workflow
 
 ```bash
-# Run pro-mode optimization with auto algorithm selection
+# Run optimization with research-grade strategy
 agentlab optimize --cycles 5
 
 # Or via the API
@@ -121,12 +70,12 @@ curl http://localhost:8000/api/events
 
 ## Integration with the eval loop
 
-Pro-mode algorithms produce candidate configs that go through the same gate/deploy pipeline as standard mutations:
+All optimization strategies produce candidate configs that go through the same gate/deploy pipeline:
 
-1. Candidate config is generated by the algorithm
+1. Candidate config is generated by the selected strategy
 2. Full eval suite runs against the candidate
 3. Statistical significance test compares against baseline
 4. Safety and regression gates are checked
-5. Passing candidates are deployed via canary
+5. Passing candidates are queued for review or deployed via canary
 
-This means all anti-Goodhart guards (holdout rotation, drift detection, judge variance) apply to pro-mode results too.
+Anti-Goodhart guards (holdout rotation, drift detection, judge variance) apply to all strategies.

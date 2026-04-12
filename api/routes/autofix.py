@@ -118,12 +118,10 @@ async def apply_proposal(proposal_id: str, request: Request) -> dict[str, Any]:
         "status": "applied",
         "message": status_message,
         "config_applied": new_config is not None,
-        "baseline_composite": 0.0,
-        "candidate_composite": 0.0,
-        "significance_p_value": 1.0,
-        "significance_delta": 0.0,
-        "canary_verdict": "",
-        "deploy_message": "",
+        "next_steps": [
+            "Run eval to validate: POST /api/eval/run",
+            "Deploy via canary if improved: POST /api/deploy/canary",
+        ],
     }
 
 
@@ -149,12 +147,6 @@ async def reject_proposal(proposal_id: str, request: Request) -> dict[str, Any]:
         "proposal_id": proposal_id,
         "status": "rejected",
         "message": status_message,
-        "baseline_composite": 0.0,
-        "candidate_composite": 0.0,
-        "significance_p_value": 1.0,
-        "significance_delta": 0.0,
-        "canary_verdict": "",
-        "deploy_message": "",
     }
 
 

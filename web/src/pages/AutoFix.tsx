@@ -40,13 +40,7 @@ export function AutoFix() {
       { proposal_id: proposalId },
       {
         onSuccess: (outcome) => {
-          if (outcome.status === 'promoted') {
-            toastSuccess('AutoFix applied', outcome.message);
-          } else if (outcome.status === 'pending_canary') {
-            toastInfo('AutoFix canary pending', outcome.message);
-          } else {
-            toastInfo('AutoFix apply finished', `${statusLabel(outcome.status)}: ${outcome.message}`);
-          }
+          toastSuccess('Proposal applied', outcome.message || 'Config mutation applied. Run eval to validate, then deploy via canary.');
           proposalsQuery.refetch();
           historyQuery.refetch();
         },
@@ -90,7 +84,7 @@ export function AutoFix() {
     <div className="space-y-6">
       <PageHeader
         title="AutoFix Copilot"
-        description="Generate constrained, one-step improvement proposals with diff previews and apply them through eval + canary checks."
+        description="Generate constrained, one-step improvement proposals with diff previews. Apply proposals, then run eval and deploy separately."
         actions={
           <button
             onClick={handleSuggest}
@@ -175,7 +169,7 @@ export function AutoFix() {
                       disabled={applyDisabled}
                       className="rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      {applyMutation.isPending ? 'Applying...' : 'Apply with Eval + Canary'}
+                      {applyMutation.isPending ? 'Applying...' : 'Apply Proposal'}
                     </button>
                   </div>
                 </div>

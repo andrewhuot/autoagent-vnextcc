@@ -85,14 +85,21 @@ async def simulate(
 
 @router.get("/report")
 async def report(request: Request) -> dict[str, Any]:
-    """Aggregate context health report."""
+    """Aggregate context health report.
 
-    # Return aggregate metrics (empty defaults if no data)
+    Returns aggregate metrics across analyzed traces. When no trace analyses
+    have been performed, returns defaults with a guidance note.
+    """
+
+    # TODO: Aggregate from stored per-trace analyses when a trace store is available.
+    # Currently returns defaults — per-trace analysis via /api/context/analysis/{id} is
+    # the functional path for context insights.
     return {
         "utilization_ratio": 0.0,
         "compaction_loss": 0.0,
         "avg_handoff_fidelity": 0.0,
         "memory_staleness": 0.0,
-        "status": "healthy",
+        "status": "no_data",
         "recommendations": [],
+        "note": "No trace analyses available for aggregation. Use GET /api/context/analysis/{trace_id} to analyze individual traces first.",
     }
