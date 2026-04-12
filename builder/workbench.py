@@ -260,6 +260,90 @@ def _verification_summary(validation: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _run_event_count(run: dict[str, Any], event_name: str) -> int:
+    """Count persisted run events by name without trusting transient UI state."""
+    return sum(
+        1
+        for event in run.get("events") or []
+        if isinstance(event, dict) and event.get("event") == event_name
+    )
+
+
+def _run_artifact_event_count(run: dict[str, Any]) -> int:
+    """Return how many distinct artifacts this run claims to have produced."""
+    artifact_ids: set[str] = set()
+    for event in run.get("events") or []:
+        if not isinstance(event, dict) or event.get("event") != "artifact.updated":
+            continue
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        artifact = data.get("artifact") if isinstance(data.get("artifact"), dict) else {}
+        artifact_id = artifact.get("id")
+        if artifact_id:
+            artifact_ids.add(str(artifact_id))
+    return len(artifact_ids)
+
+
+def build_evidence_summary(
+    project: dict[str, Any],
+    run: dict[str, Any],
+    *,
+    operations: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Explain what terminal success is actually backed by.
+
+    WHY: structural validation is useful, but it is not the same thing as
+    proving that the requested build improved. This summary keeps those two
+    claims separate in terminal payloads, handoffs, review gates, and UI state.
+    """
+    validation = run.get("validation") if isinstance(run.get("validation"), dict) else project.get("last_test")
+    validation_status = str((validation or {}).get("status") or "not_run")
+    structural_status = "passed" if validation_status == "passed" else "failed"
+    operation_count = len([op for op in operations if isinstance(op, dict)])
+    artifact_count = _run_artifact_event_count(run)
+    correction_iterations = [
+        iteration
+        for turn in project.get("turns") or []
+        if isinstance(turn, dict)
+        for iteration in turn.get("iterations") or []
+        if isinstance(iteration, dict) and iteration.get("mode") == "correction"
+    ]
+    correction_operations = sum(
+        len([op for op in iteration.get("operations") or [] if isinstance(op, dict)])
+        for iteration in correction_iterations
+    )
+    improvement_status = "changed" if operation_count > 0 else "missing"
+    if correction_iterations and correction_operations > 0 and structural_status == "passed":
+        correction_status = "corrected"
+    elif correction_iterations and correction_operations > 0:
+        correction_status = "attempted"
+    elif structural_status == "failed":
+        correction_status = "not_attempted"
+    else:
+        correction_status = "not_needed"
+
+    if structural_status == "failed":
+        evidence_level = "blocked"
+    elif improvement_status == "missing":
+        evidence_level = "structural_only"
+    elif correction_status == "corrected":
+        evidence_level = "corrected_validation_failure"
+    else:
+        evidence_level = "structural_and_change"
+
+    return {
+        "structural_status": structural_status,
+        "validation_status": validation_status,
+        "improvement_status": improvement_status,
+        "correction_status": correction_status,
+        "evidence_level": evidence_level,
+        "operations_applied": operation_count,
+        "artifacts_observed": artifact_count,
+        "task_completions": _run_event_count(run, "task.completed"),
+        "stall_count": _run_event_count(run, "progress.stall"),
+        "review_required": True,
+    }
+
+
 def _latest_artifact_summary(project: dict[str, Any]) -> dict[str, Any] | None:
     """Return a compact pointer to the newest generated artifact."""
     artifacts = [item for item in project.get("artifacts", []) if isinstance(item, dict)]
@@ -712,6 +796,7 @@ def build_run_summary(project: dict[str, Any], run: dict[str, Any]) -> dict[str,
         "operations_applied": len(changes),
         "validation_status": val_status or None,
         "changes": changes[:20],
+        "evidence_summary": copy.deepcopy(run.get("evidence_summary")),
         "recommended_action": recommended_action,
     }
 
@@ -955,6 +1040,7 @@ class WorkbenchService:
                 started_model=started_model,
                 mode="initial",
                 brief=brief,
+                auto_iterate=auto_iterate,
             ):
                 yield event
 
@@ -1075,6 +1161,7 @@ class WorkbenchService:
                 started_model=started_model,
                 mode="follow_up",
                 brief=follow_up,
+                auto_iterate=False,
             ):
                 yield event
 
@@ -1184,6 +1271,7 @@ class WorkbenchService:
             "progress": _plan_progress_summary(project.get("plan"), metrics=metrics),
             "metrics": copy.deepcopy(metrics),
             "verification": _verification_summary(validation if isinstance(validation, dict) else None),
+            "evidence": copy.deepcopy(run.get("evidence_summary")),
             "latest_artifact": _latest_artifact_summary(project),
             "recent_checkpoints": copy.deepcopy((checkpoints or [])[-3:]),
             "budget": {
@@ -1204,6 +1292,7 @@ class WorkbenchService:
         handoff["next_action"] = self._handoff_next_action(
             run,
             verification=handoff["verification"],
+            evidence=handoff["evidence"] if isinstance(handoff["evidence"], dict) else None,
             breach=breach,
         )
         return handoff
@@ -1213,7 +1302,8 @@ class WorkbenchService:
         run: dict[str, Any],
         *,
         verification: dict[str, Any],
-        breach: dict[str, Any] | None,
+        evidence: dict[str, Any] | None = None,
+        breach: dict[str, Any] | None = None,
     ) -> str:
         """Choose one concrete next step for the operator handoff."""
         status = str(run.get("status") or "")
@@ -1224,6 +1314,8 @@ class WorkbenchService:
         if breach:
             kind = str(breach.get("kind") or "budget")
             return f"Resolve the {kind} budget breach or raise the budget before retrying."
+        if evidence and evidence.get("improvement_status") == "missing":
+            return "Run passed structural validation but produced no change evidence; revise the brief or inspect the agent output."
         if verification.get("status") == "failed":
             return "Review failed validation checks before promoting this build."
         if status == RUN_STATUS_FAILED:
@@ -1763,6 +1855,7 @@ class WorkbenchService:
         started_model: dict[str, Any],
         mode: str,
         brief: str,
+        auto_iterate: bool = False,
         heartbeat_interval: float = HEARTBEAT_INTERVAL_SECONDS,
     ) -> Any:
         """Process agent events from a source iterator, yielding enriched stream events.
@@ -2014,6 +2107,7 @@ class WorkbenchService:
                 project=project,
                 run=run,
                 operations=operations_for_version,
+                auto_iterate=auto_iterate,
             ):
                 yield terminal
 
@@ -2414,6 +2508,232 @@ class WorkbenchService:
             }
         )
 
+    def _iteration_budget_remaining(self, run: dict[str, Any]) -> bool:
+        """Return whether another autonomous iteration can be started."""
+        budget = run.get("budget") if isinstance(run.get("budget"), dict) else {}
+        limits = budget.get("limits") if isinstance(budget.get("limits"), dict) else {}
+        usage = budget.get("usage") if isinstance(budget.get("usage"), dict) else {}
+        max_iterations = int(limits.get("max_iterations") or 1)
+        used_iterations = int(usage.get("iterations") or 0)
+        return used_iterations < max_iterations
+
+    def _build_validation_correction_operations(
+        self,
+        project: dict[str, Any],
+        validation: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return deterministic operations for known validation failures only."""
+        if str(validation.get("status") or "") == "passed":
+            return []
+        target = str(project.get("target") or "portable")
+        if target != "cx":
+            return []
+        invalid_ids = {
+            str(item.get("object_id") or "")
+            for item in project.get("compatibility") or []
+            if isinstance(item, dict) and item.get("status") == "invalid"
+        }
+        operations: list[dict[str, Any]] = []
+        for tool in project.get("model", {}).get("tools", []) or []:
+            if not isinstance(tool, dict):
+                continue
+            tool_id = str(tool.get("id") or "")
+            if tool_id not in invalid_ids or str(tool.get("type") or "") != "local_shell":
+                continue
+            repaired = copy.deepcopy(tool)
+            repaired["type"] = "function_tool"
+            description = str(repaired.get("description") or "").strip()
+            repair_note = "Repaired for CX export; local shell execution was removed."
+            repaired["description"] = f"{description} {repair_note}".strip()
+            repaired["repair_provenance"] = {
+                "from_type": "local_shell",
+                "to_type": "function_tool",
+                "reason": "local_shell tools are invalid for target cx",
+            }
+            operations.append(
+                {
+                    "operation": "update_tool",
+                    "target": "tools",
+                    "label": str(repaired.get("name") or tool_id),
+                    "object": repaired,
+                    "reason": "repair_target_compatibility",
+                }
+            )
+        return operations
+
+    async def _run_correction_iteration_stream(
+        self,
+        *,
+        project: dict[str, Any],
+        run: dict[str, Any],
+        operations: list[dict[str, Any]],
+        reason: str,
+    ) -> Any:
+        """Emit and persist one deterministic correction iteration."""
+        from builder.workbench_plan import PlanTask, PlanTaskStatus, WorkbenchArtifact
+
+        turn = self._current_turn(project, run)
+        if turn is None:
+            turn = self._start_turn(project, run, brief=reason, mode="correction")
+        iteration = self._start_iteration_record(turn, brief=reason, mode="correction")
+        run["iteration_id"] = iteration["iteration_id"]
+        run["phase"] = PHASE_EXECUTING
+        run["status"] = RUN_STATUS_RUNNING
+        project["build_status"] = RUN_STATUS_RUNNING
+        plan_id = f"task-correction-root-{new_id()}"
+        plan = PlanTask(
+            id=plan_id,
+            title="Autonomous compatibility correction",
+            description="Repair deterministic validation failures before terminal review.",
+            children=[
+                PlanTask(
+                    id=f"task-correction-{new_id()}",
+                    title="Repair invalid target compatibility",
+                    description=reason,
+                    parent_id=plan_id,
+                )
+            ],
+        )
+        correction_task = plan.children[0]
+        project["plan"] = plan.to_dict()
+        self._update_turn(project, run, plan=project["plan"])
+
+        started = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration["iteration_id"],
+            "index": iteration["index"],
+            "iteration_number": iteration["index"] + 1,
+            "mode": "correction",
+            "message": reason,
+            "artifact_count": len(project.get("artifacts", [])),
+        }
+        started = self._prepare_stream_event(project, run, "iteration.started", started)
+        self._record_run_event(project, run, "iteration.started", started)
+        self.store.save_project(project)
+        yield {"event": "iteration.started", "data": started}
+
+        plan_ready = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration["iteration_id"],
+            "mode": "correction",
+            "plan": project["plan"],
+        }
+        plan_ready = self._prepare_stream_event(project, run, "plan.ready", plan_ready)
+        self._record_run_event(project, run, "plan.ready", plan_ready)
+        self.store.save_project(project)
+        yield {"event": "plan.ready", "data": plan_ready}
+
+        message = {
+            "task_id": correction_task.id,
+            "text": "I found a deterministic target-compatibility failure and am applying a narrow repair.",
+            "mode": "correction",
+        }
+        self._append_message(
+            project,
+            run,
+            role="assistant",
+            text=str(message["text"]),
+            task_id=correction_task.id,
+            append_to_previous=False,
+        )
+        message = self._prepare_stream_event(project, run, "message.delta", message)
+        self._record_run_event(project, run, "message.delta", message)
+        self.store.save_project(project)
+        yield {"event": "message.delta", "data": message}
+
+        correction_task.status = PlanTaskStatus.RUNNING.value
+        correction_task.started_at = _now_iso()
+        project["plan"] = plan.to_dict()
+        self._update_turn(project, run, plan=project["plan"])
+        task_started = {"task_id": correction_task.id, "mode": "correction"}
+        task_started = self._prepare_stream_event(project, run, "task.started", task_started)
+        self._record_run_event(project, run, "task.started", task_started)
+        self.store.save_project(project)
+        yield {"event": "task.started", "data": task_started}
+
+        artifact = WorkbenchArtifact(
+            id=f"artifact-correction-{new_id()}",
+            task_id=correction_task.id,
+            category="tool",
+            name="Target compatibility repair",
+            summary=f"Applied {len(operations)} deterministic tool repair(s).",
+            preview="\n".join(str(op.get("label") or op.get("operation")) for op in operations),
+            source=json.dumps(operations, indent=2, sort_keys=True),
+            language="json",
+            created_at=_now_iso(),
+            version=int(project.get("version") or 1),
+        ).to_dict()
+        artifact["turn_id"] = run.get("turn_id") or run["run_id"]
+        artifact["iteration_id"] = iteration["iteration_id"]
+        project["artifacts"] = [
+            item for item in project.get("artifacts", [])
+            if item.get("id") != artifact["id"]
+        ] + [artifact]
+        correction_task.artifact_ids.append(artifact["id"])
+        project["plan"] = plan.to_dict()
+        self._update_turn(project, run, artifact_id=artifact["id"], plan=project["plan"])
+        artifact_updated = {"artifact": artifact, "mode": "correction"}
+        artifact_updated = self._prepare_stream_event(project, run, "artifact.updated", artifact_updated)
+        self._record_run_event(project, run, "artifact.updated", artifact_updated)
+        self.store.save_project(project)
+        yield {"event": "artifact.updated", "data": artifact_updated}
+
+        started_model = copy.deepcopy(project["model"])
+        project["model"] = apply_operations(project["model"], operations)
+        project["compatibility"] = build_compatibility_diagnostics(
+            project["model"],
+            target=str(project.get("target") or "portable"),
+        )
+        project["exports"] = compile_workbench_exports(project["model"])
+        project["version"] = int(project.get("version") or 1) + 1
+        project["draft_badge"] = f"Draft v{project['version']}"
+        self._add_version(project, summary="Autonomous correction: target compatibility repair")
+        self._add_activity(
+            project,
+            kind="build",
+            summary="Autonomous correction repaired target compatibility.",
+            diff=build_model_diff(started_model, project["model"], operations),
+        )
+        correction_task.status = PlanTaskStatus.DONE.value
+        correction_task.completed_at = _now_iso()
+        plan.status = PlanTaskStatus.DONE.value
+        project["plan"] = plan.to_dict()
+        self._update_turn(project, run, operations=operations, plan=project["plan"])
+        task_completed = {
+            "task_id": correction_task.id,
+            "mode": "correction",
+            "operations": copy.deepcopy(operations),
+        }
+        task_completed = self._prepare_stream_event(project, run, "task.completed", task_completed)
+        self._record_run_event(project, run, "task.completed", task_completed)
+        self.store.save_project(project)
+        yield {"event": "task.completed", "data": task_completed}
+
+        self._complete_iteration_record(
+            iteration,
+            status=RUN_STATUS_COMPLETED,
+            operations=operations,
+            plan=project.get("plan"),
+        )
+        build_completed = {
+            "project_id": project["project_id"],
+            "run_id": run["run_id"],
+            "turn_id": run.get("turn_id") or run["run_id"],
+            "iteration_id": iteration["iteration_id"],
+            "mode": "correction",
+            "summary": "Autonomous correction applied deterministic compatibility repairs.",
+            "operations": copy.deepcopy(operations),
+            "version": project.get("version"),
+        }
+        build_completed = self._prepare_stream_event(project, run, "build.completed", build_completed)
+        self._record_run_event(project, run, "build.completed", build_completed)
+        self.store.save_project(project)
+        yield {"event": "build.completed", "data": build_completed}
+
     async def _complete_run_stream(
         self,
         *,
@@ -2422,6 +2742,7 @@ class WorkbenchService:
         operations: list[dict[str, Any]],
         turn: dict[str, Any] | None = None,
         iteration: dict[str, Any] | None = None,
+        auto_iterate: bool = False,
     ) -> Any:
         """Run reflection, produce presentation data, and emit terminal events."""
         turn = turn or self._current_turn(project, run)
@@ -2486,9 +2807,39 @@ class WorkbenchService:
         self.store.save_project(project)
         yield {"event": "validation.ready", "data": validation_ready}
 
+        correction_operations = self._build_validation_correction_operations(project, validation)
+        if auto_iterate and correction_operations and self._iteration_budget_remaining(run):
+            if isinstance(iteration, dict) and iteration.get("status") == RUN_STATUS_RUNNING:
+                self._complete_iteration_record(
+                    iteration,
+                    status=RUN_STATUS_FAILED,
+                    operations=operations,
+                    plan=project.get("plan"),
+                )
+            reason = "Repair invalid target compatibility before terminal review."
+            async for correction_event in self._run_correction_iteration_stream(
+                project=project,
+                run=run,
+                operations=correction_operations,
+                reason=reason,
+            ):
+                yield correction_event
+            async for terminal in self._complete_run_stream(
+                project=project,
+                run=run,
+                operations=[*operations, *correction_operations],
+                turn=turn,
+                iteration=self._current_iteration(project, run),
+                auto_iterate=auto_iterate,
+            ):
+                yield terminal
+            return
+
         run["phase"] = PHASE_PRESENTING
         run["status"] = RUN_STATUS_PRESENTING
         project["build_status"] = RUN_STATUS_PRESENTING
+        evidence_summary = build_evidence_summary(project, run, operations=operations)
+        run["evidence_summary"] = copy.deepcopy(evidence_summary)
         presentation = build_presentation_manifest(project, run=run, operations=operations)
         run["presentation"] = presentation
         run["review_gate"] = copy.deepcopy(presentation.get("review_gate"))
@@ -2507,13 +2858,21 @@ class WorkbenchService:
         self.store.save_project(project)
         yield {"event": "present.ready", "data": present_ready}
 
-        final_status = RUN_STATUS_COMPLETED if validation["status"] == "passed" else RUN_STATUS_FAILED
+        if validation["status"] != "passed":
+            final_status = RUN_STATUS_FAILED
+            run["failure_reason"] = "validation_failed"
+        elif evidence_summary["improvement_status"] != "changed":
+            final_status = RUN_STATUS_FAILED
+            run["failure_reason"] = "insufficient_completion_evidence"
+        else:
+            final_status = RUN_STATUS_COMPLETED
+            run.pop("failure_reason", None)
         run["status"] = final_status
         run["phase"] = PHASE_PRESENTING
         run["completed_version"] = int(project.get("version") or 1)
         run["completed_at"] = _now_iso()
         project["build_status"] = final_status
-        if iteration is not None:
+        if iteration is not None and iteration.get("status") == RUN_STATUS_RUNNING:
             self._complete_iteration_record(
                 iteration,
                 status=final_status,
@@ -2532,6 +2891,8 @@ class WorkbenchService:
             "version": int(project.get("version") or 1),
             "iterations": len(turn.get("iterations", [])) if isinstance(turn, dict) else 1,
             "validation": validation,
+            "failure_reason": run.get("failure_reason"),
+            "evidence_summary": copy.deepcopy(evidence_summary),
             "run": copy.deepcopy(run),
         }
         self._enrich_stream_payload(run, turn_payload, turn_id=turn_payload["turn_id"], iteration_id=turn_iteration_id)
@@ -2728,6 +3089,7 @@ def build_review_gate(project: dict[str, Any], *, run: dict[str, Any]) -> dict[s
     """
     validation = run.get("validation") if isinstance(run.get("validation"), dict) else project.get("last_test") or {}
     validation_status = str(validation.get("status") or "missing")
+    evidence = run.get("evidence_summary") if isinstance(run.get("evidence_summary"), dict) else None
     invalid = [
         item
         for item in project.get("compatibility", [])
@@ -2754,13 +3116,28 @@ def build_review_gate(project: dict[str, Any], *, run: dict[str, Any]) -> dict[s
                 else f"{len(invalid)} invalid target compatibility diagnostic(s)."
             ),
         },
+    ]
+    if evidence is not None:
+        checks.append(
+            {
+                "name": "completion_evidence",
+                "status": "passed" if evidence.get("improvement_status") == "changed" else "failed",
+                "required": True,
+                "detail": (
+                    "Run applied canonical changes with artifact evidence."
+                    if evidence.get("improvement_status") == "changed"
+                    else "Run passed structure checks but did not apply canonical changes."
+                ),
+            }
+        )
+    checks.append(
         {
             "name": "human_review",
             "status": "required",
             "required": True,
             "detail": "Human review is required before promotion to Eval Runs or Deploy.",
-        },
-    ]
+        }
+    )
     blocking_reasons = [
         check["detail"]
         for check in checks
@@ -2784,6 +3161,7 @@ def build_run_handoff(
     """Build compact resume context for the next Workbench session."""
     review_gate = presentation.get("review_gate") if isinstance(presentation.get("review_gate"), dict) else {}
     gate_status = str(review_gate.get("status") or "unknown")
+    evidence = run.get("evidence_summary") if isinstance(run.get("evidence_summary"), dict) else {}
     if gate_status == "blocked":
         next_action = "Resolve blocking review gate issues before promotion."
     else:
@@ -2796,6 +3174,8 @@ def build_run_handoff(
         "turn_id": run.get("turn_id") or run_id,
         "version": version,
         "review_gate_status": gate_status,
+        "evidence_level": evidence.get("evidence_level"),
+        "improvement_status": evidence.get("improvement_status"),
         "active_artifact_id": presentation.get("active_artifact_id"),
         "last_event_sequence": len(run.get("events") or []),
         "next_operator_action": next_action,
@@ -2823,6 +3203,7 @@ def build_run_completion_payload(project: dict[str, Any], run: dict[str, Any]) -
         "telemetry_summary": copy.deepcopy(run.get("telemetry_summary") or {}),
         "failure_reason": run.get("failure_reason"),
         "cancel_reason": run.get("cancel_reason"),
+        "evidence_summary": copy.deepcopy(run.get("evidence_summary")),
         "review_gate": copy.deepcopy(run.get("review_gate")),
         "handoff": copy.deepcopy(run.get("handoff")),
         "version": int(project.get("version") or 1),
@@ -3017,6 +3398,19 @@ def apply_operations(model: dict[str, Any], operations: list[dict[str, Any]]) ->
         obj = copy.deepcopy(operation.get("object") or {})
         if op == "add_tool":
             next_model["tools"] = _dedupe_by_id([*next_model.get("tools", []), obj])
+        elif op == "update_tool":
+            tool_id = obj.get("id")
+            next_tools: list[dict[str, Any]] = []
+            replaced = False
+            for tool in next_model.get("tools", []):
+                if tool_id and tool.get("id") == tool_id:
+                    next_tools.append({**tool, **obj})
+                    replaced = True
+                else:
+                    next_tools.append(tool)
+            if not replaced and obj:
+                next_tools.append(obj)
+            next_model["tools"] = _dedupe_by_id(next_tools)
         elif op == "add_callback":
             next_model["callbacks"] = _dedupe_by_id([*next_model.get("callbacks", []), obj])
         elif op == "add_guardrail":

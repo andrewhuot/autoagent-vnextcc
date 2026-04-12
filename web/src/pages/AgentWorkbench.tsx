@@ -117,6 +117,7 @@ export function AgentWorkbench() {
           conversation: snapshot.conversation,
           turns: snapshot.turns,
           harnessState: snapshot.harness_state,
+          runSummary: snapshot.run_summary,
         });
       } catch (error) {
         if (cancelled) return;
@@ -234,6 +235,8 @@ export function AgentWorkbench() {
             project_id: currentProjectId,
             message,
             target,
+            environment,
+            max_iterations: maxIterations,
           },
           { signal: controller.signal }
         );
@@ -248,7 +251,7 @@ export function AgentWorkbench() {
         }
       }
     },
-    [consumeStream, handleSubmit, setAbortController, setError, startIteration, target]
+    [consumeStream, environment, handleSubmit, maxIterations, setAbortController, setError, startIteration, target]
   );
 
   const handleCancel = useCallback(async () => {

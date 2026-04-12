@@ -208,4 +208,52 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-filter at Draft v2.')).toBeInTheDocument();
   });
+
+  it('renders durable handoff and evidence details without presentation state', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      activeWorkspaceTab: 'activity',
+      presentation: null,
+      activeRun: {
+        run_id: 'run-2',
+        project_id: 'wb-filter',
+        brief: 'Build',
+        target: 'portable',
+        environment: 'draft',
+        status: 'completed',
+        phase: 'presenting',
+        started_version: 1,
+        completed_version: 2,
+        created_at: '2026-04-11T00:00:00Z',
+        completed_at: '2026-04-11T00:00:01Z',
+        error: null,
+        events: [],
+        messages: [],
+        validation: null,
+        presentation: null,
+        evidence_summary: {
+          structural_status: 'passed',
+          improvement_status: 'changed',
+          correction_status: 'corrected',
+          operations_applied: 2,
+        },
+        handoff: {
+          run_id: 'run-2',
+          next_action: 'Review corrected compatibility evidence.',
+          last_event: { sequence: 8, event: 'run.completed' },
+          progress: { total_tasks: 2, completed_tasks: 2 },
+          verification: { status: 'passed' },
+        },
+      },
+    });
+
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(screen.getByText('Evidence status')).toBeInTheDocument();
+    expect(screen.getByText('improvement_evidence: changed')).toBeInTheDocument();
+    expect(screen.getByText('correction: corrected')).toBeInTheDocument();
+    expect(screen.getByText('Session handoff')).toBeInTheDocument();
+    expect(screen.getByText('Review corrected compatibility evidence.')).toBeInTheDocument();
+  });
 });
