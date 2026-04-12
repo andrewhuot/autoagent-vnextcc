@@ -9,6 +9,15 @@ export interface HarnessMetrics {
   costUsd: number;
   elapsedMs: number;
   currentPhase: 'planning' | 'executing' | 'reflecting' | 'presenting' | 'idle';
+  contextBudget?: {
+    totalTokens: number;
+    conversationTokens: number;
+    planTokens: number;
+    artifactTokens: number;
+    modelTokens: number;
+    conversationCount: number;
+    artifactCount: number;
+  };
 }
 
 export interface IterationEntry {
@@ -25,6 +34,27 @@ export interface ReflectionEntry {
   qualityScore: number;
   suggestions: string[];
   timestamp: number;
+}
+
+export interface RunSummary {
+  runId: string;
+  status: string;
+  phase: string;
+  mode: string;
+  provider: string;
+  model: string;
+  durationMs: number;
+  tokensUsed: number;
+  costUsd: number;
+  artifactsProduced: number;
+  operationsApplied: number;
+  validationStatus: string | null;
+  changes: Array<{
+    operation: string;
+    category: string;
+    name: string;
+  }>;
+  recommendedAction: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +134,8 @@ export interface BuildStreamEvent {
     | 'run.recovered'
     | 'harness.metrics'
     | 'reflection.completed'
-    | 'iteration.started'
+    | 'harness.heartbeat'
+    | 'progress.stall'
     | 'error'
     | string;
   data: Record<string, unknown>;

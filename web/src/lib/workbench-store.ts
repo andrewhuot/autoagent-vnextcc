@@ -177,6 +177,10 @@ interface WorkbenchState {
   previousVersionArtifacts: WorkbenchArtifact[];
   /** Which version number is currently selected for diff (null = none). */
   diffTargetVersion: number | null;
+  /** Timestamp of the most recent heartbeat or event from the harness. */
+  lastHeartbeatAt: number;
+  /** Number of progress stalls detected in the current run. */
+  stallCount: number;
 }
 
 interface WorkbenchActions {
@@ -261,6 +265,8 @@ const INITIAL_STATE: WorkbenchState = {
   reflections: [],
   previousVersionArtifacts: [],
   diffTargetVersion: null,
+  lastHeartbeatAt: 0,
+  stallCount: 0,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -393,6 +399,8 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       activeArtifactId: state.activeArtifactId,
       error: null,
       currentIterationIndex: 0,
+      lastHeartbeatAt: Date.now(),
+      stallCount: 0,
     })),
 
   setAbortController: (controller) => set(() => ({ abortController: controller })),
@@ -881,6 +889,19 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         timestamp: incoming.timestamp ?? Date.now(),
       };
       set((state) => ({ reflections: [...state.reflections, entry] }));
+      return;
+    }
+
+    if (name === 'harness.heartbeat') {
+      set(() => ({ lastHeartbeatAt: Date.now() }));
+      return;
+    }
+
+    if (name === 'progress.stall') {
+      set((state) => {
+        const stallCount = (state.stallCount ?? 0) + 1;
+        return { stallCount, lastHeartbeatAt: Date.now() };
+      });
       return;
     }
 
