@@ -29,6 +29,20 @@ export interface HealthReport {
   mock_mode?: boolean;
   mock_reasons?: string[];
   real_provider_configured?: boolean;
+  workspace_valid?: boolean;
+  workspace?: WorkspaceState;
+}
+
+export interface WorkspaceState {
+  valid: boolean;
+  current_path: string;
+  workspace_root?: string | null;
+  workspace_label?: string | null;
+  active_config_path?: string | null;
+  active_config_version?: number | null;
+  source?: string;
+  message?: string;
+  recovery_commands?: string[];
 }
 
 // 9-Dimension Scores (v4 enhanced scoring)

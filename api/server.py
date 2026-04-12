@@ -76,6 +76,7 @@ from api.routes import (
     results as results_routes,
 )
 from api.tasks import TaskManager
+from api.workspace_state import resolve_workspace_state
 from api.websocket import ConnectionManager
 
 
@@ -132,6 +133,17 @@ def _seed_demo_data_if_empty(conversation_store) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize shared resources on startup, clean up on shutdown."""
+    startup_cwd = Path.cwd()
+    restore_cwd = False
+    workspace_state = resolve_workspace_state()
+    app.state.workspace_state = workspace_state
+    if workspace_state.valid and workspace_state.workspace_root:
+        os.chdir(workspace_state.workspace_root)
+        restore_cwd = Path.cwd() != startup_cwd
+        print(f"📁 AgentLab workspace: {workspace_state.workspace_root}")
+    else:
+        print(f"⚠️ AgentLab workspace invalid: {workspace_state.message}")
+
     from agent import create_eval_agent
     from agent.tracing import instrument_eval_runner
     from cli.mode import load_runtime_with_builder_live_preference, load_runtime_with_mode_preference
@@ -438,10 +450,17 @@ async def lifespan(app: FastAPI):
         db_path=".agentlab/notifications.db"
     )
 
-    # Auto-seed demo data on first boot if DB is empty
-    _seed_demo_data_if_empty(conversation_store)
+    # Auto-seed demo data only when state is rooted in a real workspace.
+    if workspace_state.valid:
+        _seed_demo_data_if_empty(conversation_store)
+    else:
+        print("⚠️ Skipping demo seed because no valid AgentLab workspace is active.")
 
-    yield
+    try:
+        yield
+    finally:
+        if restore_cwd:
+            os.chdir(startup_cwd)
     # No explicit cleanup needed — SQLite connections are context-managed
 
 

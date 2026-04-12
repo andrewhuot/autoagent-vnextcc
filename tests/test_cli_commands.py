@@ -138,6 +138,53 @@ class TestBrandedBanner:
         assert result.exit_code == 0
         assert "Experiment. Evaluate. Refine." not in result.output
 
+    def test_server_accepts_explicit_workspace_path(self, runner, tmp_path, monkeypatch):
+        workspace = tmp_path / "server-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--no-synthetic-data"])
+        assert init_result.exit_code == 0, init_result.output
+
+        captured: dict[str, object] = {}
+
+        def fake_run(app: str, host: str, port: int, reload: bool) -> None:
+            captured["app"] = app
+            captured["host"] = host
+            captured["port"] = port
+            captured["reload"] = reload
+
+        monkeypatch.delenv("AGENTLAB_WORKSPACE", raising=False)
+        monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=fake_run))
+
+        result = runner.invoke(cli, ["server", "--workspace", str(workspace), "--port", "8124"])
+
+        try:
+            assert result.exit_code == 0, result.output
+            assert "Workspace:" in result.output
+            assert str(workspace.resolve()) in result.output
+            assert os.environ["AGENTLAB_WORKSPACE"] == str(workspace.resolve())
+            assert captured == {
+                "app": "api.server:app",
+                "host": "0.0.0.0",
+                "port": 8124,
+                "reload": False,
+            }
+        finally:
+            monkeypatch.delenv("AGENTLAB_WORKSPACE", raising=False)
+
+    def test_server_rejects_missing_explicit_workspace_path(self, runner, tmp_path, monkeypatch):
+        captured: dict[str, object] = {}
+
+        def fake_run(app: str, host: str, port: int, reload: bool) -> None:
+            captured["app"] = app
+            del host, port, reload
+
+        monkeypatch.setitem(sys.modules, "uvicorn", SimpleNamespace(run=fake_run))
+
+        result = runner.invoke(cli, ["server", "--workspace", str(tmp_path / "missing")])
+
+        assert result.exit_code != 0
+        assert "Workspace path does not exist" in result.output
+        assert captured == {}
+
 
 class TestInitCommand:
     def test_init_creates_structure(self, runner, tmp_dir):

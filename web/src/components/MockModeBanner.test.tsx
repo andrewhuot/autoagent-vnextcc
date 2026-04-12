@@ -256,4 +256,116 @@ describe('MockModeBanner', () => {
       expect(screen.queryByRole('alert')).not.toBeInTheDocument();
     });
   });
+
+  it('shows invalid workspace recovery instructions from health payloads', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workspace_valid: false,
+          workspace: {
+            valid: false,
+            current_path: '/tmp/not-agentlab',
+            workspace_root: null,
+            workspace_label: null,
+            active_config_path: null,
+            active_config_version: null,
+            source: 'cwd',
+            message: 'No AgentLab workspace found at /tmp/not-agentlab.',
+            recovery_commands: [
+              'cd /path/to/agentlab-workspace && agentlab server',
+              'agentlab server --workspace /path/to/agentlab-workspace',
+              'agentlab init --dir /path/to/new-workspace',
+            ],
+          },
+          mock_mode: true,
+          mock_reasons: ['Mock mode explicitly enabled.'],
+          real_provider_configured: false,
+        }),
+      })
+    );
+
+    renderBanner('/build');
+
+    expect(await screen.findByRole('alert')).toBeInTheDocument();
+    expect(screen.getByText('Workspace needs attention')).toBeInTheDocument();
+    expect(screen.getByText(/No AgentLab workspace found/)).toBeInTheDocument();
+    expect(screen.getByText('/tmp/not-agentlab')).toBeInTheDocument();
+    expect(screen.getByText('agentlab server --workspace /path/to/agentlab-workspace')).toBeInTheDocument();
+    expect(screen.queryByText('Preview mode is on')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /dismiss/i })).not.toBeInTheDocument();
+  });
+
+  it('shows invalid workspace warnings outside optimization routes', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          workspace_valid: false,
+          workspace: {
+            valid: false,
+            current_path: '/tmp/not-agentlab',
+            message: 'No AgentLab workspace found at /tmp/not-agentlab.',
+            recovery_commands: ['agentlab server --workspace /path/to/agentlab-workspace'],
+          },
+        }),
+      })
+    );
+
+    renderBanner('/settings');
+
+    expect(await screen.findByText('Workspace needs attention')).toBeInTheDocument();
+  });
+
+  it('transitions from invalid workspace to hidden when retry succeeds', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workspace_valid: false,
+          workspace: {
+            valid: false,
+            current_path: '/tmp/not-agentlab',
+            message: 'No AgentLab workspace found at /tmp/not-agentlab.',
+            recovery_commands: ['agentlab server --workspace /path/to/agentlab-workspace'],
+          },
+        }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          workspace_valid: true,
+          workspace: {
+            valid: true,
+            current_path: '/tmp/not-agentlab',
+            workspace_root: '/path/to/agentlab-workspace',
+            workspace_label: 'agentlab-workspace',
+            active_config_path: '/path/to/agentlab-workspace/configs/v001.yaml',
+            active_config_version: 1,
+            source: 'env',
+            message: 'AgentLab workspace is ready.',
+            recovery_commands: [],
+          },
+          mock_mode: false,
+          mock_reasons: [],
+          real_provider_configured: true,
+        }),
+      });
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderBanner('/build');
+
+    expect(await screen.findByText('Workspace needs attention')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Retry workspace check' }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+  });
 });

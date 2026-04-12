@@ -59,3 +59,39 @@ def test_api_server_startup_configures_generated_eval_persistence(
         assert hasattr(module.app.state, "generated_eval_store")
         assert module.app.state.generated_eval_store is not None
         assert getattr(module.app.state.auto_eval_generator, "_store", None) is module.app.state.generated_eval_store
+
+
+def test_api_health_exposes_invalid_workspace_state(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup outside a workspace should be visible through health APIs."""
+    pytest.importorskip("fastapi", reason="fastapi not installed")
+    from fastapi.testclient import TestClient
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("AGENTLAB_WORKSPACE", raising=False)
+
+    sys.modules.pop("api.server", None)
+    module = importlib.import_module("api.server")
+
+    with TestClient(module.app) as client:
+        ready = client.get("/api/health/ready")
+        health = client.get("/api/health")
+        system = client.get("/api/health/system")
+
+    assert ready.status_code == 200
+    assert ready.json()["workspace_valid"] is False
+    assert ready.json()["workspace"]["current_path"] == str(tmp_path.resolve())
+
+    assert health.status_code == 200
+    health_payload = health.json()
+    assert health_payload["workspace_valid"] is False
+    assert health_payload["workspace"]["valid"] is False
+    assert "agentlab server --workspace" in "\n".join(health_payload["workspace"]["recovery_commands"])
+
+    assert system.status_code == 200
+    system_payload = system.json()
+    assert system_payload["status"] == "degraded"
+    assert system_payload["workspace_valid"] is False
+    assert system_payload["workspace"]["workspace_root"] is None

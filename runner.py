@@ -7304,8 +7304,23 @@ def memory_add(note: str, section: str) -> None:
 @click.option("--host", default="0.0.0.0", show_default=True, help="Host to bind to.")
 @click.option("--port", default=8000, show_default=True, type=int, help="Port to bind to.")
 @click.option("--reload", is_flag=True, default=False, help="Enable auto-reload for development.")
+@click.option(
+    "--workspace",
+    "workspace_path",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="AgentLab workspace root to serve, decoupled from the current directory.",
+)
 @click.pass_context
-def server(ctx: click.Context, quiet: bool, no_banner: bool, host: str, port: int, reload: bool) -> None:
+def server(
+    ctx: click.Context,
+    quiet: bool,
+    no_banner: bool,
+    host: str,
+    port: int,
+    reload: bool,
+    workspace_path: Path | None,
+) -> None:
     """Start the API server + web console.
 
     Starts the FastAPI backend serving both the REST API and the web console.
@@ -7318,8 +7333,25 @@ def server(ctx: click.Context, quiet: bool, no_banner: bool, host: str, port: in
     import uvicorn
 
     del quiet, no_banner
+    selected_workspace = ctx.obj.get("workspace") if ctx.obj else None
+    if workspace_path is not None:
+        explicit_path = workspace_path.expanduser().resolve()
+        if not explicit_path.exists():
+            raise click.ClickException(f"Workspace path does not exist: {explicit_path}")
+        explicit_workspace = discover_workspace(explicit_path)
+        if explicit_workspace is None:
+            raise click.ClickException(
+                f"No AgentLab workspace found at {explicit_path}. Run: agentlab init --dir {explicit_path}"
+            )
+        selected_workspace = explicit_workspace
+
+    if selected_workspace is not None:
+        os.environ["AGENTLAB_WORKSPACE"] = str(selected_workspace.root)
+
     echo_startup_banner(ctx)
     click.echo(f"Starting AgentLab VNextCC server on {host}:{port}")
+    if selected_workspace is not None:
+        click.echo(f"  Workspace:    {selected_workspace.root}")
     click.echo(f"  API docs:     http://localhost:{port}/docs")
     click.echo(f"  Web console:  http://localhost:{port}")
     click.echo(f"  WebSocket:    ws://localhost:{port}/ws")
