@@ -126,7 +126,7 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 | `mode` | Show or set mock/live/auto execution mode |
 | `model` | Inspect or override proposer/evaluator model preferences |
 | `provider` | Configure, list, and test provider profiles |
-| `review` | Review, apply, reject, or export change cards (proposed config diffs) |
+| `review` | Review, apply, reject, or export proposed config diffs |
 | `template` | List and apply bundled starter templates |
 
 All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md) for the full reference, including the advanced surface.
@@ -172,6 +172,8 @@ For hot-reload local development:
 ```bash
 ./start.sh
 ```
+
+`start.sh` activates the virtualenv, starts the backend, and installs frontend dependencies (`npm install`) automatically if needed.
 
 Then open:
 
