@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from builder.workbench import WorkbenchService, WorkbenchStore
+from shared.build_artifact_store import BuildArtifactStore
 
 router = APIRouter(prefix="/api/workbench", tags=["workbench"])
 
@@ -116,6 +117,24 @@ class WorkbenchCancelRunRequest(BaseModel):
     reason: str = Field(default="Cancelled by operator.")
 
 
+class WorkbenchEvalBridgeRequest(BaseModel):
+    """Request body for materializing a Workbench candidate for Eval."""
+
+    category: str | None = None
+    dataset_path: str | None = None
+    generated_suite_id: str | None = None
+    split: str = Field(default="all", pattern="^(train|test|all)$")
+
+
+def _build_artifact_store(request: Request) -> BuildArtifactStore:
+    """Return the shared build artifact store used by Agent Library saves."""
+    store = getattr(request.app.state, "build_artifact_store", None)
+    if store is None:
+        store = BuildArtifactStore()
+        request.app.state.build_artifact_store = store
+    return store
+
+
 def _service(request: Request) -> WorkbenchService:
     """Return the Workbench service, creating the JSON store on demand."""
     store = getattr(request.app.state, "workbench_store", None)
@@ -198,6 +217,66 @@ async def get_plan_snapshot(project_id: str, request: Request) -> dict[str, Any]
         return _service(request).get_plan_snapshot(project_id=project_id)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Workbench project not found") from exc
+
+
+@router.post("/projects/{project_id}/bridge/eval", status_code=201)
+async def create_eval_bridge(
+    project_id: str,
+    request: Request,
+    body: WorkbenchEvalBridgeRequest,
+) -> dict[str, Any]:
+    """Materialize a Workbench candidate and return typed Eval/Optimize payloads.
+
+    This endpoint saves the generated Workbench config into the real AgentLab
+    workspace, then returns request shapes for `/api/eval/run` and
+    `/api/optimize/run`. It does not start Eval, does not start Optimize, and
+    does not call AutoFix.
+    """
+    service = _service(request)
+    try:
+        generated_config = service.generated_config_for_bridge(project_id=project_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench project not found") from exc
+
+    try:
+        from builder.workspace_config import persist_generated_config
+
+        saved = persist_generated_config(
+            generated_config,
+            artifact_store=_build_artifact_store(request),
+            source="builder_chat",
+            source_prompt=f"Workbench project {project_id}",
+            builder_session_id=project_id,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    try:
+        bridge = service.build_improvement_bridge_payload(
+            project_id=project_id,
+            config_path=saved.config_path,
+            eval_cases_path=saved.eval_cases_path,
+            category=body.category,
+            dataset_path=body.dataset_path,
+            generated_suite_id=body.generated_suite_id,
+            split=body.split,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench run not found") from exc
+
+    eval_request = (bridge.get("evaluation") or {}).get("request")
+    optimize_template = (bridge.get("optimization") or {}).get("request_template")
+    return {
+        "bridge": bridge,
+        "save_result": saved.to_dict(),
+        "eval_request": eval_request,
+        "optimize_request_template": optimize_template,
+        "next": {
+            "start_eval_endpoint": "/api/eval/run",
+            "start_optimize_endpoint": "/api/optimize/run",
+            "optimize_requires_eval_run": True,
+        },
+    }
 
 
 @router.post("/runs/{run_id}/cancel")

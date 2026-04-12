@@ -488,7 +488,7 @@ export function Optimize() {
   const [selectionHydrated, setSelectionHydrated] = useState(false);
 
   const journeyState = (location.state as OptimizeJourneyState | null) ?? null;
-  const selectedEvalRunId = journeyState?.evalRunId ?? null;
+  const selectedEvalRunId = journeyState?.evalRunId ?? searchParams.get('evalRunId');
 
   useEffect(() => {
     if (selectionHydrated) {

@@ -1,5 +1,34 @@
 # Findings & Decisions
 
+## P1 Workbench Eval Optimize Bridge - Codex
+
+### Mission
+
+- Create a typed Workbench -> Eval -> Optimize bridge so the improvement loop is structurally connected and evidence-based.
+- Avoid AutoFix shortcuts. Workbench should hand off typed candidate/evidence data into Eval, then Optimize should consume completed eval run context.
+- Required deliverable includes `working-docs/p1-workbench-eval-optimize-bridge-plan-codex.md`, tests, validation, commit, push, and an `openclaw system event`.
+
+### Required Document Findings
+
+- Workbench harness audit says Workbench and Optimizer are adjacent rather than connected. It recommends a structured improvement handoff containing validation status, failed checks, target, export names, generated config identity, review gate state, and recommended eval suite.
+- Product/codebase audit highlights a trust gap and coherence gap. The relevant P1 principle is "wire before implement": avoid new surfaces without real loop integration.
+- User/operator journey audit frames the main flow as `BUILD -> EVAL -> OPTIMIZE -> REVIEW -> DEPLOY` and identifies current gaps where these pages are adjacent rather than continuous.
+- The right downstream path is Eval Runs -> Optimize using a real `eval_run_id`-scoped optimizer path. AutoFix should remain separate because it is proposal/apply-oriented and does not provide the eval/canary guarantees users might infer.
+
+### Initial Bridge Direction
+
+- Add a typed Workbench improvement handoff and downstream request builders rather than launching Eval or Optimize inline.
+- The handoff should be durable, structured, and explicit about readiness, missing prerequisites, validation evidence, candidate config identity, recommended eval request, and optimizer handoff status.
+
+### Implementation Findings
+
+- Workbench already had a durable handoff refreshed from `_record_run_event()`; nesting `improvement_bridge` there makes it persist on active runs, terminal stream payloads, and `harness_state.latest_handoff`.
+- Eval's typed request boundary is `EvalRunRequest(config_path, category, dataset_path, generated_suite_id, split)`.
+- Optimize's typed request boundary already supports the desired downstream bridge with `OptimizeRequest(config_path, eval_run_id, ...)`.
+- Optimize's `eval_run_id` path depends on an in-memory completed eval task before it enriches from durable result storage, so Workbench should not generate a concrete Optimize request until a real eval run has completed.
+- The materialization endpoint saves the Workbench generated config into the real workspace config/version path, then returns an Eval request and an Optimize template with `eval_run_id=None`.
+- Frontend `Optimize` already handled eval IDs passed through navigation state from Eval Runs, but ignored the `?evalRunId=` query param used by Eval Detail. The bridge slice fixed that so URL-based handoffs preserve eval context.
+
 ## Model Harness Engineering Campaign - Codex
 
 ### Mission

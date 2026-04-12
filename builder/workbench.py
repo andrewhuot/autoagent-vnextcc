@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from builder.types import new_id
+from builder.workbench_bridge import build_workbench_improvement_bridge
 
 
 WorkbenchTarget = str
@@ -1194,6 +1195,10 @@ class WorkbenchService:
             "cancel_reason": run.get("cancel_reason"),
             "recovery": None,
         }
+        handoff["improvement_bridge"] = build_workbench_improvement_bridge(
+            project,
+            run=run,
+        ).model_dump(mode="python")
         if run.get("failure_reason") == "stale_interrupted":
             handoff["recovery"] = {
                 "reason": "stale_interrupted",
@@ -1278,6 +1283,52 @@ class WorkbenchService:
         if plan is not None:
             payload["plan"] = copy.deepcopy(plan)
         return payload
+
+    def generated_config_for_bridge(self, *, project_id: str) -> dict[str, Any]:
+        """Return the Workbench-generated config that downstream Eval can run.
+
+        WHY: the bridge materialization endpoint must save the same generated
+        config preview operators saw in Workbench, not rebuild a parallel config
+        from ad hoc frontend state.
+        """
+        project = self._require_project(project_id)
+        exports = project.get("exports")
+        if not isinstance(exports, dict) or not isinstance(exports.get("generated_config"), dict):
+            project["exports"] = compile_workbench_exports(project["model"])
+            self.store.save_project(project)
+            exports = project["exports"]
+        return copy.deepcopy(exports.get("generated_config") or {})
+
+    def build_improvement_bridge_payload(
+        self,
+        *,
+        project_id: str,
+        config_path: str | None = None,
+        eval_cases_path: str | None = None,
+        eval_run_id: str | None = None,
+        category: str | None = None,
+        dataset_path: str | None = None,
+        generated_suite_id: str | None = None,
+        split: str = "all",
+    ) -> dict[str, Any]:
+        """Build the typed Workbench -> Eval -> Optimize handoff payload."""
+        project = self._require_project(project_id)
+        if self._recover_stale_runs(project):
+            self.store.save_project(project)
+        run = self._active_run(project)
+        if run is None:
+            raise KeyError("run")
+        return build_workbench_improvement_bridge(
+            project,
+            run=run,
+            config_path=config_path,
+            eval_cases_path=eval_cases_path,
+            eval_run_id=eval_run_id,
+            category=category,
+            dataset_path=dataset_path,
+            generated_suite_id=generated_suite_id,
+            split=split,
+        ).model_dump(mode="python")
 
     def _require_project(self, project_id: str) -> dict[str, Any]:
         """Load a project or raise `KeyError` for API 404 mapping."""
@@ -2716,6 +2767,10 @@ def build_presentation_manifest(
         "review_gate": review_gate,
     }
     presentation["handoff"] = build_run_handoff(project, run=run, presentation=presentation)
+    presentation["improvement_bridge"] = build_workbench_improvement_bridge(
+        project,
+        run={**run, "review_gate": review_gate, "presentation": presentation},
+    ).model_dump(mode="python")
     return presentation
 
 

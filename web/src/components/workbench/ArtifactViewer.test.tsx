@@ -196,6 +196,51 @@ describe('ArtifactViewer', () => {
           next_operator_action: 'Review candidate and run evals before promotion.',
           resume_prompt: 'Resume Workbench project wb-filter at Draft v2.',
         },
+        improvement_bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          candidate: {
+            project_id: 'wb-filter',
+            run_id: 'run-1',
+            version: 2,
+            target: 'portable',
+            environment: 'draft',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:abc123',
+            config_path: '/workspace/configs/v003.yaml',
+            eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+            export_targets: ['adk', 'cx'],
+          },
+          evaluation: {
+            status: 'ready',
+            request: {
+              config_path: '/workspace/configs/v003.yaml',
+              split: 'all',
+            },
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: [],
+          },
+          optimization: {
+            status: 'awaiting_eval_run',
+            requires_eval_run: true,
+            request_template: {
+              config_path: '/workspace/configs/v003.yaml',
+              eval_run_id: null,
+              window: 100,
+              force: true,
+              require_human_approval: true,
+              mode: 'standard',
+              objective: 'Improve failures from the Workbench candidate eval run.',
+              guardrails: ['Preserve Workbench validation and target compatibility.'],
+              research_algorithm: '',
+              budget_cycles: 10,
+              budget_dollars: 50,
+            },
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: ['Run Eval first; Optimize requires a completed eval run.'],
+          },
+        },
       },
     });
 
@@ -207,5 +252,9 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('human_review: required')).toBeInTheDocument();
     expect(screen.getByText('Session handoff')).toBeInTheDocument();
     expect(screen.getByText('Resume Workbench project wb-filter at Draft v2.')).toBeInTheDocument();
+    expect(screen.getByText('Eval and optimize bridge')).toBeInTheDocument();
+    expect(screen.getByText('Eval ready')).toBeInTheDocument();
+    expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
+    expect(screen.getByText('Optimize waiting for eval')).toBeInTheDocument();
   });
 });

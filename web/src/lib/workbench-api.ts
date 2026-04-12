@@ -380,6 +380,7 @@ export interface WorkbenchPresentation {
   next_actions: string[];
   review_gate?: WorkbenchReviewGate;
   handoff?: WorkbenchHandoff;
+  improvement_bridge?: WorkbenchImprovementBridge;
 }
 
 export interface WorkbenchReviewGateCheck {
@@ -512,6 +513,72 @@ export interface WorkbenchRunHandoff {
   cancel_reason?: string | null;
   recovery?: Record<string, unknown> | null;
   next_action: string;
+  improvement_bridge?: WorkbenchImprovementBridge;
+}
+
+export interface WorkbenchBridgeEvalRequest {
+  config_path?: string | null;
+  category?: string | null;
+  dataset_path?: string | null;
+  generated_suite_id?: string | null;
+  split: 'train' | 'test' | 'all' | string;
+}
+
+export interface WorkbenchBridgeOptimizeRequest {
+  window: number;
+  force: boolean;
+  require_human_approval: boolean;
+  config_path?: string | null;
+  eval_run_id?: string | null;
+  mode: 'standard' | 'advanced' | 'research' | string;
+  objective: string;
+  guardrails: string[];
+  research_algorithm: string;
+  budget_cycles: number;
+  budget_dollars: number;
+}
+
+export interface WorkbenchBridgeCandidate {
+  project_id: string;
+  run_id: string;
+  turn_id?: string | null;
+  version: number;
+  target: WorkbenchTarget | string;
+  environment: string;
+  agent_name?: string;
+  validation_status: string;
+  review_gate_status: string;
+  active_artifact_id?: string | null;
+  generated_config_hash: string;
+  config_path?: string | null;
+  eval_cases_path?: string | null;
+  export_targets: string[];
+}
+
+export interface WorkbenchBridgeEvaluationStep {
+  status: 'ready' | 'blocked' | 'needs_saved_config' | string;
+  request?: WorkbenchBridgeEvalRequest | null;
+  start_endpoint: string;
+  blocking_reasons: string[];
+}
+
+export interface WorkbenchBridgeOptimizationStep {
+  status: 'ready' | 'blocked' | 'awaiting_eval_run' | string;
+  requires_eval_run: boolean;
+  request_template?: WorkbenchBridgeOptimizeRequest | null;
+  start_endpoint: string;
+  blocking_reasons: string[];
+}
+
+export interface WorkbenchImprovementBridge {
+  kind: 'workbench_eval_optimize' | string;
+  schema_version: number;
+  candidate: WorkbenchBridgeCandidate;
+  evaluation: WorkbenchBridgeEvaluationStep;
+  optimization: WorkbenchBridgeOptimizationStep;
+  review_gate?: WorkbenchReviewGate | Record<string, unknown>;
+  validation?: WorkbenchTestResult | Record<string, unknown>;
+  created_from?: string;
 }
 
 export interface WorkbenchHarnessState {
