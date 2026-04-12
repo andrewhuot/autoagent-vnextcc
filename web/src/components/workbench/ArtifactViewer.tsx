@@ -569,6 +569,41 @@ function ActivityWorkspace() {
                 <li key={action}>{action}</li>
               ))}
             </ul>
+            {presentation.review_gate && (
+              <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Review gate</h3>
+                  <span className="rounded-md bg-[color:var(--wb-bg-active)] px-2 py-0.5 text-[11px] text-[color:var(--wb-text-soft)]">
+                    {presentation.review_gate.status}
+                  </span>
+                </div>
+                <div className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-text-soft)]">
+                  {presentation.review_gate.checks.map((check) => (
+                    <p key={check.name}>
+                      {check.name}: {check.status}
+                    </p>
+                  ))}
+                </div>
+                {presentation.review_gate.blocking_reasons.length > 0 && (
+                  <ul className="mt-2 space-y-1 text-[12px] text-[color:var(--wb-error)]">
+                    {presentation.review_gate.blocking_reasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+            {presentation.handoff && (
+              <div className="mt-3 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] p-3">
+                <h3 className="text-[12px] font-semibold text-[color:var(--wb-text)]">Session handoff</h3>
+                <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
+                  {presentation.handoff.resume_prompt}
+                </p>
+                <p className="mt-2 font-mono text-[11px] text-[color:var(--wb-text-dim)]">
+                  run {presentation.handoff.run_id} | event {presentation.handoff.last_event_sequence}
+                </p>
+              </div>
+            )}
           </section>
         )}
         {activity.map((entry) => (

@@ -540,6 +540,20 @@ describe('workbench-store — harness features', () => {
     expect(userMessages.length).toBeGreaterThanOrEqual(1);
   });
 
+  it('startIteration preserves visible artifacts while snapshotting them for diff', () => {
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({
+      event: 'artifact.updated',
+      data: { task_id: 'task-role', artifact: makeArtifact() },
+    });
+
+    useWorkbenchStore.getState().startIteration('Add a stricter guardrail');
+
+    const state = useWorkbenchStore.getState();
+    expect(state.artifacts.map((artifact) => artifact.id)).toEqual(['art-1']);
+    expect(state.previousVersionArtifacts.map((artifact) => artifact.id)).toEqual(['art-1']);
+  });
+
   it('selectVersionForDiff sets the diff target version', () => {
     useWorkbenchStore.getState().selectVersionForDiff(3);
     expect(useWorkbenchStore.getState().diffTargetVersion).toBe(3);

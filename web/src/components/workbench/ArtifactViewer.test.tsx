@@ -129,4 +129,55 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('old line')).toBeInTheDocument();
     expect(screen.getByText('new line')).toBeInTheDocument();
   });
+
+  it('renders review gate and handoff details in the activity tab', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      activeWorkspaceTab: 'activity',
+      presentation: {
+        run_id: 'run-1',
+        version: 2,
+        summary: 'Built 3 canonical changes.',
+        artifact_ids: ['art-agent'],
+        active_artifact_id: 'art-agent',
+        generated_outputs: ['agent.py'],
+        validation_status: 'passed',
+        next_actions: ['Review candidate before promotion.'],
+        review_gate: {
+          status: 'review_required',
+          promotion_status: 'draft',
+          requires_human_review: true,
+          blocking_reasons: [],
+          checks: [
+            {
+              name: 'human_review',
+              status: 'required',
+              required: true,
+              detail: 'Human review is required before promotion.',
+            },
+          ],
+        },
+        handoff: {
+          project_id: 'wb-filter',
+          run_id: 'run-1',
+          turn_id: 'turn-1',
+          version: 2,
+          review_gate_status: 'review_required',
+          active_artifact_id: 'art-agent',
+          last_event_sequence: 12,
+          next_operator_action: 'Review candidate and run evals before promotion.',
+          resume_prompt: 'Resume Workbench project wb-filter at Draft v2.',
+        },
+      },
+    });
+
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: 'Activity' }));
+
+    expect(screen.getByText('Review gate')).toBeInTheDocument();
+    expect(screen.getByText('review_required')).toBeInTheDocument();
+    expect(screen.getByText('human_review: required')).toBeInTheDocument();
+    expect(screen.getByText('Session handoff')).toBeInTheDocument();
+    expect(screen.getByText('Resume Workbench project wb-filter at Draft v2.')).toBeInTheDocument();
+  });
 });

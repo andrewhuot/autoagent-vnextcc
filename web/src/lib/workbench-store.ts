@@ -753,6 +753,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         environment: string;
         version: number;
         model: WorkbenchCanonicalModel;
+        artifacts: WorkbenchArtifact[];
         exports: WorkbenchExports;
         compatibility: WorkbenchCompatibilityDiagnostic[];
         last_test: WorkbenchTestResult | null;
@@ -770,6 +771,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         target: project?.target ?? state.target,
         environment: project?.environment ?? state.environment,
         version: (data.version as number) ?? project?.version ?? state.version,
+        artifacts: project?.artifacts ?? state.artifacts,
         canonicalModel: project?.model ?? state.canonicalModel,
         exports: (data.exports as WorkbenchExports | undefined) ?? project?.exports ?? state.exports,
         compatibility:
@@ -953,7 +955,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       return {
         buildStatus: 'starting' as BuildStatus,
         plan: null,
-        artifacts: [],
+        artifacts: state.artifacts,
         previousVersionArtifacts: state.artifacts,
         messages: [
           ...state.messages,
@@ -966,7 +968,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
           },
         ],
         lastBrief: message,
-        activeArtifactId: null,
+        activeArtifactId: state.activeArtifactId,
         error: null,
         iterationCount: nextIterationNumber,
         iterationHistory: [...state.iterationHistory, entry],
@@ -1036,6 +1038,16 @@ function mergeRun(current: WorkbenchRun | null, data: Record<string, unknown>): 
       (data.cancel_reason as string | null | undefined) ??
       incomingRun?.cancel_reason ??
       current?.cancel_reason ??
+      null,
+    review_gate:
+      (data.review_gate as WorkbenchRun['review_gate'] | undefined) ??
+      incomingRun?.review_gate ??
+      current?.review_gate ??
+      null,
+    handoff:
+      (data.handoff as WorkbenchRun['handoff'] | undefined) ??
+      incomingRun?.handoff ??
+      current?.handoff ??
       null,
     validation:
       (data.validation as WorkbenchTestResult | undefined) ??
