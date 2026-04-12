@@ -8,6 +8,9 @@ const PREVIEW_MODE_DESCRIPTION = 'AgentLab is using simulated responses until li
 const FRONTEND_ONLY_TITLE = 'Frontend-only mode';
 const FRONTEND_ONLY_DESCRIPTION =
   'AgentLab cannot reach the backend right now, so live status and saved actions may be unavailable.';
+const WORKSPACE_INVALID_TITLE = 'Workspace needs attention';
+const WORKSPACE_INVALID_DESCRIPTION =
+  'Start the server from a valid AgentLab workspace, or pass an explicit workspace path.';
 const OPTIMIZATION_ROUTE_PREFIXES = [
   '/dashboard',
   '/build',
@@ -24,6 +27,8 @@ interface MockModeHealthPayload {
   mock_mode?: boolean;
   mock_reasons?: unknown;
   real_provider_configured?: boolean;
+  workspace_valid?: boolean;
+  workspace?: unknown;
 }
 
 type ShellBannerState =
@@ -37,7 +42,20 @@ type ShellBannerState =
     }
   | {
       kind: 'frontend-only';
+    }
+  | {
+      kind: 'workspace-invalid';
+      currentPath: string | null;
+      message: string;
+      recoveryCommands: string[];
     };
+
+interface WorkspaceHealthPayload {
+  valid?: boolean;
+  current_path?: string;
+  message?: string;
+  recovery_commands?: unknown;
+}
 
 function isOptimizationRoute(pathname: string): boolean {
   return OPTIMIZATION_ROUTE_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
@@ -49,6 +67,34 @@ function isDismissed(): boolean {
   } catch {
     return false;
   }
+}
+
+function parseWorkspaceState(data: MockModeHealthPayload): {
+  invalid: boolean;
+  currentPath: string | null;
+  message: string;
+  recoveryCommands: string[];
+} {
+  const workspace = data.workspace && typeof data.workspace === 'object'
+    ? data.workspace as WorkspaceHealthPayload
+    : {};
+  const invalid = data.workspace_valid === false || workspace.valid === false;
+  const recoveryCommands = Array.isArray(workspace.recovery_commands)
+    ? workspace.recovery_commands.filter(
+        (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
+      )
+    : [];
+
+  return {
+    invalid,
+    currentPath: typeof workspace.current_path === 'string' && workspace.current_path.trim()
+      ? workspace.current_path
+      : null,
+    message: typeof workspace.message === 'string' && workspace.message.trim()
+      ? workspace.message
+      : WORKSPACE_INVALID_DESCRIPTION,
+    recoveryCommands,
+  };
 }
 
 export function MockModeBanner() {
@@ -78,6 +124,17 @@ export function MockModeBanner() {
         return res.json();
       })
       .then((data: MockModeHealthPayload) => {
+        const workspaceState = parseWorkspaceState(data);
+        if (workspaceState.invalid) {
+          setBannerState({
+            kind: 'workspace-invalid',
+            currentPath: workspaceState.currentPath,
+            message: workspaceState.message,
+            recoveryCommands: workspaceState.recoveryCommands,
+          });
+          return;
+        }
+
         const reasons = Array.isArray(data?.mock_reasons)
           ? data.mock_reasons.filter(
               (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0
@@ -102,10 +159,6 @@ export function MockModeBanner() {
   }, []);
 
   useEffect(() => {
-    if (!shouldRenderOnRoute) {
-      return;
-    }
-
     let cancelled = false;
     const controller = new AbortController();
 
@@ -117,7 +170,7 @@ export function MockModeBanner() {
       cancelled = true;
       controller.abort();
     };
-  }, [refreshToken, shouldRenderOnRoute, fetchHealth]);
+  }, [refreshToken, fetchHealth]);
 
   const handleDismiss = useCallback(() => {
     setDismissed(true);
@@ -136,41 +189,89 @@ export function MockModeBanner() {
 
   const shouldHidePreviewNotice = bannerState.kind === 'preview' && dismissed;
 
-  if (!shouldRenderOnRoute || bannerState.kind === 'hidden' || shouldHidePreviewNotice) {
+  if (
+    bannerState.kind !== 'workspace-invalid'
+    && (!shouldRenderOnRoute || bannerState.kind === 'hidden' || shouldHidePreviewNotice)
+  ) {
     return null;
   }
 
   const isFrontendOnly = bannerState.kind === 'frontend-only';
+  const isWorkspaceInvalid = bannerState.kind === 'workspace-invalid';
   const detail = bannerState.kind === 'preview' ? bannerState.detail : null;
   const fallback = bannerState.kind === 'preview'
     ? normalizeProviderFallback(true, bannerState.detail)
     : null;
   const isRateLimit = fallback?.category === 'rate-limit';
-  const title = isFrontendOnly
+  const title = isWorkspaceInvalid
+    ? WORKSPACE_INVALID_TITLE
+    : isFrontendOnly
     ? FRONTEND_ONLY_TITLE
     : isRateLimit
       ? 'Provider rate limited'
       : PREVIEW_MODE_TITLE;
-  const description = isFrontendOnly
+  const description = isWorkspaceInvalid
+    ? WORKSPACE_INVALID_DESCRIPTION
+    : isFrontendOnly
     ? FRONTEND_ONLY_DESCRIPTION
     : isRateLimit
       ? 'Your provider (e.g. Gemini) is temporarily rate-limiting requests. Drafts use fallback data until the limit clears. Retry in a minute or two.'
       : PREVIEW_MODE_DESCRIPTION;
+  const colorClass = isWorkspaceInvalid
+    ? 'border-red-300 bg-red-50 text-red-950'
+    : isRateLimit
+      ? 'border-orange-300 bg-orange-50 text-orange-950'
+      : 'border-amber-300 bg-amber-50 text-amber-950';
+  const iconClass = isWorkspaceInvalid
+    ? 'text-red-700'
+    : isRateLimit
+      ? 'text-orange-700'
+      : 'text-amber-700';
+  const titleClass = isWorkspaceInvalid
+    ? 'text-red-900'
+    : isRateLimit
+      ? 'text-orange-900'
+      : 'text-amber-900';
+  const bodyClass = isWorkspaceInvalid
+    ? 'text-red-800'
+    : isRateLimit
+      ? 'text-orange-800'
+      : 'text-amber-800';
+  const buttonClass = isWorkspaceInvalid
+    ? 'border-red-300 text-red-900 hover:bg-red-100'
+    : isRateLimit
+      ? 'border-orange-300 text-orange-900 hover:bg-orange-100'
+      : 'border-amber-300 text-amber-900 hover:bg-amber-100';
 
   return (
     <div
       role="alert"
-      className={`sticky top-0 z-50 flex items-center justify-between gap-3 border-b px-4 py-3 text-sm shadow-sm ${
-        isRateLimit
-          ? 'border-orange-300 bg-orange-50 text-orange-950'
-          : 'border-amber-300 bg-amber-50 text-amber-950'
-      }`}
+      className={`sticky top-0 z-50 flex items-center justify-between gap-3 border-b px-4 py-3 text-sm shadow-sm ${colorClass}`}
     >
       <div className="flex min-w-0 items-start gap-2.5">
-        <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${isRateLimit ? 'text-orange-700' : 'text-amber-700'}`} />
+        <AlertTriangle className={`mt-0.5 h-4 w-4 shrink-0 ${iconClass}`} />
         <div className="min-w-0">
-          <p className={`font-semibold ${isRateLimit ? 'text-orange-900' : 'text-amber-900'}`}>{title}</p>
-          <p className={`mt-0.5 text-xs ${isRateLimit ? 'text-orange-800' : 'text-amber-800'}`}>{description}</p>
+          <p className={`font-semibold ${titleClass}`}>{title}</p>
+          <p className={`mt-0.5 text-xs ${bodyClass}`}>{description}</p>
+          {isWorkspaceInvalid ? (
+            <div className={`mt-1 space-y-1 text-xs ${bodyClass}`}>
+              <p>{bannerState.message}</p>
+              {bannerState.currentPath ? (
+                <p>
+                  Started from <code className="rounded border border-red-200 bg-white px-1 py-0.5 font-mono">{bannerState.currentPath}</code>
+                </p>
+              ) : null}
+              {bannerState.recoveryCommands.length > 0 ? (
+                <ul className="space-y-1">
+                  {bannerState.recoveryCommands.map((command) => (
+                    <li key={command}>
+                      <code className="rounded border border-red-200 bg-white px-1 py-0.5 font-mono">{command}</code>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
           {detail && !isRateLimit ? (
             <p className="mt-1 text-xs text-amber-800">{detail}</p>
           ) : null}
@@ -178,19 +279,15 @@ export function MockModeBanner() {
       </div>
 
       <div className="flex shrink-0 items-center gap-2">
-        {isFrontendOnly || isRateLimit ? (
+        {isFrontendOnly || isRateLimit || isWorkspaceInvalid ? (
           <button
             type="button"
             onClick={handleRetry}
             disabled={retrying}
-            className={`inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
-              isRateLimit
-                ? 'border-orange-300 text-orange-900 hover:bg-orange-100'
-                : 'border-amber-300 text-amber-900 hover:bg-amber-100'
-            }`}
+            className={`inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${buttonClass}`}
           >
             <RotateCcw className={`h-3.5 w-3.5 ${retrying ? 'animate-spin' : ''}`} />
-            {retrying ? 'Checking…' : isRateLimit ? 'Retry now' : 'Retry connection'}
+            {retrying ? 'Checking…' : isWorkspaceInvalid ? 'Retry workspace check' : isRateLimit ? 'Retry now' : 'Retry connection'}
           </button>
         ) : (
           <Link
@@ -200,6 +297,14 @@ export function MockModeBanner() {
             Open Setup
           </Link>
         )}
+        {isWorkspaceInvalid ? (
+          <Link
+            to="/setup"
+            className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-900 transition hover:bg-red-100"
+          >
+            Open Setup
+          </Link>
+        ) : null}
         {bannerState.kind === 'preview' && bannerState.realProviderConfigured ? (
           <button
             type="button"

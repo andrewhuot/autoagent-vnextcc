@@ -765,6 +765,23 @@ class HealthMetricsData(BaseModel):
     total_conversations: int = Field(0, description="Number of conversations in window")
 
 
+class WorkspaceStateResponse(BaseModel):
+    """Workspace validity resolved at API startup."""
+
+    valid: bool = Field(False, description="Whether the server has a valid AgentLab workspace")
+    current_path: str = Field("", description="Process path used for workspace discovery")
+    workspace_root: Optional[str] = Field(None, description="Resolved workspace root when available")
+    workspace_label: Optional[str] = Field(None, description="Human-readable workspace label")
+    active_config_path: Optional[str] = Field(None, description="Resolved active config path")
+    active_config_version: Optional[int] = Field(None, description="Resolved active config version")
+    source: str = Field("cwd", description="Workspace source: cwd or env")
+    message: str = Field("", description="Human-readable workspace state")
+    recovery_commands: list[str] = Field(
+        default_factory=list,
+        description="Suggested commands for recovering from invalid workspace state",
+    )
+
+
 class HealthResponse(BaseModel):
     """Full health report with metrics, anomalies, and failure buckets."""
     metrics: HealthMetricsData
@@ -777,6 +794,11 @@ class HealthResponse(BaseModel):
     real_provider_configured: bool = Field(
         False,
         description="Whether at least one usable non-mock provider credential is configured",
+    )
+    workspace_valid: bool = Field(False, description="Whether the server has a valid AgentLab workspace")
+    workspace: WorkspaceStateResponse = Field(
+        default_factory=WorkspaceStateResponse,
+        description="Detailed workspace startup state and recovery guidance",
     )
 
 
@@ -913,6 +935,11 @@ class SystemHealthResponse(BaseModel):
     dead_letter_count: int = Field(0, description="Dead-letter queue size")
     tasks_running: int = Field(0, description="Count of running background tasks")
     uptime_seconds: float = Field(0.0, description="Process uptime in seconds")
+    workspace_valid: bool = Field(False, description="Whether the server has a valid AgentLab workspace")
+    workspace: WorkspaceStateResponse = Field(
+        default_factory=WorkspaceStateResponse,
+        description="Detailed workspace startup state and recovery guidance",
+    )
 
 
 # ---------------------------------------------------------------------------

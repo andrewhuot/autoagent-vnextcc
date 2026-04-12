@@ -7,7 +7,7 @@ import time
 
 from fastapi import APIRouter, Query, Request
 
-from api.models import HealthMetricsData, HealthResponse, SystemHealthResponse
+from api.models import HealthMetricsData, HealthResponse, SystemHealthResponse, WorkspaceStateResponse
 from optimizer.providers import has_real_provider_credentials
 
 router = APIRouter(prefix="/api/health", tags=["health"])
@@ -36,10 +36,27 @@ def _collect_mock_reasons(request: Request) -> list[str]:
     return deduped
 
 
+def _workspace_state_response(request: Request) -> WorkspaceStateResponse:
+    """Return startup workspace state without querying workspace files per request."""
+    state = getattr(request.app.state, "workspace_state", None)
+    if isinstance(state, WorkspaceStateResponse):
+        return state
+    if state is not None and hasattr(state, "to_dict"):
+        return WorkspaceStateResponse(**state.to_dict())
+    if isinstance(state, dict):
+        return WorkspaceStateResponse(**state)
+    return WorkspaceStateResponse()
+
+
 @router.get("/ready")
-async def readiness_check() -> dict:
+async def readiness_check(request: Request) -> dict:
     """Lightweight readiness probe — no database queries."""
-    return {"status": "ready"}
+    workspace = _workspace_state_response(request)
+    return {
+        "status": "ready",
+        "workspace_valid": workspace.valid,
+        "workspace": workspace.model_dump(),
+    }
 
 
 @router.get("", response_model=HealthResponse)
@@ -65,6 +82,7 @@ async def get_health(
         runtime_config is not None
         and has_real_provider_credentials(runtime_config.optimizer)
     )
+    workspace = _workspace_state_response(request)
 
     return HealthResponse(
         metrics=metrics,
@@ -75,6 +93,8 @@ async def get_health(
         mock_mode=bool(mock_reasons),
         mock_reasons=mock_reasons,
         real_provider_configured=real_provider_configured,
+        workspace_valid=workspace.valid,
+        workspace=workspace,
     )
 
 
@@ -96,7 +116,8 @@ async def get_system_health(request: Request) -> SystemHealthResponse:
     loop_stalled = request.app.state.loop_watchdog.is_stalled() if last_heartbeat is not None else False
     dead_letter_count = request.app.state.dead_letter_queue.count()
     uptime_seconds = max(0.0, time.time() - float(getattr(request.app.state, "started_at", time.time())))
-    status = "degraded" if loop_stalled else "ok"
+    workspace = _workspace_state_response(request)
+    status = "degraded" if loop_stalled or not workspace.valid else "ok"
 
     return SystemHealthResponse(
         status=status,
@@ -106,6 +127,8 @@ async def get_system_health(request: Request) -> SystemHealthResponse:
         dead_letter_count=dead_letter_count,
         tasks_running=len(running_tasks),
         uptime_seconds=uptime_seconds,
+        workspace_valid=workspace.valid,
+        workspace=workspace,
     )
 
 

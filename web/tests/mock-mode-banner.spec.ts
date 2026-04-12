@@ -167,6 +167,54 @@ async function stubMockModeApis(
 }
 
 test.describe('Mock Mode Banner', () => {
+  test('shows workspace recovery instructions when server starts outside a workspace', async ({ page }) => {
+    await page.route('**/api/**', async (route) => {
+      const url = new URL(route.request().url());
+      const path = url.pathname;
+
+      if (path === '/api/health') {
+        await route.fulfill({
+          json: {
+            workspace_valid: false,
+            workspace: {
+              valid: false,
+              current_path: '/tmp/not-agentlab',
+              workspace_root: null,
+              workspace_label: null,
+              active_config_path: null,
+              active_config_version: null,
+              source: 'cwd',
+              message: 'No AgentLab workspace found at /tmp/not-agentlab.',
+              recovery_commands: [
+                'cd /path/to/agentlab-workspace && agentlab server',
+                'agentlab server --workspace /path/to/agentlab-workspace',
+              ],
+            },
+            mock_mode: true,
+            mock_reasons: ['Eval harness is using mock_agent_response.'],
+            real_provider_configured: false,
+          },
+        });
+        return;
+      }
+
+      if (path === '/api/demo/status') {
+        await route.fulfill({ json: { has_demo_data: false } });
+        return;
+      }
+
+      await route.fulfill({ json: {} });
+    });
+
+    await page.goto(`${BASE_URL}/build`, { waitUntil: 'networkidle' });
+
+    await expect(page.getByText('Workspace needs attention')).toBeVisible();
+    await expect(page.getByText('No AgentLab workspace found at /tmp/not-agentlab.')).toBeVisible();
+    await expect(page.locator('code', { hasText: '/tmp/not-agentlab' })).toBeVisible();
+    await expect(page.getByText('agentlab server --workspace /path/to/agentlab-workspace')).toBeVisible();
+    await expect(page.getByText(BANNER_TEXT)).toHaveCount(0);
+  });
+
   test('shows the warning on all optimization-adjacent pages when mock mode is active', async ({ page }) => {
     await stubMockModeApis(page, { realProviderConfigured: false });
 
