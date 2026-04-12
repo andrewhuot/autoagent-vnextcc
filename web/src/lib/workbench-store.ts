@@ -10,8 +10,11 @@
 import { create } from 'zustand';
 import type {
   BuildStreamEvent,
+  HarnessMetrics,
+  IterationEntry,
   PlanTask,
   PlanTaskStatus,
+  ReflectionEntry,
   WorkbenchArtifact,
   WorkbenchCanonicalModel,
   WorkbenchTarget,
@@ -31,7 +34,7 @@ export interface AssistantMessage {
 }
 
 /** Active artifact view mode on the right pane. */
-export type ArtifactView = 'preview' | 'source';
+export type ArtifactView = 'preview' | 'source' | 'diff';
 
 /** Category filter for the artifact tab bar in the right pane. */
 export type ArtifactCategoryFilter =
@@ -100,6 +103,16 @@ interface WorkbenchState {
 
   // --- abort controller for the in-flight stream
   abortController: AbortController | null;
+
+  // --- harness metrics and iteration tracking
+  harnessMetrics: HarnessMetrics | null;
+  iterationCount: number;
+  iterationHistory: IterationEntry[];
+  reflections: ReflectionEntry[];
+  /** Snapshot of artifacts from the previous iteration, used for diff comparison. */
+  previousVersionArtifacts: WorkbenchArtifact[];
+  /** Which version number is currently selected for diff (null = none). */
+  diffTargetVersion: number | null;
 }
 
 interface WorkbenchActions {
@@ -127,6 +140,12 @@ interface WorkbenchActions {
   setTheme: (theme: WorkbenchTheme) => void;
   toggleTheme: () => void;
   reset: () => void;
+
+  // --- harness actions
+  /** Begin a follow-up iteration on the completed build. */
+  startIteration: (message: string) => void;
+  /** Pin a specific version's artifact snapshot for side-by-side diff. */
+  selectVersionForDiff: (version: number | null) => void;
 }
 
 const INITIAL_STATE: WorkbenchState = {
@@ -148,6 +167,12 @@ const INITIAL_STATE: WorkbenchState = {
   userSelectedArtifactAt: 0,
   canonicalModel: null,
   abortController: null,
+  harnessMetrics: null,
+  iterationCount: 0,
+  iterationHistory: [],
+  reflections: [],
+  previousVersionArtifacts: [],
+  diffTargetVersion: null,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -327,6 +352,80 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
       }));
       return;
     }
+
+    if (name === 'harness.metrics') {
+      const incoming = data as {
+        steps_completed?: number;
+        total_steps?: number;
+        tokens_used?: number;
+        cost_usd?: number;
+        elapsed_ms?: number;
+        current_phase?: HarnessMetrics['currentPhase'];
+      };
+      set((state) => ({
+        harnessMetrics: {
+          stepsCompleted: incoming.steps_completed ?? state.harnessMetrics?.stepsCompleted ?? 0,
+          totalSteps: incoming.total_steps ?? state.harnessMetrics?.totalSteps ?? 0,
+          tokensUsed: incoming.tokens_used ?? state.harnessMetrics?.tokensUsed ?? 0,
+          costUsd: incoming.cost_usd ?? state.harnessMetrics?.costUsd ?? 0,
+          elapsedMs: incoming.elapsed_ms ?? state.harnessMetrics?.elapsedMs ?? 0,
+          currentPhase: incoming.current_phase ?? state.harnessMetrics?.currentPhase ?? 'idle',
+        },
+      }));
+      return;
+    }
+
+    if (name === 'reflection.completed') {
+      const incoming = data as {
+        id?: string;
+        task_id?: string;
+        quality_score?: number;
+        suggestions?: string[];
+        timestamp?: number;
+      };
+      const entry: ReflectionEntry = {
+        id: incoming.id ?? `reflect-${Date.now()}`,
+        taskId: incoming.task_id ?? '',
+        qualityScore: incoming.quality_score ?? 0,
+        suggestions: incoming.suggestions ?? [],
+        timestamp: incoming.timestamp ?? Date.now(),
+      };
+      set((state) => ({ reflections: [...state.reflections, entry] }));
+      return;
+    }
+
+    if (name === 'iteration.started') {
+      const incoming = data as {
+        id?: string;
+        message?: string;
+        artifact_count?: number;
+        timestamp?: number;
+      };
+      set((state) => {
+        // Guard against double-counting: startIteration() (optimistic local
+        // action) already incremented iterationCount and appended a history
+        // entry with an id starting with "iter-local-".  If the server echo
+        // arrives after, skip the duplicate.
+        const lastEntry = state.iterationHistory[state.iterationHistory.length - 1];
+        if (lastEntry && lastEntry.id.startsWith('iter-local-')) {
+          return {};
+        }
+        const nextIterationNumber = state.iterationCount + 1;
+        const entry: IterationEntry = {
+          id: incoming.id ?? `iter-${Date.now()}`,
+          iterationNumber: nextIterationNumber,
+          message: incoming.message ?? '',
+          timestamp: incoming.timestamp ?? Date.now(),
+          artifactCount: incoming.artifact_count ?? state.artifacts.length,
+        };
+        return {
+          iterationCount: nextIterationNumber,
+          iterationHistory: [...state.iterationHistory, entry],
+          previousVersionArtifacts: state.artifacts,
+        };
+      });
+      return;
+    }
   },
 
   setActiveArtifact: (id) =>
@@ -360,6 +459,43 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     set((state) => ({
       ...INITIAL_STATE,
       theme: state.theme,
+    })),
+
+  startIteration: (message) =>
+    set((state) => {
+      const nextIterationNumber = state.iterationCount + 1;
+      const entry: IterationEntry = {
+        id: `iter-local-${Date.now()}`,
+        iterationNumber: nextIterationNumber,
+        message,
+        timestamp: Date.now(),
+        artifactCount: state.artifacts.length,
+      };
+      return {
+        buildStatus: 'starting',
+        plan: null,
+        artifacts: [],
+        previousVersionArtifacts: state.artifacts,
+        messages: [
+          ...state.messages,
+          {
+            id: `msg-user-${Date.now()}`,
+            taskId: null,
+            text: message,
+            createdAt: Date.now(),
+          },
+        ],
+        lastBrief: message,
+        activeArtifactId: null,
+        error: null,
+        iterationCount: nextIterationNumber,
+        iterationHistory: [...state.iterationHistory, entry],
+      };
+    }),
+
+  selectVersionForDiff: (version) =>
+    set(() => ({
+      diffTargetVersion: version,
     })),
 }));
 

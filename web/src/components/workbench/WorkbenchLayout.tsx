@@ -3,11 +3,13 @@
  *
  *   ┌──────────────────────────────────────────────────┐
  *   │  ◂  Name   [Create agent]     Share  ...         │  ← top bar
+ *   │  [HarnessMetricsBar — compact phase/progress row] │
  *   ├────────────────────────┬─────────────────────────┤
  *   │  conversation feed     │  artifact viewer        │
  *   │                        │                         │
  *   ├────────────────────────┤                         │
  *   │  chat input            │                         │
+ *   │  iteration controls    │                         │
  *   └────────────────────────┴─────────────────────────┘
  */
 
@@ -17,15 +19,23 @@ import { ArrowLeft, Moon, Sparkles, Sun } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import { useWorkbenchStore } from '../../lib/workbench-store';
 import { summarizePlan } from '../../lib/workbench-plan';
+import { HarnessMetricsBar } from './HarnessMetricsBar';
 
 interface WorkbenchLayoutProps {
   left: ReactNode;
   right: ReactNode;
   footer?: ReactNode;
+  iterationControls?: ReactNode;
   onBack?: () => void;
 }
 
-export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayoutProps) {
+export function WorkbenchLayout({
+  left,
+  right,
+  footer,
+  iterationControls,
+  onBack,
+}: WorkbenchLayoutProps) {
   const projectName = useWorkbenchStore((s) => s.projectName);
   const target = useWorkbenchStore((s) => s.target);
   const version = useWorkbenchStore((s) => s.version);
@@ -46,56 +56,77 @@ export function WorkbenchLayout({ left, right, footer, onBack }: WorkbenchLayout
       )}
     >
       {/* Top bar */}
-      <header className="flex items-center justify-between gap-3 border-b border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] px-4 py-2.5">
-        <div className="flex min-w-0 items-center gap-2">
-          {onBack && (
+      <header className="border-b border-[color:var(--wb-border)] bg-[color:var(--wb-bg)]">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-2">
+            {onBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="flex h-7 w-7 items-center justify-center rounded-md text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
+                aria-label="Back"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </button>
+            )}
+            <span className="flex h-6 w-6 items-center justify-center rounded bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]">
+              <Sparkles className="h-3.5 w-3.5" />
+            </span>
+            <h1 className="truncate text-[13px] font-semibold text-[color:var(--wb-text)]">
+              {projectName}
+            </h1>
+            <span className="rounded-full border border-[color:var(--wb-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+              {target} · v{version}
+            </span>
+            <StatusPill status={buildStatus} />
+            {progress.leafCount > 0 && (
+              <span
+                className="text-[11px] text-[color:var(--wb-text-dim)]"
+                aria-live="polite"
+              >
+                {progress.done}/{progress.leafCount} steps
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={onBack}
-              className="flex h-7 w-7 items-center justify-center rounded-md text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
-              aria-label="Back"
+              onClick={toggleTheme}
+              className="flex h-7 w-7 items-center justify-center rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
+              aria-label={
+                theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
+              }
+              title={
+                theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'
+              }
             >
-              <ArrowLeft className="h-4 w-4" />
+              {theme === 'dark' ? (
+                <Sun className="h-3.5 w-3.5" />
+              ) : (
+                <Moon className="h-3.5 w-3.5" />
+              )}
             </button>
-          )}
-          <span className="flex h-6 w-6 items-center justify-center rounded bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]">
-            <Sparkles className="h-3.5 w-3.5" />
-          </span>
-          <h1 className="truncate text-[13px] font-semibold text-[color:var(--wb-text)]">{projectName}</h1>
-          <span className="rounded-full border border-[color:var(--wb-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[color:var(--wb-text-dim)]">
-            {target} · v{version}
-          </span>
-          <StatusPill status={buildStatus} />
-          {progress.leafCount > 0 && (
-            <span className="text-[11px] text-[color:var(--wb-text-dim)]" aria-live="polite">
-              {progress.done}/{progress.leafCount} steps
-            </span>
-          )}
+            <button
+              type="button"
+              className="rounded-md bg-[color:var(--wb-accent)] px-3 py-1 text-[12px] font-medium text-[color:var(--wb-accent-fg)] hover:opacity-90"
+            >
+              Create agent
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={toggleTheme}
-            className="flex h-7 w-7 items-center justify-center rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] text-[color:var(--wb-text-dim)] hover:bg-[color:var(--wb-bg-hover)] hover:text-[color:var(--wb-text)]"
-            aria-label={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            title={theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-          >
-            {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </button>
-          <button
-            type="button"
-            className="rounded-md bg-[color:var(--wb-accent)] px-3 py-1 text-[12px] font-medium text-[color:var(--wb-accent-fg)] hover:opacity-90"
-          >
-            Create agent
-          </button>
+
+        {/* Harness metrics — renders only when a build is active or metrics exist */}
+        <div className="px-4 pb-2">
+          <HarnessMetricsBar />
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col lg:grid lg:grid-cols-[440px_minmax(0,1fr)]">
-        {/* Left pane: conversation + chat input + plan tree */}
+        {/* Left pane: conversation + chat input + iteration controls */}
         <div className="flex min-h-0 flex-col border-b border-[color:var(--wb-border)] lg:border-b-0 lg:border-r">
           <div className="flex min-h-0 flex-1 flex-col">{left}</div>
           {footer}
+          {iterationControls}
         </div>
         {/* Right pane: artifact viewer */}
         <div className="min-h-0 overflow-hidden">{right}</div>

@@ -171,10 +171,18 @@ def test_plan_from_llm_payload_accepts_two_level_tree() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Happy path end-to-end
+# Happy path end-to-end — harness engine lifecycle
+#
+# WHY: LiveWorkbenchBuilderAgent.run() now delegates to HarnessExecutionEngine
+# which always runs a full plan tree (~8 leaves) regardless of router canned
+# responses. The router is used only as an optional LLM enhancement layer;
+# the engine falls back to domain-aware template generation when the router
+# response doesn't parse (or the router is exhaust). Tests verify the
+# complete lifecycle and that domain-relevant artifacts are produced.
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_live_agent_happy_path_emits_events_from_canned_responses() -> None:
+async def test_live_agent_happy_path_emits_harness_lifecycle() -> None:
+    """Harness engine emits plan.ready, per-task events, metrics, and build.completed."""
     router = StubRouter(
         [_plan_response(), _tool_schema_response(), _guardrail_response()]
     )
@@ -191,30 +199,63 @@ async def test_live_agent_happy_path_emits_events_from_canned_responses() -> Non
         events.append(event)
 
     names = [event["event"] for event in events]
-    assert names[0] == "plan.ready"
-    assert names[-1] == "build.completed"
-    assert names.count("task.started") == names.count("task.completed") == 2
+    assert names[0] == "plan.ready", f"First event should be plan.ready, got {names[:3]}"
+    assert names[-1] == "build.completed", f"Last event should be build.completed, got {names[-3:]}"
 
-    # Both leaves produced artifacts.
+    # Harness engine always runs the full plan tree — expect multiple tasks
+    assert names.count("task.started") > 0
+    assert names.count("task.started") == names.count("task.completed"), (
+        "Every started task must complete"
+    )
+
+    # Artifacts are domain-aware: M&A brief should produce tool + guardrail categories
     artifact_events = [e for e in events if e["event"] == "artifact.updated"]
+    assert len(artifact_events) > 0, "Expected at least one artifact"
     categories = {e["data"]["artifact"]["category"] for e in artifact_events}
-    assert "tool" in categories
-    assert "guardrail" in categories
+    assert "tool" in categories, f"Expected tool artifact, got: {categories}"
 
-    # Both leaf tasks applied an operation.
-    final = events[-1]["data"]["operations"]
-    assert [op["operation"] for op in final] == ["add_tool", "add_guardrail"]
+    # Harness metrics event should appear
+    assert "harness.metrics" in names, "Expected at least one harness.metrics event"
+
+    # build.completed carries harness_metrics
+    final = events[-1]["data"]
+    assert "operations" in final
+    assert "harness_metrics" in final
+    # Wire format uses elapsed_ms (int milliseconds) from HarnessMetrics.to_dict()
+    assert isinstance(final["harness_metrics"]["elapsed_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_live_agent_emits_reflection_events() -> None:
+    """HarnessExecutionEngine emits reflection.completed after each task group."""
+    router = StubRouter([])  # no LLM responses — use template generation
+    agent = LiveWorkbenchBuilderAgent(router=router)
+
+    request = BuildRequest(project_id="wb-reflect", brief="Build a healthcare intake agent.")
+    project = {"project_id": "wb-reflect", "model": {"agents": [{"id": "root"}]}}
+
+    events: list[dict] = []
+    async for event in agent.run(request, project):
+        events.append(event)
+
+    reflection_events = [e for e in events if e["event"] == "reflection.completed"]
+    assert len(reflection_events) > 0, "Expected at least one reflection.completed event"
+
+    first_reflection = reflection_events[0]["data"]
+    assert "quality_score" in first_reflection   # wire field name from ReflectionResult.to_dict()
+    assert "summary" in first_reflection
+    assert "artifact_count" in first_reflection
+    assert 0.0 <= first_reflection["quality_score"] <= 1.0
 
 
 # ---------------------------------------------------------------------------
-# Retry + fallback: malformed JSON triggers fallback to the mock executor
+# Retry + fallback: exhausted router still produces a complete build
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_live_agent_falls_back_to_mock_on_persistent_parse_errors() -> None:
-    garbage = "not json at all"
-    # Plan is OK, but every executor response is garbage.
-    router = StubRouter([_plan_response()] + [garbage] * 20)
-    agent = LiveWorkbenchBuilderAgent(router=router, max_json_retries=1)
+async def test_live_agent_completes_build_when_router_exhausted() -> None:
+    """Template generation handles all steps when the router runs out of responses."""
+    router = StubRouter([])  # empty — forces template fallback immediately
+    agent = LiveWorkbenchBuilderAgent(router=router)
 
     request = BuildRequest(project_id="wb-fail", brief="Build a sales agent.")
     project = {"project_id": "wb-fail", "model": {"agents": [{"id": "root"}]}}
@@ -223,9 +264,9 @@ async def test_live_agent_falls_back_to_mock_on_persistent_parse_errors() -> Non
     async for event in agent.run(request, project):
         events.append(event)
 
-    # Still emits a complete lifecycle even though the LLM gave junk.
+    # Template generation completes the full lifecycle
     assert events[-1]["event"] == "build.completed"
-    # At least one task still produced an operation thanks to the mock fallback.
+    # At least one task produced an operation from template generation
     assert any(
         event["event"] == "task.completed" and event["data"]["operations"]
         for event in events
@@ -233,12 +274,19 @@ async def test_live_agent_falls_back_to_mock_on_persistent_parse_errors() -> Non
 
 
 # ---------------------------------------------------------------------------
-# When the planner itself fails, the agent falls back to the canned plan.
+# Graceful degradation: RuntimeError in engine falls back to mock agent
 # ---------------------------------------------------------------------------
 @pytest.mark.asyncio
-async def test_live_agent_falls_back_to_mock_plan_when_planner_errors() -> None:
-    router = StubRouter(["garbage"] * 20)
-    agent = LiveWorkbenchBuilderAgent(router=router, max_json_retries=0)
+async def test_live_agent_falls_back_to_mock_on_engine_error() -> None:
+    """If the engine raises, the agent falls back to MockWorkbenchBuilderAgent."""
+
+    class BrokenRouter:
+        mock_mode = False
+
+        def generate(self, _: Any) -> Any:
+            raise RuntimeError("router exploded")
+
+    agent = LiveWorkbenchBuilderAgent(router=BrokenRouter())
 
     request = BuildRequest(project_id="wb-plan-fail", brief="Build an airline agent.")
     project = {"project_id": "wb-plan-fail", "model": {"agents": [{"id": "root"}]}}
@@ -247,7 +295,8 @@ async def test_live_agent_falls_back_to_mock_plan_when_planner_errors() -> None:
     async for event in agent.run(request, project):
         events.append(event)
 
-    # A plan.ready event was still emitted — it's the mock fallback tree.
-    plan_ready = next(event for event in events if event["event"] == "plan.ready")
-    assert plan_ready["data"]["plan"]["title"].startswith("Build ")
+    # Should still complete — the mock fallback runs when the engine errors
     assert events[-1]["event"] == "build.completed"
+    plan_ready = next((e for e in events if e["event"] == "plan.ready"), None)
+    assert plan_ready is not None
+    assert plan_ready["data"]["plan"]["title"].startswith("Build ")

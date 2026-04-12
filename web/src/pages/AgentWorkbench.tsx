@@ -3,8 +3,9 @@
  *
  * Left pane: conversation feed (user message → live plan tree → assistant
  * narration → artifact cards → running-task spinner) plus a chat input at
- * the bottom. Right pane: a single active artifact with a Preview / Source
- * code toggle and a category tab bar.
+ * the bottom, plus iteration controls after a build completes.
+ * Right pane: a single active artifact with a Preview / Source / Diff
+ * toggle and a category tab bar.
  *
  * Data flow:
  *   1. On mount we hydrate the page from /api/workbench/projects/default
@@ -13,13 +14,18 @@
  *   2. When the user submits a brief, we start streaming
  *      /api/workbench/build/stream and dispatch every SSE event into the
  *      Zustand store. The components re-render as events arrive.
- *   3. ⌘K focuses the input, ⌘↵ (or Enter) sends.
+ *   3. When the user submits a follow-up from IterationControls, we hit
+ *      /api/workbench/build/iterate instead.
+ *   4. Reflection events and harness metrics are dispatched into the store
+ *      and rendered inline by ConversationFeed and HarnessMetricsBar.
+ *   5. ⌘K focuses the input, ⌘↵ (or Enter) sends.
  */
 
 import { useCallback, useEffect, useRef } from 'react';
 import {
   getDefaultWorkbenchProject,
   getWorkbenchPlanSnapshot,
+  iterateWorkbenchBuild,
   streamWorkbenchBuild,
   type WorkbenchTarget,
 } from '../lib/workbench-api';
@@ -28,11 +34,13 @@ import { WorkbenchLayout } from '../components/workbench/WorkbenchLayout';
 import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
+import { IterationControls } from '../components/workbench/IterationControls';
 
 export function AgentWorkbench() {
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
   const beginBuild = useWorkbenchStore((s) => s.beginBuild);
+  const startIteration = useWorkbenchStore((s) => s.startIteration);
   const dispatchEvent = useWorkbenchStore((s) => s.dispatchEvent);
   const setAbortController = useWorkbenchStore((s) => s.setAbortController);
   const target = useWorkbenchStore((s) => s.target);
@@ -123,6 +131,21 @@ export function AgentWorkbench() {
     return () => window.removeEventListener('keydown', handler);
   }, []);
 
+  // ---------------------------------------------------------------------------
+  // Stream consumer — shared between fresh builds and iterations
+  // ---------------------------------------------------------------------------
+  const consumeStream = useCallback(
+    async (stream: AsyncIterable<import('../lib/workbench-api').BuildStreamEvent>) => {
+      for await (const event of stream) {
+        dispatchEvent(event);
+      }
+    },
+    [dispatchEvent]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Fresh build handler
+  // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
     async (brief: string) => {
       beginBuild(brief);
@@ -139,9 +162,7 @@ export function AgentWorkbench() {
           },
           { signal: controller.signal }
         );
-        for await (const event of stream) {
-          dispatchEvent(event);
-        }
+        await consumeStream(stream);
       } catch (error) {
         if ((error as Error).name === 'AbortError') return;
         setError(error instanceof Error ? error.message : 'Build failed');
@@ -152,15 +173,56 @@ export function AgentWorkbench() {
         }
       }
     },
-    [beginBuild, dispatchEvent, projectId, setAbortController, setError, target]
+    [beginBuild, consumeStream, projectId, setAbortController, setError, target]
+  );
+
+  // ---------------------------------------------------------------------------
+  // Iteration handler — called by IterationControls and ReflectionCard
+  // ---------------------------------------------------------------------------
+  const handleIterate = useCallback(
+    async (message: string) => {
+      const currentProjectId = useWorkbenchStore.getState().projectId;
+      if (!currentProjectId) {
+        // Fallback: if there's no project yet, treat as a fresh build.
+        await handleSubmit(message);
+        return;
+      }
+
+      startIteration(message);
+      const controller = new AbortController();
+      activeControllerRef.current?.abort();
+      activeControllerRef.current = controller;
+      setAbortController(controller);
+      try {
+        const stream = iterateWorkbenchBuild(
+          {
+            project_id: currentProjectId,
+            message,
+            target,
+          },
+          { signal: controller.signal }
+        );
+        await consumeStream(stream);
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        setError(error instanceof Error ? error.message : 'Iteration failed');
+      } finally {
+        if (activeControllerRef.current === controller) {
+          activeControllerRef.current = null;
+          setAbortController(null);
+        }
+      }
+    },
+    [consumeStream, handleSubmit, setAbortController, setError, startIteration, target]
   );
 
   return (
     <div className="px-4 pb-6 pt-2">
       <WorkbenchLayout
-        left={<ConversationFeed />}
+        left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
         footer={<ChatInput onSubmit={handleSubmit} />}
+        iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { BuildStreamEvent, PlanTask, WorkbenchArtifact } from './workbench-api';
+import type { BuildStreamEvent, HarnessMetrics, PlanTask, WorkbenchArtifact } from './workbench-api';
 import { useWorkbenchStore } from './workbench-store';
 
 function makePlan(): PlanTask {
@@ -207,5 +207,150 @@ describe('workbench-store', () => {
     const state = useWorkbenchStore.getState();
     expect(state.theme).toBe('dark');
     expect(state.messages).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Harness metrics, reflections, iteration
+// ---------------------------------------------------------------------------
+
+describe('workbench-store — harness features', () => {
+  beforeEach(() => {
+    useWorkbenchStore.getState().reset();
+  });
+
+  it('updates harnessMetrics on harness.metrics event', () => {
+    dispatch({
+      event: 'harness.metrics',
+      data: {
+        steps_completed: 3,
+        total_steps: 8,
+        tokens_used: 2400,
+        cost_usd: 0.02,
+        elapsed_ms: 12000,
+        current_phase: 'executing' as HarnessMetrics['currentPhase'],
+      },
+    });
+    const { harnessMetrics } = useWorkbenchStore.getState();
+    expect(harnessMetrics).not.toBeNull();
+    expect(harnessMetrics?.stepsCompleted).toBe(3);
+    expect(harnessMetrics?.totalSteps).toBe(8);
+    expect(harnessMetrics?.tokensUsed).toBe(2400);
+    expect(harnessMetrics?.costUsd).toBe(0.02);
+    expect(harnessMetrics?.elapsedMs).toBe(12000);
+    expect(harnessMetrics?.currentPhase).toBe('executing');
+  });
+
+  it('merges partial harness.metrics events without losing existing fields', () => {
+    dispatch({
+      event: 'harness.metrics',
+      data: { steps_completed: 2, total_steps: 8, tokens_used: 1000, cost_usd: 0.01, elapsed_ms: 5000, current_phase: 'planning' },
+    });
+    // Second event only updates tokens and phase — rest should carry forward.
+    dispatch({
+      event: 'harness.metrics',
+      data: { tokens_used: 2400, current_phase: 'executing' },
+    });
+    const { harnessMetrics } = useWorkbenchStore.getState();
+    expect(harnessMetrics?.stepsCompleted).toBe(2);
+    expect(harnessMetrics?.totalSteps).toBe(8);
+    expect(harnessMetrics?.tokensUsed).toBe(2400);
+    expect(harnessMetrics?.currentPhase).toBe('executing');
+  });
+
+  it('appends reflection entries on reflection.completed event', () => {
+    dispatch({
+      event: 'reflection.completed',
+      data: {
+        id: 'reflect-1',
+        task_id: 'task-root',
+        quality_score: 85,
+        suggestions: ['Add error handling', 'Write a unit test'],
+        timestamp: 1_000_000,
+      },
+    });
+    const { reflections } = useWorkbenchStore.getState();
+    expect(reflections).toHaveLength(1);
+    expect(reflections[0].id).toBe('reflect-1');
+    expect(reflections[0].qualityScore).toBe(85);
+    expect(reflections[0].suggestions).toEqual(['Add error handling', 'Write a unit test']);
+  });
+
+  it('accumulates multiple reflections across events', () => {
+    dispatch({ event: 'reflection.completed', data: { id: 'r1', quality_score: 70, suggestions: [], task_id: 't1', timestamp: 1 } });
+    dispatch({ event: 'reflection.completed', data: { id: 'r2', quality_score: 90, suggestions: [], task_id: 't2', timestamp: 2 } });
+    expect(useWorkbenchStore.getState().reflections).toHaveLength(2);
+  });
+
+  it('increments iterationCount and saves history on iteration.started event', () => {
+    dispatch({
+      event: 'iteration.started',
+      data: {
+        id: 'iter-1',
+        message: 'Add a new tool',
+        artifact_count: 3,
+        timestamp: 1_000_000,
+      },
+    });
+    const state = useWorkbenchStore.getState();
+    expect(state.iterationCount).toBe(1);
+    expect(state.iterationHistory).toHaveLength(1);
+    expect(state.iterationHistory[0].message).toBe('Add a new tool');
+    expect(state.iterationHistory[0].iterationNumber).toBe(1);
+  });
+
+  it('snapshots current artifacts into previousVersionArtifacts on iteration.started', () => {
+    // Place an artifact in the store first.
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({ event: 'artifact.updated', data: { task_id: 'task-role', artifact: makeArtifact() } });
+    expect(useWorkbenchStore.getState().artifacts).toHaveLength(1);
+
+    dispatch({ event: 'iteration.started', data: { id: 'iter-1', message: 'Refactor', artifact_count: 1 } });
+
+    expect(useWorkbenchStore.getState().previousVersionArtifacts).toHaveLength(1);
+    expect(useWorkbenchStore.getState().previousVersionArtifacts[0].id).toBe('art-1');
+  });
+
+  it('startIteration action records message, increments count, and transitions status', () => {
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({ event: 'artifact.updated', data: { task_id: 'task-role', artifact: makeArtifact() } });
+    dispatch({ event: 'build.completed', data: { project_id: 'wb-1', version: 2 } });
+
+    useWorkbenchStore.getState().startIteration('Improve the guardrail');
+    const state = useWorkbenchStore.getState();
+
+    expect(state.buildStatus).toBe('starting');
+    expect(state.iterationCount).toBe(1);
+    expect(state.iterationHistory[0].message).toBe('Improve the guardrail');
+    expect(state.lastBrief).toBe('Improve the guardrail');
+    // Previous artifacts should be preserved.
+    expect(state.previousVersionArtifacts).toHaveLength(1);
+    // Current artifacts are cleared for the new run.
+    expect(state.artifacts).toHaveLength(0);
+    // A user message is appended to the feed.
+    const userMessages = state.messages.filter((m) => m.id.startsWith('msg-user-'));
+    expect(userMessages.at(-1)?.text).toBe('Improve the guardrail');
+  });
+
+  it('selectVersionForDiff stores the target version and can clear it', () => {
+    useWorkbenchStore.getState().selectVersionForDiff(3);
+    expect(useWorkbenchStore.getState().diffTargetVersion).toBe(3);
+    useWorkbenchStore.getState().selectVersionForDiff(null);
+    expect(useWorkbenchStore.getState().diffTargetVersion).toBeNull();
+  });
+
+  it('reset() clears all harness state', () => {
+    dispatch({ event: 'harness.metrics', data: { steps_completed: 5, total_steps: 10, tokens_used: 500, cost_usd: 0.01, elapsed_ms: 3000, current_phase: 'reflecting' } });
+    dispatch({ event: 'reflection.completed', data: { id: 'r1', quality_score: 80, suggestions: [], task_id: 't1', timestamp: 1 } });
+    useWorkbenchStore.getState().startIteration('Some change');
+
+    useWorkbenchStore.getState().reset();
+    const state = useWorkbenchStore.getState();
+    expect(state.harnessMetrics).toBeNull();
+    expect(state.reflections).toHaveLength(0);
+    expect(state.iterationCount).toBe(0);
+    expect(state.iterationHistory).toHaveLength(0);
+    expect(state.previousVersionArtifacts).toHaveLength(0);
+    expect(state.diffTargetVersion).toBeNull();
   });
 });

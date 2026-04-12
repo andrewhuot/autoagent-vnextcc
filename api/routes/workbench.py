@@ -62,6 +62,16 @@ class WorkbenchBuildStreamRequest(BaseModel):
     mock: bool = Field(default=False, description="Force mock mode for tests.")
 
 
+class WorkbenchIterateRequest(BaseModel):
+    """Request body for a follow-up iteration on an existing build."""
+
+    project_id: str = Field(description="ID of the project to iterate on.")
+    follow_up: str = Field(min_length=1, description="The user's refinement instruction.")
+    target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
+    environment: str = Field(default="draft")
+    mock: bool = Field(default=False, description="Force mock mode for tests.")
+
+
 def _service(request: Request) -> WorkbenchService:
     """Return the Workbench service, creating the JSON store on demand."""
     store = getattr(request.app.state, "workbench_store", None)
@@ -159,6 +169,10 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
     WHY: The Workbench UI mirrors Manus — a live plan tree on the left with
     running spinners, artifact cards inline, and a source-code preview on the
     right. That needs low-latency incremental updates, not one JSON blob.
+
+    When a ``project_id`` is provided and the project already has artifacts
+    from a prior build, this endpoint automatically routes to iteration mode
+    so the user receives delta artifacts rather than a full rebuild.
     """
     from builder.workbench_agent import build_default_agent
 
@@ -179,6 +193,54 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
                     str(event.get("event") or "message"),
                     event.get("data") or {},
                 )
+        except KeyError as exc:
+            yield _format_sse("error", {"message": f"Project not found: {exc}"})
+        except Exception as exc:  # noqa: BLE001 — surface as an error event
+            yield _format_sse("error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/build/iterate")
+async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> StreamingResponse:
+    """Handle a follow-up iteration on an existing build.
+
+    Streams the same SSE event format as ``/build/stream`` but emits an
+    ``iteration.started`` event at the top of the stream and produces delta
+    artifacts that incorporate the user's ``follow_up`` feedback into the
+    prior build artifacts.
+
+    Returns 404 when ``project_id`` does not exist.
+    """
+    from builder.workbench_agent import build_default_agent
+
+    service = _service(request)
+    agent = build_default_agent(force_mock=body.mock)
+
+    async def event_generator() -> AsyncIterator[bytes]:
+        try:
+            stream = await service.run_iteration_stream(
+                project_id=body.project_id,
+                follow_up=body.follow_up,
+                target=body.target,
+                environment=body.environment,
+                agent=agent,
+            )
+            async for event in stream:
+                yield _format_sse(
+                    str(event.get("event") or "message"),
+                    event.get("data") or {},
+                )
+        except KeyError as exc:
+            yield _format_sse("error", {"message": f"Project not found: {exc}"})
         except Exception as exc:  # noqa: BLE001 — surface as an error event
             yield _format_sse("error", {"message": str(exc)})
 

@@ -34,6 +34,7 @@ function installMockFetch(opts: {
   projectId?: string;
   planSnapshot?: Record<string, unknown>;
   streamBody?: string;
+  iterateBody?: string;
 } = {}) {
   const projectId = opts.projectId ?? 'wb-test';
   const defaultProject = {
@@ -109,6 +110,12 @@ function installMockFetch(opts: {
     }
     if (url.endsWith('/api/workbench/build/stream')) {
       return new Response(opts.streamBody ?? '', {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      });
+    }
+    if (url.endsWith('/api/workbench/build/iterate')) {
+      return new Response(opts.iterateBody ?? '', {
         status: 200,
         headers: { 'Content-Type': 'text/event-stream' },
       });
@@ -247,6 +254,106 @@ describe('AgentWorkbench', () => {
     await waitFor(() => {
       // Plan tree from the mocked stream was dispatched into the store.
       expect(useWorkbenchStore.getState().plan?.title).toBe('Build Sales agent');
+    });
+  });
+
+  it('dispatches harness.metrics events into the store', async () => {
+    const metricsEvent =
+      'event: harness.metrics\ndata: {"steps_completed":2,"total_steps":8,"tokens_used":1200,"cost_usd":0.01,"elapsed_ms":5000,"current_phase":"executing"}\n\n' +
+      'event: build.completed\ndata: {"project_id":"wb-test","version":1}\n\n';
+
+    installMockFetch({ streamBody: metricsEvent });
+    const user = userEvent.setup();
+    renderWorkbench();
+    await screen.findByText('Processes paused, click to wake up');
+
+    const textarea = screen.getByLabelText('Build request');
+    await user.type(textarea, 'Build an agent{Enter}');
+
+    await waitFor(() => {
+      const metrics = useWorkbenchStore.getState().harnessMetrics;
+      expect(metrics?.stepsCompleted).toBe(2);
+      expect(metrics?.tokensUsed).toBe(1200);
+      expect(metrics?.currentPhase).toBe('executing');
+    });
+  });
+
+  it('dispatches reflection.completed events into the store', async () => {
+    const reflectionEvent =
+      'event: reflection.completed\ndata: {"id":"r1","task_id":"task-root","quality_score":88,"suggestions":["Add retry logic"],"timestamp":1000}\n\n' +
+      'event: build.completed\ndata: {"project_id":"wb-test","version":1}\n\n';
+
+    installMockFetch({ streamBody: reflectionEvent });
+    const user = userEvent.setup();
+    renderWorkbench();
+    await screen.findByText('Processes paused, click to wake up');
+
+    const textarea = screen.getByLabelText('Build request');
+    await user.type(textarea, 'Build an agent{Enter}');
+
+    await waitFor(() => {
+      const reflections = useWorkbenchStore.getState().reflections;
+      expect(reflections).toHaveLength(1);
+      expect(reflections[0].qualityScore).toBe(88);
+      expect(reflections[0].suggestions).toContain('Add retry logic');
+    });
+  });
+
+  it('renders a reflection card inline in the conversation feed', async () => {
+    const reflectionEvent =
+      'event: reflection.completed\ndata: {"id":"r1","task_id":"task-root","quality_score":75,"suggestions":["Improve test coverage"],"timestamp":1000}\n\n' +
+      'event: build.completed\ndata: {"project_id":"wb-test","version":1}\n\n';
+
+    installMockFetch({ streamBody: reflectionEvent });
+    const user = userEvent.setup();
+    renderWorkbench();
+    await screen.findByText('Processes paused, click to wake up');
+
+    await user.type(screen.getByLabelText('Build request'), 'Build an agent{Enter}');
+
+    // Reflection card shows the suggestion text.
+    await screen.findByText('Improve test coverage');
+    // And the Apply button.
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeInTheDocument();
+  });
+
+  it('submits an iteration request via the /iterate endpoint when a build is complete and IterationControls fires', async () => {
+    // First build completes.
+    const completedBuildBody =
+      'event: build.completed\ndata: {"project_id":"wb-test","version":1}\n\n';
+    const iterateBody =
+      'event: build.completed\ndata: {"project_id":"wb-test","version":2}\n\n';
+
+    const fetchMock = installMockFetch({ streamBody: completedBuildBody, iterateBody });
+    const user = userEvent.setup();
+    renderWorkbench();
+    await screen.findByText('Processes paused, click to wake up');
+
+    // Submit the initial build.
+    await user.type(screen.getByLabelText('Build request'), 'Build an agent{Enter}');
+
+    // Wait for build to complete and IterationControls to render.
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().buildStatus).toBe('done');
+    });
+    await screen.findByTestId('iteration-controls');
+
+    // Open iterate input and submit.
+    await user.click(screen.getByRole('button', { name: /iterate/i }));
+    await user.type(screen.getByLabelText('Iteration message'), 'Add retry logic');
+    await user.click(screen.getByRole('button', { name: /^run$/i }));
+
+    // The /iterate endpoint should have been called.
+    await waitFor(() => {
+      const iterateCalls = fetchMock.mock.calls.filter(
+        ([url]: [string]) => typeof url === 'string' && url.endsWith('/api/workbench/build/iterate')
+      );
+      expect(iterateCalls.length).toBe(1);
+    });
+
+    // Store version should update to 2 after iteration.
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().version).toBe(2);
     });
   });
 });
