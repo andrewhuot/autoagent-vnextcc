@@ -2,10 +2,10 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
-import { ChangeReview } from './ChangeReview';
+import { UnifiedReviewQueue } from './UnifiedReviewQueue';
 import { Experiments } from './Experiments';
 import { Opportunities } from './Opportunities';
-import { useExperiments, useChanges } from '../lib/api';
+import { useExperiments, useOptimizeHistory, useUnifiedReviewStats } from '../lib/api';
 import { formatTimestamp, statusVariant, classNames } from '../lib/utils';
 
 type ImprovementsTab = 'opportunities' | 'experiments' | 'review' | 'history';
@@ -38,7 +38,7 @@ const WORKFLOW_STEPS: Array<{
   {
     key: 'review',
     title: 'Approve or reject',
-    description: 'Make the decision with diffs, metrics, and audit context in one place.',
+    description: 'Review all pending proposals from both optimizer and change card pipelines in one unified queue.',
     icon: GitPullRequest,
   },
   {
@@ -79,20 +79,75 @@ function ImprovementsTabButton({
   );
 }
 
-function ImprovementHistoryPanel() {
-  const { data: experiments = [], isLoading, isError } = useExperiments();
-  const history = experiments
-    .filter((experiment) => experiment.status === 'accepted' || experiment.status === 'rejected')
-    .sort((left, right) => right.created_at - left.created_at);
+interface HistoryEntry {
+  id: string;
+  source: 'experiment' | 'optimizer';
+  title: string;
+  subtitle: string;
+  status: string;
+  delta: number;
+  pValue: number | null;
+  policy: string | null;
+  timestamp: number | string;
+}
 
-  const acceptedCount = history.filter((experiment) => experiment.status === 'accepted').length;
-  const rejectedCount = history.filter((experiment) => experiment.status === 'rejected').length;
+function ImprovementHistoryPanel() {
+  const { data: experiments = [], isLoading: expLoading, isError: expError } = useExperiments();
+  const { data: attempts = [], isLoading: attLoading, isError: attError } = useOptimizeHistory();
+
+  const isLoading = expLoading || attLoading;
+  const isError = expError || attError;
+
+  // Merge experiment decisions and optimizer attempt decisions into one timeline
+  const history: HistoryEntry[] = [];
+
+  for (const exp of experiments) {
+    if (exp.status !== 'accepted' && exp.status !== 'rejected') continue;
+    history.push({
+      id: exp.experiment_id,
+      source: 'experiment',
+      title: exp.hypothesis,
+      subtitle: `${exp.operator_name.replaceAll('_', ' ')}`,
+      status: exp.status,
+      delta: exp.significance_delta,
+      pValue: exp.significance_p_value,
+      policy: exp.deployment_policy,
+      timestamp: exp.created_at,
+    });
+  }
+
+  for (const attempt of attempts) {
+    if (attempt.status !== 'accepted' && !attempt.status.startsWith('rejected')) continue;
+    // Avoid duplicates — if an experiment already covers this attempt_id, skip
+    if (history.some((h) => h.id === attempt.attempt_id)) continue;
+    history.push({
+      id: attempt.attempt_id,
+      source: 'optimizer',
+      title: attempt.change_description || 'Optimizer attempt',
+      subtitle: attempt.config_section || 'config change',
+      status: attempt.status,
+      delta: attempt.score_delta / 100, // score_delta is already in percent form
+      pValue: attempt.significance_p_value,
+      policy: null,
+      timestamp: attempt.timestamp,
+    });
+  }
+
+  // Sort newest first
+  history.sort((a, b) => {
+    const tsA = typeof a.timestamp === 'number' ? a.timestamp : new Date(a.timestamp).getTime();
+    const tsB = typeof b.timestamp === 'number' ? b.timestamp : new Date(b.timestamp).getTime();
+    return tsB - tsA;
+  });
+
+  const acceptedCount = history.filter((h) => h.status === 'accepted').length;
+  const rejectedCount = history.filter((h) => h.status.startsWith('rejected')).length;
 
   return (
     <div className="space-y-4">
-      <section className="grid gap-4 md:grid-cols-3">
+      <section className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-4">
-          <p className="text-xs text-gray-500">Recorded decisions</p>
+          <p className="text-xs text-gray-500">Total decisions</p>
           <p className="mt-1 text-2xl font-semibold text-gray-900">{history.length}</p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-4">
@@ -102,6 +157,17 @@ function ImprovementHistoryPanel() {
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <p className="text-xs text-gray-500">Rejected</p>
           <p className="mt-1 text-2xl font-semibold text-red-700">{rejectedCount}</p>
+        </div>
+        <div className="rounded-lg border border-gray-200 bg-white p-4">
+          <p className="text-xs text-gray-500">Sources</p>
+          <div className="mt-1 flex items-center gap-2">
+            <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+              Optimizer
+            </span>
+            <span className="rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700">
+              Experiments
+            </span>
+          </div>
         </div>
       </section>
 
@@ -127,37 +193,53 @@ function ImprovementHistoryPanel() {
         <section className="rounded-lg border border-gray-200 bg-white p-5">
           <h3 className="mb-4 text-sm font-semibold text-gray-900">Decision history</h3>
           <div className="space-y-3">
-            {history.map((experiment) => (
-              <div key={experiment.experiment_id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+            {history.map((entry) => (
+              <div key={entry.id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="font-mono text-xs text-gray-500">{experiment.experiment_id}</p>
-                    <p className="mt-1 text-sm font-medium text-gray-900">{experiment.hypothesis}</p>
+                    <div className="flex items-center gap-2">
+                      <p className="font-mono text-xs text-gray-500">{entry.id}</p>
+                      <span
+                        className={classNames(
+                          'rounded px-1.5 py-0.5 text-[10px] font-medium',
+                          entry.source === 'optimizer'
+                            ? 'bg-indigo-50 text-indigo-700'
+                            : 'bg-violet-50 text-violet-700'
+                        )}
+                      >
+                        {entry.source === 'optimizer' ? 'Optimizer' : 'Experiment'}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm font-medium text-gray-900">{entry.title}</p>
                     <p className="mt-1 text-xs text-gray-500">
-                      {experiment.operator_name.replaceAll('_', ' ')} · {formatTimestamp(experiment.created_at)}
+                      {entry.subtitle} &middot; {formatTimestamp(entry.timestamp)}
                     </p>
                   </div>
                   <StatusBadge
-                    variant={statusVariant(experiment.status)}
-                    label={experiment.status}
+                    variant={statusVariant(entry.status)}
+                    label={entry.status}
                   />
                 </div>
                 <div className="mt-3 grid gap-3 text-xs text-gray-600 sm:grid-cols-3">
                   <p>
                     Delta:{' '}
-                    <span className={experiment.significance_delta >= 0 ? 'font-medium text-green-700' : 'font-medium text-red-700'}>
-                      {experiment.significance_delta > 0 ? '+' : ''}
-                      {experiment.significance_delta.toFixed(3)}
+                    <span className={entry.delta >= 0 ? 'font-medium text-green-700' : 'font-medium text-red-700'}>
+                      {entry.delta > 0 ? '+' : ''}
+                      {entry.delta.toFixed(3)}
                     </span>
                   </p>
-                  <p>
-                    p-value:{' '}
-                    <span className="font-medium text-gray-900">{experiment.significance_p_value.toFixed(3)}</span>
-                  </p>
-                  <p>
-                    Policy:{' '}
-                    <span className="font-medium text-gray-900">{experiment.deployment_policy}</span>
-                  </p>
+                  {entry.pValue != null && (
+                    <p>
+                      p-value:{' '}
+                      <span className="font-medium text-gray-900">{entry.pValue.toFixed(3)}</span>
+                    </p>
+                  )}
+                  {entry.policy && (
+                    <p>
+                      Policy:{' '}
+                      <span className="font-medium text-gray-900">{entry.policy}</span>
+                    </p>
+                  )}
                 </div>
               </div>
             ))}
@@ -171,8 +253,9 @@ function ImprovementHistoryPanel() {
 export function Improvements() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = normalizeTab(searchParams.get('tab'));
-  const { data: changes = [] } = useChanges();
-  const appliedCount = changes.filter((c) => c.status === 'applied').length;
+  const { data: reviewStats } = useUnifiedReviewStats();
+  const pendingCount = reviewStats?.total_pending ?? 0;
+  const appliedCount = reviewStats?.total_approved ?? 0;
 
   function selectTab(tab: ImprovementsTab) {
     const next = new URLSearchParams(searchParams);
@@ -261,7 +344,7 @@ export function Improvements() {
             <ImprovementsTabButton
               key={tab.key}
               active={activeTab === tab.key}
-              label={tab.label}
+              label={tab.key === 'review' && pendingCount > 0 ? `Review (${pendingCount})` : tab.label}
               onClick={() => selectTab(tab.key)}
             />
           ))}
@@ -270,7 +353,7 @@ export function Improvements() {
 
       {activeTab === 'opportunities' && <Opportunities embedded />}
       {activeTab === 'experiments' && <Experiments embedded showAnalysisPanels={false} defaultTab="all" />}
-      {activeTab === 'review' && <ChangeReview embedded />}
+      {activeTab === 'review' && <UnifiedReviewQueue embedded />}
       {activeTab === 'history' && <ImprovementHistoryPanel />}
     </div>
   );

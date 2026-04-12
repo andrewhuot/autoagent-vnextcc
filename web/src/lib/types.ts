@@ -1052,6 +1052,45 @@ export interface ChangeAuditSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Unified Review Surface
+// ---------------------------------------------------------------------------
+
+export type UnifiedReviewSource = 'optimizer' | 'change_card';
+
+export interface UnifiedReviewItem {
+  id: string;
+  source: UnifiedReviewSource;
+  status: string;
+  title: string;
+  description: string;
+  score_before: number;
+  score_after: number;
+  score_delta: number;
+  risk_class: 'low' | 'medium' | 'high';
+  diff_summary: string;
+  created_at: string;
+  strategy: string | null;
+  operator_family: string | null;
+  has_detailed_audit: boolean;
+}
+
+export interface UnifiedReviewStats {
+  total_pending: number;
+  optimizer_pending: number;
+  change_card_pending: number;
+  total_approved: number;
+  total_rejected: number;
+}
+
+export interface UnifiedReviewActionResult {
+  status: string;
+  id: string;
+  source: string;
+  message: string;
+  deploy_message: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Intelligence Studio
 // ---------------------------------------------------------------------------
 
