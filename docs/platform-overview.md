@@ -15,17 +15,18 @@ This page focuses on the current product surface as it exists in the repo today.
 The product centers on one operational loop:
 
 ```text
-BUILD -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
+BUILD -> WORKBENCH -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 ```
 
 What each step means in today’s product:
 
 1. **Build** — create or refine a config from a prompt, transcripts, or builder chat
-2. **Eval** — run the active or selected config against eval cases
-3. **Compare** — inspect run-to-run deltas and pairwise version comparisons
-4. **Optimize** — generate and test candidate changes
-5. **Review** — accept or reject improvements with evidence
-6. **Deploy** — canary, release, rollback, or integration-target push
+2. **Workbench** — inspect a candidate build as a live plan, artifacts, validation, review gate, and Eval handoff
+3. **Eval** — run the active or selected config against eval cases
+4. **Compare** — inspect run-to-run deltas and pairwise version comparisons
+5. **Optimize** — generate and test candidate changes
+6. **Review** — accept or reject improvements with evidence
+7. **Deploy** — canary, release, rollback, or integration-target push
 
 The UI, CLI, and API all work from the same workspace state, so you can move between them without translating concepts.
 
@@ -45,6 +46,21 @@ Current build tabs:
 - **Saved Artifacts** — inspect previous build outputs
 
 Build is also where the **XML Instruction Studio** lives. That matters because new workspaces now default to XML root instructions and the same XML model is editable from both CLI and UI.
+
+### Workbench
+
+Workbench is the Build-family harness for making an agent candidate inspectable before Eval.
+
+Current Workbench surfaces include:
+
+- a conversation and plan feed for the user brief, task progress, artifact updates, reflections, and follow-up turns
+- a right-side workspace for artifacts, agent card, source previews, eval-related state, trace/activity details, review gate, and handoff evidence
+- explicit readiness states for drafts, blockers, saved Eval candidates, Eval waiting states, and Optimize preconditions
+- durable hydration after refresh or restart, with interrupted historical snapshots instead of silent fake-running state
+
+Workbench does not run Eval or Optimize itself. It materializes a candidate into a saved config and hands that context to Eval Runs.
+
+See [features/workbench.md](features/workbench.md) for the full feature deep dive.
 
 ### Connect
 
@@ -120,13 +136,15 @@ The default simple-mode navigation is the current day-one product story:
 - `Dashboard`
 - `Setup`
 - `Build`
-- `Connect`
+- `Workbench`
 - `Eval Runs`
 - `Results Explorer`
 - `Compare`
+- `Optimize Studio`
 - `Optimize`
 - `Improvements`
 - `Deploy`
+- `Docs`
 
 ### Pro mode
 
@@ -329,6 +347,7 @@ The platform also includes persistence and operational state for:
 ## Where to go next
 
 - [Concepts](concepts.md) — mental models for workspaces, versions, modes, and improvements
+- [Workbench](features/workbench.md) — feature deep dive for candidate-building, readiness, and Eval handoff
 - [CLI Reference](cli-reference.md) — command-by-command reference
 - [UI Quick Start](UI_QUICKSTART_GUIDE.md) — walkthrough of the current browser UI
 - [App Guide](app-guide.md) — route and page map

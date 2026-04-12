@@ -45,15 +45,19 @@ In simple mode, the main sidebar shows the current day-one workflow:
 - `Dashboard`
 - `Setup`
 - `Build`
-- `Connect`
+- `Workbench`
 - `Eval Runs`
 - `Results Explorer`
 - `Compare`
+- `Optimize Studio`
 - `Optimize`
 - `Improvements`
 - `Deploy`
+- `Docs`
 
 That list is the fastest way to understand how the product is currently organized.
+
+Import and integration routes such as `Connect`, `CX Studio`, and `ADK Import` are available from the broader navigation.
 
 ## 3. Check Setup First
 
@@ -119,7 +123,32 @@ agentlab instruction show
 agentlab instruction validate
 ```
 
-## 5. Use Connect When You Already Have a Runtime
+## 5. Use Workbench for an Inspectable Candidate Build
+
+Open **Workbench** when you want to watch an agent candidate take shape before Eval.
+
+Workbench is useful when you want:
+
+- a live plan and task feed
+- generated artifacts and source previews
+- validation and compatibility evidence
+- a review gate and session handoff
+- a guided **Save candidate and open Eval** or **Open Eval with this candidate** action
+
+Workbench does not run Eval or Optimize itself. It prepares and materializes the candidate, then hands that candidate to Eval Runs.
+
+Closest API surfaces:
+
+```bash
+GET /api/workbench/projects/default
+GET /api/workbench/projects/{project_id}/plan
+POST /api/workbench/build/stream
+POST /api/workbench/projects/{project_id}/bridge/eval
+```
+
+See [Workbench Feature Deep Dive](features/workbench.md) for the full workflow and readiness states.
+
+## 6. Use Connect When You Already Have a Runtime
 
 Open **Connect** if you are importing an existing runtime instead of starting from scratch.
 
@@ -141,7 +170,7 @@ agentlab connect http --url https://agent.example.com
 agentlab connect transcript --file conversations.jsonl
 ```
 
-## 6. Run an Eval
+## 7. Run an Eval
 
 Open **Eval Runs** to launch and monitor evaluation runs.
 
@@ -166,7 +195,7 @@ agentlab eval show latest
 agentlab eval generate
 ```
 
-## 7. Use Results Explorer for Case-Level Debugging
+## 8. Use Results Explorer for Case-Level Debugging
 
 Open **Results Explorer** after you have at least one eval run.
 
@@ -191,7 +220,7 @@ agentlab eval results
 agentlab eval results export RUN_ID --format markdown
 ```
 
-## 8. Use Compare for Head-to-Head Decisions
+## 9. Use Compare for Head-to-Head Decisions
 
 Open **Compare** when you want to compare two versions directly.
 
@@ -212,7 +241,7 @@ agentlab compare candidates
 agentlab eval compare --config-a configs/v001.yaml --config-b configs/v002.yaml
 ```
 
-## 9. Optimize, Then Review in Improvements
+## 10. Optimize, Then Review in Improvements
 
 Open **Optimize** to launch optimization cycles.
 
@@ -247,7 +276,7 @@ agentlab review show pending
 agentlab review apply pending
 ```
 
-## 10. Deploy Safely
+## 11. Deploy Safely
 
 Open **Deploy** when you are ready to ship a version.
 
@@ -274,7 +303,7 @@ If you want review and deploy in one CLI step, this also works:
 agentlab deploy --auto-review --yes
 ```
 
-## 11. Explore the Pro and Integration Surfaces
+## 12. Explore the Pro and Integration Surfaces
 
 When you switch into the broader navigation, you will see additional routes for observation, governance, and integrations.
 
@@ -299,7 +328,7 @@ Examples:
 
 These pages are real routes in the current app, but they are not required for a first successful build and eval cycle.
 
-## 12. Keyboard Shortcuts
+## 13. Keyboard Shortcuts
 
 The current app supports these global shortcuts:
 
@@ -312,18 +341,19 @@ The current app supports these global shortcuts:
 
 The command palette also exposes navigation shortcuts and recent items.
 
-## 13. Recommended Daily Loop
+## 14. Recommended Daily Loop
 
 Once the workspace is healthy, the usual operating rhythm is:
 
 1. **Setup** to confirm readiness
 2. **Build** or **Connect** to create the next version
-3. **Eval Runs** to score it
-4. **Results Explorer** to inspect failures
-5. **Compare** if you need a head-to-head decision
-6. **Optimize** to generate candidates
-7. **Improvements** to approve or reject changes
-8. **Deploy** to canary or promote the winning version
+3. **Workbench** when you want an inspectable candidate build and Eval handoff
+4. **Eval Runs** to score it
+5. **Results Explorer** to inspect failures
+6. **Compare** if you need a head-to-head decision
+7. **Optimize** to generate candidates
+8. **Improvements** to approve or reject changes
+9. **Deploy** to canary or promote the winning version
 
 Closest CLI loop:
 
@@ -388,6 +418,7 @@ That is expected for the default AgentLab deployment target. External deployment
 ## Next Steps
 
 - [Detailed Guide](DETAILED_GUIDE.md)
+- [Workbench Feature Deep Dive](features/workbench.md)
 - [Platform Overview](platform-overview.md)
 - [App Guide](app-guide.md)
 - [CX Studio Integration](cx-studio-integration.md)

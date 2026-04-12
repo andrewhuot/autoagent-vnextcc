@@ -6,6 +6,8 @@ Analyze context window usage, simulate compaction strategies, and optimize how y
 
 Large context windows are expensive and can degrade quality when filled with irrelevant content. The Context Workbench gives you tools to understand growth patterns, identify waste, and simulate optimization strategies before applying them.
 
+Looking for the agent-building Workbench instead? See [Agent Builder Workbench](workbench.md).
+
 ## ContextAnalyzer
 
 The `ContextAnalyzer` processes trace data and classifies context growth into four patterns:

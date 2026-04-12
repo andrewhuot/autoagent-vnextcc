@@ -50,6 +50,7 @@ The console is grouped into simple-mode core routes plus broader operator and in
 | Page | Route | Purpose |
 |------|-------|---------|
 | Build | `/build` | Prompt-led generation, transcript-led generation, builder chat, saved artifacts, and XML instruction editing |
+| Workbench | `/workbench` | Live agent-candidate harness with plan progress, artifacts, validation, review gate, and Eval handoff |
 
 ### Import
 
@@ -135,12 +136,13 @@ If you are opening the UI for the first time, this is the cleanest order:
 
 1. **Setup** to confirm the workspace and provider mode
 2. **Build** or **Connect** to create the next version
-3. **Eval Runs** to run an evaluation
-4. **Results Explorer** to inspect failures
-5. **Compare** when deciding between versions
-6. **Optimize** to generate candidate improvements
-7. **Improvements** to approve or reject proposed changes
-8. **Deploy** to canary or promote a version
+3. **Workbench** when you want a transparent candidate-building session before Eval
+4. **Eval Runs** to run an evaluation
+5. **Results Explorer** to inspect failures
+6. **Compare** when deciding between versions
+7. **Optimize** to generate candidate improvements
+8. **Improvements** to approve or reject proposed changes
+9. **Deploy** to canary or promote a version
 
 ## What Each Main Surface Answers
 
@@ -173,6 +175,15 @@ Use Build to answer:
 - How do I create or refine the next version?
 - What did the builder produce?
 - How do I edit XML instructions without dropping into raw config files?
+
+### Workbench
+
+Use Workbench to answer:
+
+- How is this agent candidate being built step by step?
+- What artifacts, source previews, validation evidence, and review gate did the build produce?
+- Is this candidate blocked, still a draft, ready to save for Eval, or waiting on a completed eval run before Optimize?
+- What durable session or handoff state exists after refresh or restart?
 
 ### Connect
 
@@ -271,6 +282,7 @@ The web app is backed by the same FastAPI server the CLI uses.
 Examples:
 
 - Build pages call `/api/builder/*` and related generation routes
+- Workbench calls `/api/workbench/*` for project hydration, streamed runs, iteration, cancellation, and Eval handoff
 - Setup calls `/api/setup/overview`
 - Eval pages call `/api/eval/*`, `/api/evals/results*`, and `/api/evals/compare*`
 - Deploy uses `/api/deploy` and `/api/deploy/status`
@@ -282,6 +294,7 @@ For the live endpoint list, use [api-reference.md](api-reference.md) or open `ht
 ## Next Steps
 
 - [UI Quick Start Guide](UI_QUICKSTART_GUIDE.md)
+- [Workbench Feature Deep Dive](features/workbench.md)
 - [Platform Overview](platform-overview.md)
 - [CLI Reference](cli-reference.md)
 - [API Reference](api-reference.md)

@@ -4,10 +4,10 @@
 ![Test Suite](https://img.shields.io/badge/test%20suite-pytest%20%2B%20vite-22C55E)
 ![License](https://img.shields.io/badge/license-Apache%202.0-111827)
 
-AgentLab is a local-first toolkit for iterating on AI agent configurations. Give it an agent, define eval cases that describe what "good" looks like, and AgentLab runs a build-eval-optimize-review-deploy loop you can inspect end to end. It works with agents you import (OpenAI Agents, Anthropic, HTTP endpoints, Google CX) and agents you build from scratch.
+AgentLab is a local-first toolkit for iterating on AI agent configurations. Give it an agent, define eval cases that describe what "good" looks like, and AgentLab runs an inspectable Build -> Workbench -> Eval -> Compare -> Optimize -> Review -> Deploy loop. It works with agents you import (OpenAI Agents, Anthropic, HTTP endpoints, Google CX) and agents you build from scratch.
 
 ```text
-BUILD -> EVAL -> OPTIMIZE -> REVIEW -> DEPLOY
+BUILD -> WORKBENCH -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 ```
 
 > **[Quick Start](docs/QUICKSTART_GUIDE.md)** — Get a workspace running in minutes
@@ -25,11 +25,12 @@ BUILD -> EVAL -> OPTIMIZE -> REVIEW -> DEPLOY
 AgentLab centers everything around a closed improvement loop:
 
 1. **Build** — create or refine agent configs (prompts, tools, guardrails) and starter evals
-2. **Eval** — run the current config against a suite of test cases and score the results
-3. **Compare** — inspect run-to-run deltas and case-level changes
-4. **Optimize** — generate and test targeted prompt/config changes to improve scores
-5. **Review** — accept or reject proposed changes before they go live
-6. **Deploy** — canary, release, rollback, or push through an integration target
+2. **Workbench** — inspect a candidate build as a live plan, artifacts, validation, and Eval handoff
+3. **Eval** — run the current config against a suite of test cases and score the results
+4. **Compare** — inspect run-to-run deltas and case-level changes
+5. **Optimize** — generate and test targeted prompt/config changes to improve scores
+6. **Review** — accept or reject proposed changes before they go live
+7. **Deploy** — canary, release, rollback, or push through an integration target
 
 The CLI, API, and web console all work off the same local workspace state, so you can move between surfaces without losing context.
 
@@ -138,6 +139,7 @@ All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md
 ### Core loop
 
 - **Build workspace** — Prompt, transcript, builder chat, and saved artifacts in one place
+- **Agent Builder Workbench** — Live candidate-building harness with plan progress, artifacts, validation, review gate, and Eval handoff
 - **Eval runs** — Run suites, inspect historical runs, and drill into case-level results
 - **Results Explorer** — Filter failures, annotate examples, export runs, and compare outcomes
 - **Compare** — Run or inspect pairwise config comparisons with significance summaries
@@ -228,7 +230,7 @@ See [docs/deployment.md](docs/deployment.md) for local, container, and Cloud Run
 
 - [Platform Overview](docs/platform-overview.md) | [Architecture](docs/architecture.md) | [API Reference](docs/api-reference.md)
 - [XML Instructions](docs/xml-instructions.md) | [CX Studio](docs/cx-studio-integration.md) | [MCP Integration](docs/mcp-integration.md) | [Deployment](docs/deployment.md)
-- Feature deep dives: [AutoFix](docs/features/autofix.md) | [Judge Ops](docs/features/judge-ops.md) | [Context Workbench](docs/features/context-workbench.md) | [Prompt Optimization](docs/features/prompt-optimization.md) | [Registry](docs/features/registry.md) | [Trace Grading](docs/features/trace-grading.md) | [NL Scorer](docs/features/nl-scorer.md)
+- Feature deep dives: [Workbench](docs/features/workbench.md) | [AutoFix](docs/features/autofix.md) | [Judge Ops](docs/features/judge-ops.md) | [Context Workbench](docs/features/context-workbench.md) | [Prompt Optimization](docs/features/prompt-optimization.md) | [Registry](docs/features/registry.md) | [Trace Grading](docs/features/trace-grading.md) | [NL Scorer](docs/features/nl-scorer.md)
 
 ---
 
