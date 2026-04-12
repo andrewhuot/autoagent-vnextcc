@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .base import AgentAdapter, ImportedAgentSpec
+from .openai_agents import _extract_function_parameters
 
 
 def _extract_name(node: ast.AST) -> str:
@@ -97,11 +98,14 @@ class AnthropicClaudeAdapter(AgentAdapter):
                         if "tool" in target_name and isinstance(value, list):
                             for item in value:
                                 if isinstance(item, dict) and item.get("name"):
-                                    tools[str(item["name"])] = {
+                                    tool_entry: dict[str, Any] = {
                                         "name": str(item["name"]),
                                         "description": str(item.get("description", "")),
                                         "source_file": str(path),
                                     }
+                                    if item.get("input_schema"):
+                                        tool_entry["input_schema"] = item["input_schema"]
+                                    tools[str(item["name"])] = tool_entry
                         if "guardrail" in target_name:
                             guardrails[target.id] = {
                                 "name": target.id,
@@ -112,11 +116,15 @@ class AnthropicClaudeAdapter(AgentAdapter):
                 if isinstance(node, ast.FunctionDef):
                     decorator_names = [_extract_name(decorator) for decorator in node.decorator_list]
                     if node.name.startswith("tool_") or any(name == "tool" for name in decorator_names):
-                        tools[node.name] = {
+                        fn_tool_entry: dict[str, Any] = {
                             "name": node.name,
                             "description": ast.get_docstring(node) or "",
                             "source_file": str(path),
                         }
+                        fn_params = _extract_function_parameters(node)
+                        if fn_params:
+                            fn_tool_entry["parameters"] = fn_params
+                        tools[node.name] = fn_tool_entry
                     if "guardrail" in node.name.lower() or any("guardrail" in name.lower() for name in decorator_names):
                         guardrails[node.name] = {
                             "name": node.name,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -20,12 +22,18 @@ class RoutingConfig(BaseModel):
 
 
 class PromptsConfig(BaseModel):
-    """System prompts for all agents."""
+    """System prompts for all agents.
+
+    Supports both the legacy fixed fields (root/support/orders/recommendations)
+    and arbitrary specialist prompt keys via model_config extra="allow".
+    """
 
     root: str = "You are a helpful customer service agent."
     support: str = "You are a customer support specialist."
     orders: str = "You are an order management specialist."
     recommendations: str = "You are a product recommendation specialist."
+
+    model_config = {"extra": "allow"}
 
 
 class ToolConfig(BaseModel):
@@ -98,12 +106,60 @@ class OptimizerConfig(BaseModel):
     skill_max_candidates: int = 5  # Max skills to select per cycle
 
 
+class GuardrailConfig(BaseModel):
+    """Configuration for a single guardrail."""
+
+    name: str
+    type: str = "both"
+    enforcement: str = "block"
+    description: str = ""
+
+
+class HandoffConfig(BaseModel):
+    """Configuration for an agent-to-agent handoff."""
+
+    source: str = ""
+    target: str
+    condition: str = ""
+    context_transfer: str = "full"
+
+
+class PolicyConfig(BaseModel):
+    """Configuration for a behavioral policy."""
+
+    name: str
+    type: str = "behavioral"
+    enforcement: str = "recommended"
+    description: str = ""
+
+
+class McpServerConfig(BaseModel):
+    """Configuration for an MCP server reference."""
+
+    name: str
+    config: dict[str, Any] = Field(default_factory=dict)
+    tools_exposed: list[str] = Field(default_factory=list)
+
+
+class GenerationConfig(BaseModel):
+    """LLM generation settings."""
+
+    temperature: float | None = None
+    max_tokens: int | None = None
+
+
 class AgentConfig(BaseModel):
-    """Top-level agent configuration."""
+    """Top-level agent configuration.
+
+    Supports both legacy fixed-schema fields (tools, prompts with hardcoded
+    specialists) and new dynamic fields (tools_config, guardrails, handoffs,
+    policies, mcp_servers) for richer agent representations.
+    """
 
     routing: RoutingConfig = Field(default_factory=RoutingConfig)
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    tools_config: dict[str, Any] = Field(default_factory=dict)
     thresholds: ThresholdsConfig = Field(default_factory=ThresholdsConfig)
     context_caching: ContextCachingConfig = Field(
         default_factory=ContextCachingConfig
@@ -115,6 +171,34 @@ class AgentConfig(BaseModel):
     optimizer: OptimizerConfig = Field(default_factory=OptimizerConfig)
     model: str = "gemini-2.0-flash"
     quality_boost: bool = False
+    guardrails: list[GuardrailConfig] = Field(default_factory=list)
+    handoffs: list[HandoffConfig] = Field(default_factory=list)
+    policies: list[PolicyConfig] = Field(default_factory=list)
+    mcp_servers: list[McpServerConfig] = Field(default_factory=list)
+    generation: GenerationConfig = Field(default_factory=GenerationConfig)
+    adapter: dict[str, Any] = Field(default_factory=dict)
+
+
+    def to_canonical(self, *, name: str = "", platform: str = "") -> "CanonicalAgent":
+        """Convert this AgentConfig to a CanonicalAgent IR."""
+        from shared.canonical_ir_convert import from_config_dict
+
+        return from_config_dict(self.model_dump(), name=name, platform=platform)
+
+    @classmethod
+    def from_canonical(cls, agent: "CanonicalAgent") -> "AgentConfig":
+        """Build an AgentConfig from a CanonicalAgent IR."""
+        from shared.canonical_ir_convert import to_config_dict
+
+        config_dict = to_config_dict(agent)
+        return cls.model_validate(config_dict)
+
+
+# Deferred import for type annotation
+from typing import TYPE_CHECKING  # noqa: E402
+
+if TYPE_CHECKING:
+    from shared.canonical_ir import CanonicalAgent  # noqa: F401
 
 
 def validate_config(data: dict) -> AgentConfig:

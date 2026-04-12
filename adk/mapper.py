@@ -10,7 +10,10 @@ Never import from api/, web/, or other Layer 2 modules.
 from __future__ import annotations
 
 import copy
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from shared.canonical_ir import CanonicalAgent
 
 from cx_studio.types import (
     CxEditableFlow,
@@ -68,6 +71,20 @@ class AdkMapper:
 
     All methods are pure functions over their arguments — no I/O, no state.
     """
+
+    # ------------------------------------------------------------------
+    # ADK → Canonical IR
+    # ------------------------------------------------------------------
+
+    def to_canonical(self, agent_tree: AdkAgentTree) -> "CanonicalAgent":
+        """Convert an AdkAgentTree to the canonical CanonicalAgent IR.
+
+        This is the higher-fidelity conversion path that preserves sub-agent
+        hierarchy, tool parameters, and callback metadata as typed structures.
+        """
+        from shared.canonical_ir_convert import from_adk_tree
+
+        return from_adk_tree(agent_tree)
 
     # ------------------------------------------------------------------
     # ADK → AgentLab

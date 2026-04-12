@@ -46,6 +46,42 @@ def _module_constants(tree: ast.AST) -> dict[str, Any]:
     return constants
 
 
+def _extract_function_parameters(node: ast.FunctionDef) -> list[dict[str, Any]]:
+    """Extract typed parameter info from a function definition's AST."""
+    params: list[dict[str, Any]] = []
+    args = node.args
+
+    num_defaults = len(args.defaults)
+    num_args = len(args.args)
+    for i, arg in enumerate(args.args):
+        if arg.arg == "self":
+            continue
+        param: dict[str, Any] = {"name": arg.arg, "type": "string", "required": True}
+        if arg.annotation:
+            param["type"] = _annotation_to_str(arg.annotation)
+        default_index = i - (num_args - num_defaults)
+        if default_index >= 0:
+            param["required"] = False
+            default_val = _extract_value(args.defaults[default_index], {})
+            if default_val is not None:
+                param["default"] = default_val
+        params.append(param)
+    return params
+
+
+def _annotation_to_str(node: ast.AST) -> str:
+    """Convert an AST annotation node to a type string."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Constant):
+        return str(node.value)
+    if isinstance(node, ast.Attribute):
+        return f"{_annotation_to_str(node.value)}.{node.attr}"
+    if isinstance(node, ast.Subscript):
+        return f"{_annotation_to_str(node.value)}[{_annotation_to_str(node.slice)}]"
+    return "string"
+
+
 class OpenAIAgentsAdapter(AgentAdapter):
     """Import agent topology from projects built with OpenAI Agents."""
 
@@ -132,11 +168,15 @@ class OpenAIAgentsAdapter(AgentAdapter):
                 if isinstance(node, ast.FunctionDef):
                     decorator_names = [_extract_name(decorator) for decorator in node.decorator_list]
                     if "function_tool" in decorator_names:
-                        tools[node.name] = {
+                        tool_entry: dict[str, Any] = {
                             "name": node.name,
                             "description": ast.get_docstring(node) or "",
                             "source_file": str(path),
                         }
+                        fn_params = _extract_function_parameters(node)
+                        if fn_params:
+                            tool_entry["parameters"] = fn_params
+                        tools[node.name] = tool_entry
                     if "guardrail" in node.name.lower() or any("guardrail" in name.lower() for name in decorator_names):
                         guardrails[node.name] = {
                             "name": node.name,

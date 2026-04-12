@@ -5,7 +5,10 @@ from __future__ import annotations
 import abc
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from shared.canonical_ir import CanonicalAgent
 
 
 def slugify_label(value: str) -> str:
@@ -71,6 +74,16 @@ class ImportedAgentSpec:
                 "session_patterns": self.session_patterns,
             }
 
+    def to_canonical(self) -> CanonicalAgent:
+        """Convert this spec to a typed CanonicalAgent IR.
+
+        This is the preferred upgrade path from the flat dict-based
+        ImportedAgentSpec to the richer typed representation.
+        """
+        from shared.canonical_ir_convert import from_imported_spec
+
+        return from_imported_spec(self)
+
     def build_config(self) -> dict[str, Any]:
         """Build a starter AgentLab config from imported features."""
 
@@ -87,28 +100,70 @@ class ImportedAgentSpec:
                 }
             )
 
-        tools_config = {
-            str(tool.get("name")): {
+        tools_config: dict[str, Any] = {}
+        for tool in self.tools:
+            name = str(tool.get("name", ""))
+            if not name:
+                continue
+            entry: dict[str, Any] = {
                 "enabled": True,
                 "description": str(tool.get("description", "")),
             }
-            for tool in self.tools
-            if tool.get("name")
-        }
+            if tool.get("parameters"):
+                entry["parameters"] = tool["parameters"]
+            if tool.get("input_schema"):
+                entry["input_schema"] = tool["input_schema"]
+            if tool.get("invocation_hint"):
+                entry["invocation_hint"] = tool["invocation_hint"]
+            tools_config[name] = entry
+
         root_prompt = self.system_prompts[0] if self.system_prompts else (
             f"Imported from {self.platform}. Preserve the source runtime behavior while AgentLab evaluates improvements."
         )
-        return {
+
+        guardrails_list: list[dict[str, Any]] = []
+        for item in self.guardrails:
+            if not item.get("name"):
+                continue
+            g_entry: dict[str, Any] = {"name": item["name"]}
+            if item.get("description"):
+                g_entry["description"] = item["description"]
+            if item.get("type"):
+                g_entry["type"] = item["type"]
+            if item.get("enforcement"):
+                g_entry["enforcement"] = item["enforcement"]
+            guardrails_list.append(g_entry)
+
+        config: dict[str, Any] = {
             "model": self.metadata.get("model", f"imported-{self.adapter}"),
             "prompts": {"root": root_prompt},
             "routing": {"rules": routing_rules},
-            "tools": tools_config,
-            "guardrails": [item.get("name") for item in self.guardrails if item.get("name")],
+            "tools_config": tools_config,
+            "guardrails": guardrails_list,
             "adapter": {
                 "type": self.adapter,
                 "source": self.source,
             },
         }
+
+        if self.handoffs:
+            config["handoffs"] = [
+                {"source": str(h.get("source", self.agent_name)),
+                 "target": str(h.get("target", "")),
+                 "condition": str(h.get("condition", "")),
+                 "context_transfer": str(h.get("context_transfer", "full"))}
+                for h in self.handoffs if h.get("target")
+            ]
+
+        if self.mcp_refs:
+            config["mcp_servers"] = [
+                {"name": str(r.get("name", "")),
+                 "config": dict(r.get("config", {})),
+                 "tools_exposed": list(r.get("tools_exposed", []))}
+                for r in self.mcp_refs if r.get("name")
+            ]
+
+        return config
 
     def build_starter_evals(self) -> list[dict[str, Any]]:
         """Create starter eval fixtures from traces or discovered runtime features."""
