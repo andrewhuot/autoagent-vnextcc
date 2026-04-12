@@ -1,23 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Improvements } from './Improvements';
 
+const apiMocks = vi.hoisted(() => ({
+  useExperiments: vi.fn(),
+  useOptimizeHistory: vi.fn(),
+  useUnifiedReviewStats: vi.fn(),
+}));
+
 vi.mock('../lib/api', () => ({
-  useExperiments: () => ({
-    data: [],
-    isLoading: false,
-    isError: false,
-  }),
-  useOptimizeHistory: () => ({
-    data: [],
-    isLoading: false,
-    isError: false,
-  }),
-  useUnifiedReviewStats: () => ({
-    data: undefined,
-  }),
+  useExperiments: apiMocks.useExperiments,
+  useOptimizeHistory: apiMocks.useOptimizeHistory,
+  useUnifiedReviewStats: apiMocks.useUnifiedReviewStats,
 }));
 
 vi.mock('./Experiments', () => ({
@@ -41,6 +37,22 @@ function renderImprovements(initialEntry = '/improvements') {
 }
 
 describe('Improvements', () => {
+  beforeEach(() => {
+    apiMocks.useExperiments.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    });
+    apiMocks.useOptimizeHistory.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+    });
+    apiMocks.useUnifiedReviewStats.mockReturnValue({
+      data: undefined,
+    });
+  });
+
   it('renders the unified improvement workflow tabs', async () => {
     const user = userEvent.setup();
 
@@ -79,5 +91,43 @@ describe('Improvements', () => {
     const deployLink = screen.getByRole('link', { name: /Deploy/ });
     expect(deployLink).toBeInTheDocument();
     expect(deployLink).toHaveAttribute('href', '/deploy');
+  });
+
+  it('guides operators to review proposals when the review queue has pending work', () => {
+    apiMocks.useUnifiedReviewStats.mockReturnValue({
+      data: {
+        total_pending: 2,
+        total_approved: 0,
+      },
+    });
+
+    renderImprovements('/improvements?tab=review');
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Review')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: review proposals')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Review proposals' })).toHaveAttribute(
+      'href',
+      '/improvements?tab=review'
+    );
+  });
+
+  it('guides operators to deploy after improvements are approved', () => {
+    apiMocks.useUnifiedReviewStats.mockReturnValue({
+      data: {
+        total_pending: 0,
+        total_approved: 1,
+      },
+    });
+
+    renderImprovements();
+
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Current step: Review')).toBeInTheDocument();
+    expect(within(journey).getByText('Next: deploy approved improvements')).toBeInTheDocument();
+    expect(within(journey).getByRole('link', { name: 'Deploy approved improvements' })).toHaveAttribute(
+      'href',
+      '/deploy'
+    );
   });
 });

@@ -19,8 +19,10 @@ import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { ScoreDisplay } from '../components/ScoreDisplay';
 import { EvalGenerator } from '../components/EvalGenerator';
 import { GeneratedEvalReview } from '../components/GeneratedEvalReview';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { wsClient } from '../lib/websocket';
 import { useActiveAgent } from '../lib/active-agent';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
 import { formatTimestamp, statusVariant } from '../lib/utils';
 import type { AgentLibraryItem } from '../lib/types';
@@ -31,6 +33,37 @@ interface EvalJourneyState {
   source?: string;
   draftEvalCount?: number;
   latestUserRequest?: string;
+}
+
+/** Use selected eval evidence to point operators forward without inventing a hidden eval state. */
+function getEvalJourneySummary(input: {
+  activeAgent: AgentLibraryItem | null;
+  completedAgent: AgentLibraryItem | null;
+  completedRunId: string | null;
+}) {
+  if (input.completedAgent && input.completedRunId) {
+    return createJourneyStatusSummary({
+      currentStep: 'eval',
+      status: 'ready',
+      statusLabel: 'Eval complete',
+      summary: `${input.completedAgent.name} has a completed eval run. Use that same run context for Optimize.`,
+      nextLabel: 'Optimize candidate',
+      nextDescription: 'Open Optimize with the completed eval run and selected agent carried forward.',
+      href: `/optimize?agent=${encodeURIComponent(input.completedAgent.id)}&evalRunId=${encodeURIComponent(input.completedRunId)}`,
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'eval',
+    status: input.activeAgent ? 'ready' : 'blocked',
+    statusLabel: input.activeAgent ? 'Agent selected' : 'Agent needed',
+    summary: input.activeAgent
+      ? `${input.activeAgent.name} is selected. Run Eval before Optimize so the next step has evidence.`
+      : 'Choose a saved Build or Workbench candidate before starting Eval.',
+    nextLabel: 'Run eval',
+    nextDescription: 'Launch an evaluation against the selected saved config.',
+    href: input.activeAgent ? `/evals?agent=${encodeURIComponent(input.activeAgent.id)}&new=1` : '/build',
+  });
 }
 
 export function EvalRuns() {
@@ -68,6 +101,15 @@ export function EvalRuns() {
   const isAgentImproverHandoff =
     navigationState?.source === 'agent-improver' || searchParams.get('from') === 'agent-improver';
   const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
+  const latestCompletedRunId = useMemo(() => {
+    const completedRun = (runs || []).find((run) => run.status === 'completed');
+    return completedRun?.run_id ?? null;
+  }, [runs]);
+  const journeySummary = getEvalJourneySummary({
+    activeAgent,
+    completedAgent: completedAgent ?? (activeAgent && latestCompletedRunId ? activeAgent : null),
+    completedRunId: completedRunId ?? latestCompletedRunId,
+  });
 
   useEffect(() => {
     if (selectionHydratedRef.current) {
@@ -325,6 +367,8 @@ export function EvalRuns() {
       />
 
       <AgentSelector onChange={syncAgentSearchParam} />
+
+      <OperatorNextStepCard summary={journeySummary} />
 
       {completedAgent && completedRunId && (
         <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-4">

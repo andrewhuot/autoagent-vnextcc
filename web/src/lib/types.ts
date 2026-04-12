@@ -1322,6 +1322,7 @@ export type BuildArtifactStatus = 'draft' | 'complete' | 'exported';
 
 export interface BuildArtifact {
   artifact_id: string;
+  agent_id?: string;
   title: string;
   summary: string;
   source: BuildArtifactSource;
@@ -2176,6 +2177,31 @@ export interface DeployCardData {
   status: 'pending' | 'deploying' | 'deployed' | 'failed';
   canary_progress?: number;
   can_rollback: boolean;
+}
+
+export type OperatorJourneyStep =
+  | 'build'
+  | 'workbench'
+  | 'eval'
+  | 'optimize'
+  | 'review'
+  | 'deploy';
+
+export type OperatorJourneyStatus = 'blocked' | 'waiting' | 'ready' | 'active' | 'complete';
+
+export interface OperatorNextAction {
+  label: string;
+  description: string;
+  href?: string;
+  disabled?: boolean;
+}
+
+export interface JourneyStatusSummary {
+  currentStep: OperatorJourneyStep;
+  status: OperatorJourneyStatus;
+  statusLabel: string;
+  summary: string;
+  nextAction: OperatorNextAction;
 }
 
 export interface ClusterCardData {

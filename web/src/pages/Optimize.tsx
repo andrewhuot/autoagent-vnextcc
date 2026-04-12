@@ -27,7 +27,9 @@ import { PageHeader } from '../components/PageHeader';
 import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { AgentSelector } from '../components/AgentSelector';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { useActiveAgent } from '../lib/active-agent';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
 import {
   useAgents,
   useApproveReview,
@@ -478,6 +480,69 @@ function OptimizeTabButton({
   );
 }
 
+/** Summarize the optimize gate from selected agent, eval context, and pending proposal evidence. */
+function getOptimizeJourneySummary(input: {
+  activeAgent: AgentLibraryItem | null;
+  evalRunId: string | null;
+  pendingReviews: PendingReview[];
+  taskIsRunning: boolean;
+}) {
+  if (input.pendingReviews.length > 0) {
+    return createJourneyStatusSummary({
+      currentStep: 'optimize',
+      status: 'ready',
+      statusLabel: `${input.pendingReviews.length} proposal${input.pendingReviews.length === 1 ? '' : 's'} ready`,
+      summary: 'Optimize has proposal evidence waiting for human review. Review before deployment.',
+      nextLabel: 'Review proposals',
+      nextDescription: 'Open the unified review queue for pending optimization proposals.',
+      href: '/improvements?tab=review',
+    });
+  }
+
+  if (input.taskIsRunning) {
+    return createJourneyStatusSummary({
+      currentStep: 'optimize',
+      status: 'active',
+      statusLabel: 'Optimization running',
+      summary: 'Wait for the active optimization cycle to finish before reviewing proposals.',
+      nextLabel: 'Wait for results',
+      nextDescription: 'The review step becomes available after a proposal is produced.',
+    });
+  }
+
+  if (input.activeAgent && input.evalRunId) {
+    return createJourneyStatusSummary({
+      currentStep: 'optimize',
+      status: 'ready',
+      statusLabel: 'Eval context loaded',
+      summary: `${input.activeAgent.name} and eval run ${input.evalRunId.slice(0, 8)} are selected for this optimization cycle.`,
+      nextLabel: 'Start optimization',
+      nextDescription: 'Run Optimize, then review any proposal before Deploy.',
+    });
+  }
+
+  if (input.activeAgent) {
+    return createJourneyStatusSummary({
+      currentStep: 'optimize',
+      status: 'waiting',
+      statusLabel: 'Eval recommended',
+      summary: `${input.activeAgent.name} is selected. Run or choose an eval first so Optimize has evidence.`,
+      nextLabel: 'Run eval',
+      nextDescription: 'Open Eval Runs with this agent selected.',
+      href: `/evals?agent=${encodeURIComponent(input.activeAgent.id)}&new=1`,
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'optimize',
+    status: 'blocked',
+    statusLabel: 'Agent needed',
+    summary: 'Select a saved candidate and completed eval run before optimizing.',
+    nextLabel: 'Select agent',
+    nextDescription: 'Choose an agent from the library on this page.',
+  });
+}
+
 export function Optimize() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
@@ -634,6 +699,12 @@ function OptimizeRunSection({
     data: pendingReviews = [],
     refetch: refetchPendingReviews,
   } = usePendingReviews(taskIsRunning);
+  const journeySummary = getOptimizeJourneySummary({
+    activeAgent,
+    evalRunId,
+    pendingReviews,
+    taskIsRunning,
+  });
 
   useEffect(() => {
     const handleOptimizationEvent = (
@@ -875,6 +946,15 @@ function OptimizeRunSection({
 
   return (
     <div className="space-y-6">
+      <OperatorNextStepCard
+        summary={journeySummary}
+        onAction={
+          journeySummary.nextAction.label === 'Start optimization'
+            ? () => handleStart()
+            : undefined
+        }
+      />
+
       {!latestResult && completedRun && !taskIsRunning && (
         <section className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-4">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

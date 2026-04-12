@@ -122,33 +122,40 @@ describe('getRouteContext', () => {
 });
 
 describe('getDemoJourneyContext', () => {
-  it('returns a 5-step journey for the build page', () => {
+  it('returns a 6-step journey for the build page', () => {
     const ctx = getDemoJourneyContext('/build');
     expect(ctx).not.toBeNull();
-    expect(ctx!.stepLabel).toBe('Step 1 of 5');
+    expect(ctx!.stepLabel).toBe('Step 1 of 6');
     expect(ctx!.activeStep).toBe(0);
+  });
+
+  it('returns journey context for the workbench page', () => {
+    const ctx = getDemoJourneyContext('/workbench');
+    expect(ctx).not.toBeNull();
+    expect(ctx!.stepLabel).toBe('Step 2 of 6');
+    expect(ctx!.activeStep).toBe(1);
   });
 
   it('returns journey context for optimize pages', () => {
     const optimizeCtx = getDemoJourneyContext('/optimize');
     expect(optimizeCtx).not.toBeNull();
-    expect(optimizeCtx!.stepLabel).toBe('Step 3 of 5');
-    expect(optimizeCtx!.activeStep).toBe(2);
+    expect(optimizeCtx!.stepLabel).toBe('Step 4 of 6');
+    expect(optimizeCtx!.activeStep).toBe(3);
 
     const studioCtx = getDemoJourneyContext('/studio');
     expect(studioCtx).not.toBeNull();
-    expect(studioCtx!.stepLabel).toBe('Step 3 of 5');
+    expect(studioCtx!.stepLabel).toBe('Step 4 of 6');
   });
 
   it('returns journey context for improvements and deploy', () => {
     const improvementsCtx = getDemoJourneyContext('/improvements');
     expect(improvementsCtx).not.toBeNull();
-    expect(improvementsCtx!.stepLabel).toBe('Step 4 of 5');
+    expect(improvementsCtx!.stepLabel).toBe('Step 5 of 6');
 
     const deployCtx = getDemoJourneyContext('/deploy');
     expect(deployCtx).not.toBeNull();
-    expect(deployCtx!.stepLabel).toBe('Step 5 of 5');
-    expect(deployCtx!.activeStep).toBe(4);
+    expect(deployCtx!.stepLabel).toBe('Step 6 of 6');
+    expect(deployCtx!.activeStep).toBe(5);
   });
 
   it('returns null for pages not in the journey', () => {
@@ -215,7 +222,7 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: 'Build', level: 2 })).toBeInTheDocument();
     expect(screen.getByText('Journey')).toBeInTheDocument();
-    expect(screen.getAllByText('Step 1 of 5').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Step 1 of 6').length).toBeGreaterThan(0);
     expect(screen.getByRole('tab', { name: 'Prompt' })).toBeInTheDocument();
   });
 
@@ -248,7 +255,7 @@ describe('App', () => {
     render(createElement(App));
 
     expect(window.location.pathname).toBe('/evals');
-    expect(screen.getByText('Step 2 of 5')).toBeInTheDocument();
+    expect(screen.getByText('Step 3 of 6')).toBeInTheDocument();
     expect(await screen.findByText('Pick an agent to start evaluating')).toBeInTheDocument();
   });
 

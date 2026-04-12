@@ -31,6 +31,13 @@ import { ConversationFeed } from '../components/workbench/ConversationFeed';
 import { ArtifactViewer } from '../components/workbench/ArtifactViewer';
 import { ChatInput } from '../components/workbench/ChatInput';
 import { IterationControls } from '../components/workbench/IterationControls';
+import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
+import { createJourneyStatusSummary } from '../lib/operator-journey';
+import type {
+  RunSummary,
+  WorkbenchCanonicalModel,
+  WorkbenchTestResult,
+} from '../lib/workbench-api';
 
 function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   switch (status) {
@@ -54,6 +61,42 @@ function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   }
 }
 
+/** Derive Workbench readiness from the persisted build/test evidence already loaded by the page. */
+function getWorkbenchJourneySummary(input: {
+  buildStatus: BuildStatus;
+  canonicalModel: WorkbenchCanonicalModel | null;
+  lastTest: WorkbenchTestResult | null;
+  runSummary: RunSummary | null;
+}) {
+  const hasCandidate = Boolean(input.canonicalModel?.agents?.length);
+  const runCompleted = input.runSummary?.status === 'completed';
+  const validationPassed = input.lastTest?.status === 'passed';
+  const isReadyForEval = hasCandidate && (input.buildStatus === 'done' || runCompleted || validationPassed);
+
+  if (isReadyForEval) {
+    return createJourneyStatusSummary({
+      currentStep: 'workbench',
+      status: 'ready',
+      statusLabel: 'Candidate ready',
+      summary: 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
+      nextLabel: 'Run eval',
+      nextDescription: 'Open Eval Runs and launch the first evaluation for this candidate.',
+      href: '/evals?new=1',
+    });
+  }
+
+  return createJourneyStatusSummary({
+    currentStep: 'workbench',
+    status: hasCandidate ? 'waiting' : 'blocked',
+    statusLabel: hasCandidate ? 'Needs validation' : 'Candidate needed',
+    summary: hasCandidate
+      ? 'Finish validation or presentation in Workbench before Eval.'
+      : 'Describe the agent in Workbench so a candidate can be materialized first.',
+    nextLabel: 'Build candidate',
+    nextDescription: 'Use the Workbench prompt to create a candidate with artifacts and validation evidence.',
+  });
+}
+
 export function AgentWorkbench() {
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
@@ -67,6 +110,16 @@ export function AgentWorkbench() {
   const reset = useWorkbenchStore((s) => s.reset);
   const autoIterate = useWorkbenchStore((s) => s.autoIterate);
   const maxIterations = useWorkbenchStore((s) => s.maxIterations);
+  const buildStatus = useWorkbenchStore((s) => s.buildStatus);
+  const canonicalModel = useWorkbenchStore((s) => s.canonicalModel);
+  const lastTest = useWorkbenchStore((s) => s.lastTest);
+  const runSummary = useWorkbenchStore((s) => s.runSummary);
+  const journeySummary = getWorkbenchJourneySummary({
+    buildStatus,
+    canonicalModel,
+    lastTest,
+    runSummary,
+  });
 
   // Track the active stream controller so we can abort on unmount.
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -275,7 +328,8 @@ export function AgentWorkbench() {
   }, [dispatchEvent, setError]);
 
   return (
-    <div className="px-4 pb-6 pt-2">
+    <div className="space-y-4 px-4 pb-6 pt-2">
+      <OperatorNextStepCard summary={journeySummary} />
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
