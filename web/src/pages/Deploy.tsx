@@ -286,7 +286,7 @@ export function Deploy() {
               <span className="inline-flex rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-semibold uppercase text-sky-700">
                 Waiting
               </span>
-              <p className="text-xs font-medium text-gray-600">No active canary</p>
+              <p className="text-xs font-medium text-gray-600">No canary running</p>
               <p className="text-xs leading-5 text-gray-500">
                 Next: Deploy a candidate with the canary strategy to collect rollout evidence.
               </p>
@@ -316,7 +316,7 @@ export function Deploy() {
                 className="inline-flex items-center gap-1 rounded-lg border border-green-300 bg-white px-2.5 py-1 text-xs text-green-700 hover:bg-green-50 disabled:opacity-60"
               >
                 <ArrowUpCircle className="h-3.5 w-3.5" />
-                {promoteCanary.isPending ? 'Promoting...' : 'Promote canary'}
+                {promoteCanary.isPending ? 'Promoting...' : 'Promote from verdict'}
               </button>
               <button
                 onClick={handleRollback}

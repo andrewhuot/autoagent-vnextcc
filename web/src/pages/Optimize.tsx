@@ -659,7 +659,7 @@ export function Optimize() {
             to="/improvements"
             className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
           >
-            Open Improvements
+            Open Review
           </Link>
         }
       />
@@ -1367,7 +1367,7 @@ function OptimizeRunSection({
                   to="/improvements?tab=history"
                   className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                 >
-                  View in Improvements
+                  View review history
                 </Link>
                 <Link
                   to="/deploy"

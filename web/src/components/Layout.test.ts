@@ -198,7 +198,7 @@ describe('Sidebar', () => {
 
     expect(screen.getByText('You\'re on Review. Next up: Deploy.')).toBeInTheDocument();
     expect(
-      screen.getByText('Move left to right to keep the product feeling predictable: Setup, Build, Eval, Optimize, Review, then Deploy.')
+      screen.getByText('Move left to right to keep the product feeling predictable: Build, Workbench, Eval, Optimize, Review, then Deploy.')
     ).toBeInTheDocument();
     expect(screen.getAllByText('Optimize').length).toBeGreaterThan(0);
     expect(screen.getAllByText('Review').length).toBeGreaterThan(0);
