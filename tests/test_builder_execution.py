@@ -174,10 +174,43 @@ class TestProgressUpdate:
         assert updated.progress == 50
         assert updated.current_step == "Running evals"
 
-    def test_progress_capped_at_100(self, engine, session):
+    def test_progress_100_requires_completion_evidence(self, engine, events, session):
         task = engine.create_task(session_id=session.session_id, project_id="p", title="T", description="D", mode=ExecutionMode.ASK)
+        engine.start_task(task.task_id)
         updated = engine.progress_task(task.task_id, progress=150, current_step="Done")
+        assert updated.progress == 99
+        assert updated.status == TaskStatus.RUNNING
+        assert updated.metadata["progress_clamped_from"] == 150
+        assert "completion evidence" in updated.metadata["completion_blocked_reason"]
+
+        published = events.list_events(session_id=session.session_id)
+        progress_events = [event for event in published if event.task_id == task.task_id]
+        assert progress_events[-1].payload["progress"] == 99
+        assert progress_events[-1].payload["completion_blocked_reason"] == updated.metadata["completion_blocked_reason"]
+
+    def test_progress_allows_100_with_completion_evidence(self, engine, store, session):
+        task = engine.create_task(session_id=session.session_id, project_id="p", title="T", description="D", mode=ExecutionMode.ASK)
+        engine.start_task(task.task_id)
+        task.artifact_ids.append("art-1")
+        store.save_task(task)
+
+        updated = engine.progress_task(task.task_id, progress=100, current_step="Artifact verified")
+
         assert updated.progress == 100
+        assert "completion_blocked_reason" not in updated.metadata
+
+    def test_complete_task_clears_progress_blocker_metadata(self, engine, session):
+        task = engine.create_task(session_id=session.session_id, project_id="p", title="T", description="D", mode=ExecutionMode.ASK)
+        engine.start_task(task.task_id)
+        clamped = engine.progress_task(task.task_id, progress=100, current_step="Done")
+        assert clamped.progress == 99
+
+        completed = engine.complete_task(task.task_id, artifact_ids=["art-1"])
+
+        assert completed.progress == 100
+        assert completed.status == TaskStatus.COMPLETED
+        assert "progress_clamped_from" not in completed.metadata
+        assert "completion_blocked_reason" not in completed.metadata
 
     def test_progress_missing_task_returns_none(self, engine):
         assert engine.progress_task("nonexistent", progress=50, current_step="Step") is None

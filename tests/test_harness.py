@@ -848,7 +848,7 @@ async def test_workbench_service_run_iteration_stream_raises_on_missing_project(
 # ---------------------------------------------------------------------------
 
 def test_get_plan_snapshot_includes_harness_state(tmp_path: Path) -> None:
-    """get_plan_snapshot includes harness_state with last_metrics and checkpoint_count."""
+    """get_plan_snapshot includes compact durable harness state for rehydration."""
     store = WorkbenchStore(tmp_path / "wb.json")
     service = WorkbenchService(store)
 
@@ -859,14 +859,20 @@ def test_get_plan_snapshot_includes_harness_state(tmp_path: Path) -> None:
     project["harness_state"] = {
         "checkpoints": [{"task_id": "t1"}, {"task_id": "t2"}],
         "last_metrics": {"steps_completed": 8, "elapsed_seconds": 1.23},
+        "latest_handoff": {
+            "run_id": "run-1",
+            "next_action": "Review generated artifacts.",
+        },
     }
     store.save_project(project)
 
     snapshot = service.get_plan_snapshot(project_id=project_id)
     hs = snapshot["harness_state"]
     assert hs["checkpoint_count"] == 2
+    assert hs["recent_checkpoints"] == [{"task_id": "t1"}, {"task_id": "t2"}]
     assert hs["last_metrics"]["steps_completed"] == 8
     assert hs["last_metrics"]["elapsed_seconds"] == 1.23
+    assert hs["latest_handoff"]["run_id"] == "run-1"
 
 
 def test_get_plan_snapshot_harness_state_absent_when_not_set(tmp_path: Path) -> None:
@@ -879,6 +885,34 @@ def test_get_plan_snapshot_harness_state_absent_when_not_set(tmp_path: Path) -> 
     hs = snapshot["harness_state"]
     assert hs["checkpoint_count"] == 0
     assert hs["last_metrics"] is None
+    assert hs["recent_checkpoints"] == []
+    assert hs["latest_handoff"] is None
+
+
+def test_validation_failed_handoff_points_to_validation_checks(tmp_path: Path) -> None:
+    """Failed validation should not look like a generic unexplained failure."""
+    store = WorkbenchStore(tmp_path / "wb.json")
+    service = WorkbenchService(store)
+    project = store.create_project(brief="Build a refund agent.")
+    run = service._start_run(  # noqa: SLF001 - direct handoff contract setup.
+        project,
+        brief="Build a refund agent.",
+        target="portable",
+        environment="draft",
+    )
+    validation = {
+        "run_id": "validation-1",
+        "status": "failed",
+        "checks": [{"name": "exports_compile", "passed": False, "detail": "Missing source."}],
+    }
+    project["last_test"] = validation
+    run["validation"] = validation
+    run["status"] = "failed"
+    handoff = service._refresh_run_handoff(project, run)  # noqa: SLF001
+
+    assert handoff["verification"]["status"] == "failed"
+    assert "validation" in handoff["next_action"].lower()
+    assert "failure reason" not in handoff["next_action"].lower()
 
 
 # ---------------------------------------------------------------------------

@@ -9,6 +9,15 @@ export interface HarnessMetrics {
   costUsd: number;
   elapsedMs: number;
   currentPhase: 'planning' | 'executing' | 'reflecting' | 'presenting' | 'idle';
+  contextBudget?: {
+    totalTokens: number;
+    conversationTokens: number;
+    planTokens: number;
+    artifactTokens: number;
+    modelTokens: number;
+    conversationCount: number;
+    artifactCount: number;
+  };
 }
 
 export interface IterationEntry {
@@ -25,6 +34,35 @@ export interface ReflectionEntry {
   qualityScore: number;
   suggestions: string[];
   timestamp: number;
+}
+
+export interface RunSummary {
+  run_id?: string;
+  runId?: string;
+  status: string;
+  phase: string;
+  mode: string;
+  provider: string;
+  model: string;
+  duration_ms?: number;
+  durationMs?: number;
+  tokens_used?: number;
+  tokensUsed?: number;
+  cost_usd?: number;
+  costUsd?: number;
+  artifacts_produced?: number;
+  artifactsProduced?: number;
+  operations_applied?: number;
+  operationsApplied?: number;
+  validation_status?: string | null;
+  validationStatus?: string | null;
+  changes: Array<{
+    operation: string;
+    category: string;
+    name: string;
+  }>;
+  recommended_action?: string;
+  recommendedAction?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +142,8 @@ export interface BuildStreamEvent {
     | 'run.recovered'
     | 'harness.metrics'
     | 'reflection.completed'
-    | 'iteration.started'
+    | 'harness.heartbeat'
+    | 'progress.stall'
     | 'error'
     | string;
   data: Record<string, unknown>;
@@ -181,21 +220,7 @@ export interface WorkbenchPlanSnapshot {
   conversation?: WorkbenchConversationMessage[];
   turns?: WorkbenchTurnRecord[];
   harness_state?: WorkbenchHarnessState;
-}
-
-export interface WorkbenchHarnessState {
-  checkpoint_count: number;
-  last_metrics: WorkbenchHarnessStateMetrics | null;
-}
-
-export interface WorkbenchHarnessStateMetrics {
-  steps_completed?: number;
-  total_steps?: number;
-  tokens_used?: number;
-  cost_usd?: number;
-  elapsed_ms?: number;
-  elapsed_seconds?: number;
-  current_phase?: HarnessMetrics['currentPhase'] | string;
+  run_summary?: RunSummary | null;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -424,6 +449,71 @@ export interface WorkbenchTelemetrySummary {
   budget_breach?: Record<string, unknown> | null;
 }
 
+export interface WorkbenchRunHandoff {
+  project_id?: string;
+  run_id: string;
+  turn_id?: string | null;
+  iteration_id?: string | null;
+  phase?: string;
+  status?: string;
+  updated_at?: string;
+  last_event: {
+    sequence?: number;
+    event?: string;
+    phase?: string;
+    status?: string;
+    created_at?: string;
+  } | null;
+  progress: {
+    total_tasks: number;
+    completed_tasks: number;
+    running_tasks?: number;
+    blocked_tasks?: number;
+    current_task?: {
+      task_id?: string;
+      title?: string;
+      status?: string;
+    } | null;
+  };
+  metrics?: Record<string, unknown> | null;
+  verification: {
+    status: string;
+    passed_checks?: number;
+    total_checks?: number;
+    blocking?: boolean;
+  };
+  latest_artifact?: {
+    artifact_id?: string;
+    task_id?: string;
+    name?: string;
+    category?: string;
+    summary?: string;
+  } | null;
+  recent_checkpoints?: Record<string, unknown>[];
+  budget?: {
+    usage?: Record<string, unknown>;
+    breach?: Record<string, unknown> | null;
+  };
+  failure_reason?: string | null;
+  cancel_reason?: string | null;
+  recovery?: Record<string, unknown> | null;
+  next_action: string;
+}
+
+export interface WorkbenchHarnessState {
+  checkpoint_count: number;
+  recent_checkpoints?: Record<string, unknown>[];
+  last_metrics?: {
+    steps_completed?: number;
+    total_steps?: number;
+    tokens_used?: number;
+    cost_usd?: number;
+    elapsed_ms?: number;
+    current_phase?: HarnessMetrics['currentPhase'];
+  } | null;
+  latest_handoff?: WorkbenchRunHandoff | null;
+}
+
 export interface WorkbenchRun {
   run_id: string;
   project_id?: string;
@@ -444,10 +534,11 @@ export interface WorkbenchRun {
   mode_reason?: string;
   budget?: WorkbenchBudget;
   telemetry_summary?: WorkbenchTelemetrySummary;
+  summary?: RunSummary | null;
   failure_reason?: string | null;
   cancel_reason?: string | null;
   review_gate?: WorkbenchReviewGate | null;
-  handoff?: WorkbenchHandoff | null;
+  handoff?: WorkbenchRunHandoff | null;
   events: WorkbenchRunEvent[];
   messages: WorkbenchMessage[];
   validation: WorkbenchTestResult | null;
