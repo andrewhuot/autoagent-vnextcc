@@ -1,13 +1,13 @@
 # AutoFix Copilot
 
-Automated failure analysis and constrained repair proposals. AutoFix identifies why your agent is failing, generates targeted fix proposals, and applies them through a gated deployment pipeline.
+Automated failure analysis and constrained repair proposals. AutoFix identifies why your agent is failing, generates targeted fix proposals, and applies them through a reviewed mutation pipeline.
 
 ## How it works
 
-AutoFix runs a six-stage pipeline:
+AutoFix runs a four-stage pipeline:
 
 ```
-failure analysis → constrained proposals → human review → apply → eval → canary deploy
+failure analysis → constrained proposals → human review → apply
 ```
 
 1. **Failure analysis.** Scans recent conversation failures, classifies them by type (tool failure, routing error, safety violation, etc.), and identifies the most impactful patterns.
@@ -18,9 +18,15 @@ failure analysis → constrained proposals → human review → apply → eval �
 
 4. **Apply.** Applies the mutation to a candidate config. The original config is preserved for rollback.
 
-5. **Eval.** Runs the full eval suite against the candidate config. The candidate must pass all gates (safety, regression) and show statistically significant improvement.
+### What happens after apply
 
-6. **Canary deploy.** Successful candidates are deployed via canary. Traffic is gradually shifted, and the system monitors for regressions before full promotion.
+After AutoFix applies a mutation, the candidate config is saved but **not automatically evaluated or deployed**. To validate the fix:
+
+1. Run an eval: `agentlab eval run` or `POST /api/eval/run`
+2. Compare results against baseline: `agentlab eval results`
+3. If improvement is confirmed, deploy via canary: `agentlab deploy canary` or `POST /api/deploy/canary`
+
+These steps use the same eval and deployment infrastructure as the standard optimization loop — they are simply not auto-triggered by AutoFix. This keeps the operator in control of when evaluation budget is spent and when changes go live.
 
 ## CLI commands
 
@@ -70,7 +76,10 @@ agentlab autofix apply fix_001
 agentlab eval run --output after_fix.json
 agentlab eval results --file after_fix.json
 
-# 5. Check history
+# 5. Deploy if satisfied
+agentlab deploy canary
+
+# 6. Check history
 agentlab autofix history
 ```
 

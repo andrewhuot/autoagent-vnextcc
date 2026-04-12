@@ -12,7 +12,7 @@ Versions are immutable. Rolling back means activating a previous version, not ed
 
 The `DriftMonitor` tracks judge agreement rates over time. It compares recent scoring patterns against a baseline window and flags significant shifts.
 
-Key parameters:
+Key parameters (configured in `agentlab.yaml`):
 
 ```yaml
 optimizer:
@@ -20,10 +20,24 @@ optimizer:
   max_judge_variance: 0.03    # Maximum scoring variance before flagging
 ```
 
-When drift exceeds the threshold, the system:
-- Flags the judge for review
-- Optionally pauses auto-promotion of experiments scored by the drifting judge
-- Emits an event via the SSE stream
+The `drift_threshold` value is passed to the DriftMonitor at server startup and controls the sensitivity of drift detection.
+
+### What drift detection does
+
+When drift exceeds the configured threshold, the system generates a `DriftAlert` containing:
+- The affected grader ID
+- Alert type (agreement drift, position bias, or verbosity bias)
+- Severity score (0.0–1.0)
+- Historical vs recent agreement rates
+
+Alerts are returned via `GET /api/judges/drift`.
+
+### What drift detection does NOT do (yet)
+
+- **Auto-pause promotion** — Drift alerts do not currently block or pause experiment promotion. Operators must check drift status manually and decide whether to pause optimization.
+- **SSE event emission** — Drift alerts are not currently pushed via SSE. Poll the drift endpoint to check status.
+
+These capabilities are planned for a future release.
 
 ## Human feedback
 
@@ -76,7 +90,7 @@ agentlab judges drift         # Check for scoring drift
 | `GET` | `/api/judges` | List judges and their versions |
 | `POST` | `/api/judges/feedback` | Submit human feedback on a score |
 | `GET` | `/api/judges/calibration` | Calibration report |
-| `GET` | `/api/judges/drift` | Drift analysis |
+| `GET` | `/api/judges/drift` | Drift analysis (includes configured threshold) |
 
 ## The judge stack
 

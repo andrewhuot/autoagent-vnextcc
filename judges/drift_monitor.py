@@ -44,15 +44,20 @@ class DriftAlert:
 class DriftMonitor:
     """Monitors judge verdicts for drift and bias patterns."""
 
-    def __init__(self, calibration_suite: JudgeCalibrationSuite | None = None) -> None:
+    def __init__(
+        self,
+        calibration_suite: JudgeCalibrationSuite | None = None,
+        drift_threshold: float = 0.1,
+    ) -> None:
         self._calibration_suite = calibration_suite
+        self.drift_threshold = drift_threshold
 
     def check_agreement_drift(
         self,
         verdicts: list[dict],
         window_size: int = 50,
     ) -> DriftAlert | None:
-        """Compare recent window agreement vs historical; alert if drift > 0.1.
+        """Compare recent window agreement vs historical; alert if drift exceeds threshold.
 
         Each verdict dict must contain at least 'score' (float) and
         'expected' (float) keys.  Agreement means |score - expected| <= 0.1.
@@ -76,7 +81,7 @@ class DriftMonitor:
         historical_rate = _agreement_rate(historical)
         drift = historical_rate - recent_rate
 
-        if drift <= 0.1:
+        if drift <= self.drift_threshold:
             return None
 
         severity = min(drift, 1.0)

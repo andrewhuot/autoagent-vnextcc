@@ -21,7 +21,7 @@ The analyzer also computes:
 
 - **Utilization** -- Percentage of context window actually used
 - **Failure correlations** -- Whether context size correlates with failure rates
-- **Handoff scoring** -- How efficiently context is transferred between agents during handoffs
+- **Handoff scoring** -- Information retention during agent-to-agent transitions (word overlap fidelity metric)
 
 ## CompactionSimulator
 
@@ -43,7 +43,7 @@ The `ContextMetrics` data class captures per-trace measurements:
 - Growth rate
 - Peak utilization
 - Compaction events
-- Handoff efficiency
+- Handoff fidelity (when agent transitions are detected)
 
 ## CLI commands
 
@@ -54,7 +54,7 @@ agentlab context analyze --trace trace_abc123
 # Simulate compaction strategies
 agentlab context simulate --strategy balanced
 
-# Generate a full context health report
+# Check aggregate report (returns available data or defaults if no traces analyzed)
 agentlab context report
 ```
 
@@ -62,28 +62,28 @@ agentlab context report
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/context/analysis/{id}` | Context analysis for a trace |
-| `POST` | `/api/context/simulate` | Simulate compaction strategy |
-| `GET` | `/api/context/report` | Context health report |
+| `GET` | `/api/context/analysis/{id}` | Context analysis for a trace (fully functional) |
+| `POST` | `/api/context/simulate` | Simulate compaction strategy (fully functional) |
+| `GET` | `/api/context/report` | Aggregate context health (returns defaults when no traces are available) |
 
 ## Example workflow
 
 ```bash
-# 1. Get a high-level report
-agentlab context report
-# → Growth pattern: exponential (3 agents)
-# → Average utilization: 78%
-# → Failure correlation: moderate (r=0.42)
-
-# 2. Drill into a problematic trace
+# 1. Analyze a specific trace
 agentlab context analyze --trace trace_abc123
 # → Pattern: exponential
 # → Peak: 12,400 tokens (82% of window)
+# → Handoff fidelity: 0.73
 # → Cause: tool output from order lookup not compacted
 
-# 3. Simulate a fix
+# 2. Simulate a fix
 agentlab context simulate --strategy balanced
 # → Estimated savings: 3,200 tokens
 # → Quality impact: -0.5%
 # → Recommendation: Safe to apply
+
+# 3. Check aggregate health (requires prior per-trace analyses)
+agentlab context report
 ```
+
+> **Note:** The aggregate report endpoint (`/api/context/report`) currently returns default values when no trace analyses have been performed. Run per-trace analysis first to populate the system with data. The per-trace analysis and compaction simulator are fully functional.

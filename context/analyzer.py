@@ -47,6 +47,16 @@ class ContextCorrelation:
 
 
 @dataclass
+class HandoffScore:
+    """Score for a single agent-to-agent handoff event."""
+
+    from_agent: str
+    to_agent: str
+    turn_number: int
+    fidelity: float  # 0.0–1.0, information retention ratio
+
+
+@dataclass
 class ContextAnalysis:
     """Full analysis result for a single trace."""
 
@@ -57,6 +67,14 @@ class ContextAnalysis:
     avg_utilization: float
     context_correlations: list[ContextCorrelation]
     recommendations: list[str]
+    handoff_scores: list[HandoffScore] = field(default_factory=list)
+
+    @property
+    def avg_handoff_fidelity(self) -> float:
+        """Average fidelity across all scored handoffs (0.0 if none)."""
+        if not self.handoff_scores:
+            return 0.0
+        return sum(h.fidelity for h in self.handoff_scores) / len(self.handoff_scores)
 
     def to_dict(self) -> dict:
         """Serialize to a plain dict."""
@@ -81,6 +99,16 @@ class ContextAnalysis:
                 }
                 for c in self.context_correlations
             ],
+            "handoff_scores": [
+                {
+                    "from_agent": h.from_agent,
+                    "to_agent": h.to_agent,
+                    "turn_number": h.turn_number,
+                    "fidelity": round(h.fidelity, 4),
+                }
+                for h in self.handoff_scores
+            ],
+            "avg_handoff_fidelity": round(self.avg_handoff_fidelity, 4),
             "recommendations": self.recommendations,
         }
 
@@ -100,6 +128,7 @@ class ContextAnalyzer:
         snapshots = self.measure_utilization(trace_events)
         growth = self.detect_growth_pattern(snapshots)
         correlations = self.find_failure_correlations(trace_events, snapshots)
+        handoff_scores = self._score_handoffs(trace_events)
 
         peak = max((s.utilization for s in snapshots), default=0.0)
         avg = (
@@ -127,6 +156,12 @@ class ContextAnalyzer:
                     f"Failure rate spikes above {corr.threshold_tokens} tokens "
                     f"(strength {corr.correlation_strength:.2f})."
                 )
+        if handoff_scores:
+            avg_fidelity = sum(h.fidelity for h in handoff_scores) / len(handoff_scores)
+            if avg_fidelity < 0.5:
+                recommendations.append(
+                    f"Low handoff fidelity ({avg_fidelity:.0%}) — context may be lost during agent transitions."
+                )
 
         trace_id = trace_events[0].get("trace_id", str(uuid.uuid4())) if trace_events else str(uuid.uuid4())
 
@@ -138,6 +173,7 @@ class ContextAnalyzer:
             avg_utilization=avg,
             context_correlations=correlations,
             recommendations=recommendations,
+            handoff_scores=handoff_scores,
         )
 
     def measure_utilization(self, trace_events: list[dict]) -> list[ContextSnapshot]:
@@ -259,6 +295,35 @@ class ContextAnalyzer:
             )
 
         return correlations
+
+    def _score_handoffs(self, trace_events: list[dict]) -> list[HandoffScore]:
+        """Score all handoff events in a trace for information retention."""
+        scores: list[HandoffScore] = []
+        previous_context = ""
+        previous_agent = ""
+
+        for i, evt in enumerate(trace_events):
+            current_agent = evt.get("agent_path", "")
+
+            # Detect agent transition (handoff) by agent_path change
+            if current_agent and previous_agent and current_agent != previous_agent:
+                handoff_summary = evt.get("handoff_summary", "") or evt.get("context_summary", "")
+                if handoff_summary and previous_context:
+                    fidelity = self.score_handoff(handoff_summary, previous_context)
+                    scores.append(HandoffScore(
+                        from_agent=previous_agent,
+                        to_agent=current_agent,
+                        turn_number=i,
+                        fidelity=fidelity,
+                    ))
+
+            # Accumulate context from this event for potential future handoff scoring
+            content = evt.get("content", "") or evt.get("message", "")
+            if content:
+                previous_context = content
+            previous_agent = current_agent
+
+        return scores
 
     def score_handoff(self, handoff_summary: str, original_context: str) -> float:
         """Measure information retention as simple word overlap ratio."""

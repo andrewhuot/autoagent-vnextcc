@@ -85,10 +85,17 @@ async def calibration(request: Request, judge_id: str | None = None) -> dict[str
 
 @router.get("/drift")
 async def drift(request: Request) -> dict[str, Any]:
-    """Drift metrics from the drift monitor."""
+    """Drift metrics from the drift monitor.
+
+    Note: Drift detection requires judge verdicts to be collected over time.
+    When no verdicts are available, the response will show zero alerts.
+    Use /api/judges/feedback to submit verdicts that feed drift analysis.
+    """
     drift_monitor = request.app.state.drift_monitor
     alerts = drift_monitor.run_all_checks(verdicts=[])
     return {
         "alerts": [a.to_dict() for a in alerts],
         "count": len(alerts),
+        "configured_threshold": drift_monitor.drift_threshold,
+        "note": "Drift detection requires accumulated judge verdicts. Submit verdicts via /api/judges/feedback to enable drift analysis." if not alerts else None,
     }

@@ -262,6 +262,8 @@ async def lifespan(app: FastAPI):
         significance_min_effect_size=runtime.eval.significance_min_effect_size,
         significance_iterations=runtime.eval.significance_iterations,
         significance_min_pairs=runtime.eval.significance_min_pairs,
+        search_strategy=runtime.optimizer.search_strategy,
+        bandit_policy=runtime.optimizer.bandit_policy,
         skill_engine=skill_engine,
         use_skills=True,
         skill_selection_strategy="auto",
@@ -400,7 +402,9 @@ async def lifespan(app: FastAPI):
 
     app.state.grader_version_store = GraderVersionStore()
     app.state.human_feedback_store = HumanFeedbackStore()
-    app.state.drift_monitor = DriftMonitor()
+    app.state.drift_monitor = DriftMonitor(
+        drift_threshold=runtime.optimizer.drift_threshold,
+    )
 
     # Context Workbench
     from context.analyzer import ContextAnalyzer

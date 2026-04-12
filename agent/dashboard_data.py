@@ -116,7 +116,7 @@ class DashboardDataService:
                 "command": "agentlab quickstart --verbose",
             }
         else:
-            stage = "Pro mode unlocked — scale with canaries and automation"
+            stage = "Advanced mode unlocked — scale with canaries and automation"
             next_action = {
                 "label": "Run continuous loop",
                 "command": "agentlab loop --max-cycles 20 --stop-on-plateau",
