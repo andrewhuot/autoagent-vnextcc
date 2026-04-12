@@ -1,7 +1,4 @@
-/**
- * Empty state for the right preview pane — matches Image 1's "Processes
- * paused, click to wake up" idiom.
- */
+/** Empty state for the right preview pane. */
 
 import { Sparkles } from 'lucide-react';
 

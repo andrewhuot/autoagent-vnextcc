@@ -55,6 +55,34 @@ describe('ArtifactViewer', () => {
     expect(screen.queryByText('AGENT PREVIEW')).not.toBeInTheDocument();
   });
 
+  it('groups less common artifact categories under Other', async () => {
+    const user = userEvent.setup();
+    useWorkbenchStore.setState({
+      artifacts: [
+        ...useWorkbenchStore.getState().artifacts,
+        {
+          id: 'art-callback',
+          task_id: 'task-callback',
+          category: 'callback',
+          name: 'After response callback',
+          summary: 'Callback summary',
+          preview: 'CALLBACK PREVIEW',
+          source: 'CALLBACK SOURCE',
+          language: 'python',
+          created_at: '2026-04-11T00:00:00Z',
+          version: 1,
+        },
+      ],
+    });
+
+    render(<ArtifactViewer />);
+    await user.click(screen.getByRole('button', { name: /Other/ }));
+
+    expect(screen.getByText('After response callback')).toBeInTheDocument();
+    expect(screen.getByText('CALLBACK')).toBeInTheDocument();
+    expect(screen.getByText('PREVIEW')).toBeInTheDocument();
+  });
+
   it('does not show the Diff tab when there are no previous version artifacts', () => {
     render(<ArtifactViewer />);
     expect(screen.queryByRole('button', { name: 'Diff' })).not.toBeInTheDocument();

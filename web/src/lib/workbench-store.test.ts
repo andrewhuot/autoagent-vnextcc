@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import type { BuildStreamEvent, PlanTask, WorkbenchArtifact } from './workbench-api';
-import { useWorkbenchStore } from './workbench-store';
+import type { BuildStreamEvent, PlanTask, WorkbenchArtifact, WorkbenchRun } from './workbench-api';
+import { isWorkbenchBuildActive, useWorkbenchStore } from './workbench-store';
 
 function makePlan(): PlanTask {
   return {
@@ -61,6 +61,29 @@ function makeArtifact(overrides: Partial<WorkbenchArtifact> = {}): WorkbenchArti
 
 function dispatch(event: BuildStreamEvent) {
   useWorkbenchStore.getState().dispatchEvent(event);
+}
+
+function makeRun(overrides: Partial<WorkbenchRun> = {}): WorkbenchRun {
+  return {
+    run_id: 'run-1',
+    project_id: 'wb-42',
+    brief: 'Build agent',
+    target: 'portable',
+    environment: 'draft',
+    status: 'running',
+    phase: 'planning',
+    started_version: 1,
+    completed_version: null,
+    created_at: '2026-04-11T00:00:00Z',
+    updated_at: '2026-04-11T00:00:01Z',
+    completed_at: null,
+    error: null,
+    events: [],
+    messages: [],
+    validation: null,
+    presentation: null,
+    ...overrides,
+  };
 }
 
 describe('workbench-store', () => {
@@ -473,6 +496,13 @@ describe('workbench-store — harness features', () => {
     useWorkbenchStore.getState().reset();
   });
 
+  it('classifies reflecting and presenting as active build states', () => {
+    expect(isWorkbenchBuildActive('starting')).toBe(true);
+    expect(isWorkbenchBuildActive('reflecting')).toBe(true);
+    expect(isWorkbenchBuildActive('presenting')).toBe(true);
+    expect(isWorkbenchBuildActive('done')).toBe(false);
+  });
+
   it('stores harness metrics from harness.metrics event', () => {
     dispatch({
       event: 'harness.metrics',
@@ -490,6 +520,75 @@ describe('workbench-store — harness features', () => {
     expect(state.harnessMetrics?.currentPhase).toBe('executing');
     expect(state.harnessMetrics?.stepsCompleted).toBe(2);
     expect(state.harnessMetrics?.tokensUsed).toBe(1200);
+  });
+
+  it('hydrates last harness metrics from the plan snapshot harness state', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      projectName: 'Hydrated Harness',
+      target: 'portable',
+      environment: 'draft',
+      version: 2,
+      harnessState: {
+        checkpoint_count: 2,
+        last_metrics: {
+          steps_completed: 3,
+          total_steps: 5,
+          tokens_used: 1200,
+          cost_usd: 0.04,
+          elapsed_seconds: 2.5,
+          current_phase: 'executing',
+        },
+      },
+    });
+
+    expect(useWorkbenchStore.getState().harnessMetrics).toEqual({
+      stepsCompleted: 3,
+      totalSteps: 5,
+      tokensUsed: 1200,
+      costUsd: 0.04,
+      elapsedMs: 2500,
+      currentPhase: 'executing',
+    });
+  });
+
+  it('keeps stale recovery details visible after hydration', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      projectName: 'Recovered Harness',
+      target: 'portable',
+      environment: 'draft',
+      version: 1,
+      buildStatus: 'error',
+      activeRun: makeRun({
+        status: 'failed',
+        phase: 'terminal',
+        failure_reason: 'stale_interrupted',
+        error: 'Run interrupted after process recovery; last update was 90 seconds ago.',
+      }),
+    });
+
+    expect(useWorkbenchStore.getState().error).toBe(
+      'Run interrupted after process recovery; last update was 90 seconds ago.'
+    );
+  });
+
+  it('keeps cancellation reason visible after hydration', () => {
+    useWorkbenchStore.getState().hydrate({
+      projectId: 'wb-42',
+      projectName: 'Cancelled Harness',
+      target: 'portable',
+      environment: 'draft',
+      version: 1,
+      buildStatus: 'cancelled',
+      activeRun: makeRun({
+        status: 'cancelled',
+        phase: 'terminal',
+        cancel_reason: 'operator stopped run',
+      }),
+    });
+
+    expect(useWorkbenchStore.getState().error).toBe('operator stopped run');
   });
 
   it('stores reflections from reflection.completed event', () => {

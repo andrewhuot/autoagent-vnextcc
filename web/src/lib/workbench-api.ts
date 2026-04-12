@@ -180,6 +180,22 @@ export interface WorkbenchPlanSnapshot {
   last_brief?: string;
   conversation?: WorkbenchConversationMessage[];
   turns?: WorkbenchTurnRecord[];
+  harness_state?: WorkbenchHarnessState;
+}
+
+export interface WorkbenchHarnessState {
+  checkpoint_count: number;
+  last_metrics: WorkbenchHarnessStateMetrics | null;
+}
+
+export interface WorkbenchHarnessStateMetrics {
+  steps_completed?: number;
+  total_steps?: number;
+  tokens_used?: number;
+  cost_usd?: number;
+  elapsed_ms?: number;
+  elapsed_seconds?: number;
+  current_phase?: HarnessMetrics['currentPhase'] | string;
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';

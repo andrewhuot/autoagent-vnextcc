@@ -14,15 +14,17 @@
  */
 
 import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2, RotateCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, Loader2, RotateCw } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import {
+  isWorkbenchBuildActive,
   useWorkbenchStore,
   type AssistantMessage,
+  type BuildStatus,
   type WorkbenchTurn,
 } from '../../lib/workbench-store';
 import { walkTasks } from '../../lib/workbench-plan';
-import type { WorkbenchArtifact } from '../../lib/workbench-api';
+import type { WorkbenchArtifact, WorkbenchRun } from '../../lib/workbench-api';
 import { AssistantMessageCard } from './AssistantMessageCard';
 import { ArtifactCard } from './ArtifactCard';
 import { PlanTreeView } from './PlanTreeView';
@@ -45,6 +47,7 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
     (s) => s.currentIterationIndex
   );
   const reflections = useWorkbenchStore((s) => s.reflections);
+  const activeRun = useWorkbenchStore((s) => s.activeRun);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -75,10 +78,8 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
 
   // Messages that never got tagged with a turn (safety net for transient
   // state while turn.started hasn't landed yet).
-  const orphanMessages = useMemo(
-    () => messages.filter((m) => !m.turnId && turns.length === 0),
-    [messages, turns]
-  );
+  const pendingMessages = useMemo(() => messages.filter((m) => !m.turnId), [messages]);
+  const terminalNotice = buildTerminalNotice(buildStatus, error, activeRun);
 
   return (
     <div
@@ -100,7 +101,7 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
           </div>
         )}
 
-        {orphanMessages.map((message) => (
+        {turns.length === 0 && pendingMessages.map((message) => (
           <AssistantMessageCard
             key={message.id}
             message={message}
@@ -110,7 +111,7 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
 
         {turnGroups.map((group, index) => {
           const isLast = index === turnGroups.length - 1;
-          const isActive = group.turn.turnId === activeTurnId && buildStatus === 'running';
+          const isActive = group.turn.turnId === activeTurnId && isWorkbenchBuildActive(buildStatus);
           return (
             <TurnBlock
               key={group.turn.turnId}
@@ -122,9 +123,18 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
               currentIterationIndex={
                 isActive ? currentIterationIndex : group.turn.iterationCount
               }
+              buildStatus={buildStatus}
             />
           );
         })}
+
+        {turns.length > 0 && pendingMessages.map((message) => (
+          <AssistantMessageCard
+            key={message.id}
+            message={message}
+            role={message.id.startsWith('msg-user-') ? 'user' : 'assistant'}
+          />
+        ))}
 
         {/* Reflection cards from the harness reflect phase */}
         {reflections.length > 0 && (
@@ -144,16 +154,27 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
             <CheckCircle2 className="h-3.5 w-3.5" />
             <span>
               {turns.length === 1
-                ? 'Build complete. Canonical model updated with the new plan.'
-                : `Turn ${turns.length} complete. Send another follow-up to keep refining.`}
+                ? 'Candidate ready for human review. Inspect artifacts, source, and the review gate before promotion.'
+                : `Turn ${turns.length} complete. Review the updated candidate or send another follow-up.`}
             </span>
           </div>
         )}
 
-        {error && (
-          <div className="flex items-center gap-2 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-error-weak)] px-3 py-2 text-[12px] text-[color:var(--wb-error)]">
-            <AlertTriangle className="h-3.5 w-3.5" />
-            <span>{error}</span>
+        {terminalNotice && (
+          <div
+            className={classNames(
+              'flex items-center gap-2 rounded-md border px-3 py-2 text-[12px]',
+              terminalNotice.tone === 'error'
+                ? 'border-[color:var(--wb-border)] bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]'
+                : 'border-[color:var(--wb-border)] bg-[color:var(--wb-warn-weak)] text-[color:var(--wb-warn)]'
+            )}
+          >
+            {terminalNotice.tone === 'error' ? (
+              <AlertTriangle className="h-3.5 w-3.5" />
+            ) : (
+              <Info className="h-3.5 w-3.5" />
+            )}
+            <span>{terminalNotice.message}</span>
           </div>
         )}
       </div>
@@ -209,6 +230,7 @@ interface TurnBlockProps {
   isLast: boolean;
   runningTask: { title: string } | null;
   currentIterationIndex: number;
+  buildStatus: BuildStatus;
 }
 
 function TurnBlock({
@@ -218,6 +240,7 @@ function TurnBlock({
   isLast,
   runningTask,
   currentIterationIndex,
+  buildStatus,
 }: TurnBlockProps) {
   const { turn, userMessage, assistantMessages, artifacts, plan } = group;
   const validation = turn.validation;
@@ -252,11 +275,12 @@ function TurnBlock({
           className={classNames(
             'rounded-full px-2 py-0.5 text-[10px]',
             turn.status === 'completed' && 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]',
-            turn.status === 'error' && 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]',
-            turn.status === 'running' && 'bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]'
+            (turn.status === 'error' || turn.status === 'failed') && 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]',
+            turn.status === 'cancelled' && 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]',
+            (turn.status === 'running' || turn.status === 'reflecting' || turn.status === 'presenting') && 'bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]'
           )}
         >
-          {turn.status}
+          {turn.status === 'cancelled' ? 'stopped' : turn.status}
         </span>
       </header>
 
@@ -315,23 +339,85 @@ function TurnBlock({
         </div>
       )}
 
-      {isActive && isLast && runningTask && (
-        <div
-          className="flex items-center gap-2 rounded-md border border-dashed border-[color:var(--wb-border)] px-3 py-2 text-[12px] text-[color:var(--wb-text-soft)]"
-          aria-live="polite"
-        >
-          <Loader2 className="h-3.5 w-3.5 animate-spin text-[color:var(--wb-accent)]" />
-          <span>
-            <span className="text-[color:var(--wb-text-dim)]">Next:&nbsp;</span>
-            {runningTask.title}
-            {currentIterationIndex > 0 && (
-              <span className="ml-2 text-[color:var(--wb-text-dim)]">
-                (pass {currentIterationIndex + 1})
-              </span>
-            )}
-          </span>
-        </div>
+      {isActive && isLast && (
+        <LiveRunNotice
+          buildStatus={buildStatus}
+          runningTask={runningTask}
+          currentIterationIndex={currentIterationIndex}
+        />
       )}
     </section>
   );
+}
+
+function LiveRunNotice({
+  buildStatus,
+  runningTask,
+  currentIterationIndex,
+}: {
+  buildStatus: BuildStatus;
+  runningTask: { title: string } | null;
+  currentIterationIndex: number;
+}) {
+  const Icon = buildStatus === 'presenting' ? CheckCircle2 : Loader2;
+  const isSpinning = buildStatus !== 'presenting';
+  return (
+    <div
+      className="flex items-center gap-2 rounded-md border border-dashed border-[color:var(--wb-border)] px-3 py-2 text-[12px] text-[color:var(--wb-text-soft)]"
+      aria-live="polite"
+    >
+      <Icon
+        className={classNames(
+          'h-3.5 w-3.5 text-[color:var(--wb-accent)]',
+          isSpinning && 'animate-spin'
+        )}
+      />
+      <span>
+        {runningTask ? (
+          <>
+            <span className="text-[color:var(--wb-text-dim)]">Next:&nbsp;</span>
+            {runningTask.title}
+          </>
+        ) : (
+          livePhaseCopy(buildStatus)
+        )}
+        {currentIterationIndex > 0 && (
+          <span className="ml-2 text-[color:var(--wb-text-dim)]">
+            (pass {currentIterationIndex + 1})
+          </span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+function livePhaseCopy(status: BuildStatus): string {
+  if (status === 'starting' || status === 'queued') return 'Waiting for the run to start.';
+  if (status === 'reflecting') return 'Validating generated outputs.';
+  if (status === 'presenting') return 'Preparing the review handoff.';
+  return 'Working through the plan.';
+}
+
+function buildTerminalNotice(
+  buildStatus: BuildStatus,
+  error: string | null,
+  activeRun: WorkbenchRun | null
+): { tone: 'warning' | 'error'; message: string } | null {
+  if (buildStatus === 'cancelled') {
+    return {
+      tone: 'warning',
+      message: activeRun?.cancel_reason ?? error ?? 'Run stopped by operator.',
+    };
+  }
+  if (buildStatus !== 'error' && !error) return null;
+  if (activeRun?.failure_reason === 'stale_interrupted') {
+    return {
+      tone: 'warning',
+      message: activeRun.error ?? error ?? 'Recovered an interrupted run after reload.',
+    };
+  }
+  return {
+    tone: 'error',
+    message: error ?? activeRun?.error ?? 'Workbench run failed.',
+  };
 }
