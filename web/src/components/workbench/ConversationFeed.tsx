@@ -277,10 +277,11 @@ function TurnBlock({
             turn.status === 'completed' && 'bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]',
             (turn.status === 'error' || turn.status === 'failed') && 'bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]',
             turn.status === 'cancelled' && 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]',
+            turn.status === 'interrupted' && 'bg-[color:var(--wb-warn-weak)] text-[color:var(--wb-warn)]',
             (turn.status === 'running' || turn.status === 'reflecting' || turn.status === 'presenting') && 'bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]'
           )}
         >
-          {turn.status === 'cancelled' ? 'stopped' : turn.status}
+          {turn.status === 'cancelled' ? 'stopped' : turn.status === 'interrupted' ? 'interrupted' : turn.status}
         </span>
       </header>
 
@@ -407,6 +408,12 @@ function buildTerminalNotice(
     return {
       tone: 'warning',
       message: activeRun?.cancel_reason ?? error ?? 'Run stopped by operator.',
+    };
+  }
+  if (buildStatus === 'interrupted' || activeRun?.status === 'interrupted') {
+    return {
+      tone: 'warning',
+      message: activeRun?.error ?? error ?? 'Interrupted run restored after restart.',
     };
   }
   if (buildStatus !== 'error' && !error) return null;

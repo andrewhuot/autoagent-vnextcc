@@ -51,6 +51,7 @@ class BuilderChatService:
     ) -> None:
         """Initialize the session store and shared dependencies."""
         self._sessions: dict[str, BuilderChatSession] = {}
+        self._restored_session_ids: set[str] = set()
         self._studio_service = studio_service or TranscriptIntelligenceService()
         self._build_artifact_store = build_artifact_store
         self._db_path = db_path
@@ -91,6 +92,7 @@ class BuilderChatService:
                 session = _deserialize_session(row["payload"])
                 if session is not None:
                     self._sessions[session.session_id] = session
+                    self._restored_session_ids.add(session.session_id)
             except Exception:
                 continue
 
@@ -115,6 +117,7 @@ class BuilderChatService:
     def handle_message(self, message: str, session_id: str | None = None) -> dict[str, Any]:
         """Apply one conversational message to a builder session."""
         session = self._get_or_create_session(session_id)
+        self._restored_session_ids.discard(session.session_id)
         user_message = BuilderChatMessage(role="user", content=message.strip())
         session.messages.append(user_message)
 
@@ -139,17 +142,25 @@ class BuilderChatService:
             key=lambda s: s.updated_at,
             reverse=True,
         )[:limit]
-        return [
-            {
-                "session_id": s.session_id,
-                "agent_name": s.config.agent_name,
-                "message_count": len(s.messages),
-                "mock_mode": s.mock_mode,
-                "created_at": s.created_at,
-                "updated_at": s.updated_at,
-            }
-            for s in sessions
-        ]
+        summaries: list[dict[str, Any]] = []
+        for session in sessions:
+            continuity = self._session_continuity(session)
+            summaries.append(
+                {
+                    "session_id": session.session_id,
+                    "agent_name": session.config.agent_name,
+                    "message_count": len(session.messages),
+                    "mock_mode": session.mock_mode,
+                    "created_at": session.created_at,
+                    "updated_at": session.updated_at,
+                    "continuity": continuity,
+                    "continuity_state": continuity["state"],
+                    "state_label": continuity["label"],
+                    "state_detail": continuity["detail"],
+                    "can_resume": True,
+                }
+            )
+        return summaries
 
     def export_session(self, session_id: str, format_name: str = "yaml") -> dict[str, str] | None:
         """Serialize one builder config for download."""
@@ -200,6 +211,7 @@ class BuilderChatService:
 
     def serialize_session(self, session: BuilderChatSession) -> dict[str, Any]:
         """Convert session state to the frontend-facing response shape."""
+        continuity = self._session_continuity(session)
         return {
             "session_id": session.session_id,
             "mock_mode": session.mock_mode,
@@ -213,6 +225,26 @@ class BuilderChatService:
             },
             "evals": asdict(session.evals) if session.evals is not None else None,
             "updated_at": session.updated_at,
+            "continuity": continuity,
+            "continuity_state": continuity["state"],
+            "state_label": continuity["label"],
+            "state_detail": continuity["detail"],
+        }
+
+    def _session_continuity(self, session: BuilderChatSession) -> dict[str, Any]:
+        """Return whether this session is current process work or restart history."""
+        if session.session_id in self._restored_session_ids:
+            return {
+                "state": "historical",
+                "label": "Historical session",
+                "detail": "This builder chat was restored from durable storage after restart. Resume it to continue editing.",
+                "is_live": False,
+            }
+        return {
+            "state": "live",
+            "label": "Live session",
+            "detail": "This builder chat was created during the current server process.",
+            "is_live": True,
         }
 
     # ------------------------------------------------------------------

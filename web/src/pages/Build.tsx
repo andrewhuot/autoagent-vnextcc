@@ -580,14 +580,15 @@ export function BuilderChatWorkspace({
   const builderLastChange = getLastUserTurn(messages);
   const builderHasPreview = Boolean(previewResult);
   const builderHasSaved = Boolean(savedAgent || saveResult);
+  const restoredHistoricalSession = session?.continuity?.state === 'historical';
 
   const body = (
     <>
       {!session && priorSessions.length > 0 && (
         <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-4">
-          <h3 className="text-sm font-semibold text-blue-900">Resume a previous session</h3>
+          <h3 className="text-sm font-semibold text-blue-900">Restart recovery</h3>
           <p className="mt-1 text-xs text-blue-700">
-            Your builder chat sessions are saved. Pick up where you left off or start fresh below.
+            Durable builder chat sessions remain available after restart. Resume one to continue editing saved history.
           </p>
           <div className="mt-3 flex flex-wrap gap-2">
             {priorSessions.map((s) => (
@@ -595,10 +596,18 @@ export function BuilderChatWorkspace({
                 key={s.session_id}
                 onClick={() => resumeSession(s.session_id)}
                 disabled={pending}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-60"
+                className="inline-flex max-w-sm flex-col items-start gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-2 text-left text-xs font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-60"
               >
-                <MessageSquare className="h-3 w-3" />
-                {s.agent_name} ({s.message_count} msgs)
+                <span className="inline-flex items-center gap-1.5">
+                  <MessageSquare className="h-3 w-3" />
+                  {s.agent_name} ({s.message_count} msgs)
+                </span>
+                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-blue-700">
+                  {s.continuity?.label ?? 'Historical session'}
+                </span>
+                <span className="font-normal leading-5 text-blue-700">
+                  {s.continuity?.detail ?? 'This builder chat was restored from durable storage after restart. Resume it to continue editing.'}
+                </span>
               </button>
             ))}
             <button
@@ -607,6 +616,21 @@ export function BuilderChatWorkspace({
             >
               Start fresh
             </button>
+          </div>
+        </section>
+      )}
+      {restoredHistoricalSession && (
+        <section className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold text-blue-900">Restored historical session</h3>
+              <p className="mt-1 text-xs leading-5 text-blue-700">
+                This is saved history, not a live in-flight build. Continue editing to make it live again.
+              </p>
+            </div>
+            <span className="rounded-full border border-blue-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-blue-700">
+              {session.continuity?.label ?? 'Historical session'}
+            </span>
           </div>
         </section>
       )}

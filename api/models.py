@@ -34,6 +34,10 @@ class TaskStatus(BaseModel):
     error: Optional[str] = Field(None, description="Error message if failed")
     created_at: datetime = Field(..., description="Task creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
+    continuity: Optional[dict[str, Any]] = Field(None, description="Live/historical restart context")
+    continuity_state: Optional[str] = Field(None, description="Compact continuity state")
+    state_label: Optional[str] = Field(None, description="User-facing continuity label")
+    state_detail: Optional[str] = Field(None, description="User-facing continuity explanation")
 
 
 # ---------------------------------------------------------------------------

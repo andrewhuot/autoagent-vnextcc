@@ -269,6 +269,43 @@ describe('EvalRuns', () => {
     expect(screen.queryByRole('button', { name: 'Set Up First Eval' })).not.toBeInTheDocument();
   });
 
+  it('explains interrupted eval runs as restart-stopped historical work', () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [
+        {
+          run_id: 'run-interrupted-1234',
+          timestamp: '2026-04-12T14:00:00Z',
+          status: 'interrupted',
+          progress: 42,
+          composite_score: 0,
+          total_cases: 0,
+          passed_cases: 0,
+          mode: 'live',
+          continuity: {
+            state: 'interrupted',
+            label: 'Interrupted by restart',
+            detail: 'This task was pending or running when the server restarted. It did not finish; rerun it to continue.',
+            is_live: false,
+            is_historical: true,
+            can_rerun: true,
+          },
+        },
+      ],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage('/evals?agent=agent-v002');
+
+    expect(screen.getByText('Interrupted by restart')).toBeInTheDocument();
+    expect(
+      screen.getByText('This task was pending or running when the server restarted. It did not finish; rerun it to continue.')
+    ).toBeInTheDocument();
+    expect(screen.getByText('Durable history')).toBeInTheDocument();
+  });
+
   it('explains Agent Improver handoff when opening the eval generator', async () => {
     apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
 

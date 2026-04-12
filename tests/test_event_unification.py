@@ -506,6 +506,83 @@ class TestEndToEndEventFlow:
         assert "eval_completed_broadcast" in types
         assert "loop_cycle_broadcast" in types
 
+    def test_unified_endpoint_exposes_durable_source_metadata(self, tmp_path: Path) -> None:
+        """The event viewer should know unified results include durable stores."""
+        fastapi = pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+        from api.routes.events import router
+
+        app = fastapi.FastAPI()
+        app.include_router(router)
+        event_log = EventLog(str(tmp_path / "event_log.db"))
+        durable = DurableEventStore(db_path=str(tmp_path / "builder_events.db"))
+        broker = EventBroker(durable_store=durable, system_event_log=event_log)
+        app.state.event_log = event_log
+        app.state.builder_events = broker
+
+        event_log.append(event_type="eval_started", payload={"run_id": "eval-1"})
+        broker.publish(BuilderEventType.TASK_STARTED, "session-1", "task-1", {"phase": "plan"})
+
+        response = TestClient(app).get("/api/events/unified")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["count"] == 2
+        assert payload["sources"] == {
+            "system": {"included": True, "durable": True, "label": "System event log"},
+            "builder": {"included": True, "durable": True, "label": "Builder event history"},
+        }
+        assert payload["continuity"] == {
+            "state": "historical",
+            "label": "Durable event history",
+            "detail": "This timeline merges persisted system events and builder events so history remains visible after restart.",
+        }
+
+    def test_unified_endpoint_source_all_explicitly_merges_every_store(self, tmp_path: Path) -> None:
+        """source=all should match the default merged restart history view."""
+        fastapi = pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+        from api.routes.events import router
+
+        app = fastapi.FastAPI()
+        app.include_router(router)
+        event_log = EventLog(str(tmp_path / "event_log.db"))
+        durable = DurableEventStore(db_path=str(tmp_path / "builder_events.db"))
+        broker = EventBroker(durable_store=durable, system_event_log=event_log)
+        app.state.event_log = event_log
+        app.state.builder_events = broker
+
+        event_log.append(event_type="eval_started", payload={"run_id": "eval-1"})
+        broker.publish(BuilderEventType.TASK_STARTED, "session-1", "task-1", {"phase": "plan"})
+
+        response = TestClient(app).get("/api/events/unified?source=all")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["count"] == 2
+        assert {event["source"] for event in payload["events"]} == {"system", "builder"}
+        assert payload["sources"]["system"]["included"] is True
+        assert payload["sources"]["builder"]["included"] is True
+        assert payload["continuity"]["label"] == "Durable event history"
+
+    def test_unified_endpoint_rejects_unknown_source(self, tmp_path: Path) -> None:
+        """Unknown source filters should fail instead of returning an empty history."""
+        fastapi = pytest.importorskip("fastapi")
+        from fastapi.testclient import TestClient
+        from api.routes.events import router
+
+        app = fastapi.FastAPI()
+        app.include_router(router)
+        app.state.event_log = EventLog(str(tmp_path / "event_log.db"))
+        app.state.builder_events = EventBroker(
+            durable_store=DurableEventStore(db_path=str(tmp_path / "builder_events.db"))
+        )
+
+        response = TestClient(app).get("/api/events/unified?source=unknown")
+
+        assert response.status_code == 400
+        assert response.json()["detail"] == "source must be one of: all, system, builder"
+
 
 # ---------------------------------------------------------------------------
 # 5. Regression: existing event types still work

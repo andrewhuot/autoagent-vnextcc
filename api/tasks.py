@@ -36,6 +36,7 @@ class Task:
         self._thread: threading.Thread | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        continuity = _task_continuity(self.status)
         return {
             "task_id": self.task_id,
             "task_type": self.task_type,
@@ -45,7 +46,55 @@ class Task:
             "error": self.error,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat(),
+            "continuity": continuity,
+            "continuity_state": continuity["state"],
+            "state_label": _task_state_label(self.status, continuity),
+            "state_detail": _task_state_detail(self.status, continuity),
         }
+
+
+def _task_continuity(status: str) -> dict[str, Any]:
+    """Return display metadata explaining whether task state is live history."""
+    if status in ("pending", "running"):
+        return {
+            "state": "live",
+            "label": "Live task",
+            "detail": "This task is still active and may update while the server is running.",
+            "is_live": True,
+            "is_historical": False,
+            "can_rerun": False,
+        }
+    if status == "interrupted":
+        return {
+            "state": "interrupted",
+            "label": "Interrupted by restart",
+            "detail": "This task was pending or running when the server restarted. It did not finish; rerun it to continue.",
+            "is_live": False,
+            "is_historical": True,
+            "can_rerun": True,
+        }
+    return {
+        "state": "historical",
+        "label": "Historical task",
+        "detail": "This task record was restored from durable history.",
+        "is_live": False,
+        "is_historical": True,
+        "can_rerun": False,
+    }
+
+
+def _task_state_label(status: str, continuity: dict[str, Any]) -> str:
+    """Return a compact top-level label for task lists."""
+    if status == "interrupted":
+        return "Interrupted after restart"
+    return str(continuity["label"])
+
+
+def _task_state_detail(status: str, continuity: dict[str, Any]) -> str:
+    """Return a compact top-level detail for task lists."""
+    if status == "interrupted":
+        return "This task was active during a server restart. Start a new run to continue."
+    return str(continuity["detail"])
 
 
 def _serialize_result(result: Any) -> str | None:
@@ -131,6 +180,8 @@ class TaskManager:
 
             if task.status in ("running", "pending"):
                 task.status = "interrupted"
+                if not task.error:
+                    task.error = _task_state_detail("interrupted", _task_continuity("interrupted"))
                 task.updated_at = datetime.now(timezone.utc)
                 interrupted_ids.append(task.task_id)
 
@@ -140,8 +191,8 @@ class TaskManager:
             with sqlite3.connect(self._db_path) as conn:
                 now = datetime.now(timezone.utc).isoformat()
                 conn.executemany(
-                    "UPDATE tasks SET status = 'interrupted', updated_at = ? WHERE task_id = ?",
-                    [(now, tid) for tid in interrupted_ids],
+                    "UPDATE tasks SET status = 'interrupted', error = COALESCE(error, ?), updated_at = ? WHERE task_id = ?",
+                    [(_task_state_detail("interrupted", _task_continuity("interrupted")), now, tid) for tid in interrupted_ids],
                 )
 
     def _persist_task(self, task: Task) -> None:

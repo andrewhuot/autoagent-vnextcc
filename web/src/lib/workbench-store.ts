@@ -91,7 +91,8 @@ export type BuildStatus =
   | 'presenting'
   | 'done'
   | 'error'
-  | 'cancelled';
+  | 'cancelled'
+  | 'interrupted';
 
 const ACTIVE_BUILD_STATUSES = new Set<BuildStatus>([
   'starting',
@@ -1328,6 +1329,9 @@ function deriveHydrationNotice(
 ): string | null {
   if (!activeRun) return null;
   const status = String(activeRun.status ?? buildStatus);
+  if (buildStatus === 'interrupted' || status === 'interrupted') {
+    return activeRun.error ?? 'Interrupted run restored after restart.';
+  }
   if (buildStatus === 'cancelled' || status === 'cancelled') {
     return activeRun.cancel_reason ?? 'Run cancelled by operator.';
   }

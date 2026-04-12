@@ -6,11 +6,45 @@ that merges system events with builder events for a single timeline.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from builder.events import event_to_dict
 
 router = APIRouter(prefix="/api/events", tags=["events"])
+
+
+def _event_source_metadata(source: str | None, has_builder_events: bool) -> dict[str, dict]:
+    """Return display metadata for the event stores included in a query."""
+    return {
+        "system": {
+            "included": source in (None, "system"),
+            "durable": True,
+            "label": "System event log",
+        },
+        "builder": {
+            "included": source in (None, "builder") and has_builder_events,
+            "durable": has_builder_events,
+            "label": "Builder event history",
+        },
+    }
+
+
+def _normalize_event_source(source: str | None) -> str | None:
+    """Normalize the event source query so clients can request every store explicitly."""
+    if source is None or source == "all":
+        return None
+    if source in {"system", "builder"}:
+        return source
+    raise HTTPException(status_code=400, detail="source must be one of: all, system, builder")
+
+
+def _history_continuity() -> dict[str, str]:
+    """Describe the unified event timeline as durable restart-safe history."""
+    return {
+        "state": "historical",
+        "label": "Durable event history",
+        "detail": "This timeline merges persisted system events and builder events so history remains visible after restart.",
+    }
 
 
 @router.get("")
@@ -43,7 +77,9 @@ async def list_unified_events(
     """
     event_log = request.app.state.event_log
     builder_events_broker = getattr(request.app.state, "builder_events", None)
-    include_builder = source in (None, "builder") and builder_events_broker is not None
+    normalized_source = _normalize_event_source(source)
+    include_builder = normalized_source in (None, "builder") and builder_events_broker is not None
+    source_metadata = _event_source_metadata(normalized_source, builder_events_broker is not None)
 
     # Bridged builder event types appear in both system EventLog and builder
     # DurableEventStore.  When querying both sources, exclude the bridged copies
@@ -57,7 +93,7 @@ async def list_unified_events(
     merged: list[dict] = []
 
     # Collect system events
-    if source in (None, "system"):
+    if normalized_source in (None, "system"):
         system_events = event_log.list_events(limit=limit, session_id=session_id)
         for evt in system_events:
             # Skip bridged builder events when builder source is also included
@@ -68,6 +104,8 @@ async def list_unified_events(
                 "timestamp": evt["timestamp"],
                 "event_type": evt["event_type"],
                 "source": "system",
+                "source_label": source_metadata["system"]["label"],
+                "continuity_state": "historical",
                 "session_id": evt.get("session_id"),
                 "payload": evt.get("payload", {}),
             })
@@ -85,6 +123,8 @@ async def list_unified_events(
                 "timestamp": evt_dict["timestamp"],
                 "event_type": evt_dict["event_type"],
                 "source": "builder",
+                "source_label": source_metadata["builder"]["label"],
+                "continuity_state": "historical",
                 "session_id": evt_dict.get("session_id"),
                 "payload": evt_dict.get("payload", {}),
             })
@@ -93,4 +133,9 @@ async def list_unified_events(
     merged.sort(key=lambda e: e["timestamp"], reverse=True)
     merged = merged[:limit]
 
-    return {"events": merged, "count": len(merged)}
+    return {
+        "events": merged,
+        "count": len(merged),
+        "sources": source_metadata,
+        "continuity": _history_continuity(),
+    }
