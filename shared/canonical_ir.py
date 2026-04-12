@@ -236,6 +236,59 @@ class EnvironmentConfig(BaseModel):
     model_config = {"extra": "allow"}
 
 
+class TransitionSpec(BaseModel):
+    """A single transition in a state machine graph (CX transition route, ADK routing edge)."""
+
+    target: str = ""
+    condition: str = ""
+    intent: str = ""
+    fulfillment_message: str = ""
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+
+class EventHandlerSpec(BaseModel):
+    """A handler triggered by a named event within a flow or state."""
+
+    event: str = ""
+    action: str = ""
+    fulfillment_message: str = ""
+    target: str = ""
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+
+class StateSpec(BaseModel):
+    """A state (page) within a flow — entry behavior, transitions, event handlers."""
+
+    name: str = ""
+    display_name: str = ""
+    entry_fulfillment: str = ""
+    form_parameters: list[dict[str, Any]] = Field(default_factory=list)
+    transitions: list[TransitionSpec] = Field(default_factory=list)
+    event_handlers: list[EventHandlerSpec] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+
+class FlowSpec(BaseModel):
+    """A named flow (state machine subgraph) containing states and transitions."""
+
+    name: str = ""
+    display_name: str = ""
+    description: str = ""
+    states: list[StateSpec] = Field(default_factory=list)
+    transitions: list[TransitionSpec] = Field(default_factory=list)
+    event_handlers: list[EventHandlerSpec] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {"extra": "allow"}
+
+
 class CanonicalAgent(BaseModel):
     """Platform-neutral typed representation of an agent.
 
@@ -254,6 +307,7 @@ class CanonicalAgent(BaseModel):
     policies: list[PolicySpec] = Field(default_factory=list)
     guardrails: list[GuardrailSpec] = Field(default_factory=list)
     handoffs: list[HandoffSpec] = Field(default_factory=list)
+    flows: list[FlowSpec] = Field(default_factory=list)
     sub_agents: list[CanonicalAgent] = Field(default_factory=list)
     mcp_servers: list[McpServerRef] = Field(default_factory=list)
     environment: EnvironmentConfig = Field(default_factory=EnvironmentConfig)
@@ -296,3 +350,23 @@ class CanonicalAgent(BaseModel):
         if not self.instructions:
             return ""
         return max(self.instructions, key=lambda i: i.priority).content
+
+    def flow_names(self) -> list[str]:
+        """Return names of all flows."""
+        return [f.name for f in self.flows]
+
+    def all_states(self) -> list[StateSpec]:
+        """Collect all states across all flows."""
+        result: list[StateSpec] = []
+        for flow in self.flows:
+            result.extend(flow.states)
+        return result
+
+    def all_transitions(self) -> list[TransitionSpec]:
+        """Collect all transitions across all flows and states."""
+        result: list[TransitionSpec] = []
+        for flow in self.flows:
+            result.extend(flow.transitions)
+            for state in flow.states:
+                result.extend(state.transitions)
+        return result

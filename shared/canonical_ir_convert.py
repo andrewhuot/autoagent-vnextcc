@@ -16,8 +16,10 @@ from .canonical_ir import (
     ConditionType,
     ContextTransfer,
     EnvironmentConfig,
+    EventHandlerSpec,
     FidelityNote,
     FidelityStatus,
+    FlowSpec,
     GuardrailEnforcement,
     GuardrailSpec,
     GuardrailType,
@@ -30,9 +32,11 @@ from .canonical_ir import (
     PolicySpec,
     PolicyType,
     RoutingRuleSpec,
+    StateSpec,
     ToolContract,
     ToolInvocationHint,
     ToolParameter,
+    TransitionSpec,
 )
 
 
@@ -487,6 +491,10 @@ def to_config_dict(agent: CanonicalAgent) -> dict[str, Any]:
             gen["max_tokens"] = agent.environment.max_tokens
         config["generation"] = gen
 
+    # Flows (state machine graphs)
+    if agent.flows:
+        config["flows"] = [_serialize_flow(f) for f in agent.flows]
+
     # MCP servers
     if agent.mcp_servers:
         config["mcp_servers"] = [
@@ -713,6 +721,17 @@ def from_config_dict(
         max_tokens=gen.get("max_tokens") if isinstance(gen, dict) else None,
     )
 
+    # Flows (state machine graphs)
+    flows: list[FlowSpec] = []
+    for f in config.get("flows", []):
+        if isinstance(f, dict):
+            flows.append(_deserialize_flow(f))
+    if flows:
+        fidelity.append(FidelityNote(
+            field="flows", status=FidelityStatus.FAITHFUL,
+            rationale="Flows loaded from config flows key.",
+        ))
+
     adapter = config.get("adapter", {})
     metadata: dict[str, Any] = {}
     if isinstance(adapter, dict):
@@ -728,10 +747,147 @@ def from_config_dict(
         policies=policies,
         guardrails=guardrails,
         handoffs=handoffs,
+        flows=flows,
         mcp_servers=mcp_servers,
         environment=environment,
         metadata=metadata,
         fidelity_notes=fidelity,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Flow serialization helpers
+# ---------------------------------------------------------------------------
+
+
+def _serialize_transition(t: TransitionSpec) -> dict[str, Any]:
+    d: dict[str, Any] = {}
+    if t.target:
+        d["target"] = t.target
+    if t.condition:
+        d["condition"] = t.condition
+    if t.intent:
+        d["intent"] = t.intent
+    if t.fulfillment_message:
+        d["fulfillment_message"] = t.fulfillment_message
+    if t.parameters:
+        d["parameters"] = t.parameters
+    if t.metadata:
+        d["metadata"] = t.metadata
+    return d
+
+
+def _serialize_event_handler(e: EventHandlerSpec) -> dict[str, Any]:
+    d: dict[str, Any] = {}
+    if e.event:
+        d["event"] = e.event
+    if e.action:
+        d["action"] = e.action
+    if e.fulfillment_message:
+        d["fulfillment_message"] = e.fulfillment_message
+    if e.target:
+        d["target"] = e.target
+    if e.metadata:
+        d["metadata"] = e.metadata
+    return d
+
+
+def _serialize_state(s: StateSpec) -> dict[str, Any]:
+    d: dict[str, Any] = {"name": s.name}
+    if s.display_name:
+        d["display_name"] = s.display_name
+    if s.entry_fulfillment:
+        d["entry_fulfillment"] = s.entry_fulfillment
+    if s.form_parameters:
+        d["form_parameters"] = s.form_parameters
+    if s.transitions:
+        d["transitions"] = [_serialize_transition(t) for t in s.transitions]
+    if s.event_handlers:
+        d["event_handlers"] = [_serialize_event_handler(e) for e in s.event_handlers]
+    if s.metadata:
+        d["metadata"] = s.metadata
+    return d
+
+
+def _serialize_flow(f: FlowSpec) -> dict[str, Any]:
+    d: dict[str, Any] = {"name": f.name}
+    if f.display_name:
+        d["display_name"] = f.display_name
+    if f.description:
+        d["description"] = f.description
+    if f.states:
+        d["states"] = [_serialize_state(s) for s in f.states]
+    if f.transitions:
+        d["transitions"] = [_serialize_transition(t) for t in f.transitions]
+    if f.event_handlers:
+        d["event_handlers"] = [_serialize_event_handler(e) for e in f.event_handlers]
+    if f.metadata:
+        d["metadata"] = f.metadata
+    return d
+
+
+def _deserialize_transition(d: dict[str, Any]) -> TransitionSpec:
+    return TransitionSpec(
+        target=str(d.get("target", "")),
+        condition=str(d.get("condition", "")),
+        intent=str(d.get("intent", "")),
+        fulfillment_message=str(d.get("fulfillment_message", "")),
+        parameters=dict(d.get("parameters", {})),
+        metadata=dict(d.get("metadata", {})),
+    )
+
+
+def _deserialize_event_handler(d: dict[str, Any]) -> EventHandlerSpec:
+    return EventHandlerSpec(
+        event=str(d.get("event", "")),
+        action=str(d.get("action", "")),
+        fulfillment_message=str(d.get("fulfillment_message", "")),
+        target=str(d.get("target", "")),
+        metadata=dict(d.get("metadata", {})),
+    )
+
+
+def _deserialize_state(d: dict[str, Any]) -> StateSpec:
+    transitions = [
+        _deserialize_transition(t) for t in d.get("transitions", [])
+        if isinstance(t, dict)
+    ]
+    event_handlers = [
+        _deserialize_event_handler(e) for e in d.get("event_handlers", [])
+        if isinstance(e, dict)
+    ]
+    return StateSpec(
+        name=str(d.get("name", "")),
+        display_name=str(d.get("display_name", "")),
+        entry_fulfillment=str(d.get("entry_fulfillment", "")),
+        form_parameters=list(d.get("form_parameters", [])),
+        transitions=transitions,
+        event_handlers=event_handlers,
+        metadata=dict(d.get("metadata", {})),
+    )
+
+
+def _deserialize_flow(d: dict[str, Any]) -> FlowSpec:
+    states = [
+        _deserialize_state(s) for s in d.get("states", [])
+        if isinstance(s, dict)
+    ]
+    transitions = [
+        _deserialize_transition(t) for t in d.get("transitions", [])
+        if isinstance(t, dict)
+    ]
+    event_handlers = [
+        _deserialize_event_handler(e) for e in d.get("event_handlers", [])
+        if isinstance(e, dict)
+    ]
+    return FlowSpec(
+        name=str(d.get("name", "")),
+        display_name=str(d.get("display_name", "")),
+        description=str(d.get("description", "")),
+        states=states,
+        transitions=transitions,
+        event_handlers=event_handlers,
+        metadata=dict(d.get("metadata", {})),
     )
 
 

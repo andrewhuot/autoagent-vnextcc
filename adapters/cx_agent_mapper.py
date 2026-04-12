@@ -152,10 +152,13 @@ class CxAgentMapper:
             routing = self._map_routing(snapshot.flows, snapshot.intents)
             cx_workspace = self.build_cx_workspace(snapshot)
 
+            flows = self._map_flows(snapshot)
+
             config: dict[str, Any] = {
                 "prompts": prompts,
                 "tools": tools,
                 "routing": routing,
+                "flows": flows,
                 "cx": cx_workspace.model_dump(mode="json"),
                 "_cx": {
                     "version": 1,
@@ -544,6 +547,127 @@ class CxAgentMapper:
                 )
 
         return {"rules": rules}
+
+    def _map_flows(self, snapshot: CxAgentSnapshot) -> list[dict[str, Any]]:
+        """Project CX flows and pages into IR-compatible flow structures."""
+
+        intent_by_name = {intent.name: intent for intent in snapshot.intents}
+        flows: list[dict[str, Any]] = []
+
+        for flow in snapshot.flows:
+            flow_name = _slug(flow.display_name or _resource_segment(flow.name))
+
+            flow_transitions: list[dict[str, Any]] = []
+            for route in flow.transition_routes:
+                intent = intent_by_name.get(route.get("intent", ""))
+                target_raw = route.get("targetPage") or route.get("targetFlow") or ""
+                target = _slug(_resource_segment(str(target_raw))) if target_raw else ""
+                fulfillment = ""
+                fulfillment_block = route.get("triggerFulfillment", {})
+                if isinstance(fulfillment_block, dict):
+                    messages = fulfillment_block.get("messages", [])
+                    if messages and isinstance(messages, list):
+                        text_block = messages[0].get("text", {}) if isinstance(messages[0], dict) else {}
+                        texts = text_block.get("text", []) if isinstance(text_block, dict) else []
+                        if texts:
+                            fulfillment = str(texts[0])
+
+                flow_transitions.append({
+                    "target": target,
+                    "condition": str(route.get("condition", "")),
+                    "intent": intent.display_name if intent else "",
+                    "fulfillment_message": fulfillment,
+                    "metadata": {"cx_route": route},
+                })
+
+            flow_event_handlers: list[dict[str, Any]] = []
+            for handler in flow.event_handlers:
+                target_raw = handler.get("targetPage") or handler.get("targetFlow") or ""
+                target = _slug(_resource_segment(str(target_raw))) if target_raw else ""
+                flow_event_handlers.append({
+                    "event": str(handler.get("event", "")),
+                    "action": "route" if target else "fulfill",
+                    "target": target,
+                    "fulfillment_message": self._extract_fulfillment_text(handler.get("triggerFulfillment")),
+                })
+
+            states: list[dict[str, Any]] = []
+            for page in flow.pages:
+                page_name = _slug(page.display_name or _resource_segment(page.name))
+
+                page_transitions: list[dict[str, Any]] = []
+                for route in page.transition_routes:
+                    intent = intent_by_name.get(route.get("intent", ""))
+                    target_raw = route.get("targetPage") or route.get("targetFlow") or ""
+                    target = _slug(_resource_segment(str(target_raw))) if target_raw else ""
+                    page_transitions.append({
+                        "target": target,
+                        "condition": str(route.get("condition", "")),
+                        "intent": intent.display_name if intent else "",
+                        "fulfillment_message": self._extract_fulfillment_text(
+                            route.get("triggerFulfillment")
+                        ),
+                    })
+
+                page_event_handlers: list[dict[str, Any]] = []
+                for handler in page.event_handlers:
+                    target_raw = handler.get("targetPage") or handler.get("targetFlow") or ""
+                    target = _slug(_resource_segment(str(target_raw))) if target_raw else ""
+                    page_event_handlers.append({
+                        "event": str(handler.get("event", "")),
+                        "action": "route" if target else "fulfill",
+                        "target": target,
+                        "fulfillment_message": self._extract_fulfillment_text(
+                            handler.get("triggerFulfillment")
+                        ),
+                    })
+
+                form_params: list[dict[str, Any]] = []
+                form = page.form if isinstance(page.form, dict) else {}
+                for param in form.get("parameters", []):
+                    if isinstance(param, dict):
+                        form_params.append(param)
+
+                states.append({
+                    "name": page_name,
+                    "display_name": page.display_name or _resource_segment(page.name),
+                    "entry_fulfillment": self._extract_fulfillment_text(page.entry_fulfillment),
+                    "form_parameters": form_params,
+                    "transitions": page_transitions,
+                    "event_handlers": page_event_handlers,
+                    "metadata": {"cx_page_name": page.name},
+                })
+
+            flows.append({
+                "name": flow_name,
+                "display_name": flow.display_name or _resource_segment(flow.name),
+                "description": flow.description,
+                "states": states,
+                "transitions": flow_transitions,
+                "event_handlers": flow_event_handlers,
+                "metadata": {"cx_flow_name": flow.name},
+            })
+
+        return flows
+
+    @staticmethod
+    def _extract_fulfillment_text(fulfillment: Any) -> str:
+        """Extract the first text message from a CX fulfillment block."""
+        if not isinstance(fulfillment, dict):
+            return ""
+        messages = fulfillment.get("messages", [])
+        if not messages or not isinstance(messages, list):
+            return ""
+        first = messages[0] if messages else {}
+        if not isinstance(first, dict):
+            return ""
+        text_block = first.get("text", {})
+        if not isinstance(text_block, dict):
+            return ""
+        texts = text_block.get("text", [])
+        if texts and isinstance(texts, list):
+            return str(texts[0])
+        return ""
 
     def _apply_prompts(self, snapshot: CxAgentSnapshot, prompts: dict[str, Any]) -> None:
         """Apply prompt edits back to playbooks or agent descriptions."""

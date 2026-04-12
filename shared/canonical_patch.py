@@ -74,6 +74,7 @@ class TypedPatchBundle(BaseModel):
 
 _CANONICAL_CONFIG_KEYS = {
     "adapter",
+    "flows",
     "generation",
     "guardrails",
     "handoffs",
@@ -119,6 +120,23 @@ def iter_component_references(
         refs.append(_reference(scope, "mcp_server", server.name, f"{path_prefix}/mcp_servers/{index}"))
 
     refs.append(_reference(scope, "environment", "environment", f"{path_prefix}/environment"))
+
+    for fi, flow in enumerate(agent.flows):
+        flow_path = f"{path_prefix}/flows/{fi}"
+        flow_name = flow.name or flow.display_name or f"flow_{fi}"
+        refs.append(_reference(scope, "flow", flow_name, flow_path))
+        for si, state in enumerate(flow.states):
+            state_path = f"{flow_path}/states/{si}"
+            state_name = state.name or state.display_name or f"state_{si}"
+            refs.append(_reference(scope, "state", state_name, state_path))
+            for ti, transition in enumerate(state.transitions):
+                t_path = f"{state_path}/transitions/{ti}"
+                t_name = transition.target or f"transition_{ti}"
+                refs.append(_reference(scope, "transition", t_name, t_path))
+        for ti, transition in enumerate(flow.transitions):
+            t_path = f"{flow_path}/transitions/{ti}"
+            t_name = transition.target or f"transition_{ti}"
+            refs.append(_reference(scope, "transition", t_name, t_path))
 
     for index, sub_agent in enumerate(agent.sub_agents):
         sub_path = f"{path_prefix}/sub_agents/{index}"

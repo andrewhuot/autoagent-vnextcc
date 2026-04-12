@@ -1,4 +1,4 @@
-"""LLM-based config change proposer with deterministic mock."""
+"""LLM-based config change proposer with credit-driven component mutation."""
 
 from __future__ import annotations
 
@@ -6,10 +6,18 @@ import copy
 import json
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from shared.canonical_ir_convert import from_config_dict
-from shared.canonical_patch import ComponentPatchOperation, TypedPatchBundle, find_component_reference
+from shared.canonical_patch import (
+    ComponentPatchOperation,
+    TypedPatchBundle,
+    find_component_reference,
+    patch_bundle_to_config,
+)
 
+from .component_credit import ComponentCreditAnalyzer
+from .component_mutation import analyze_and_propose, propose_component_patches
 from .providers import LLMRequest, LLMRouter
 
 _ROUTING_STOP_WORDS = {
@@ -93,22 +101,89 @@ class Proposer:
         objective: str | None = None,
         guardrails: list[str] | None = None,
         project_memory_context: dict[str, list[str]] | None = None,
+        traces: list[dict[str, Any]] | None = None,
     ) -> Proposal | None:
-        if self.use_mock:
-            return self._mock_propose(
-                current_config,
-                health_metrics,
-                failure_buckets,
-                past_attempts,
-                failure_samples=failure_samples,
+        if not self.use_mock:
+            return self._llm_propose(
+                current_config, health_metrics, failure_samples, failure_buckets, past_attempts,
+                optimization_mode=optimization_mode,
+                objective=objective,
+                guardrails=guardrails,
+                project_memory_context=project_memory_context,
             )
-        return self._llm_propose(
-            current_config, health_metrics, failure_samples, failure_buckets, past_attempts,
-            optimization_mode=optimization_mode,
-            objective=objective,
-            guardrails=guardrails,
-            project_memory_context=project_memory_context,
+
+        credit_proposal = self._credit_propose(
+            current_config,
+            failure_samples=failure_samples,
+            traces=traces,
+            past_attempts=past_attempts,
         )
+        if credit_proposal is not None:
+            return credit_proposal
+
+        return self._mock_propose(
+            current_config,
+            health_metrics,
+            failure_buckets,
+            past_attempts,
+            failure_samples=failure_samples,
+        )
+
+    def _credit_propose(
+        self,
+        current_config: dict,
+        *,
+        failure_samples: list[dict] | None = None,
+        traces: list[dict[str, Any]] | None = None,
+        past_attempts: list[dict] | None = None,
+    ) -> Proposal | None:
+        """Credit-driven proposal using trace/failure blame analysis and component mutation.
+
+        Returns None when there are no actionable blame entries, allowing
+        the caller to fall back to the mock proposer.
+        """
+        trace_data = traces or failure_samples or []
+        if not trace_data:
+            return None
+
+        past_surfaces = [
+            a.get("config_section", "") for a in ((past_attempts or [])[-5:])
+        ]
+
+        try:
+            agent = from_config_dict(current_config, name="root")
+            blame_entries, bundle = analyze_and_propose(
+                agent,
+                trace_data,
+                past_bundle_surfaces=past_surfaces,
+                max_patches=5,
+            )
+
+            if not bundle.operations:
+                return None
+
+            new_config = patch_bundle_to_config(current_config, bundle)
+
+            descriptions = [op.rationale for op in bundle.operations if op.rationale]
+            primary_desc = descriptions[0] if descriptions else "Component-targeted patch"
+            component_types_touched = list(dict.fromkeys(
+                op.component.component_type for op in bundle.operations
+            ))
+
+            return Proposal(
+                change_description=primary_desc,
+                config_section=component_types_touched[0] if component_types_touched else "mixed",
+                new_config=new_config,
+                reasoning=(
+                    f"Credit analysis identified {len(blame_entries)} blamed components. "
+                    f"Generated {len(bundle.operations)} targeted patches "
+                    f"across {', '.join(component_types_touched)}. "
+                    f"Risk: {bundle.metadata.get('risk_class', 'unknown')}."
+                ),
+                patch_bundle=bundle.model_dump(mode="python"),
+            )
+        except Exception:
+            return None
 
     @staticmethod
     def _dominant_failure_bucket(failure_buckets: dict[str, int]) -> str | None:

@@ -29,6 +29,9 @@ class ComponentType(str, Enum):
     sub_agent = "sub_agent"
     mcp_server = "mcp_server"
     environment = "environment"
+    flow = "flow"
+    state = "state"
+    transition = "transition"
 
 
 class AttributionConfidence(str, Enum):
@@ -120,10 +123,25 @@ _FAILURE_TYPE_TO_COMPONENT: dict[str, list[tuple[ComponentType, AttributionConfi
     "infinite_loop": [
         (ComponentType.routing_rule, AttributionConfidence.MEDIUM),
         (ComponentType.handoff, AttributionConfidence.MEDIUM),
+        (ComponentType.transition, AttributionConfidence.MEDIUM),
     ],
     "error": [
         (ComponentType.tool_contract, AttributionConfidence.LOW),
         (ComponentType.instruction, AttributionConfidence.HEURISTIC),
+    ],
+    "flow_error": [
+        (ComponentType.flow, AttributionConfidence.HIGH),
+        (ComponentType.transition, AttributionConfidence.MEDIUM),
+    ],
+    "transition_error": [
+        (ComponentType.transition, AttributionConfidence.HIGH),
+    ],
+    "state_error": [
+        (ComponentType.state, AttributionConfidence.HIGH),
+    ],
+    "dead_end": [
+        (ComponentType.state, AttributionConfidence.MEDIUM),
+        (ComponentType.transition, AttributionConfidence.MEDIUM),
     ],
 }
 
@@ -132,6 +150,10 @@ _SEVERITY_MULTIPLIERS: dict[str, float] = {
     "hallucination": 1.3,
     "infinite_loop": 1.2,
     "routing_error": 1.1,
+    "flow_error": 1.1,
+    "transition_error": 1.1,
+    "dead_end": 1.0,
+    "state_error": 1.0,
     "timeout": 1.0,
     "error": 1.0,
     "tool_failure": 0.9,
@@ -163,6 +185,12 @@ class ComponentCreditAnalyzer:
         "empty": "no_response",
         "tool": "tool_failure",
         "routing": "routing_error",
+        "flow": "flow_error",
+        "transition": "transition_error",
+        "dead end": "dead_end",
+        "stuck": "dead_end",
+        "state": "state_error",
+        "page": "state_error",
     }
 
     def analyze(

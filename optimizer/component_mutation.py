@@ -20,6 +20,8 @@ from shared.canonical_ir import (
     CanonicalAgent,
     ConditionType,
     ContextTransfer,
+    EventHandlerSpec,
+    FlowSpec,
     GuardrailEnforcement,
     GuardrailSpec,
     GuardrailType,
@@ -30,7 +32,9 @@ from shared.canonical_ir import (
     PolicySpec,
     PolicyType,
     RoutingRuleSpec,
+    StateSpec,
     ToolContract,
+    TransitionSpec,
 )
 from shared.canonical_ir_convert import to_config_dict
 from shared.canonical_patch import (
@@ -176,6 +180,9 @@ def _ops_for_entry(
         ComponentType.handoff: _ops_for_handoff,
         ComponentType.policy: _ops_for_policy,
         ComponentType.environment: _ops_for_environment,
+        ComponentType.flow: _ops_for_flow,
+        ComponentType.state: _ops_for_state,
+        ComponentType.transition: _ops_for_transition,
     }
     gen = generators.get(entry.component_type)
     if gen is None:
@@ -541,5 +548,181 @@ def _ops_for_environment(
                     value=new_temp,
                     rationale=f"Lower temperature from {current_temp} to {new_temp} for more deterministic responses",
                 ))
+
+    return ops
+
+
+def _ops_for_flow(
+    agent: CanonicalAgent,
+    entry: ComponentBlameEntry,
+) -> list[ComponentPatchOperation]:
+    """Generate mutations for flow-level failures (missing transitions, dead ends)."""
+    ops: list[ComponentPatchOperation] = []
+
+    if not agent.flows:
+        return ops
+
+    has_dead_end = "dead_end" in entry.failure_types
+
+    if entry.component_name:
+        ref = _find_ref(agent, "flow", entry.component_name)
+        if ref is not None:
+            for flow in agent.flows:
+                if flow.name == entry.component_name:
+                    if has_dead_end and not flow.event_handlers:
+                        ops.append(ComponentPatchOperation(
+                            op="set",
+                            component=ref,
+                            field_path="event_handlers",
+                            value=[{
+                                "event": "no-match",
+                                "action": "fallback",
+                                "fulfillment_message": "I didn't understand that. Could you rephrase?",
+                            }],
+                            rationale=f"Add no-match event handler to flow '{flow.name}' to handle dead-end states",
+                        ))
+                    if not flow.description:
+                        ops.append(ComponentPatchOperation(
+                            op="set",
+                            component=ref,
+                            field_path="description",
+                            value=f"Flow for {flow.name.replace('_', ' ')} handling",
+                            rationale=f"Add description to flow '{flow.name}' for clarity",
+                        ))
+                    break
+    else:
+        for fi, flow in enumerate(agent.flows):
+            if not flow.event_handlers and has_dead_end:
+                ref = _ref_by_index(agent, "flow", fi)
+                if ref is not None:
+                    ops.append(ComponentPatchOperation(
+                        op="set",
+                        component=ref,
+                        field_path="event_handlers",
+                        value=[{
+                            "event": "no-match",
+                            "action": "fallback",
+                            "fulfillment_message": "I didn't understand that. Could you rephrase?",
+                        }],
+                        rationale=f"Add no-match handler to flow '{flow.name}' to prevent dead ends",
+                    ))
+                break
+
+    return ops
+
+
+def _ops_for_state(
+    agent: CanonicalAgent,
+    entry: ComponentBlameEntry,
+) -> list[ComponentPatchOperation]:
+    """Generate mutations for state-level failures (missing fulfillment, no exits)."""
+    ops: list[ComponentPatchOperation] = []
+
+    if not agent.flows:
+        return ops
+
+    has_dead_end = "dead_end" in entry.failure_types or "state_error" in entry.failure_types
+
+    for fi, flow in enumerate(agent.flows):
+        for si, state in enumerate(flow.states):
+            if entry.component_name and state.name != entry.component_name:
+                continue
+
+            ref = _find_ref(agent, "state", state.name)
+            if ref is None:
+                continue
+
+            if not state.entry_fulfillment:
+                ops.append(ComponentPatchOperation(
+                    op="set",
+                    component=ref,
+                    field_path="entry_fulfillment",
+                    value=f"Welcome to {state.display_name or state.name}. How can I help?",
+                    rationale=f"Add entry fulfillment to state '{state.name}' so users get an initial response",
+                ))
+
+            if has_dead_end and not state.transitions and not state.event_handlers:
+                ops.append(ComponentPatchOperation(
+                    op="set",
+                    component=ref,
+                    field_path="event_handlers",
+                    value=[{
+                        "event": "no-match",
+                        "action": "escalate",
+                        "fulfillment_message": "Let me connect you with someone who can help.",
+                    }],
+                    rationale=f"Add fallback handler to state '{state.name}' to prevent dead ends",
+                ))
+
+            if entry.component_name:
+                break
+        if entry.component_name and ops:
+            break
+
+    return ops
+
+
+def _ops_for_transition(
+    agent: CanonicalAgent,
+    entry: ComponentBlameEntry,
+) -> list[ComponentPatchOperation]:
+    """Generate mutations for transition-level failures (missing conditions, bad targets)."""
+    ops: list[ComponentPatchOperation] = []
+
+    if not agent.flows:
+        return ops
+
+    for fi, flow in enumerate(agent.flows):
+        for ti, transition in enumerate(flow.transitions):
+            t_name = transition.target or f"transition_{ti}"
+            if entry.component_name and t_name != entry.component_name:
+                continue
+
+            ref = _find_ref(agent, "transition", t_name)
+            if ref is None:
+                continue
+
+            if not transition.condition and not transition.intent:
+                ops.append(ComponentPatchOperation(
+                    op="set",
+                    component=ref,
+                    field_path="condition",
+                    value="true",
+                    rationale=f"Add explicit condition to transition targeting '{transition.target}' to prevent unreachable paths",
+                ))
+
+            if not transition.fulfillment_message:
+                ops.append(ComponentPatchOperation(
+                    op="set",
+                    component=ref,
+                    field_path="fulfillment_message",
+                    value=f"Routing to {transition.target.replace('_', ' ')}.",
+                    rationale=f"Add fulfillment message to transition '{t_name}' for user clarity",
+                ))
+
+            if entry.component_name:
+                return ops
+
+        for state in flow.states:
+            for ti, transition in enumerate(state.transitions):
+                t_name = transition.target or f"transition_{ti}"
+                if entry.component_name and t_name != entry.component_name:
+                    continue
+
+                ref = _find_ref(agent, "transition", t_name)
+                if ref is None:
+                    continue
+
+                if not transition.condition and not transition.intent:
+                    ops.append(ComponentPatchOperation(
+                        op="set",
+                        component=ref,
+                        field_path="condition",
+                        value="true",
+                        rationale=f"Add condition to state transition targeting '{transition.target}'",
+                    ))
+
+                if entry.component_name:
+                    return ops
 
     return ops

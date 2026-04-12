@@ -231,7 +231,8 @@ class TestComponentCreditAnalyzer:
     def test_component_type_values_match_codex_vocabulary(self) -> None:
         """Verify enum values are compatible with Codex's ComponentReference.component_type."""
         expected = {"instruction", "tool_contract", "routing_rule", "guardrail",
-                    "policy", "callback", "handoff", "sub_agent", "mcp_server", "environment"}
+                    "policy", "callback", "handoff", "sub_agent", "mcp_server", "environment",
+                    "flow", "state", "transition"}
         actual = {ct.value for ct in ComponentType}
         assert actual == expected
 
