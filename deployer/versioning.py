@@ -165,5 +165,9 @@ class ConfigVersionManager:
                     return yaml.safe_load(f)
         return None
 
+    def reload(self) -> None:
+        """Refresh the in-memory manifest from disk."""
+        self.manifest = self._load_manifest()
+
     def get_version_history(self) -> list[dict]:
         return list(self.manifest["versions"])

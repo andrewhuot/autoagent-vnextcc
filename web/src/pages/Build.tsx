@@ -39,8 +39,11 @@ import {
 } from '../lib/api';
 import {
   exportBuilderConfig,
+  getBuilderSession,
+  listBuilderChatSessions,
   previewBuilderSession,
   sendBuilderMessage,
+  type BuilderChatSessionSummary,
   type BuilderConfig,
   type BuilderSessionPayload,
 } from '../lib/builder-chat-api';
@@ -324,9 +327,34 @@ export function BuilderChatWorkspace({
   const [saveResult, setSaveResult] = useState<BuildSaveResult | null>(null);
   const [savedAgent, setSavedAgent] = useState<AgentLibraryItem | null>(null);
   const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [priorSessions, setPriorSessions] = useState<BuilderChatSessionSummary[]>([]);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const artifactCreatedAtRef = useRef<string | null>(null);
   const busy = pending || previewPending || savePending;
+
+  // Fetch prior sessions on mount so the user can resume after a restart
+  useEffect(() => {
+    if (session) return; // Already have a session, skip
+    listBuilderChatSessions(10)
+      .then((sessions) => setPriorSessions(sessions.filter((s) => s.message_count > 1)))
+      .catch(() => {}); // Silently ignore — not critical
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function resumeSession(sessionId: string) {
+    setPending(true);
+    setError(null);
+    try {
+      const restored = await getBuilderSession(sessionId);
+      startTransition(() => {
+        setSession(restored);
+        setPriorSessions([]);
+      });
+    } catch (resumeError) {
+      setError(resumeError instanceof Error ? resumeError.message : 'Could not restore session');
+    } finally {
+      setPending(false);
+    }
+  }
   const builderYamlPreview = session?.config ? builderConfigToYaml(session.config) : '';
   const builderPreviewModeNotice = !session || session.mock_mode;
   const builderEvalLabel = savedAgent ? 'Run Eval' : 'Save & Run Eval';
@@ -555,6 +583,33 @@ export function BuilderChatWorkspace({
 
   const body = (
     <>
+      {!session && priorSessions.length > 0 && (
+        <section className="rounded-lg border border-blue-200 bg-blue-50 p-4 mb-4">
+          <h3 className="text-sm font-semibold text-blue-900">Resume a previous session</h3>
+          <p className="mt-1 text-xs text-blue-700">
+            Your builder chat sessions are saved. Pick up where you left off or start fresh below.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {priorSessions.map((s) => (
+              <button
+                key={s.session_id}
+                onClick={() => resumeSession(s.session_id)}
+                disabled={pending}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-800 hover:bg-blue-100 disabled:opacity-60"
+              >
+                <MessageSquare className="h-3 w-3" />
+                {s.agent_name} ({s.message_count} msgs)
+              </button>
+            ))}
+            <button
+              onClick={() => setPriorSessions([])}
+              className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs text-blue-600 hover:bg-blue-50"
+            >
+              Start fresh
+            </button>
+          </div>
+        </section>
+      )}
       <BuildLoopPanel
         iterationCount={builderIterationCount}
         lastChange={builderLastChange}

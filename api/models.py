@@ -21,6 +21,7 @@ class TaskStatusEnum(str, Enum):
     running = "running"
     completed = "completed"
     failed = "failed"
+    interrupted = "interrupted"
 
 
 class TaskStatus(BaseModel):

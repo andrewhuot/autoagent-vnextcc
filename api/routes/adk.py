@@ -1,8 +1,10 @@
 """ADK (Agent Development Kit) API routes — import, export, deploy."""
 from __future__ import annotations
 
+from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+import yaml
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from adk import AdkImporter, AdkExporter, AdkDeployer
@@ -55,7 +57,7 @@ class AdkDiffResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 @router.post("/import", response_model=AdkImportResponse, status_code=201)
-async def import_adk_agent(body: AdkImportRequest) -> AdkImportResponse:
+async def import_adk_agent(body: AdkImportRequest, request: Request) -> AdkImportResponse:
     """Import an ADK agent from local directory."""
     try:
         importer = AdkImporter()
@@ -63,6 +65,15 @@ async def import_adk_agent(body: AdkImportRequest) -> AdkImportResponse:
             agent_path=body.path,
             output_dir=body.output_dir,
         )
+
+        # Register the imported config with the running server's version manager
+        version_manager = getattr(request.app.state, "version_manager", None)
+        if version_manager is not None and result.config_path:
+            config_path = Path(result.config_path)
+            if config_path.exists():
+                config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                version_manager.save_version(config, scores={}, status="candidate")
+
         return AdkImportResponse(
             config_path=result.config_path,
             snapshot_path=result.snapshot_path,

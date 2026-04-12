@@ -563,7 +563,7 @@ interface EvalResultRaw {
 interface TaskStatusRaw {
   task_id: string;
   task_type: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'interrupted';
   progress: number;
   result: unknown;
   error: string | null;
@@ -1578,6 +1578,23 @@ export function useRollback() {
     mutationFn: () =>
       fetchApi('/deploy/rollback', {
         method: 'POST',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['deployStatus'] });
+      queryClient.invalidateQueries({ queryKey: ['deployHistory'] });
+      queryClient.invalidateQueries({ queryKey: ['configs'] });
+    },
+  });
+}
+
+export function usePromoteCanary() {
+  const queryClient = useQueryClient();
+
+  return useMutation<DeployResponse, ApiRequestError, { version?: number } | void>({
+    mutationFn: (params) =>
+      fetchApi('/deploy/promote', {
+        method: 'POST',
+        body: JSON.stringify(params ?? {}),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['deployStatus'] });

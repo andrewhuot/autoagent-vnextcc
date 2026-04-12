@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Rocket, RotateCcw } from 'lucide-react';
-import { useConfigs, useDeploy, useDeployStatus, useRollback } from '../lib/api';
+import { ArrowUpCircle, Rocket, RotateCcw } from 'lucide-react';
+import { useConfigs, useDeploy, useDeployStatus, usePromoteCanary, useRollback } from '../lib/api';
 import { EmptyState } from '../components/EmptyState';
 import { LoadingSkeleton } from '../components/LoadingSkeleton';
 import { PageHeader } from '../components/PageHeader';
@@ -11,7 +11,8 @@ import { formatPercent, formatTimestamp, statusVariant } from '../lib/utils';
 
 type PendingConfirmation =
   | { type: 'rollback'; canaryVersion: number | null }
-  | { type: 'deploy'; version: number; strategy: 'immediate' };
+  | { type: 'deploy'; version: number; strategy: 'immediate' }
+  | { type: 'promote'; canaryVersion: number | null };
 
 export function Deploy() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -19,6 +20,7 @@ export function Deploy() {
   const { data: configs } = useConfigs();
   const deploy = useDeploy();
   const rollback = useRollback();
+  const promoteCanary = usePromoteCanary();
 
   const [showForm, setShowForm] = useState(false);
   const [version, setVersion] = useState('');
@@ -60,6 +62,13 @@ export function Deploy() {
     );
   }
 
+  function handlePromote() {
+    setPendingConfirmation({
+      type: 'promote',
+      canaryVersion: deployStatus?.canary_version ?? null,
+    });
+  }
+
   function handleRollback() {
     setPendingConfirmation({
       type: 'rollback',
@@ -80,6 +89,24 @@ export function Deploy() {
         onError: (error) => {
           setPendingConfirmation(null);
           toastError('Rollback failed', error.message);
+        },
+      });
+      return;
+    }
+
+    if (pendingConfirmation.type === 'promote') {
+      const params = pendingConfirmation.canaryVersion
+        ? { version: pendingConfirmation.canaryVersion }
+        : undefined;
+      promoteCanary.mutate(params, {
+        onSuccess: (response) => {
+          setPendingConfirmation(null);
+          toastSuccess('Canary promoted', response.message);
+          refetch();
+        },
+        onError: (error) => {
+          setPendingConfirmation(null);
+          toastError('Promotion failed', error.message);
         },
       });
       return;
@@ -108,11 +135,17 @@ export function Deploy() {
   }
 
   const confirmationTitle =
-    pendingConfirmation?.type === 'rollback' ? 'Confirm rollback' : 'Confirm immediate deploy';
+    pendingConfirmation?.type === 'rollback'
+      ? 'Confirm rollback'
+      : pendingConfirmation?.type === 'promote'
+        ? 'Confirm canary promotion'
+        : 'Confirm immediate deploy';
   const confirmationDescription =
     pendingConfirmation?.type === 'rollback'
       ? `Rollback canary v${pendingConfirmation.canaryVersion ?? '—'} and return traffic to the active version.`
-      : `Promote v${pendingConfirmation?.type === 'deploy' ? pendingConfirmation.version : '—'} to all traffic immediately.`;
+      : pendingConfirmation?.type === 'promote'
+        ? `Promote canary v${pendingConfirmation.canaryVersion ?? '—'} to active and route all traffic to it.`
+        : `Promote v${pendingConfirmation?.type === 'deploy' ? pendingConfirmation.version : '—'} to all traffic immediately.`;
 
   function isConfirmationPending(type: PendingConfirmation['type']) {
     return pendingConfirmation?.type === type;
@@ -181,7 +214,11 @@ export function Deploy() {
               onClick={confirmPendingAction}
               className="rounded-lg bg-gray-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-gray-800"
             >
-              {pendingConfirmation.type === 'rollback' ? 'Confirm rollback' : 'Confirm deploy'}
+              {pendingConfirmation.type === 'rollback'
+                ? 'Confirm rollback'
+                : pendingConfirmation.type === 'promote'
+                  ? 'Confirm promote'
+                  : 'Confirm deploy'}
             </button>
           </div>
         </section>
@@ -228,6 +265,14 @@ export function Deploy() {
                 variant={statusVariant(deployStatus.canary_status.verdict)}
                 label={deployStatus.canary_status.verdict}
               />
+              <button
+                onClick={handlePromote}
+                disabled={promoteCanary.isPending || isConfirmationPending('promote')}
+                className="inline-flex items-center gap-1 rounded-lg border border-green-300 bg-white px-2.5 py-1 text-xs text-green-700 hover:bg-green-50 disabled:opacity-60"
+              >
+                <ArrowUpCircle className="h-3.5 w-3.5" />
+                {promoteCanary.isPending ? 'Promoting...' : 'Promote'}
+              </button>
               <button
                 onClick={handleRollback}
                 disabled={rollback.isPending || isConfirmationPending('rollback')}

@@ -6,12 +6,19 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from pydantic import BaseModel
+
 from api.models import (
     DeployRequest,
     DeployResponse,
     DeployStatusResponse,
     DeployStrategy,
 )
+
+
+class PromoteRequest(BaseModel):
+    """Optional body for the promote endpoint."""
+    version: int | None = None
 
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
@@ -96,6 +103,29 @@ async def get_deploy_status(request: Request) -> DeployStatusResponse:
         total_versions=status.get("total_versions", 0),
         canary_status=canary_status,
         history=status.get("history", []),
+    )
+
+
+@router.post("/promote", response_model=DeployResponse)
+async def promote_canary(request: Request, body: PromoteRequest | None = None) -> DeployResponse:
+    """Promote the current canary (or a specific version) to active."""
+    vm = request.app.state.version_manager
+
+    target = body.version if body else None
+    if target is None:
+        target = vm.manifest.get("canary_version")
+    if target is None:
+        raise HTTPException(status_code=400, detail="No active canary to promote and no version specified")
+
+    try:
+        vm.promote(target)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+    return DeployResponse(
+        message=f"Promoted v{target:03d} to active",
+        version=target,
+        strategy="promote",
     )
 
 

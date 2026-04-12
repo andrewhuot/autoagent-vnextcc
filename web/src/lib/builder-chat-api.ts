@@ -138,6 +138,19 @@ export function getBuilderSession(sessionId: string): Promise<BuilderSessionPayl
   return fetchBuilderApi(`/api/builder/session/${encodeURIComponent(sessionId)}`);
 }
 
+export interface BuilderChatSessionSummary {
+  session_id: string;
+  agent_name: string;
+  message_count: number;
+  mock_mode: boolean;
+  created_at: number;
+  updated_at: number;
+}
+
+export function listBuilderChatSessions(limit: number = 50): Promise<BuilderChatSessionSummary[]> {
+  return fetchBuilderApi(`/api/builder/chat/sessions?limit=${limit}`);
+}
+
 export function exportBuilderConfig(body: {
   session_id: string;
   format?: 'yaml' | 'json';

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+from pathlib import Path
+
+import yaml
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from adapters import (
@@ -43,6 +46,7 @@ class ConnectImportResponse(BaseModel):
     guardrail_count: int
     trace_count: int
     eval_case_count: int
+    registered_version: int | None = None
 
 
 @router.get("")
@@ -60,7 +64,7 @@ async def connect_catalog() -> dict[str, object]:
 
 
 @router.post("/import", response_model=ConnectImportResponse, status_code=201)
-async def connect_import(body: ConnectImportRequest) -> ConnectImportResponse:
+async def connect_import(body: ConnectImportRequest, request: Request) -> ConnectImportResponse:
     """Create a workspace from an imported runtime or transcript export."""
 
     try:
@@ -87,7 +91,25 @@ async def connect_import(body: ConnectImportRequest) -> ConnectImportResponse:
             workspace_name=body.workspace_name,
             runtime_mode=body.runtime_mode,
         )
-        return ConnectImportResponse(**result.to_dict())
+
+        # Register the imported config with the running server's version manager
+        # so it appears immediately in /api/agents and the agent library UI.
+        registered_version: int | None = None
+        version_manager = getattr(request.app.state, "version_manager", None)
+        if version_manager is not None:
+            config_path = Path(result.config_path)
+            if config_path.exists():
+                config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+                cv = version_manager.save_version(
+                    config,
+                    scores={},
+                    status="candidate",
+                )
+                registered_version = cv.version
+
+        response = ConnectImportResponse(**result.to_dict())
+        response.registered_version = registered_version
+        return response
     except HTTPException:
         raise
     except Exception as exc:
