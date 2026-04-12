@@ -114,6 +114,12 @@ def test_snapshot_recovers_stale_inflight_run(tmp_path: Path, monkeypatch) -> No
     assert snapshot["active_run"]["status"] == "failed"
     assert snapshot["active_run"]["failure_reason"] == "stale_interrupted"
     assert "interrupted after process recovery" in snapshot["active_run"]["error"]
+    handoff = snapshot["active_run"]["handoff"]
+    assert handoff["run_id"] == run["run_id"]
+    assert handoff["failure_reason"] == "stale_interrupted"
+    assert handoff["recovery"]["reason"] == "stale_interrupted"
+    assert "interrupted" in handoff["next_action"].lower()
+    assert snapshot["harness_state"]["latest_handoff"]["run_id"] == run["run_id"]
     event_names = [event["event"] for event in snapshot["active_run"]["events"]]
     assert "run.recovered" in event_names
 
