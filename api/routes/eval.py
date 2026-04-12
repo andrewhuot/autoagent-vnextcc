@@ -26,7 +26,6 @@ from api.models import (
     GeneratedCaseResponse,
     GeneratedSuiteResponse,
     TaskStatus,
-    TaskStatusEnum,
     UpdateCaseRequest,
 )
 from api.tasks import Task
@@ -222,19 +221,7 @@ async def list_eval_runs(request: Request) -> list[TaskStatus]:
     """List all eval run tasks."""
     task_manager = request.app.state.task_manager
     tasks = task_manager.list_tasks(task_type="eval")
-    return [
-        TaskStatus(
-            task_id=t.task_id,
-            task_type=t.task_type,
-            status=TaskStatusEnum(t.status),
-            progress=t.progress,
-            result=t.result,
-            error=t.error,
-            created_at=t.created_at,
-            updated_at=t.updated_at,
-        )
-        for t in tasks
-    ]
+    return [TaskStatus(**t.to_dict()) for t in tasks]
 
 
 @router.get("/runs/{run_id}", response_model=EvalResultsResponse)

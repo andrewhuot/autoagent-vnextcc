@@ -73,6 +73,10 @@ export function WorkbenchLayout({
       ? 'The review gate appears after presentation is ready'
       : 'Run the harness to produce a review gate';
   const showMetrics = harnessMetrics !== null || isWorkbenchBuildActive(buildStatus);
+  const interruptedRun =
+    buildStatus === 'interrupted' ||
+    activeRun?.status === 'interrupted' ||
+    activeRun?.failure_reason === 'stale_interrupted';
 
   return (
     <div
@@ -144,6 +148,16 @@ export function WorkbenchLayout({
           </button>
         </div>
       </header>
+      {interruptedRun && (
+        <div className="border-y border-[color:var(--wb-border)] bg-[color:var(--wb-warn-weak)] px-4 py-2 text-[12px] text-[color:var(--wb-warn)]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] px-2 py-0.5 font-semibold uppercase tracking-wider">
+              Historical snapshot
+            </span>
+            <span className="font-medium">Interrupted run restored after restart</span>
+          </div>
+        </div>
+      )}
       {showMetrics && (
         <div className="border-y border-[color:var(--wb-border)] bg-[color:var(--wb-bg)] px-4 py-2">
           <HarnessMetricsBar />
@@ -198,6 +212,9 @@ function StatusPill({
   } else if (status === 'cancelled') {
     className = 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]';
     label = 'Stopped';
+  } else if (status === 'interrupted') {
+    className = 'bg-[color:var(--wb-warn-weak)] text-[color:var(--wb-warn)]';
+    label = 'Interrupted';
   }
   return (
     <span

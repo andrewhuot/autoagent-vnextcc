@@ -365,6 +365,69 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('Resume Workbench project wb-test at Draft v2.')).toBeInTheDocument();
   });
 
+  it('labels an interrupted hydrated run as restored historical work', async () => {
+    installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-test',
+        name: 'Airline Support Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 2,
+        build_status: 'interrupted',
+        plan: null,
+        artifacts: [],
+        messages: [],
+        model: null,
+        exports: { generated_config: {}, adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        last_test: null,
+        activity: [],
+        active_run: {
+          run_id: 'run-interrupted',
+          project_id: 'wb-test',
+          brief: 'Build airline support',
+          target: 'portable',
+          environment: 'draft',
+          status: 'interrupted',
+          phase: 'executing',
+          started_version: 1,
+          completed_version: null,
+          created_at: '2026-04-12T13:00:00Z',
+          updated_at: '2026-04-12T13:05:00Z',
+          completed_at: null,
+          error: 'Recovered after restart before the run completed.',
+          failure_reason: 'stale_interrupted',
+          events: [],
+          messages: [],
+          validation: null,
+          presentation: null,
+        },
+        runs: [],
+        last_brief: 'Build airline support',
+        conversation: [],
+        turns: [
+          {
+            turn_id: 'turn-1',
+            brief: 'Build airline support',
+            mode: 'initial',
+            status: 'interrupted',
+            created_at: '2026-04-12T13:00:00Z',
+            artifact_ids: [],
+            iterations: [],
+            plan: null,
+          },
+        ],
+      },
+    });
+
+    renderWorkbench();
+
+    expect(await screen.findByText('Interrupted')).toBeInTheDocument();
+    expect(screen.getByText('Historical snapshot')).toBeInTheDocument();
+    expect(screen.getByText('Interrupted run restored after restart')).toBeInTheDocument();
+    expect(screen.getByText('Recovered after restart before the run completed.')).toBeInTheDocument();
+  });
+
   it('passes manual iteration budget controls to the iterate stream', async () => {
     const user = userEvent.setup();
     const fetchMock = installMockFetch();

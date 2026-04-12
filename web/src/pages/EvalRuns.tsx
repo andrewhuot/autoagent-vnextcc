@@ -22,8 +22,8 @@ import { GeneratedEvalReview } from '../components/GeneratedEvalReview';
 import { wsClient } from '../lib/websocket';
 import { useActiveAgent } from '../lib/active-agent';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
-import { formatTimestamp, statusVariant } from '../lib/utils';
-import type { AgentLibraryItem } from '../lib/types';
+import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
+import type { AgentLibraryItem, ContinuityState, EvalRun } from '../lib/types';
 
 interface EvalJourneyState {
   agent?: AgentLibraryItem;
@@ -124,6 +124,7 @@ export function EvalRuns() {
     if (!runs || selectedRuns.length !== 2) return [];
     return runs.filter((run) => selectedRuns.includes(run.run_id));
   }, [runs, selectedRuns]);
+  const continuitySummary = useMemo(() => summarizeEvalRunContinuity(runs ?? []), [runs]);
   const shouldShowStandaloneNoAgentEmptyState =
     !activeAgent &&
     !showCreateForm &&
@@ -325,6 +326,24 @@ export function EvalRuns() {
       />
 
       <AgentSelector onChange={syncAgentSearchParam} />
+
+      {(runs?.length ?? 0) > 0 && (
+        <section className="rounded-lg border border-gray-200 bg-white p-4">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Durable history</p>
+              <p className="mt-1 text-xs leading-5 text-gray-600">
+                Live evals can still update. Interrupted and completed runs are retained as historical records after restart.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <ContinuityPill label="Live" count={continuitySummary.live} tone="live" />
+              <ContinuityPill label="Interrupted" count={continuitySummary.interrupted} tone="interrupted" />
+              <ContinuityPill label="Historical" count={continuitySummary.historical} tone="historical" />
+            </div>
+          </div>
+        </section>
+      )}
 
       {completedAgent && completedRunId && (
         <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-4">
@@ -718,7 +737,9 @@ export function EvalRuns() {
                 </tr>
               </thead>
               <tbody>
-                {runs.map((run, index) => (
+                {runs.map((run, index) => {
+                  const continuity = getEvalRunContinuity(run);
+                  return (
                   <tr key={run.run_id} className={index % 2 ? 'bg-gray-50/60' : ''}>
                     <td className="px-3 py-2">
                       <input
@@ -737,6 +758,14 @@ export function EvalRuns() {
                         {run.status === 'running' && (
                           <p className="text-xs text-gray-500">Progress: {run.progress}%</p>
                         )}
+                        <div className="max-w-xs space-y-1">
+                          <p className={classNames('text-xs font-semibold', continuityToneClass(continuity.state))}>
+                            {continuity.label}
+                          </p>
+                          <p className={classNames('text-xs leading-5', continuityToneClass(continuity.state))}>
+                            {continuity.detail}
+                          </p>
+                        </div>
                       </div>
                     </td>
                     <td className="px-3 py-2 font-medium text-gray-900">{run.composite_score.toFixed(1)}</td>
@@ -752,7 +781,8 @@ export function EvalRuns() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>
@@ -778,5 +808,91 @@ export function EvalRuns() {
         />
       ) : null}
     </div>
+  );
+}
+
+function summarizeEvalRunContinuity(runs: EvalRun[]) {
+  return runs.reduce(
+    (summary, run) => {
+      const state = run.continuity?.state ?? inferEvalContinuityState(run.status);
+      if (state === 'live') {
+        summary.live += 1;
+      } else if (state === 'interrupted') {
+        summary.interrupted += 1;
+      } else {
+        summary.historical += 1;
+      }
+      return summary;
+    },
+    { live: 0, interrupted: 0, historical: 0 }
+  );
+}
+
+function getEvalRunContinuity(run: EvalRun): ContinuityState {
+  if (run.continuity) {
+    return run.continuity;
+  }
+  const state = inferEvalContinuityState(run.status);
+  if (state === 'live') {
+    return {
+      state,
+      label: 'Live run',
+      detail: 'This eval is active in the current server process.',
+      is_live: true,
+      is_historical: false,
+      can_rerun: false,
+    };
+  }
+  if (state === 'interrupted') {
+    return {
+      state,
+      label: 'Interrupted by restart',
+      detail: 'This eval stopped before completion when the server restarted. Rerun it to continue.',
+      is_live: false,
+      is_historical: true,
+      can_rerun: true,
+    };
+  }
+  return {
+    state,
+    label: 'Historical run',
+    detail: 'This eval is saved history and remains visible after restart.',
+    is_live: false,
+    is_historical: true,
+    can_rerun: false,
+  };
+}
+
+function inferEvalContinuityState(status: string): 'live' | 'interrupted' | 'historical' {
+  if (status === 'pending' || status === 'running') return 'live';
+  if (status === 'interrupted') return 'interrupted';
+  return 'historical';
+}
+
+function continuityToneClass(state: string) {
+  if (state === 'live') return 'text-sky-700';
+  if (state === 'interrupted') return 'text-amber-700';
+  return 'text-gray-500';
+}
+
+function ContinuityPill({
+  label,
+  count,
+  tone,
+}: {
+  label: string;
+  count: number;
+  tone: 'live' | 'interrupted' | 'historical';
+}) {
+  const className =
+    tone === 'live'
+      ? 'border-sky-200 bg-sky-50 text-sky-700'
+      : tone === 'interrupted'
+        ? 'border-amber-200 bg-amber-50 text-amber-700'
+        : 'border-gray-200 bg-gray-50 text-gray-700';
+  return (
+    <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${className}`}>
+      {label}: {count}
+    </span>
   );
 }

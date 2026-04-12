@@ -145,6 +145,13 @@ function ImprovementHistoryPanel() {
 
   return (
     <div className="space-y-4">
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <p className="text-sm font-semibold text-gray-900">Durable decision history</p>
+        <p className="mt-1 text-sm leading-6 text-gray-600">
+          Accepted and rejected improvements remain available here after restart.
+        </p>
+      </section>
+
       <section className="grid gap-4 md:grid-cols-4">
         <div className="rounded-lg border border-gray-200 bg-white p-4">
           <p className="text-xs text-gray-500">Total decisions</p>

@@ -46,6 +46,8 @@ function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
       return 'done';
     case 'cancelled':
       return 'cancelled';
+    case 'interrupted':
+      return 'interrupted';
     case 'error':
     case 'failed':
       return 'error';

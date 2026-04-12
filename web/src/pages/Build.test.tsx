@@ -232,6 +232,57 @@ describe('Build', () => {
     expect(screen.getByRole('link', { name: 'Open Setup' })).toHaveAttribute('href', '/setup');
   });
 
+  it('labels restart-restored builder sessions as historical before resuming', async () => {
+    const user = userEvent.setup();
+    const restoredSession = {
+      ...mockBuilderSession(),
+      session_id: 'history-session-1',
+      continuity: {
+        state: 'historical',
+        label: 'Historical session',
+        detail: 'This builder chat was restored from durable storage after restart. Resume it to continue editing.',
+        is_live: false,
+      },
+    };
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/builder/chat/sessions?limit=10') {
+          return jsonResponse([
+            {
+              session_id: 'history-session-1',
+              agent_name: 'Refund Rescue',
+              message_count: 2,
+              mock_mode: false,
+              created_at: 1234567000,
+              updated_at: 1234567890,
+              continuity: restoredSession.continuity,
+            },
+          ]);
+        }
+        if (url === '/api/builder/session/history-session-1') {
+          return jsonResponse(restoredSession);
+        }
+        return jsonResponse({});
+      })
+    );
+
+    renderPage('/build?tab=builder-chat');
+
+    expect(await screen.findByText('Restart recovery')).toBeInTheDocument();
+    expect(screen.getByText('Historical session')).toBeInTheDocument();
+    expect(
+      screen.getByText('This builder chat was restored from durable storage after restart. Resume it to continue editing.')
+    ).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: /Refund Rescue/ }));
+
+    expect(await screen.findByText('Restored historical session')).toBeInTheDocument();
+    expect(screen.getByText('Refund Rescue')).toBeInTheDocument();
+  });
+
   it('moves builder config into a modal and makes testing the main right-panel workflow', async () => {
     const user = userEvent.setup();
     const builderSession = mockBuilderSession();

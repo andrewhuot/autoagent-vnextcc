@@ -9,6 +9,19 @@ export interface TaskStatus {
   error: string | null;
   created_at: string;
   updated_at: string;
+  continuity?: ContinuityState;
+  continuity_state?: string;
+  state_label?: string;
+  state_detail?: string;
+}
+
+export interface ContinuityState {
+  state: 'live' | 'interrupted' | 'historical' | string;
+  label: string;
+  detail: string;
+  is_live: boolean;
+  is_historical?: boolean;
+  can_rerun?: boolean;
 }
 
 export interface HealthMetrics {
@@ -199,6 +212,7 @@ export interface EvalRun {
   composite_score: number;
   total_cases: number;
   passed_cases: number;
+  continuity?: ContinuityState;
 }
 
 export interface PairwiseVariantResult {

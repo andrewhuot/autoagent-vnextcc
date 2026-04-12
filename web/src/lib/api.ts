@@ -33,6 +33,7 @@ import type {
   ConfigVersion,
   ConnectImportRequest,
   ConnectImportResult,
+  ContinuityState,
   ConversationRecord,
   ConversationTurn,
   CxAuthResult,
@@ -572,6 +573,10 @@ interface TaskStatusRaw {
   error: string | null;
   created_at: string;
   updated_at: string;
+  continuity?: ContinuityState;
+  continuity_state?: string;
+  state_label?: string;
+  state_detail?: string;
 }
 
 function normalizeEvalMode(value: unknown, warnings: unknown = []): EvalMode | undefined {
@@ -601,6 +606,10 @@ function mapTask(task: TaskStatusRaw): TaskStatus {
     error: task.error,
     created_at: task.created_at,
     updated_at: task.updated_at,
+    continuity: task.continuity,
+    continuity_state: task.continuity_state,
+    state_label: task.state_label,
+    state_detail: task.state_detail,
   };
 }
 
@@ -615,6 +624,7 @@ function mapEvalTask(task: TaskStatusRaw): EvalRun {
     composite_score: percent(result.composite),
     total_cases: result.total_cases || 0,
     passed_cases: result.passed_cases || 0,
+    continuity: task.continuity,
   };
 }
 
@@ -2258,6 +2268,28 @@ interface SystemEvent {
   payload: Record<string, unknown>;
 }
 
+export interface UnifiedEvent {
+  id: string;
+  event_type: string;
+  timestamp: number;
+  source: 'system' | 'builder' | string;
+  source_label?: string;
+  continuity_state?: string;
+  session_id?: string | null;
+  payload: Record<string, unknown>;
+}
+
+export interface UnifiedEventsResponse {
+  events: UnifiedEvent[];
+  count: number;
+  sources?: Record<string, { included: boolean; durable: boolean; label: string }>;
+  continuity?: {
+    state: string;
+    label: string;
+    detail: string;
+  };
+}
+
 export function useSystemEvents(params: { limit?: number; event_type?: string } = {}) {
   return useQuery<SystemEvent[]>({
     queryKey: ['events', params],
@@ -2268,6 +2300,29 @@ export function useSystemEvents(params: { limit?: number; event_type?: string } 
       const query = qs.toString() ? `?${qs.toString()}` : '';
       const payload = await fetchApi<{ events: SystemEvent[] }>(`/events${query}`);
       return payload.events ?? [];
+    },
+    refetchInterval: 5000,
+  });
+}
+
+export function useUnifiedEvents(
+  params: { limit?: number; source?: 'system' | 'builder' | 'all'; session_id?: string } = {}
+) {
+  return useQuery<UnifiedEventsResponse>({
+    queryKey: ['events', 'unified', params],
+    queryFn: async () => {
+      const qs = new URLSearchParams();
+      if (params.limit !== undefined) qs.set('limit', String(params.limit));
+      if (params.source && params.source !== 'all') qs.set('source', params.source);
+      if (params.session_id) qs.set('session_id', params.session_id);
+      const query = qs.toString() ? `?${qs.toString()}` : '';
+      const payload = await fetchApi<UnifiedEventsResponse>(`/events/unified${query}`);
+      return {
+        events: payload.events ?? [],
+        count: payload.count ?? payload.events?.length ?? 0,
+        sources: payload.sources,
+        continuity: payload.continuity,
+      };
     },
     refetchInterval: 5000,
   });

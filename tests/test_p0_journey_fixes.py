@@ -79,6 +79,91 @@ class TestTaskManagerPersistence:
         assert task is not None
         assert task.status == "interrupted"
 
+    def test_interrupted_task_exposes_restart_recovery_context(self, tmp_path: Path) -> None:
+        """Interrupted tasks should explain the restart state to API consumers."""
+        from api.tasks import TaskManager
+        import sqlite3
+
+        db_path = str(tmp_path / "tasks.db")
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY, task_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending', progress INTEGER NOT NULL DEFAULT 0,
+                    result TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("restart-eval", "eval", "running", 40, None, None,
+                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
+
+        manager = TaskManager(db_path=db_path)
+        task = manager.get_task("restart-eval")
+
+        assert task is not None
+        payload = task.to_dict()
+        assert payload["status"] == "interrupted"
+        assert payload["continuity_state"] == "interrupted"
+        assert payload["state_label"] == "Interrupted after restart"
+        assert "server restart" in payload["state_detail"]
+        assert "Start a new run" in (payload["error"] or "")
+
+    def test_interrupted_task_exposes_restart_continuity_metadata(self, tmp_path: Path) -> None:
+        """Interrupted tasks should explain that restart stopped live work."""
+        from api.tasks import TaskManager
+        import sqlite3
+
+        db_path = str(tmp_path / "tasks.db")
+        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS tasks (
+                    task_id TEXT PRIMARY KEY, task_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending', progress INTEGER NOT NULL DEFAULT 0,
+                    result TEXT, error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+                )
+            """)
+            conn.execute(
+                "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("eval-restart", "eval", "running", 42, None, None,
+                 "2026-01-01T00:00:00+00:00", "2026-01-01T00:00:00+00:00"),
+            )
+
+        manager = TaskManager(db_path=db_path)
+        task = manager.get_task("eval-restart")
+
+        assert task is not None
+        payload = task.to_dict()
+        assert payload["status"] == "interrupted"
+        assert payload["continuity"] == {
+            "state": "interrupted",
+            "label": "Interrupted by restart",
+            "detail": "This task was pending or running when the server restarted. It did not finish; rerun it to continue.",
+            "is_live": False,
+            "is_historical": True,
+            "can_rerun": True,
+        }
+
+    def test_completed_task_exposes_historical_continuity_metadata(self, tmp_path: Path) -> None:
+        """Completed tasks should be labeled as durable historical state."""
+        from api.tasks import TaskManager
+
+        db_path = str(tmp_path / "tasks.db")
+        manager = TaskManager(db_path=db_path)
+
+        task = manager.create_task("eval", lambda t: {"composite": 0.85})
+        task._thread.join(timeout=5)
+
+        payload = task.to_dict()
+        assert payload["continuity"]["state"] == "historical"
+        assert payload["continuity"]["label"] == "Historical task"
+        assert payload["continuity"]["is_live"] is False
+        assert payload["continuity"]["is_historical"] is True
+        assert payload["continuity"]["can_rerun"] is False
+
     def test_failed_task_persists_error(self, tmp_path: Path) -> None:
         """A failed task should persist its error message."""
         from api.tasks import TaskManager
@@ -311,6 +396,9 @@ class TestBuilderChatSessionPersistence:
         assert recovered["session_id"] == session_id
         assert len(recovered["messages"]) >= 2
         assert recovered["config"]["agent_name"]
+        assert recovered["continuity"]["state"] == "historical"
+        assert recovered["continuity"]["label"] == "Historical session"
+        assert recovered["continuity"]["is_live"] is False
 
     def test_list_sessions_returns_recent(self, tmp_path: Path) -> None:
         """list_sessions should return a summary of recent sessions."""
@@ -329,6 +417,28 @@ class TestBuilderChatSessionPersistence:
         assert len(sessions) == 2
         assert all("session_id" in s for s in sessions)
         assert all("agent_name" in s for s in sessions)
+
+    def test_list_sessions_marks_recovered_history_as_resumable(self, tmp_path: Path) -> None:
+        """Session summaries should tell the UI that persisted chats are resumable history."""
+        try:
+            from builder.chat_service import BuilderChatService
+        except TypeError:
+            pytest.skip("Import chain requires Python 3.11+ (dataclass slots)")
+
+        db_path = str(tmp_path / "chat_sessions.db")
+        service1 = BuilderChatService(db_path=db_path)
+        created = service1.handle_message("Build me a durable restart agent")
+
+        service2 = BuilderChatService(db_path=db_path)
+        sessions = service2.list_sessions()
+
+        assert sessions
+        summary = next(item for item in sessions if item["session_id"] == created["session_id"])
+        assert summary["continuity_state"] == "historical"
+        assert summary["state_label"] == "Historical session"
+        assert summary["can_resume"] is True
+        assert "Resume" in summary["state_detail"]
+        assert all(s["continuity"]["state"] == "historical" for s in sessions)
 
     def test_follow_up_message_persists(self, tmp_path: Path) -> None:
         """Follow-up messages in a session should persist across restarts."""
@@ -352,6 +462,28 @@ class TestBuilderChatSessionPersistence:
         assert recovered is not None
         # Should have: welcome, user1, assistant1, user2, assistant2
         assert len(recovered["messages"]) >= 4
+
+    def test_restarted_session_summary_exposes_historical_state(self, tmp_path: Path) -> None:
+        """Session lists should make restart-resumed history discoverable."""
+        try:
+            from builder.chat_service import BuilderChatService
+        except TypeError:
+            pytest.skip("Import chain requires Python 3.11+ (dataclass slots)")
+
+        db_path = str(tmp_path / "chat_sessions.db")
+        service1 = BuilderChatService(db_path=db_path)
+        created = service1.handle_message("Build me a customer support agent")
+
+        service2 = BuilderChatService(db_path=db_path)
+        sessions = service2.list_sessions()
+
+        assert sessions[0]["session_id"] == created["session_id"]
+        assert sessions[0]["continuity"] == {
+            "state": "historical",
+            "label": "Historical session",
+            "detail": "This builder chat was restored from durable storage after restart. Resume it to continue editing.",
+            "is_live": False,
+        }
 
 
 # ---------------------------------------------------------------------------

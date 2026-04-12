@@ -45,6 +45,13 @@ export interface BuilderEvalDraft {
   scenarios: Array<{ name: string; description: string }>;
 }
 
+export interface BuilderContinuity {
+  state: 'live' | 'historical' | 'interrupted' | string;
+  label: string;
+  detail: string;
+  is_live: boolean;
+}
+
 export interface BuilderSessionPayload {
   session_id: string;
   mock_mode: boolean;
@@ -58,6 +65,7 @@ export interface BuilderSessionPayload {
   };
   evals: BuilderEvalDraft | null;
   updated_at: number;
+  continuity?: BuilderContinuity;
 }
 
 export interface BuilderExportPayload {
@@ -145,6 +153,7 @@ export interface BuilderChatSessionSummary {
   mock_mode: boolean;
   created_at: number;
   updated_at: number;
+  continuity?: BuilderContinuity;
 }
 
 export function listBuilderChatSessions(limit: number = 50): Promise<BuilderChatSessionSummary[]> {

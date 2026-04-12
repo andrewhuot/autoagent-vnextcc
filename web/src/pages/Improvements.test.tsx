@@ -69,6 +69,15 @@ describe('Improvements', () => {
     expect(screen.getByText('Review Content')).toBeInTheDocument();
   });
 
+  it('frames the history tab as durable past state', () => {
+    renderImprovements('/improvements?tab=history');
+
+    expect(screen.getByText('Durable decision history')).toBeInTheDocument();
+    expect(
+      screen.getByText('Accepted and rejected improvements remain available here after restart.')
+    ).toBeInTheDocument();
+  });
+
   it('renders journey navigation links to Optimize and Deploy', () => {
     renderImprovements();
 
