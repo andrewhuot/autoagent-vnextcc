@@ -199,6 +199,29 @@ describe('Optimize', () => {
     );
   });
 
+  it('passes evalRunId from the URL through to the optimize request', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'opt-query-123', message: 'Optimization started' });
+    });
+    apiMocks.useStartOptimize.mockReturnValue({
+      mutate,
+      isPending: false,
+    });
+
+    renderOptimize('/optimize?agent=agent-v002&evalRunId=eval-run-query');
+
+    await user.click(screen.getByRole('button', { name: 'Start Optimization' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config_path: '/workspace/configs/v002.yaml',
+        eval_run_id: 'eval-run-query',
+      }),
+      expect.any(Object)
+    );
+  });
+
   it('warns before starting a new run when a review is already pending', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
