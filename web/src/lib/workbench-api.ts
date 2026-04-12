@@ -102,6 +102,18 @@ export type WorkbenchArtifactCategory =
   | 'plan'
   | 'note';
 
+/** Skill layer classification for an artifact. */
+export type SkillLayer = 'build' | 'runtime' | 'none';
+
+/** Skill context summary included in build events. */
+export interface SkillContext {
+  build_skills_available: number;
+  runtime_skills_available: number;
+  build_skills_relevant?: string[];
+  runtime_skills_relevant?: string[];
+  skill_store_loaded: boolean;
+}
+
 export interface WorkbenchArtifact {
   id: string;
   task_id: string;
@@ -117,6 +129,8 @@ export interface WorkbenchArtifact {
   turn_id?: string;
   /** Iteration id within the turn (autonomous corrections). */
   iteration_id?: string;
+  /** Skill layer this artifact belongs to (build, runtime, or none). */
+  skill_layer?: SkillLayer;
 }
 
 export interface BuildStreamEvent {
@@ -509,7 +523,8 @@ export interface WorkbenchHarnessState {
     tokens_used?: number;
     cost_usd?: number;
     elapsed_ms?: number;
-    current_phase?: HarnessMetrics['currentPhase'];
+    elapsed_seconds?: number;
+    current_phase?: HarnessMetrics['currentPhase'] | string;
   } | null;
   latest_handoff?: WorkbenchRunHandoff | null;
 }

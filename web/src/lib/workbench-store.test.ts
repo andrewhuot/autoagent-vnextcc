@@ -757,3 +757,104 @@ describe('workbench-store — harness features', () => {
     expect(state.diffTargetVersion).toBeNull();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Skill context integration
+// ---------------------------------------------------------------------------
+
+describe('skill context', () => {
+  beforeEach(() => {
+    useWorkbenchStore.getState().reset();
+  });
+
+  it('initializes skillContext as null', () => {
+    expect(useWorkbenchStore.getState().skillContext).toBeNull();
+  });
+
+  it('captures skill_context from build.completed', () => {
+    const dispatch = useWorkbenchStore.getState().dispatchEvent;
+
+    dispatch({
+      event: 'build.completed',
+      data: {
+        project_id: 'proj-1',
+        skill_context: {
+          build_skills_available: 5,
+          runtime_skills_available: 3,
+          build_skills_relevant: ['safety_hardening'],
+          runtime_skills_relevant: ['order_lookup'],
+          skill_store_loaded: true,
+        },
+      },
+    });
+
+    const ctx = useWorkbenchStore.getState().skillContext;
+    expect(ctx).not.toBeNull();
+    expect(ctx?.build_skills_available).toBe(5);
+    expect(ctx?.runtime_skills_available).toBe(3);
+    expect(ctx?.skill_store_loaded).toBe(true);
+  });
+
+  it('attaches skill_layer from artifact.updated event', () => {
+    const dispatch = useWorkbenchStore.getState().dispatchEvent;
+
+    // Set up plan first
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+
+    dispatch({
+      event: 'artifact.updated',
+      data: {
+        task_id: 'task-role',
+        artifact: makeArtifact({ id: 'art-skill', category: 'tool' }),
+        skill_layer: 'runtime',
+      },
+    });
+
+    const artifacts = useWorkbenchStore.getState().artifacts;
+    const art = artifacts.find((a) => a.id === 'art-skill');
+    expect(art).toBeDefined();
+    expect(art?.skill_layer).toBe('runtime');
+  });
+
+  it('handles artifact.updated events without skill_layer gracefully', () => {
+    const dispatch = useWorkbenchStore.getState().dispatchEvent;
+
+    // Set up plan
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+
+    // Event without skill_layer (older harness or mock mode)
+    dispatch({
+      event: 'artifact.updated',
+      data: {
+        task_id: 'task-role',
+        artifact: makeArtifact({ id: 'art-no-layer', category: 'agent' }),
+        // no skill_layer field
+      },
+    });
+
+    const artifacts = useWorkbenchStore.getState().artifacts;
+    const art = artifacts.find((a) => a.id === 'art-no-layer');
+    expect(art).toBeDefined();
+    // skill_layer should be undefined (not crash)
+    expect(art?.skill_layer).toBeUndefined();
+  });
+
+  it('resets skillContext on reset()', () => {
+    const dispatch = useWorkbenchStore.getState().dispatchEvent;
+    dispatch({
+      event: 'build.completed',
+      data: {
+        project_id: 'proj-1',
+        skill_context: {
+          build_skills_available: 2,
+          runtime_skills_available: 1,
+          skill_store_loaded: true,
+        },
+      },
+    });
+    expect(useWorkbenchStore.getState().skillContext).not.toBeNull();
+
+    useWorkbenchStore.getState().reset();
+    expect(useWorkbenchStore.getState().skillContext).toBeNull();
+  });
+});

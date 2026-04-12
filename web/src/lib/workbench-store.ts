@@ -16,6 +16,7 @@ import type {
   PlanTask,
   PlanTaskStatus,
   ReflectionEntry,
+  SkillContext,
   WorkbenchArtifact,
   WorkbenchCanonicalModel,
   WorkbenchCompatibilityDiagnostic,
@@ -196,6 +197,10 @@ interface WorkbenchState {
   lastHeartbeatAt: number;
   /** Number of progress stalls detected in the current run. */
   stallCount: number;
+
+  // --- skill context from the harness
+  /** Skill context summary from the most recent build.completed event. */
+  skillContext: SkillContext | null;
 }
 
 interface WorkbenchActions {
@@ -283,6 +288,7 @@ const INITIAL_STATE: WorkbenchState = {
   diffTargetVersion: null,
   lastHeartbeatAt: 0,
   stallCount: 0,
+  skillContext: null,
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -670,6 +676,10 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
 
     if (name === 'artifact.updated') {
       const incoming = data.artifact as WorkbenchArtifact;
+      // Attach skill_layer from the event envelope to the artifact
+      if (data.skill_layer && !incoming.skill_layer) {
+        incoming.skill_layer = data.skill_layer as WorkbenchArtifact['skill_layer'];
+      }
       const turnId =
         (data.turn_id as string | undefined) ?? incoming.turn_id ?? null;
       set((state) => {
@@ -736,11 +746,13 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     if (name === 'build.completed') {
       // A single iteration finished. Multi-turn status transitions now live
       // in turn.completed; here we just acknowledge the pass ended.
+      const incomingSkillContext = data.skill_context as SkillContext | undefined;
       set((state) => ({
         buildStatus: 'running',
         projectId: (data.project_id as string) ?? state.projectId,
         version: (data.version as number) ?? state.version,
         activeRun: mergeRun(state.activeRun, data),
+        skillContext: incomingSkillContext ?? state.skillContext,
       }));
       return;
     }
@@ -1105,13 +1117,24 @@ function harnessMetricsFromWire(
   current: HarnessMetrics | null
 ): HarnessMetrics | null {
   if (!incoming) return current;
+  const phase = incoming.current_phase;
+  const currentPhase: HarnessMetrics['currentPhase'] =
+    phase === 'planning' ||
+    phase === 'executing' ||
+    phase === 'reflecting' ||
+    phase === 'presenting' ||
+    phase === 'idle'
+      ? phase
+      : current?.currentPhase ?? 'idle';
   return {
     stepsCompleted: incoming.steps_completed ?? current?.stepsCompleted ?? 0,
     totalSteps: incoming.total_steps ?? current?.totalSteps ?? 0,
     tokensUsed: incoming.tokens_used ?? current?.tokensUsed ?? 0,
     costUsd: incoming.cost_usd ?? current?.costUsd ?? 0,
-    elapsedMs: incoming.elapsed_ms ?? current?.elapsedMs ?? 0,
-    currentPhase: incoming.current_phase ?? current?.currentPhase ?? 'idle',
+    elapsedMs:
+      incoming.elapsed_ms ??
+      (incoming.elapsed_seconds ? incoming.elapsed_seconds * 1000 : current?.elapsedMs ?? 0),
+    currentPhase,
     contextBudget: current?.contextBudget,
   };
 }

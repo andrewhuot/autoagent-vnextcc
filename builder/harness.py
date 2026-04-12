@@ -27,10 +27,12 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
 
+from builder.contract import BuilderContract, load_builder_contract
 from builder.types import new_id
 from builder.workbench import (
     _infer_domain,
@@ -51,6 +53,97 @@ from builder.workbench_plan import (
     WorkbenchArtifact,
     walk_leaves,
 )
+
+_log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Skill context — loaded at harness startup for event enrichment
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SkillContext:
+    """Summary of available skills loaded from the skill store at startup.
+
+    This is informational — the harness surfaces skill context in events
+    so operators can understand which skill layer is in play.  It does NOT
+    drive execution decisions.
+    """
+
+    build_skills_available: int = 0
+    runtime_skills_available: int = 0
+    build_skill_names: list[str] = field(default_factory=list)
+    runtime_skill_names: list[str] = field(default_factory=list)
+    skill_store_loaded: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for inclusion in events."""
+        return {
+            "build_skills_available": self.build_skills_available,
+            "runtime_skills_available": self.runtime_skills_available,
+            "build_skill_names": self.build_skill_names,
+            "runtime_skill_names": self.runtime_skill_names,
+            "skill_store_loaded": self.skill_store_loaded,
+        }
+
+    def relevant_for_domain(self, domain: str) -> dict[str, Any]:
+        """Return a domain-filtered subset for event payloads."""
+        # Simple domain relevance: skill names containing the domain keyword
+        domain_lower = domain.lower()
+        build_relevant = [
+            n for n in self.build_skill_names
+            if domain_lower in n.lower() or "general" in n.lower()
+        ]
+        runtime_relevant = [
+            n for n in self.runtime_skill_names
+            if domain_lower in n.lower() or "general" in n.lower()
+        ]
+        return {
+            "build_skills_available": self.build_skills_available,
+            "runtime_skills_available": self.runtime_skills_available,
+            "build_skills_relevant": build_relevant,
+            "runtime_skills_relevant": runtime_relevant,
+            "skill_store_loaded": self.skill_store_loaded,
+        }
+
+
+def _load_skill_context(skill_store: Any = None) -> SkillContext:
+    """Load available skills from the skill store, if accessible.
+
+    Degrades gracefully — returns an empty context if the store is
+    unavailable or the import fails.
+    """
+    ctx = SkillContext()
+    if skill_store is not None:
+        try:
+            from core.skills.types import SkillKind
+
+            build_skills = skill_store.list(kind=SkillKind.BUILD, status="active")
+            runtime_skills = skill_store.list(kind=SkillKind.RUNTIME, status="active")
+            ctx.build_skills_available = len(build_skills)
+            ctx.runtime_skills_available = len(runtime_skills)
+            ctx.build_skill_names = [s.name for s in build_skills]
+            ctx.runtime_skill_names = [s.name for s in runtime_skills]
+            ctx.skill_store_loaded = True
+        except Exception:  # noqa: BLE001
+            _log.warning("Skill store query failed; continuing without skill context")
+    return ctx
+
+
+def classify_artifact_skill_layer(category: str) -> str:
+    """Classify a workbench artifact category into a skill layer.
+
+    Returns ``"build"``, ``"runtime"``, or ``"none"`` based on the
+    artifact's category.  This makes the skill layer visible in events
+    without requiring the artifact to carry a skill reference.
+    """
+    _RUNTIME_CATEGORIES = {"tool", "callback", "api_call"}
+    _BUILD_CATEGORIES = {"eval", "guardrail"}
+    if category in _RUNTIME_CATEGORIES:
+        return "runtime"
+    if category in _BUILD_CATEGORIES:
+        return "build"
+    return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +288,8 @@ class HarnessExecutionEngine:
         *,
         router: Any = None,
         step_delay: float = 0.0,
+        skill_store: Any = None,
+        contract_path: str | None = None,
     ) -> None:
         """Bind dependencies.
 
@@ -205,11 +300,22 @@ class HarnessExecutionEngine:
                 content replaces template-based generation.
             step_delay: Artificial delay (seconds) between steps. Useful for
                 UI demos; leave 0.0 in production.
+            skill_store: Optional ``core.skills.SkillStore``.  When provided,
+                the engine loads available skills as context and includes
+                skill-layer metadata in events.
+            contract_path: Optional explicit path to ``BUILDER_CONTRACT.md``.
+                When ``None``, the loader searches upward from cwd.
         """
         self._store = store
         self._event_broker = event_broker
         self._router = router
         self._step_delay = step_delay
+
+        # Load builder contract (best-effort — never fails)
+        self._contract: BuilderContract = load_builder_contract(path=contract_path)
+
+        # Load skill context (best-effort — never fails)
+        self._skill_context: SkillContext = _load_skill_context(skill_store)
 
     # ------------------------------------------------------------------
     # Public API
@@ -241,7 +347,14 @@ class HarnessExecutionEngine:
         metrics.steps_total = len(leaves)
         metrics.record_text_output(plan.title + plan.description)
 
-        yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+        # Include skill context in plan event when available
+        plan_data: dict[str, Any] = {"plan": plan.to_dict()}
+        if self._skill_context.skill_store_loaded:
+            plan_data["skill_context"] = self._skill_context.relevant_for_domain(domain)
+        if self._contract.loaded:
+            plan_data["contract_version"] = self._contract.version
+
+        yield {"event": "plan.ready", "data": plan_data}
         await self._tick()
 
         # Emit the intro message in chunks
@@ -293,9 +406,14 @@ class HarnessExecutionEngine:
                 await self._tick(0.06)
 
             if artifact is not None:
+                skill_layer = classify_artifact_skill_layer(artifact.category)
                 yield {
                     "event": "artifact.updated",
-                    "data": {"task_id": leaf.id, "artifact": artifact.to_dict()},
+                    "data": {
+                        "task_id": leaf.id,
+                        "artifact": artifact.to_dict(),
+                        "skill_layer": skill_layer,
+                    },
                 }
                 await self._tick()
 
@@ -355,14 +473,18 @@ class HarnessExecutionEngine:
             "event": "harness.metrics",
             "data": metrics.to_dict(),
         }
+        completed_data: dict[str, Any] = {
+            "project_id": request.project_id,
+            "operations": applied_operations,
+            "plan_id": plan.id,
+            "harness_metrics": metrics.to_dict(),
+            "skill_context": self._skill_context.relevant_for_domain(domain),
+        }
+        if self._contract.loaded:
+            completed_data["contract_version"] = self._contract.version
         yield {
             "event": "build.completed",
-            "data": {
-                "project_id": request.project_id,
-                "operations": applied_operations,
-                "plan_id": plan.id,
-                "harness_metrics": metrics.to_dict(),
-            },
+            "data": completed_data,
         }
 
     async def iterate(
@@ -461,9 +583,14 @@ class HarnessExecutionEngine:
                 await self._tick(0.06)
 
             if artifact is not None:
+                skill_layer = classify_artifact_skill_layer(artifact.category)
                 yield {
                     "event": "artifact.updated",
-                    "data": {"task_id": leaf.id, "artifact": artifact.to_dict()},
+                    "data": {
+                        "task_id": leaf.id,
+                        "artifact": artifact.to_dict(),
+                        "skill_layer": skill_layer,
+                    },
                 }
                 await self._tick()
 
@@ -484,15 +611,17 @@ class HarnessExecutionEngine:
             "event": "harness.metrics",
             "data": metrics.to_dict(),
         }
+        iter_completed: dict[str, Any] = {
+            "project_id": request.project_id,
+            "operations": applied_operations,
+            "plan_id": iteration_plan.id,
+            "harness_metrics": metrics.to_dict(),
+            "iteration": iteration_number,
+            "skill_context": self._skill_context.relevant_for_domain(domain),
+        }
         yield {
             "event": "build.completed",
-            "data": {
-                "project_id": request.project_id,
-                "operations": applied_operations,
-                "plan_id": iteration_plan.id,
-                "harness_metrics": metrics.to_dict(),
-                "iteration": iteration_number,
-            },
+            "data": iter_completed,
         }
 
     # ------------------------------------------------------------------

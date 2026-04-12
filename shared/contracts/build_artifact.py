@@ -22,6 +22,7 @@ class BuildArtifact:
     eval_draft: str | None = None
     starter_config_path: str | None = None
     selector: str = "latest"
+    skill_layer: str = ""  # "build", "runtime", "none", or "" (unclassified)
     metadata: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
@@ -44,5 +45,6 @@ class BuildArtifact:
             eval_draft=data.get("eval_draft"),
             starter_config_path=data.get("starter_config_path"),
             selector=data.get("selector", "latest"),
+            skill_layer=data.get("skill_layer", ""),
             metadata=data.get("metadata"),
         )

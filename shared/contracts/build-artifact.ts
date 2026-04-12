@@ -2,6 +2,8 @@ export type BuildArtifactSource = 'prompt' | 'transcript' | 'builder_chat' | 'cl
 
 export type BuildArtifactStatus = 'draft' | 'complete' | 'exported';
 
+export type BuildArtifactSkillLayer = 'build' | 'runtime' | 'none' | '';
+
 export interface BuildArtifact {
   id: string;
   selector: string;
@@ -15,6 +17,7 @@ export interface BuildArtifact {
   builder_session_id?: string;
   eval_draft?: string;
   starter_config_path?: string;
+  skill_layer?: BuildArtifactSkillLayer;
   metadata?: Record<string, unknown>;
 }
 

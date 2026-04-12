@@ -61,6 +61,8 @@ export interface SkillRecordDependency {
   optional: boolean;
 }
 
+export type SkillRecordLayer = 'build' | 'runtime' | 'none' | '';
+
 export interface SkillRecord {
   skill_id: string;
   name: string;
@@ -77,6 +79,7 @@ export interface SkillRecord {
   test_cases: SkillRecordTestCase[];
   dependencies: SkillRecordDependency[];
   effectiveness: SkillRecordEffectiveness;
+  skill_layer?: SkillRecordLayer;
   created_at: string;
   updated_at: string;
   metadata?: Record<string, unknown>;

@@ -9,6 +9,7 @@ import { FileCode2, FileJson, FileText, Shield, Sparkles, TestTube2, Wrench } fr
 import { classNames } from '../../lib/utils';
 import type { WorkbenchArtifact } from '../../lib/workbench-api';
 import { useWorkbenchStore } from '../../lib/workbench-store';
+import { SkillLayerBadge } from '../SkillLayerBadge';
 
 const CATEGORY_ICONS: Record<string, typeof Sparkles> = {
   agent: Sparkles,
@@ -52,6 +53,7 @@ export function ArtifactCard({ artifact, compact = false }: ArtifactCardProps) {
           <span className="text-[10px] uppercase tracking-wide text-[color:var(--wb-text-dim)]">
             {artifact.category}
           </span>
+          <SkillLayerBadge layer={artifact.skill_layer} />
         </span>
         {!compact && (
           <span className="mt-0.5 block text-[12px] leading-4 text-[color:var(--wb-text-dim)]">

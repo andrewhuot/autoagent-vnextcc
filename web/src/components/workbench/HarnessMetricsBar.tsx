@@ -20,6 +20,7 @@ import {
   Layers,
   Loader2,
   Presentation,
+  Puzzle,
 } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import { isWorkbenchBuildActive, useWorkbenchStore } from '../../lib/workbench-store';
@@ -106,6 +107,7 @@ export function HarnessMetricsBar() {
   const iterationCount = useWorkbenchStore((s) => s.iterationCount);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
   const activeRun = useWorkbenchStore((s) => s.activeRun);
+  const skillContext = useWorkbenchStore((s) => s.skillContext);
 
   // Show when there are real metrics OR when a build is active (shows zeros
   // while the first harness.metrics event hasn't arrived yet).
@@ -238,6 +240,19 @@ export function HarnessMetricsBar() {
           )}
         >
           Iteration {iterationCount}
+        </span>
+      )}
+
+      {/* Skill context summary */}
+      {skillContext?.skill_store_loaded && (
+        <span
+          className="flex items-center gap-1 text-[color:var(--wb-text-dim)]"
+          title={`Build skills: ${skillContext.build_skills_available}, Runtime skills: ${skillContext.runtime_skills_available}`}
+        >
+          <Puzzle className="h-2.5 w-2.5" />
+          <span className="tabular-nums">
+            {skillContext.build_skills_available}B / {skillContext.runtime_skills_available}R skills
+          </span>
         </span>
       )}
     </div>

@@ -28,6 +28,8 @@ from builder.harness import (
     HarnessExecutionEngine,
     HarnessMetrics,
     ReflectionResult,
+    SkillContext,
+    classify_artifact_skill_layer,
     _build_iteration_plan,
     _build_role_text,
     _build_system_prompt,
@@ -1026,3 +1028,115 @@ def test_build_stream_endpoint_routes_to_iteration_for_existing_project(tmp_path
     assert "run.completed" in names
     assert "turn.completed" in names
     assert names[-1] == "run.completed"
+
+
+# ---------------------------------------------------------------------------
+# Skill context in harness events
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_engine_run_build_completed_includes_skill_context() -> None:
+    """build.completed should include a skill_context dict."""
+    store = _NullStore()
+    broker = _NullBroker()
+    engine = HarnessExecutionEngine(store, broker)
+
+    request = BuildRequest(project_id="test-skill-ctx", brief="Build an airline agent.")
+    project: dict[str, Any] = {
+        "project_id": "test-skill-ctx",
+        "model": {"agents": [{"id": "root"}], "tools": [], "guardrails": []},
+        "harness_state": {"checkpoints": []},
+    }
+
+    final_event = None
+    async for event in engine.run(request, project):
+        final_event = event
+
+    assert final_event is not None
+    assert final_event["event"] == "build.completed"
+    skill_ctx = final_event["data"]["skill_context"]
+    assert isinstance(skill_ctx, dict)
+    assert "build_skills_available" in skill_ctx
+    assert "runtime_skills_available" in skill_ctx
+    assert "skill_store_loaded" in skill_ctx
+
+
+@pytest.mark.asyncio
+async def test_engine_run_artifact_events_include_skill_layer() -> None:
+    """artifact.updated events should include a skill_layer field."""
+    store = _NullStore()
+    broker = _NullBroker()
+    engine = HarnessExecutionEngine(store, broker)
+
+    request = BuildRequest(project_id="test-layer", brief="Build a healthcare intake agent.")
+    project: dict[str, Any] = {
+        "project_id": "test-layer",
+        "model": {"agents": [{"id": "root"}], "tools": [], "guardrails": []},
+        "harness_state": {"checkpoints": []},
+    }
+
+    artifact_events = []
+    async for event in engine.run(request, project):
+        if event.get("event") == "artifact.updated":
+            artifact_events.append(event)
+
+    assert len(artifact_events) > 0
+    for ae in artifact_events:
+        assert "skill_layer" in ae["data"]
+        assert ae["data"]["skill_layer"] in ("build", "runtime", "none")
+
+
+@pytest.mark.asyncio
+async def test_engine_run_plan_ready_includes_contract_version() -> None:
+    """plan.ready should include contract_version when contract is loaded."""
+    import os
+    store = _NullStore()
+    broker = _NullBroker()
+    repo_root = Path(__file__).resolve().parent.parent
+    contract_path = str(repo_root / "BUILDER_CONTRACT.md")
+
+    engine = HarnessExecutionEngine(
+        store, broker, contract_path=contract_path
+    )
+
+    request = BuildRequest(project_id="test-contract", brief="Build a sales agent.")
+    project: dict[str, Any] = {
+        "project_id": "test-contract",
+        "model": {"agents": [{"id": "root"}], "tools": [], "guardrails": []},
+        "harness_state": {"checkpoints": []},
+    }
+
+    plan_event = None
+    async for event in engine.run(request, project):
+        if event.get("event") == "plan.ready":
+            plan_event = event
+            break
+
+    assert plan_event is not None
+    assert "contract_version" in plan_event["data"]
+    assert plan_event["data"]["contract_version"] == "1.0"
+
+
+@pytest.mark.asyncio
+async def test_engine_iterate_build_completed_includes_skill_context() -> None:
+    """iterate() build.completed should also include skill_context."""
+    store = _NullStore()
+    broker = _NullBroker()
+    engine = HarnessExecutionEngine(store, broker)
+
+    request = BuildRequest(project_id="test-iter-ctx", brief="Build an airline agent.")
+    final_event = None
+    async for event in engine.iterate(
+        request,
+        existing_plan=None,
+        existing_artifacts=[],
+        follow_up="Add a refund tool",
+        iteration_number=2,
+    ):
+        final_event = event
+
+    assert final_event is not None
+    assert final_event["event"] == "build.completed"
+    skill_ctx = final_event["data"]["skill_context"]
+    assert isinstance(skill_ctx, dict)
+    assert "skill_store_loaded" in skill_ctx
