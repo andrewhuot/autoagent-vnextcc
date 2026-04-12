@@ -783,8 +783,10 @@ async def test_workbench_service_routes_to_iteration_when_artifacts_exist(tmp_pa
         events.append(event)
 
     names = [e["event"] for e in events]
-    # Either iteration.started (if harness) or plan.ready (if mock fallback)
-    assert names[-1] == "build.completed", f"Expected build.completed, got last 3: {names[-3:]}"
+    # The service wraps every build with reflect/present phases, so the
+    # terminal event is run.completed (the durable-run lifecycle endpoint).
+    assert "build.completed" in names, f"build.completed missing from {names}"
+    assert names[-1] == "run.completed", f"Expected run.completed, got last 3: {names[-3:]}"
 
 
 # ---------------------------------------------------------------------------
@@ -814,7 +816,8 @@ async def test_workbench_service_run_iteration_stream_persists_harness_state(tmp
         events.append(event)
 
     names = [e["event"] for e in events]
-    assert names[-1] == "build.completed"
+    assert "build.completed" in names
+    assert names[-1] == "run.completed"
 
     # Activity log should contain an iterate or build entry
     saved = store.get_project(project_id)
@@ -903,7 +906,8 @@ def test_iterate_endpoint_streams_sse(tmp_path: Path) -> None:
     events = _parse_sse(response.text)
     assert len(events) > 0
     names = [e["event"] for e in events]
-    assert names[-1] == "build.completed"
+    assert "build.completed" in names
+    assert names[-1] == "run.completed"
 
 
 def test_iterate_endpoint_returns_error_event_for_missing_project(tmp_path: Path) -> None:
@@ -978,4 +982,5 @@ def test_build_stream_endpoint_routes_to_iteration_for_existing_project(tmp_path
     )
     second_events = _parse_sse(second_response.text)
     names = [e["event"] for e in second_events]
-    assert names[-1] == "build.completed"
+    assert "build.completed" in names
+    assert names[-1] == "run.completed"

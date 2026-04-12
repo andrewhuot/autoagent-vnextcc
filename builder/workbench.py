@@ -812,6 +812,16 @@ class WorkbenchService:
             "active_run": self._active_run(project),
             "runs": list(project.get("runs", {}).values()),
             "last_brief": project.get("last_brief"),
+            "harness_state": self._harness_state_summary(project),
+        }
+
+    def _harness_state_summary(self, project: dict[str, Any]) -> dict[str, Any]:
+        """Build a harness_state summary for snapshot hydration."""
+        hs = project.get("harness_state") or {}
+        checkpoints = hs.get("checkpoints") or []
+        return {
+            "checkpoint_count": len(checkpoints),
+            "last_metrics": hs.get("last_metrics"),
         }
 
     def rollback(self, *, project_id: str, version: int) -> dict[str, Any]:
