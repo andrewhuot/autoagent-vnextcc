@@ -177,9 +177,19 @@ export function EvalRuns() {
       const data = payload as { task_id: string; composite: number; passed: number; total: number };
       const evalAgent = runAgents[data.task_id] ?? activeAgent ?? null;
 
+      const failed = Math.max(0, (data.total ?? 0) - (data.passed ?? 0));
       toastSuccess(
-        `Eval ${data.task_id.slice(0, 8)} completed`,
-        `Composite ${(data.composite * 100).toFixed(1)} · ${data.passed}/${data.total} passed`
+        `Eval finished — composite ${(data.composite * 100).toFixed(1)}`,
+        `${data.passed}/${data.total} passed${failed > 0 ? ` · ${failed} failed` : ''}`,
+        failed > 0
+          ? {
+              action: {
+                label: 'Review failures',
+                onClick: () =>
+                  navigate(`/results?runId=${encodeURIComponent(data.task_id)}&outcome=fail`),
+              },
+            }
+          : undefined,
       );
 
       if (evalAgent) {
@@ -196,7 +206,7 @@ export function EvalRuns() {
     });
 
     return () => unsubscribe();
-  }, [activeAgent, refetch, runAgents]);
+  }, [activeAgent, navigate, refetch, runAgents]);
 
   const comparisonRuns = useMemo(() => {
     if (!runs || selectedRuns.length !== 2) return [];

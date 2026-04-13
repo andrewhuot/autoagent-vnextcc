@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { CommandPalette } from './CommandPalette';
 import { ToastViewport } from './ToastViewport';
 import { MockModeBanner } from './MockModeBanner';
+import { ProviderModePill } from './ProviderModePill';
 import { getBreadcrumbForPath, getBuildWorkspaceContext, getRouteTitle } from '../lib/navigation';
 import { wsClient } from '../lib/websocket';
 
@@ -290,17 +291,20 @@ export function Layout({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          <button
-            onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
-            className="hidden items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:text-gray-500 sm:inline-flex"
-            type="button"
-          >
-            <Search className="h-3 w-3" />
-            Search...
-            <kbd className="ml-2 rounded border border-gray-200 bg-gray-50 px-1 py-0.5 font-mono text-[10px] text-gray-400">
-              &#8984;K
-            </kbd>
-          </button>
+          <div className="flex items-center gap-2">
+            <ProviderModePill />
+            <button
+              onClick={() => window.dispatchEvent(new Event('open-command-palette'))}
+              className="hidden items-center gap-1.5 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs text-gray-400 transition hover:border-gray-300 hover:text-gray-500 sm:inline-flex"
+              type="button"
+            >
+              <Search className="h-3 w-3" />
+              Search...
+              <kbd className="ml-2 rounded border border-gray-200 bg-gray-50 px-1 py-0.5 font-mono text-[10px] text-gray-400">
+                &#8984;K
+              </kbd>
+            </button>
+          </div>
         </header>
 
         {demoJourneyContext ? <DemoJourneyStrip context={demoJourneyContext} /> : null}

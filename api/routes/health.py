@@ -84,6 +84,13 @@ async def get_health(
     )
     workspace = _workspace_state_response(request)
 
+    active_provider: str | None = None
+    active_model: str | None = None
+    if runtime_config is not None and getattr(runtime_config.optimizer, "models", None):
+        primary = runtime_config.optimizer.models[0]
+        active_provider = str(getattr(primary, "provider", "") or "") or None
+        active_model = str(getattr(primary, "model", "") or "") or None
+
     return HealthResponse(
         metrics=metrics,
         anomalies=report.anomalies,
@@ -93,6 +100,8 @@ async def get_health(
         mock_mode=bool(mock_reasons),
         mock_reasons=mock_reasons,
         real_provider_configured=real_provider_configured,
+        active_provider=active_provider,
+        active_model=active_model,
         workspace_valid=workspace.valid,
         workspace=workspace,
     )
@@ -179,10 +188,109 @@ async def get_cost_health(request: Request, limit: int = Query(30, ge=1, le=365)
 
 @router.get("/eval-set")
 async def get_eval_set_health(request: Request) -> dict:
-    """Return eval-set health diagnostics including difficulty distribution."""
+    """Return eval-set health diagnostics computed from real run history.
+
+    A case is:
+    - **saturated** if it passed in every one of the last 3 runs that included it.
+    - **unsolvable** if it failed in every one of the last 3 runs that included it.
+    - **high-leverage** otherwise (mixed pass/fail signal — most informative for the optimizer).
+
+    Difficulty distribution buckets cases by historical pass rate:
+    - easy:   pass_rate >= 0.8
+    - medium: 0.4 <= pass_rate < 0.8
+    - hard:   pass_rate < 0.4
+    """
+    eval_runner = getattr(request.app.state, "eval_runner", None)
+    history_store = getattr(eval_runner, "history_store", None) if eval_runner is not None else None
+    if history_store is None:
+        return {
+            "status": "no_history_store",
+            "total_cases": 0,
+            "analysis": {"saturated": 0, "unsolvable": 0, "high_leverage": 0},
+            "difficulty_distribution": {"easy": 0, "medium": 0, "hard": 0},
+        }
+
+    try:
+        recent_runs = history_store.list_runs(limit=20)
+    except Exception:  # noqa: BLE001 - degraded health is better than 500
+        return {
+            "status": "history_unavailable",
+            "total_cases": 0,
+            "analysis": {"saturated": 0, "unsolvable": 0, "high_leverage": 0},
+            "difficulty_distribution": {"easy": 0, "medium": 0, "hard": 0},
+        }
+
+    if not recent_runs:
+        return {
+            "status": "no_eval_set",
+            "total_cases": 0,
+            "analysis": {"saturated": 0, "unsolvable": 0, "high_leverage": 0},
+            "difficulty_distribution": {"easy": 0, "medium": 0, "hard": 0},
+        }
+
+    # Per-case rolling history of last 3 outcomes (most-recent run first).
+    per_case_outcomes: dict[str, list[bool]] = {}
+    for run_summary in recent_runs:
+        try:
+            run_detail = history_store.get_run(run_summary["run_id"])
+        except Exception:  # noqa: BLE001
+            continue
+        if not run_detail:
+            continue
+        for case in run_detail.get("cases", []):
+            case_id = str(case.get("case_id") or "").strip()
+            if not case_id:
+                continue
+            history = per_case_outcomes.setdefault(case_id, [])
+            if len(history) >= 3:
+                continue
+            history.append(bool(case.get("passed")))
+
+    saturated = 0
+    unsolvable = 0
+    high_leverage = 0
+    easy = 0
+    medium = 0
+    hard = 0
+    for outcomes in per_case_outcomes.values():
+        if not outcomes:
+            continue
+        passed = sum(1 for o in outcomes if o)
+        total = len(outcomes)
+        if total >= 3 and passed == total:
+            saturated += 1
+        elif total >= 3 and passed == 0:
+            unsolvable += 1
+        else:
+            high_leverage += 1
+        pass_rate = passed / total
+        if pass_rate >= 0.8:
+            easy += 1
+        elif pass_rate >= 0.4:
+            medium += 1
+        else:
+            hard += 1
+
+    total_cases = len(per_case_outcomes)
+    if total_cases == 0:
+        status = "no_eval_set"
+    elif saturated / total_cases > 0.8:
+        status = "needs_attention"  # eval set is too easy — add harder cases
+    elif unsolvable / total_cases > 0.5:
+        status = "needs_attention"  # eval set is too hard — agent hasn't shipped any wins
+    else:
+        status = "healthy"
+
     return {
-        "analysis": {"saturated": 0, "unsolvable": 0, "high_leverage": 0},
-        "difficulty_distribution": {"easy": 0, "medium": 0, "hard": 0},
+        "status": status,
+        "total_cases": total_cases,
+        "runs_analyzed": min(len(recent_runs), 20),
+        "analysis": {
+            "saturated": saturated,
+            "unsolvable": unsolvable,
+            "high_leverage": high_leverage,
+        },
+        "difficulty_distribution": {"easy": easy, "medium": medium, "hard": hard},
     }
 
 

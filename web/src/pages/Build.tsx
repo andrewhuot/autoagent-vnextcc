@@ -1007,15 +1007,26 @@ export function BuilderChatWorkspace({
               title={savedAgent ? 'Saved draft ready for eval' : 'Next step'}
               description={builderEvalHelperText}
             >
-              <button
-                data-testid="builder-run-eval"
-                onClick={() => void handleContinueToEval()}
-                disabled={!builderHasDraft || busy}
-                className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <Play className="h-4 w-4" />
-                {builderEvalLabel}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  data-testid="builder-save-to-library"
+                  onClick={() => void handleSave()}
+                  disabled={!builderHasDraft || busy || savePending}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  title="Save the current draft to your agent library without leaving Build."
+                >
+                  Save to Library
+                </button>
+                <button
+                  data-testid="builder-run-eval"
+                  onClick={() => void handleContinueToEval()}
+                  disabled={!builderHasDraft || busy}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 transition hover:bg-sky-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <Play className="h-4 w-4" />
+                  {builderEvalLabel}
+                </button>
+              </div>
             </JourneyActionPanel>
           </div>
         </aside>

@@ -701,50 +701,51 @@ async def execute_action(
     # Route to appropriate handler based on action_id
     # TODO: Implement actual action handlers
 
+    # NOTE: This Assistant API surface is currently a preview-only stub. Until a
+    # real orchestrator is wired up, action handlers must NOT pretend that work
+    # was performed. We surface the simulated outcome with explicit `simulated`
+    # flags and honest booleans so the UI cannot be misled into thinking a
+    # deploy/apply/rollback actually happened.
     if action_id == "approve_fix":
-        # Apply proposed configuration change
         result = {
-            "applied": True,
-            "description": "Applied routing rule fix",
-            "score_before": 0.72,
-            "score_after": 0.81,
+            "applied": False,
+            "simulated": True,
+            "description": "Mock preview — no routing rule was changed.",
         }
-        message = "Preview only: simulated fix applied. No config was changed."
+        message = "Preview only: simulated fix. No config was changed."
 
     elif action_id == "deploy":
-        # Deploy change to production
         result = {
-            "deployed": True,
-            "version": "v1.2.3",
-            "canary_progress": 0.0,
+            "deployed": False,
+            "simulated": True,
+            "description": "Mock preview — no deployment was triggered.",
         }
-        message = "Preview only: simulated deployment started. No live deploy was triggered."
+        message = "Preview only: simulated deployment. No live deploy was triggered."
 
     elif action_id == "rollback":
-        # Rollback deployed change
         result = {
-            "rolled_back": True,
-            "reverted_to": "v1.2.2",
+            "rolled_back": False,
+            "simulated": True,
+            "description": "Mock preview — no live deployment changed.",
         }
-        message = "Preview only: simulated rollback completed. No live deployment changed."
+        message = "Preview only: simulated rollback. No live deployment changed."
 
     elif action_id == "show_examples":
-        # Fetch example conversations
         result = {
-            "examples": [
-                {"conversation_id": "conv_123", "snippet": "User: I need a refund..."},
-                {"conversation_id": "conv_456", "snippet": "User: Where's my order?..."},
-            ]
+            "simulated": True,
+            "examples": [],
+            "description": "Mock preview — example conversations are not loaded from the live store.",
         }
-        message = "Preview only: showing simulated example conversations."
+        message = "Preview only: example conversations are not loaded from the live store."
 
     elif action_id == "run_eval":
-        # Trigger evaluation run
         result = {
-            "eval_id": str(uuid.uuid4()),
-            "status": "running",
+            "simulated": True,
+            "eval_id": None,
+            "status": "not_started",
+            "description": "Mock preview — no eval run was launched. Use the Eval page to start a real run.",
         }
-        message = "Preview only: simulated eval run started. No live eval was launched."
+        message = "Preview only: no eval run was launched. Use the Eval page to start a real run."
 
     else:
         raise HTTPException(

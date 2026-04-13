@@ -69,6 +69,22 @@ test('Greenleaf lawn-and-garden agent — full live golden path', async ({ page 
     record({ step: 'setup', severity: 'low', kind: 'success', title: 'Setup shows live mode (no mock banner)' });
   }
 
+  // ── Step 1b: ProviderModePill must report Live with a real key set ─────
+  // Wait for the pill to settle from its loading state.
+  const pillLocator = page.locator('[data-testid="provider-mode-pill"]');
+  const hasGoogleKey = !!process.env.GOOGLE_API_KEY;
+  await pillLocator.first().waitFor({ state: 'visible', timeout: 10_000 }).catch(() => {});
+  const pillMode = await pillLocator.first().getAttribute('data-mode').catch(() => null);
+  if (hasGoogleKey && pillMode === 'live') {
+    record({ step: 'setup', severity: 'low', kind: 'success', title: 'ProviderModePill reads "Live" with Gemini key set' });
+  } else if (hasGoogleKey) {
+    record({ step: 'setup', severity: 'high', kind: 'bug', title: `ProviderModePill should be "live" with key set but is "${pillMode ?? 'absent'}"` });
+  } else if (pillMode === 'mock') {
+    record({ step: 'setup', severity: 'low', kind: 'success', title: 'ProviderModePill reads "Mock" with no key' });
+  } else {
+    record({ step: 'setup', severity: 'medium', kind: 'note', title: `ProviderModePill state without key: ${pillMode ?? 'absent'}` });
+  }
+
   // ── Step 2: Build ──────────────────────────────────────────────────────
   await page.goto(`${BASE_URL}/build`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
@@ -89,6 +105,23 @@ test('Greenleaf lawn-and-garden agent — full live golden path', async ({ page 
     record({ step: 'build', severity: 'low', kind: 'success', title: 'Generated agent references the brief domain (lawn/garden)' });
   } else {
     record({ step: 'build', severity: 'medium', kind: 'bug', title: "Generated agent text doesn't mention lawn/garden domain" });
+  }
+
+  // ── Step 2b: Save to Library (no-leave save) ──────────────────────────
+  const saveLib = page.locator('[data-testid="builder-save-to-library"]').first();
+  if (await saveLib.count()) {
+    const before = page.url();
+    await saveLib.click().catch(() => {});
+    await page.waitForTimeout(2500);
+    await shot(page, '02b-after-save-library');
+    const stayed = page.url() === before;
+    if (stayed) {
+      record({ step: 'build', severity: 'low', kind: 'success', title: 'Save to Library kept user on Build (no forced navigation)' });
+    } else {
+      record({ step: 'build', severity: 'medium', kind: 'friction', title: 'Save to Library navigated away from Build', details: page.url() });
+    }
+  } else {
+    record({ step: 'build', severity: 'medium', kind: 'gap', title: 'No Save to Library button on Build page' });
   }
 
   // ── Step 3: Save & Run Eval (handoff) ──────────────────────────────────

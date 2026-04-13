@@ -881,6 +881,14 @@ class HealthResponse(BaseModel):
         False,
         description="Whether at least one usable non-mock provider credential is configured",
     )
+    active_provider: Optional[str] = Field(
+        None,
+        description="Name of the primary provider selected by the optimizer router (e.g. 'google').",
+    )
+    active_model: Optional[str] = Field(
+        None,
+        description="Name of the primary model selected by the optimizer router (e.g. 'gemini-2.5-pro').",
+    )
     workspace_valid: bool = Field(False, description="Whether the server has a valid AgentLab workspace")
     workspace: WorkspaceStateResponse = Field(
         default_factory=WorkspaceStateResponse,

@@ -49,6 +49,7 @@ import difflib
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 import time
@@ -1677,6 +1678,175 @@ def _next_built_config_path(configs_dir: Path) -> Path:
     return configs_dir / f"v{next_version:03d}_built_from_prompt.yaml"
 
 
+def _adapt_llm_config_to_artifact(
+    llm_config: dict,
+    prompt: str,
+    connectors: list[str],
+) -> dict:
+    """Map the studio LLM `generate_agent_config` output into the legacy build artifact shape.
+
+    The CLI build pipeline (eval generation, seed config, skill recommendations) was
+    designed around the pattern matcher's artifact shape: ``intents``, ``tools``,
+    ``guardrails``, ``business_rules``, ``suggested_tests``, etc. The studio LLM
+    contract is different (``routing_rules``, ``policies``, ``eval_criteria``,
+    ``system_prompt``). This adapter normalizes the live response so the rest of
+    ``build_agent`` can stay unchanged. Anything missing falls back to a sensible
+    empty default so downstream consumers stay defensive.
+    """
+
+    def _str(value: object) -> str:
+        return "" if value is None else str(value).strip()
+
+    routing_rules = llm_config.get("routing_rules") or []
+    intents: list[dict[str, object]] = []
+    for rule in routing_rules:
+        if not isinstance(rule, dict):
+            continue
+        condition = _str(rule.get("condition"))
+        action = _str(rule.get("action"))
+        if not condition and not action:
+            continue
+        slug = re.sub(r"[^a-z0-9]+", "_", condition.lower()).strip("_") or "intent"
+        intents.append(
+            {
+                "name": slug[:48] or "intent",
+                "description": condition or action,
+                "expected_action": action,
+                "priority": rule.get("priority"),
+            }
+        )
+
+    tools_out: list[dict[str, object]] = []
+    for tool in llm_config.get("tools") or []:
+        if not isinstance(tool, dict):
+            continue
+        name = _str(tool.get("name")) or "tool"
+        description = _str(tool.get("description"))
+        params = tool.get("parameters") or []
+        if isinstance(params, list):
+            param_list = [_str(p) for p in params if _str(p)]
+        else:
+            param_list = []
+        connector_match = next(
+            (conn for conn in connectors if conn.lower().replace(" ", "_") in name.lower()),
+            "",
+        )
+        tools_out.append(
+            {
+                "name": name,
+                "purpose": description,
+                "connector": connector_match,
+                "parameters": param_list,
+            }
+        )
+
+    guardrails: list[str] = []
+    business_rules: list[str] = []
+    for policy in llm_config.get("policies") or []:
+        if not isinstance(policy, dict):
+            continue
+        description = _str(policy.get("description"))
+        if not description:
+            continue
+        enforcement = _str(policy.get("enforcement")).lower()
+        if enforcement == "strict":
+            guardrails.append(description)
+        else:
+            business_rules.append(description)
+
+    suggested_tests: list[dict[str, object]] = []
+    for criterion in llm_config.get("eval_criteria") or []:
+        if not isinstance(criterion, dict):
+            continue
+        name = _str(criterion.get("name")) or "criterion"
+        description = _str(criterion.get("description")) or name
+        suggested_tests.append(
+            {
+                "id": re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_") or "case",
+                "user_message": description,
+                "expected_behavior": description,
+            }
+        )
+
+    integration_templates: list[dict[str, str]] = []
+    for connector in connectors:
+        integration_templates.append(
+            {"connector": connector, "purpose": f"Integrate with {connector} during build."}
+        )
+
+    metadata = llm_config.get("metadata") if isinstance(llm_config.get("metadata"), dict) else {}
+    return {
+        "intents": intents,
+        "tools": tools_out,
+        "guardrails": guardrails,
+        "business_rules": business_rules,
+        "escalation_conferences": [],
+        "escalation_conditions": [],
+        "auth_steps": [],
+        "connectors": list(connectors),
+        "suggested_tests": suggested_tests,
+        "integration_templates": integration_templates,
+        "system_prompt": _str(llm_config.get("system_prompt")),
+        "model": _str(llm_config.get("model")),
+        "agent_name": _str(metadata.get("agent_name")),
+        "version": _str(metadata.get("version")),
+        "generation_source": "live_llm",
+    }
+
+
+def _build_artifact_live(
+    prompt: str, connectors: list[str]
+) -> tuple[dict | None, str | None, str | None]:
+    """Generate a build artifact via the live LLM router when one is configured.
+
+    Returns a tuple of ``(artifact, model_label, failure_reason)``.
+    - ``artifact`` is ``None`` when no real provider is configured (mock mode),
+      when the LLM call fails, or when the response can't be adapted — in any
+      of those cases the caller falls back to the deterministic pattern matcher.
+    - ``model_label`` is set when a live call succeeded.
+    - ``failure_reason`` is set when the live path was attempted but did not
+      succeed (e.g. HTTP 403, malformed JSON), so the CLI can tell the operator
+      *why* it fell back instead of pretending no key was configured.
+    """
+    try:
+        from cli.model import apply_model_overrides
+        from optimizer.transcript_intelligence import TranscriptIntelligenceService
+
+        runtime = load_runtime_with_mode_preference()
+        runtime = apply_model_overrides(runtime)
+        router = build_router_from_runtime_config(runtime.optimizer)
+    except Exception:  # noqa: BLE001 - fallback never breaks the CLI
+        return None, None, None
+
+    if router.mock_mode or not router.models:
+        return None, None, None
+
+    requested_model = str(router.models[0].model)
+    try:
+        service = TranscriptIntelligenceService(llm_router=router)
+        llm_config = service.generate_agent_config(prompt, requested_model=requested_model)
+    except Exception as exc:  # noqa: BLE001
+        return None, None, str(exc)
+
+    if not getattr(service, "last_generation_used_llm", False):
+        reason = getattr(service, "last_generation_failure_reason", "") or "live LLM did not return a usable response"
+        return None, None, reason
+
+    if not llm_config:
+        return None, None, "live LLM returned an empty response"
+
+    try:
+        artifact = _adapt_llm_config_to_artifact(llm_config, prompt, connectors)
+    except Exception as exc:  # noqa: BLE001
+        return None, None, f"failed to adapt LLM response: {exc}"
+
+    if not artifact.get("intents") and not artifact.get("tools") and not artifact.get("system_prompt"):
+        return None, None, "live LLM response was missing intents, tools, and system prompt"
+
+    provider = str(router.models[0].provider)
+    return artifact, f"{provider}:{requested_model}", None
+
+
 def _artifact_to_seed_config(prompt: str, artifact: dict) -> dict:
     """Map a prompt-built artifact into an AgentLab config scaffold."""
     base_path = Path(__file__).parent / "agent" / "config" / "base_config.yaml"
@@ -1699,14 +1869,18 @@ def _artifact_to_seed_config(prompt: str, artifact: dict) -> dict:
         part for part in (prompt, intent_human, business_rules, escalation_conditions, auth_steps) if part
     )
 
-    config["prompts"]["root"] = (
-        "You are AgentLab, a production customer support orchestrator. "
-        f"Build brief: {prompt}. "
-        f"Primary intents: {intent_human or 'general support'}. "
-        f"Business rules: {business_rules or 'standard support policy'}. "
-        f"Follow these guardrails: {guardrail_text or 'standard policy controls'}. "
-        "Escalate with verified context when self-service cannot resolve safely."
-    )
+    llm_system_prompt = str(artifact.get("system_prompt", "")).strip()
+    if llm_system_prompt:
+        config["prompts"]["root"] = llm_system_prompt
+    else:
+        config["prompts"]["root"] = (
+            "You are AgentLab, a production customer support orchestrator. "
+            f"Build brief: {prompt}. "
+            f"Primary intents: {intent_human or 'general support'}. "
+            f"Business rules: {business_rules or 'standard support policy'}. "
+            f"Follow these guardrails: {guardrail_text or 'standard policy controls'}. "
+            "Escalate with verified context when self-service cannot resolve safely."
+        )
 
     order_keywords = {"order", "tracking", "cancel", "cancellation", "shipping", "address", "refund"}
     support_keywords = {"support", "help"}
@@ -2591,8 +2765,14 @@ def build_agent(
     if not resolved_connectors:
         resolved_connectors = _infer_connectors_from_prompt(prompt)
 
-    service = TranscriptIntelligenceService()
-    artifact = service.build_agent_artifact(prompt, resolved_connectors)
+    live_artifact, live_model_label, live_failure_reason = _build_artifact_live(
+        prompt, resolved_connectors
+    )
+    if live_artifact is not None:
+        artifact = live_artifact
+    else:
+        service = TranscriptIntelligenceService()
+        artifact = service.build_agent_artifact(prompt, resolved_connectors)
     artifact["skills"] = _build_skill_recommendations(artifact)
     artifact["source_prompt"] = prompt
 
@@ -2666,6 +2846,23 @@ def build_agent(
         return
 
     click.echo(click.style("\n✦ AgentLab Build", fg="cyan", bold=True))
+    if live_model_label:
+        click.echo(click.style(f"  ✓ Generated with live LLM ({live_model_label})", fg="green"))
+    elif live_failure_reason:
+        click.echo(
+            click.style(
+                f"  ⚠ Live LLM call failed — used pattern fallback. Reason: {live_failure_reason}",
+                fg="yellow",
+            )
+        )
+    else:
+        click.echo(
+            click.style(
+                "  ℹ No provider key — used pattern fallback. "
+                "Run `agentlab mode set live` after adding a provider key for LLM-generated configs.",
+                dim=True,
+            )
+        )
     click.echo(f"Prompt: {prompt}")
     click.echo(f"Connectors: {', '.join(artifact.get('connectors', [])) or 'None'}")
     click.echo("")
