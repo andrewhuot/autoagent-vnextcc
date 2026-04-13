@@ -177,7 +177,7 @@ They now point into the current product surfaces instead of representing separat
 
 The default CLI help shows two groups:
 
-- **Primary** — `new`, `build`, `eval`, `optimize`, `deploy`, `status`, `doctor`, `shell`
+- **Primary** — `new`, `build`, `workbench`, `eval`, `optimize`, `deploy`, `status`, `doctor`, `shell`
 - **Secondary** — `config`, `connect`, `instruction`, `memory`, `mode`, `model`, `provider`, `review`, `template`
 
 Run:
@@ -188,6 +188,17 @@ agentlab advanced
 ```
 
 The hidden/advanced surface includes operations like `compare`, `trace`, `mcp`, `cx`, `adk`, `runbook`, `skill`, `scorer`, `release`, and `quickstart`.
+
+The CLI Workbench command group mirrors the core candidate loop from the web Workbench:
+
+```bash
+agentlab workbench build "Build a support agent"
+agentlab workbench show
+agentlab workbench save
+agentlab eval run --config <saved-config-path>
+```
+
+Workbench saves and hands off candidate context. Eval and Optimize remain separate commands because Eval owns measurement and Optimize requires completed eval evidence.
 
 ---
 

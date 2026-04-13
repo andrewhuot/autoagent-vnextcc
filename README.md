@@ -110,6 +110,7 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 |---------|---------|
 | `new` | Create a new workspace from a starter template |
 | `build` | Generate or inspect build artifacts |
+| `workbench` | Build, inspect, iterate, and materialize a Workbench candidate |
 | `eval` | Run evals, inspect results, compare runs, and generate eval suites |
 | `optimize` | Run optimization cycles (`--continuous` for loop mode) |
 | `deploy` | Canary, release, rollback, or auto-review-and-deploy |
@@ -132,6 +133,20 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 | `template` | List and apply bundled starter templates |
 
 All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md) for the full reference, including the advanced surface.
+
+### CLI Workbench
+
+Use the terminal Workbench when you want the Workbench candidate loop without opening the web console:
+
+```bash
+agentlab workbench build "Build a refund support agent with PII guardrails"
+agentlab workbench show
+agentlab workbench iterate "Add regression evals for missing-order cases"
+agentlab workbench save
+agentlab eval run --config <saved-config-path>
+```
+
+`agentlab workbench save` materializes the candidate into the normal workspace config path, writes generated eval cases, and sets the saved candidate as the active local config. It does not start Eval or Optimize; Eval still measures the candidate, and Optimize still waits for completed eval evidence.
 
 ---
 

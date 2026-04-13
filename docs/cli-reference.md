@@ -49,6 +49,46 @@ Subcommands:
 
 - `show` — show the latest or selected build artifact
 
+### `agentlab workbench`
+
+Build, inspect, iterate, and materialize a Workbench candidate from the terminal.
+
+Common commands:
+
+```bash
+agentlab workbench build "Build a support agent for refund escalations"
+agentlab workbench show
+agentlab workbench status
+agentlab workbench iterate "Add a PII guardrail and missing-order regression eval"
+agentlab workbench save
+agentlab workbench handoff --json
+```
+
+Subcommands:
+
+- `build` — run the Workbench build loop for a natural-language brief
+- `show` — show the candidate card, artifacts, validation, readiness, and next step
+- `status` — compact readiness view for the latest or selected Workbench project
+- `iterate` — apply a follow-up turn to the latest or selected Workbench project
+- `save` — materialize the candidate into `configs/` and generated eval cases
+- `handoff` — print the typed Workbench Eval/Optimize bridge
+
+Useful options:
+
+- `--project-id TEXT`
+- `--target [portable|adk|cx]`
+- `--environment TEXT`
+- `--mock`
+- `--auto-iterate / --no-auto-iterate`
+- `--max-iterations INTEGER`
+- `--max-seconds INTEGER`
+- `--max-tokens INTEGER`
+- `--max-cost-usd FLOAT`
+- `--json`
+- `--output-format [text|json|stream-json]`
+
+`workbench save` writes the generated Workbench candidate into the normal AgentLab workspace, updates the active local config, writes `evals/cases/generated_build.yaml`, and returns an Eval request plus an Optimize request template. It does **not** start Eval, Optimize, AutoFix, review approval, or deployment.
+
 ### `agentlab eval`
 
 Run evals, inspect results, compare runs, and generate eval suites.

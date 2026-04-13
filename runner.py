@@ -100,6 +100,7 @@ from cli.intelligence import (
 from cli.mcp_setup import mcp_group
 from cli.mode import load_runtime_with_mode_preference, mode_group, summarize_mode_state
 from cli.permissions import permissions_group
+from cli.workbench import workbench_group
 from cli.providers import (
     configured_providers,
     default_api_key_env_for,
@@ -170,7 +171,7 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 
 # Command visibility tiers for simplified help output
-PRIMARY_COMMANDS = {"new", "build", "eval", "optimize", "deploy", "status", "doctor", "shell"}
+PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {"review", "config", "instruction", "model", "provider", "mode", "memory", "template", "connect"}
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
@@ -1857,6 +1858,7 @@ cli.add_command(mode_group)
 cli.add_command(mcp_group)
 cli.add_command(intelligence_group)
 cli.add_command(permissions_group)
+cli.add_command(workbench_group)
 from cli.model import model_group
 from cli.usage import usage_command
 
