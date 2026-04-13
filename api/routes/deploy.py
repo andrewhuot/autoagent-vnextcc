@@ -19,6 +19,13 @@ from api.models import (
 class PromoteRequest(BaseModel):
     """Optional body for the promote endpoint."""
     version: int | None = None
+    attempt_id: str | None = None
+
+
+class RollbackRequest(BaseModel):
+    """Optional body for the rollback endpoint."""
+    attempt_id: str | None = None
+
 
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
@@ -40,10 +47,52 @@ def _deploy_context(request: Request) -> tuple[Any, Any]:
     return deployer, vm
 
 
+def _record_lineage(
+    request: Request,
+    event_type: str,
+    *,
+    attempt_id: str | None,
+    version: int | None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Append a lineage event if the store is wired and we know the attempt."""
+    lineage = getattr(request.app.state, "improvement_lineage", None)
+    if lineage is None or not attempt_id:
+        return
+    try:
+        lineage.record(
+            attempt_id,
+            event_type,
+            version=version,
+            payload=payload or {},
+        )
+    except Exception:
+        pass
+
+
+def _resolve_attempt_id(request: Request, explicit: str | None) -> str | None:
+    """Fall back to the most recent optimizer attempt when the caller omits one.
+
+    This keeps existing CLI and UI flows (which don't yet pass ``attempt_id``)
+    still produce lineage rows automatically.
+    """
+    if explicit:
+        return explicit
+    memory = getattr(request.app.state, "optimization_memory", None)
+    if memory is None:
+        return None
+    try:
+        recent = memory.recent(limit=1)
+    except Exception:
+        return None
+    return recent[0].attempt_id if recent else None
+
+
 @router.post("", response_model=DeployResponse, status_code=201)
 async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse:
     """Deploy a config version using the specified strategy."""
     deployer, vm = _deploy_context(request)
+    attempt_id = _resolve_attempt_id(request, body.attempt_id)
 
     if body.version is not None:
         # Deploy an existing saved version instead of duplicating it.
@@ -54,6 +103,14 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
                 vm.mark_canary(body.version)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+        event_type = "promote" if body.strategy == DeployStrategy.immediate else "deploy_canary"
+        _record_lineage(
+            request,
+            event_type,
+            attempt_id=attempt_id,
+            version=body.version,
+            payload={"source": "deploy_existing_version"},
+        )
         if body.strategy == DeployStrategy.immediate:
             return DeployResponse(
                 message=f"Promoted v{body.version:03d} to active (immediate)",
@@ -71,6 +128,13 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
         scores = body.scores or {}
         if body.strategy == DeployStrategy.immediate:
             cv = vm.save_version(body.config, scores, status="active")
+            _record_lineage(
+                request,
+                "promote",
+                attempt_id=attempt_id,
+                version=cv.version,
+                payload={"source": "deploy_new_config", "scores": scores},
+            )
             return DeployResponse(
                 message=f"Deployed v{cv.version:03d} as active (immediate)",
                 version=cv.version,
@@ -79,6 +143,13 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
         else:
             msg = deployer.deploy(body.config, scores)
             canary_ver = vm.manifest.get("canary_version")
+            _record_lineage(
+                request,
+                "deploy_canary",
+                attempt_id=attempt_id,
+                version=canary_ver,
+                payload={"source": "deploy_new_config", "scores": scores},
+            )
             return DeployResponse(
                 message=msg,
                 version=canary_ver,
@@ -92,6 +163,13 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
 
     if body.strategy == DeployStrategy.immediate:
         vm.promote(canary_ver)
+        _record_lineage(
+            request,
+            "promote",
+            attempt_id=attempt_id,
+            version=canary_ver,
+            payload={"source": "promote_current_canary"},
+        )
         return DeployResponse(
             message=f"Promoted canary v{canary_ver:03d} to active",
             version=canary_ver,
@@ -147,6 +225,13 @@ async def promote_canary(request: Request, body: PromoteRequest | None = None) -
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    _record_lineage(
+        request,
+        "promote",
+        attempt_id=_resolve_attempt_id(request, body.attempt_id if body else None),
+        version=target,
+        payload={"source": "promote_endpoint"},
+    )
     return DeployResponse(
         message=f"Promoted v{target:03d} to active",
         version=target,
@@ -155,7 +240,7 @@ async def promote_canary(request: Request, body: PromoteRequest | None = None) -
 
 
 @router.post("/rollback", response_model=DeployResponse)
-async def rollback_canary(request: Request) -> DeployResponse:
+async def rollback_canary(request: Request, body: RollbackRequest | None = None) -> DeployResponse:
     """Rollback the current canary deployment."""
     _deployer, vm = _deploy_context(request)
     canary_ver = vm.manifest.get("canary_version")
@@ -167,6 +252,13 @@ async def rollback_canary(request: Request) -> DeployResponse:
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    _record_lineage(
+        request,
+        "rollback",
+        attempt_id=_resolve_attempt_id(request, body.attempt_id if body else None),
+        version=canary_ver,
+        payload={"source": "rollback_endpoint"},
+    )
     return DeployResponse(
         message=f"Rolled back canary v{canary_ver:03d}",
         version=canary_ver,

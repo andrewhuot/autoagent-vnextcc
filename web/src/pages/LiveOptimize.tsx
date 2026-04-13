@@ -55,7 +55,11 @@ export function LiveOptimize({
     setScoreData([]);
     setShowConfetti(false);
 
-    const eventSource = new EventSource(`/api/optimize/stream?cycles=${totalCycles}&mode=standard`);
+    // This page is the simulated walkthrough; explicit opt-in so the real
+    // stream endpoint 400s any caller that forgets to pass a task_id.
+    const eventSource = new EventSource(
+      `/api/optimize/stream?simulated=1&cycles=${totalCycles}&mode=standard`
+    );
 
     eventSource.addEventListener('cycle_start', () => {
       setCurrentPhase('diagnose');
