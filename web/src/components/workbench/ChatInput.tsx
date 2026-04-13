@@ -17,11 +17,40 @@ interface ChatInputProps {
   onSubmit: (text: string) => void;
   onCancel?: () => void;
   placeholder?: string;
+  /**
+   * Externally supplied prefill text. When this value changes to a non-empty
+   * string, the composer adopts it as its current value so callers can inject
+   * a draft brief (e.g. "Import from Build") without bypassing the internal
+   * editable state. Users remain free to edit or clear the prefill before
+   * submitting.
+   */
+  prefill?: string;
 }
 
-export function ChatInput({ onSubmit, onCancel, placeholder }: ChatInputProps) {
+export function ChatInput({ onSubmit, onCancel, placeholder, prefill }: ChatInputProps) {
   const [value, setValue] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastPrefillRef = useRef<string | undefined>(undefined);
+
+  // Adopt an externally provided prefill whenever it changes to a new
+  // non-empty value. We key off the raw prefill string (not the current
+  // editable value) so repeated clicks of an "Import" button with the same
+  // text stay idempotent.
+  useEffect(() => {
+    if (prefill && prefill !== lastPrefillRef.current) {
+      lastPrefillRef.current = prefill;
+      setValue(prefill);
+      // Focus the textarea so the user can immediately edit the imported
+      // brief before sending.
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        if (textareaRef.current) {
+          const end = textareaRef.current.value.length;
+          textareaRef.current.setSelectionRange(end, end);
+        }
+      });
+    }
+  }, [prefill]);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
   const cancelBuild = useWorkbenchStore((s) => s.cancelBuild);
   const autoIterate = useWorkbenchStore((s) => s.autoIterate);

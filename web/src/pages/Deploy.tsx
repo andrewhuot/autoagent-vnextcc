@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { ArrowUpCircle, Rocket, RotateCcw } from 'lucide-react';
 import { useConfigs, useDeploy, useDeployStatus, usePromoteCanary, useRollback } from '../lib/api';
@@ -57,6 +57,16 @@ export function Deploy() {
   const activeConfig = deployStatus?.active_version
     ? configs?.find((entry) => entry.version === deployStatus.active_version) || null
     : null;
+  // useConfigs returns versions sorted by version number desc, so index 0 is the latest.
+  const latestConfig = configs && configs.length > 0 ? configs[0] : null;
+
+  // When the deploy form is shown and no version is chosen yet, default to the latest candidate
+  // so the primary "Deploy" button is actionable without requiring the user to guess.
+  useEffect(() => {
+    if (showDeployForm && !version && latestConfig) {
+      setVersion(String(latestConfig.version));
+    }
+  }, [showDeployForm, version, latestConfig]);
 
   function closeForm() {
     setShowForm(false);
@@ -361,6 +371,7 @@ export function Deploy() {
                 {(configs || []).map((config) => (
                   <option key={config.version} value={config.version}>
                     v{config.version} · {statusLabel(config.status)}
+                    {latestConfig && config.version === latestConfig.version ? ' (latest)' : ''}
                   </option>
                 ))}
               </select>

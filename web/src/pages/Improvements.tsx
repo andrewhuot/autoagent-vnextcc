@@ -1,5 +1,5 @@
 import { Link, useSearchParams } from 'react-router-dom';
-import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket } from 'lucide-react';
+import { ArrowRight, Clock3, Flag, FlaskConical, GitPullRequest, Rocket, ShieldAlert } from 'lucide-react';
 import { EmptyState } from '../components/EmptyState';
 import { PageHeader } from '../components/PageHeader';
 import { StatusBadge } from '../components/StatusBadge';
@@ -7,9 +7,11 @@ import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { UnifiedReviewQueue } from './UnifiedReviewQueue';
 import { Experiments } from './Experiments';
 import { Opportunities } from './Opportunities';
-import { useExperiments, useOptimizeHistory, useUnifiedReviewStats } from '../lib/api';
+import { useExperiments, useOpportunities, useOptimizeHistory, useUnifiedReviewStats } from '../lib/api';
+import { useActiveAgent } from '../lib/active-agent';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { formatTimestamp, statusVariant, classNames } from '../lib/utils';
+import type { OptimizationAttempt } from '../lib/types';
 
 type ImprovementsTab = 'opportunities' | 'experiments' | 'review' | 'history';
 
@@ -310,6 +312,143 @@ function ImprovementHistoryPanel() {
   );
 }
 
+function getRejectionReason(attempt: OptimizationAttempt): string {
+  switch (attempt.status) {
+    case 'rejected_invalid':
+      return 'Config change was invalid or failed validation';
+    case 'rejected_human':
+      return 'Rejected during human review';
+    case 'rejected_safety':
+      return 'Failed safety / constraint thresholds (e.g. adversarial robustness)';
+    case 'rejected_no_improvement':
+      return 'No statistically significant improvement over baseline';
+    case 'rejected_regression':
+      return 'Caused a regression against the current config';
+    case 'rejected_noop':
+      return 'No effective config change was produced';
+    default:
+      if (typeof attempt.status === 'string' && attempt.status.startsWith('rejected')) {
+        return `Rejected by acceptance gates (${attempt.status.replace(/^rejected_?/, '') || 'unspecified'})`;
+      }
+      return 'Rejected by acceptance gates';
+  }
+}
+
+function RejectedAttemptsPanel() {
+  const { activeAgent } = useActiveAgent();
+  const { data: attempts = [], isLoading, isError } = useOptimizeHistory();
+  const { data: opportunities = [] } = useOpportunities('open');
+
+  // Backend /optimize/history returns every attempt regardless of agent; filter
+  // client-side to just the rejected ones. If/when the API gains an agent_id
+  // field, we can tighten this to scope by the active agent.
+  const rejected = attempts.filter((attempt) =>
+    typeof attempt.status === 'string' && attempt.status.startsWith('rejected')
+  );
+
+  const hasOpenOpportunities = opportunities.length > 0;
+
+  if (isLoading) {
+    return null;
+  }
+
+  if (isError) {
+    return null;
+  }
+
+  if (rejected.length === 0) {
+    if (!hasOpenOpportunities) {
+      return (
+        <section className="rounded-xl border border-dashed border-gray-200 bg-gray-50 p-5 text-sm text-gray-600">
+          No opportunities and no rejected attempts yet — run Optimize to generate candidates.
+        </section>
+      );
+    }
+    return null;
+  }
+
+  return (
+    <section className="rounded-lg border border-amber-200 bg-amber-50/60 p-5">
+      <div className="flex items-start gap-2">
+        <ShieldAlert className="mt-0.5 h-4 w-4 text-amber-700" />
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-amber-900">
+            Tried but rejected
+            <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800">
+              {rejected.length}
+            </span>
+          </h3>
+          <p className="mt-1 text-xs leading-5 text-amber-900/80">
+            Optimize produced candidates for
+            {activeAgent ? <> <span className="font-medium">{activeAgent.name}</span></> : ' the active agent'},
+            but none of these passed the acceptance gates. They are shown here so you can see what was
+            attempted and why it didn&apos;t land as an opportunity or proposal.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-3">
+        {rejected.map((attempt) => (
+          <div key={attempt.attempt_id} className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <p className="font-mono text-xs text-gray-500">{attempt.attempt_id}</p>
+                  <span className="rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">
+                    Optimizer
+                  </span>
+                </div>
+                <p className="mt-1 text-sm font-medium text-gray-900">
+                  {attempt.change_description || 'Optimizer attempt'}
+                </p>
+                <p className="mt-1 text-xs text-gray-500">
+                  {attempt.config_section || 'config change'} &middot; {formatTimestamp(attempt.timestamp)}
+                </p>
+              </div>
+              <StatusBadge variant={statusVariant(attempt.status)} label={attempt.status} />
+            </div>
+
+            <p className="mt-3 text-xs text-gray-700">
+              <span className="font-medium text-gray-900">Why it was rejected: </span>
+              {getRejectionReason(attempt)}
+            </p>
+
+            <div className="mt-3 grid gap-3 text-xs text-gray-600 sm:grid-cols-3">
+              <p>
+                Score delta:{' '}
+                <span
+                  className={
+                    attempt.score_delta >= 0
+                      ? 'font-medium text-green-700'
+                      : 'font-medium text-red-700'
+                  }
+                >
+                  {attempt.score_delta > 0 ? '+' : ''}
+                  {(attempt.score_delta / 100).toFixed(3)}
+                </span>
+              </p>
+              {attempt.significance_p_value != null && attempt.significance_p_value < 1 && (
+                <p>
+                  p-value:{' '}
+                  <span className="font-medium text-gray-900">
+                    {attempt.significance_p_value.toFixed(3)}
+                  </span>
+                </p>
+              )}
+              {attempt.config_section && (
+                <p>
+                  Section:{' '}
+                  <span className="font-medium text-gray-900">{attempt.config_section}</span>
+                </p>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export function Improvements() {
   const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = normalizeTab(searchParams.get('tab'));
@@ -414,7 +553,12 @@ export function Improvements() {
         </div>
       </section>
 
-      {activeTab === 'opportunities' && <Opportunities embedded />}
+      {activeTab === 'opportunities' && (
+        <div className="space-y-6">
+          <Opportunities embedded />
+          <RejectedAttemptsPanel />
+        </div>
+      )}
       {activeTab === 'experiments' && <Experiments embedded showAnalysisPanels={false} defaultTab="all" />}
       {activeTab === 'review' && <UnifiedReviewQueue embedded />}
       {activeTab === 'history' && <ImprovementHistoryPanel />}

@@ -60,6 +60,7 @@ vi.mock('../lib/api', () => ({
   useUnifiedReviews: () => ({ data: [], isLoading: false, isError: false }),
   useApproveUnifiedReview: () => ({ mutate: vi.fn(), isPending: false }),
   useRejectUnifiedReview: () => ({ mutate: vi.fn(), isPending: false }),
+  useGenerateEvals: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
 function installLocalStorageMock(initial: Record<string, string> = {}) {

@@ -41,6 +41,8 @@ import { toastError } from '../lib/toast';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { statusLabel } from '../lib/utils';
+import { useActiveAgent } from '../lib/active-agent';
+import type { AgentLibraryItem } from '../lib/types';
 
 function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   switch (status) {
@@ -136,6 +138,16 @@ export function AgentWorkbench() {
   const canonicalModel = useWorkbenchStore((s) => s.canonicalModel);
   const lastTest = useWorkbenchStore((s) => s.lastTest);
   const runSummary = useWorkbenchStore((s) => s.runSummary);
+  const turnCount = useWorkbenchStore((s) => s.turns.length);
+  const lastBrief = useWorkbenchStore((s) => s.lastBrief);
+
+  // Build-draft import affordance. We read from the shared active-agent store
+  // (populated by /build's setActiveAgent) and offer a one-click import rather
+  // than auto-populating the composer — the user may have intentionally come
+  // to /workbench to start fresh.
+  const { activeAgent } = useActiveAgent();
+  const [buildImportPrefill, setBuildImportPrefill] = useState<string | undefined>(undefined);
+  const [buildImportDismissed, setBuildImportDismissed] = useState(false);
   const journeySummary = getWorkbenchJourneySummary({
     buildStatus,
     canonicalModel,
@@ -458,9 +470,37 @@ export function AgentWorkbench() {
     }
   }, [navigate]);
 
+  // Only offer the "Import from Build" banner if the operator hasn't already
+  // started a workbench session here (no turns, no prior brief, no live
+  // build) and we aren't already running the dedicated nav handoff from
+  // /build. This keeps the composer undisturbed for anyone who arrived at
+  // /workbench to start fresh.
+  const hasWorkbenchSession =
+    turnCount > 0 ||
+    Boolean(lastBrief) ||
+    buildStatus !== 'idle';
+  const showBuildImportBanner =
+    !buildHandoff &&
+    !buildImportDismissed &&
+    !hasWorkbenchSession &&
+    Boolean(activeAgent);
+
+  const handleImportFromBuild = useCallback(() => {
+    if (!activeAgent) return;
+    setBuildImportPrefill(briefFromActiveAgent(activeAgent));
+    setBuildImportDismissed(true);
+  }, [activeAgent]);
+
   return (
     <div className="space-y-4 px-4 pb-6 pt-2">
       {buildHandoff ? <BuildHandoffPanel handoff={buildHandoff} /> : null}
+      {showBuildImportBanner && activeAgent ? (
+        <BuildDraftImportBanner
+          agent={activeAgent}
+          onImport={handleImportFromBuild}
+          onDismiss={() => setBuildImportDismissed(true)}
+        />
+      ) : null}
       <OperatorNextStepCard summary={journeySummary} />
       <WorkbenchEvalHandoffPanel
         bridge={bridge}
@@ -470,14 +510,83 @@ export function AgentWorkbench() {
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
-        footer={<ChatInput onSubmit={handleSubmit} onCancel={handleCancel} />}
+        footer={
+          <ChatInput
+            onSubmit={handleSubmit}
+            onCancel={handleCancel}
+            prefill={buildImportPrefill}
+          />
+        }
         iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>
   );
 }
 
+/**
+ * Map a Build-draft agent into a composer brief string. We include the name
+ * and config-path context so the workbench stream has enough signal to
+ * continue work on that candidate without having to re-describe it.
+ */
+function briefFromActiveAgent(agent: AgentLibraryItem): string {
+  const configLine = agent.config_path
+    ? `\nSaved Build config: ${agent.config_path}`
+    : '';
+  const modelLine = agent.model ? `\nPrimary model: ${agent.model}` : '';
+  return `Continue building ${agent.name} from the Build draft.${modelLine}${configLine}\n\nRefine the existing configuration here — validate its instructions, tools, and guardrails, and propose iterations as needed.`;
+}
+
 export default AgentWorkbench;
+
+function BuildDraftImportBanner({
+  agent,
+  onImport,
+  onDismiss,
+}: {
+  agent: AgentLibraryItem;
+  onImport: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <section
+      className="rounded-md border border-[color:var(--wb-accent-border)] bg-[color:var(--wb-accent-weak)] px-4 py-3 text-[color:var(--wb-text)]"
+      aria-label="Import draft from Build"
+    >
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold text-[color:var(--wb-accent)]">
+            Continue with draft from Build
+          </p>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
+            You described {agent.name} on Build. Import that draft into the
+            Workbench composer instead of starting from scratch.
+          </p>
+          {agent.config_path ? (
+            <p className="mt-1 break-all font-mono text-[11px] text-[color:var(--wb-text-dim)]">
+              {agent.config_path}
+            </p>
+          ) : null}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="inline-flex items-center justify-center rounded-md border border-[color:var(--wb-border)] bg-transparent px-3 py-1.5 text-[12px] font-medium text-[color:var(--wb-text-soft)] transition hover:text-[color:var(--wb-text)]"
+          >
+            Start fresh
+          </button>
+          <button
+            type="button"
+            onClick={onImport}
+            className="inline-flex items-center justify-center rounded-md bg-[color:var(--wb-accent)] px-3 py-1.5 text-[12px] font-medium text-[color:var(--wb-accent-fg)] transition hover:opacity-90"
+          >
+            Import from Build
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function BuildHandoffPanel({
   handoff,

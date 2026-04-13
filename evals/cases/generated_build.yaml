@@ -1,31 +1,29 @@
+cases:
 - id: build_001
   category: generated_build
-  user_message: I need help with topic.
+  user_message: I need help with confidence score.
   expected_specialist: support
   expected_behavior: answer
   expected_keywords:
-  - topic
-  - product setup
-  - troubleshooting
-  expected_notes: topic in ['product_setup', 'troubleshooting'] and kb_article_found
-    == true
+  - confidence score
+  - escalate to human
+  expected_notes: confidence_score < 0.4
 - id: build_002
   category: generated_build
   user_message: I need help with topic.
-  expected_specialist: orders
-  expected_behavior: answer
-  expected_keywords:
-  - topic
-  - billing
-  - account plan
-  expected_notes: topic in ['billing', 'account_plan'] and identity_verified == true
-- id: build_003
-  category: generated_build
-  user_message: I need help with topic.
   expected_specialist: support
   expected_behavior: answer
   expected_keywords:
   - topic
-  - billing
-  - security
-  expected_notes: topic in ['billing', 'security'] and confidence_score < 0.7
+  - sensitive
+  - apply safety guardrails
+  expected_notes: topic == 'sensitive'
+- id: build_003
+  category: generated_build
+  user_message: I need help with default.
+  expected_specialist: orders
+  expected_behavior: answer
+  expected_keywords:
+  - default
+  - answer from knowledge base
+  expected_notes: default
