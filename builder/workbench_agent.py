@@ -303,13 +303,16 @@ def _build_plan_tree(brief: str, domain: str) -> PlanTask:
     """Return a 2-level plan tree that mirrors the reference UI."""
     root_id = f"task-{new_id()}"
 
-    def task(title: str, description: str = "") -> PlanTask:
-        return PlanTask(
+    def task(title: str, description: str = "", *, kind: str | None = None) -> PlanTask:
+        t = PlanTask(
             id=f"task-{new_id()}",
             title=title,
             description=description,
             parent_id=None,
         )
+        if kind:
+            t.log.append(f"kind:{kind}")
+        return t
 
     def with_parent(parent: PlanTask, *children: PlanTask) -> PlanTask:
         for child in children:
@@ -319,26 +322,26 @@ def _build_plan_tree(brief: str, domain: str) -> PlanTask:
 
     plan_group = with_parent(
         task("Plan the agent", "Shape scope, role, and instructions from the brief."),
-        task("Define role and capabilities"),
-        task("Draft system instructions"),
+        task("Define role and capabilities", kind="role"),
+        task("Draft system instructions", kind="instructions"),
     )
     tools_group = with_parent(
         task("Create tools", "Generate the tool stubs the agent will call."),
-        task("Design tool schemas"),
-        task("Generate tool source"),
+        task("Design tool schemas", kind="tool_schema"),
+        task("Generate tool source", kind="tool_source"),
     )
     safety_group = with_parent(
         task("Set up guardrails", "Author the safety rules the agent must follow."),
         task("Identify sensitive flows"),
-        task("Author guardrail rules"),
+        task("Author guardrail rules", kind="guardrail"),
     )
     env_group = with_parent(
         task("Configure environment", "Pick the deployment target and render source."),
-        task("Render agent source code"),
+        task("Render agent source code", kind="environment"),
     )
     eval_group = with_parent(
         task("Author evaluation suite", "Draft test cases and validation."),
-        task("Draft test cases"),
+        task("Draft test cases", kind="eval_suite"),
     )
 
     root = PlanTask(

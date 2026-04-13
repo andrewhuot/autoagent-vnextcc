@@ -386,7 +386,7 @@ class HarnessExecutionEngine:
             await self._tick()
 
             # Generate content — try LLM first, fall back to template engine
-            artifact, operation, log_line = await self._generate_step(
+            artifact, operation, log_line, gen_source = await self._generate_step(
                 leaf=leaf,
                 brief=brief,
                 domain=domain,
@@ -424,7 +424,7 @@ class HarnessExecutionEngine:
             completed_ops = [operation] if operation is not None else []
             yield {
                 "event": "task.completed",
-                "data": {"task_id": leaf.id, "operations": completed_ops},
+                "data": {"task_id": leaf.id, "operations": completed_ops, "source": gen_source},
             }
             await self._tick(0.04)
 
@@ -637,11 +637,12 @@ class HarnessExecutionEngine:
         target: str,
         working_model: dict[str, Any],
         step_index: int,
-    ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str]]:
+    ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str], str]:
         """Generate content for one leaf task.
 
         Tries the LLM router (if available), then falls back to template
         generation. Never raises — errors return the template-based fallback.
+        Returns a 4-tuple where the last element is "llm" or "template".
         """
         if self._router is not None:
             try:
@@ -653,12 +654,12 @@ class HarnessExecutionEngine:
                     working_model=working_model,
                 )
                 if result is not None:
-                    return result
+                    return (*result, "llm")
             except Exception:  # noqa: BLE001
                 pass  # Fall through to template generation
 
         # Template-based generation — richer than raw _fake_execute
-        return _template_execute(leaf, brief, domain, target, working_model)
+        return (*_template_execute(leaf, brief, domain, target, working_model), "template")
 
     async def _try_llm_step(
         self,

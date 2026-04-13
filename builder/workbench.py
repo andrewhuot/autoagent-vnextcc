@@ -422,16 +422,37 @@ def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _infer_domain(brief: str) -> str:
     """Infer a short domain label from a plain-English brief."""
+    import re
+
     lowered = brief.lower()
     if "airline" in lowered or "flight" in lowered or "booking" in lowered:
         return "Airline Support"
+    if (
+        "billing" in lowered
+        or "phone company" in lowered
+        or "telecom" in lowered
+        or "mobile plan" in lowered
+        or "phone plan" in lowered
+        or "wireless" in lowered
+        or "cell phone" in lowered
+        or "monthly bill" in lowered
+        or "charges" in lowered
+        or "invoice" in lowered
+    ):
+        return "Billing Support"
     if "refund" in lowered or "order" in lowered:
         return "Refund Support"
     if "sales" in lowered or "qualification" in lowered or "lead" in lowered:
         return "Sales Qualification"
     if "health" in lowered or "intake" in lowered:
         return "Healthcare Intake"
-    if "it " in lowered or "vpn" in lowered or "password" in lowered:
+    if (
+        re.search(r"\bit\s+(support|helpdesk|help desk|department|team|infrastructure|service)", lowered)
+        or "vpn" in lowered
+        or "password" in lowered
+        or "helpdesk" in lowered
+        or "help desk" in lowered
+    ):
         return "IT Helpdesk"
     if (
         "m&a" in lowered
@@ -444,6 +465,28 @@ def _infer_domain(brief: str) -> str:
     return "Agent"
 
 
+def _resolve_workspace_agent_model() -> str:
+    """Read the model from the workspace's active config, falling back to a real default."""
+    try:
+        from cli.workspace import discover_workspace
+
+        ws_root = discover_workspace()
+        if ws_root:
+            active_config = Path(ws_root) / ".agentlab" / "workspace.json"
+            if active_config.exists():
+                ws = json.loads(active_config.read_text())
+                config_file = ws.get("active_config_file")
+                if config_file:
+                    config_path = Path(ws_root) / "configs" / config_file
+                    if config_path.exists():
+                        cfg = yaml.safe_load(config_path.read_text())
+                        if isinstance(cfg, dict) and cfg.get("model"):
+                            return str(cfg["model"])
+    except Exception:
+        pass
+    return "gemini-2.0-flash"
+
+
 def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> dict[str, Any]:
     """Build the initial canonical model from a plain-English brief.
 
@@ -452,6 +495,7 @@ def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> 
     """
     domain = _infer_domain(brief)
     agent_name = f"{domain} Agent" if not domain.endswith("Agent") else domain
+    resolved_model = _resolve_workspace_agent_model()
     return {
         "project": {
             "name": f"{domain} Workbench",
@@ -462,7 +506,7 @@ def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> 
                 "id": "root",
                 "name": agent_name,
                 "role": f"Handle {domain.lower()} conversations safely and clearly.",
-                "model": "gpt-5.4-mini",
+                "model": resolved_model,
                 "instructions": (
                     f"{brief.strip() or 'Help the user with the requested workflow.'}\n\n"
                     "Ask one clarifying question when required details are missing. "
@@ -3408,7 +3452,7 @@ def infer_operations(message: str) -> list[dict[str, Any]]:
                     "id": "agent-escalation-specialist",
                     "name": name,
                     "role": "Handle escalations and edge cases that need expert review.",
-                    "model": "gpt-5.4-mini",
+                    "model": _resolve_workspace_agent_model(),
                     "instructions": "Review escalated conversations, ask for missing context, and keep decisions auditable.",
                     "sub_agents": [],
                 },
@@ -3548,7 +3592,7 @@ def canonical_to_generated_config(model: dict[str, Any]) -> dict[str, Any]:
         for tool in model.get("tools", [])
     ]
     return {
-        "model": root.get("model", "gpt-5.4-mini"),
+        "model": root.get("model", _resolve_workspace_agent_model()),
         "system_prompt": root.get("instructions", ""),
         "tools": tools,
         "routing_rules": [
@@ -3593,7 +3637,7 @@ def render_adk_agent_py(model: dict[str, Any]) -> str:
         "from .tools import *\n\n"
         "root_agent = Agent(\n"
         f"    name={root.get('name', 'Workbench Agent')!r},\n"
-        f"    model={root.get('model', 'gpt-5.4-mini')!r},\n"
+        f"    model={root.get('model', _resolve_workspace_agent_model())!r},\n"
         f"    instruction={root.get('instructions', '')!r},\n"
         f"    tools={tools_expr},\n"
         ")\n"
@@ -3630,7 +3674,7 @@ def render_cx_agent_json(model: dict[str, Any]) -> dict[str, Any]:
         "description": model.get("project", {}).get("description", ""),
         "defaultLanguageCode": "en",
         "generativeSettings": {
-            "llmModelSettings": {"model": root.get("model", "gpt-5.4-mini")},
+            "llmModelSettings": {"model": root.get("model", _resolve_workspace_agent_model())},
             "safetySettings": [guardrail.get("rule", "") for guardrail in model.get("guardrails", [])],
         },
         "tools": [
@@ -3809,7 +3853,7 @@ def _root_agent(model: dict[str, Any]) -> dict[str, Any]:
         "id": "root",
         "name": "Workbench Agent",
         "role": "Handle user requests safely.",
-        "model": "gpt-5.4-mini",
+        "model": _resolve_workspace_agent_model(),
         "instructions": "Help the user safely and clearly.",
         "sub_agents": [],
     }

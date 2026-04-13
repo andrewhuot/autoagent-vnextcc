@@ -37,7 +37,9 @@ _EVENT_RENDERERS: dict[str, Any] = {
     "task.started": lambda d: f"[task] {d.get('title', d.get('task_id', 'task'))} ...started",
     "task.progress": lambda d: f"[task] {d.get('title', '')}: {d.get('note', d.get('message', ''))}",
     "task.completed": lambda d: click.style(
-        f"[task] {d.get('title', d.get('task_id', 'task'))} ...done", fg="green",
+        f"[task] {d.get('title', d.get('task_id', 'task'))} ...done"
+        + (f" [{d['source']}]" if d.get("source") else ""),
+        fg="green",
     ),
     "message.delta": lambda _d: None,
     "artifact.updated": lambda d: f"[artifact] {(d.get('artifact') or d).get('name', 'artifact')} updated",
