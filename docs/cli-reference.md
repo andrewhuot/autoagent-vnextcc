@@ -207,6 +207,45 @@ agentlab continue
 
 ## Secondary Commands
 
+### `agentlab workbench`
+
+Agent Builder Workbench — design, build, validate, and hand off agent candidates from the terminal.
+
+Common commands:
+
+```bash
+agentlab workbench                                    # show status (default)
+agentlab workbench create "Build a support agent"     # new project
+agentlab workbench build "Add flight status tool"     # stream a build
+agentlab workbench iterate "Add a guardrail for PII"  # follow-up turn
+agentlab workbench bridge --json                      # eval readiness
+agentlab workbench export                             # write candidate to disk
+```
+
+Subcommands:
+
+- `status` — show the current project status (default when invoked bare)
+- `create` — create a new Workbench project from a brief
+- `build` — stream a full build run (plan tree, artifacts, validation)
+- `iterate` — follow-up iteration on an existing build
+- `plan` — plan changes without executing them
+- `apply` — apply an approved change plan and run validation
+- `test` — run deterministic validation checks
+- `rollback` — roll back to a prior version
+- `cancel` — cancel an active build run
+- `list` — list all Workbench projects in the workspace
+- `bridge` — show Eval/Optimize handoff readiness
+- `export` — write the candidate config to disk for `agentlab eval run`
+
+Key options:
+
+- `--project ID` — target a specific project (most commands)
+- `--target [portable|adk|cx]` — compilation target for exports
+- `--mock` — force mock agent, no API keys needed (build/iterate)
+- `--max-iterations N` — max autonomous correction passes (build/iterate)
+- `--output-format [text|json|stream-json]` — output mode (build/iterate)
+- `--json / -j` — JSON envelope output (all commands)
+
 ### `agentlab config`
 
 Manage versioned config files.

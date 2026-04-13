@@ -41,6 +41,7 @@ Full command set:
   agentlab scorer refine <name> "additional criteria"
   agentlab scorer test <name> --trace <trace-id>
   agentlab full-auto --yes [--cycles N] [--max-loop-cycles N]
+  agentlab workbench [status|create|build|iterate|plan|apply|test|rollback|cancel|list|bridge|export]
 """
 
 from __future__ import annotations
@@ -171,7 +172,7 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 # Command visibility tiers for simplified help output
 PRIMARY_COMMANDS = {"new", "build", "eval", "optimize", "deploy", "status", "doctor", "shell"}
-SECONDARY_COMMANDS = {"review", "config", "instruction", "model", "provider", "mode", "memory", "template", "connect"}
+SECONDARY_COMMANDS = {"review", "config", "instruction", "model", "provider", "mode", "memory", "template", "connect", "workbench"}
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
     "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
@@ -1859,9 +1860,11 @@ cli.add_command(intelligence_group)
 cli.add_command(permissions_group)
 from cli.model import model_group
 from cli.usage import usage_command
+from cli.workbench import workbench_group
 
 cli.add_command(model_group)
 cli.add_command(usage_command)
+cli.add_command(workbench_group)
 permissions_group.hidden = True
 usage_command.hidden = True
 
