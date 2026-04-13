@@ -383,22 +383,14 @@ class TranscriptIntelligenceService:
         lower = prompt.lower()
 
         # --- domain detection ---
-        domain = "general"
-        if any(kw in lower for kw in ("customer service", "support", "help desk", "helpdesk")):
-            domain = "customer_service"
-        if any(kw in lower for kw in ("sales", "lead", "prospect", "crm", "deal")):
-            domain = "sales"
-        if any(kw in lower for kw in ("health", "medical", "patient", "clinic", "doctor")):
-            domain = "healthcare"
-        if any(kw in lower for kw in ("finance", "banking", "payment", "invoice", "billing")):
-            domain = "finance"
-        if any(kw in lower for kw in ("ecommerce", "e-commerce", "shop", "order", "shipping", "cart")):
-            domain = "ecommerce"
-        if any(kw in lower for kw in ("hr", "human resource", "employee", "onboard", "payroll")):
-            domain = "hr"
-        if any(
-            kw in lower
-            for kw in (
+        # WHY: score each domain by keyword hits and pick the best match; ties are
+        # broken by the explicit priority order below. Previously each `if` block
+        # ran independently and later matches overwrote earlier ones — a prompt
+        # like "customer support agent that answers billing questions" would end
+        # up tagged `finance` because "billing" fired after "support".
+        _domain_keywords: list[tuple[str, tuple[str, ...]]] = [
+            ("customer_service", ("customer service", "customer support", "support", "help desk", "helpdesk", "faq", "knowledge base")),
+            ("product_review", (
                 "prd",
                 "product requirement",
                 "product requirements",
@@ -408,9 +400,20 @@ class TranscriptIntelligenceService:
                 "regression test",
                 "review product",
                 "review requirement",
-            )
-        ):
-            domain = "product_review"
+            )),
+            ("healthcare", ("health", "medical", "patient", "clinic", "doctor")),
+            ("hr", ("hr", "human resource", "employee", "onboard", "payroll")),
+            ("sales", ("sales", "lead", "prospect", "crm", "deal")),
+            ("ecommerce", ("ecommerce", "e-commerce", "shop", "order", "shipping", "cart")),
+            ("finance", ("finance", "banking", "invoice", "accounting", "wire transfer", "fraud", "billing", "payment")),
+        ]
+        _scores: list[tuple[int, int, str]] = []  # (-hits, priority_idx, domain)
+        for idx, (candidate, keywords) in enumerate(_domain_keywords):
+            hits = sum(1 for kw in keywords if kw in lower)
+            if hits:
+                _scores.append((-hits, idx, candidate))
+        _scores.sort()
+        domain = _scores[0][2] if _scores else "general"
 
         # --- derive a short agent name from the prompt ---
         agent_name_words = [w.capitalize() for w in re.findall(r"[a-z]+", lower) if len(w) > 3][:3]

@@ -3085,12 +3085,16 @@ function JourneyActionPanel({
 }) {
   return (
     <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/80 px-4 py-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      {/* WHY: the panel lives inside narrow studio/aside columns (~380-460px)
+          regardless of viewport, so a viewport-breakpoint-based flex-row would
+          collapse the description to zero width and wrap one-word-per-line.
+          Always stack vertically — description readable, buttons full-width. */}
+      <div className="flex flex-col gap-3">
         <div className="min-w-0">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">{title}</p>
           <p className="mt-2 text-sm leading-relaxed text-sky-950">{description}</p>
         </div>
-        <div className="shrink-0">{children}</div>
+        <div className="w-full">{children}</div>
       </div>
     </div>
   );

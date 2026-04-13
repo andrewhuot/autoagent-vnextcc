@@ -1,0 +1,6 @@
+screenshots/
+events.jsonl
+session.json
+_browser_holder.py
+holder.log
+__pycache__/
