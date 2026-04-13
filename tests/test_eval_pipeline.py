@@ -76,6 +76,37 @@ def test_eval_runner_loads_csv_dataset(tmp_path) -> None:
     assert cases[0].expected_keywords == ["order", "shipping"]
 
 
+def test_eval_runner_loads_yaml_dataset_path(tmp_path) -> None:
+    """Build-generated YAML eval files should work when passed as an explicit dataset."""
+    dataset = tmp_path / "generated_build.yaml"
+    dataset.write_text(
+        yaml.safe_dump(
+            [
+                {
+                    "id": "setup-sso",
+                    "split": "test",
+                    "category": "generated_build",
+                    "user_message": "How do I enable SSO on the Team plan?",
+                    "expected_specialist": "support",
+                    "expected_behavior": "answer",
+                    "expected_keywords": ["SSO", "Team plan"],
+                    "expected_tool": "search_knowledge_base",
+                }
+            ],
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    runner = EvalRunner()
+    cases = runner.load_dataset_cases(str(dataset), split="test")
+
+    assert len(cases) == 1
+    assert cases[0].id == "setup-sso"
+    assert cases[0].category == "generated_build"
+    assert cases[0].expected_tool == "search_knowledge_base"
+
+
 def test_custom_eval_function_is_aggregated(tmp_path) -> None:
     """Custom evaluators should be executed and included in composite output."""
     runner = EvalRunner()

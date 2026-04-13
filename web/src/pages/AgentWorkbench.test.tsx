@@ -6,7 +6,17 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentWorkbench } from './AgentWorkbench';
 import { useWorkbenchStore } from '../lib/workbench-store';
 
-function renderWorkbench() {
+type InitialEntry =
+  | string
+  | {
+      pathname: string;
+      search?: string;
+      hash?: string;
+      state?: unknown;
+      key?: string;
+    };
+
+function renderWorkbench(initialEntry: InitialEntry = '/workbench') {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -16,7 +26,7 @@ function renderWorkbench() {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/workbench']}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/workbench" element={<AgentWorkbench />} />
           <Route path="/evals" element={<EvalLocationProbe />} />
@@ -340,6 +350,49 @@ describe('AgentWorkbench', () => {
     await waitFor(() => {
       // Plan tree from the mocked stream was dispatched into the store.
       expect(useWorkbenchStore.getState().plan?.title).toBe('Build Sales agent');
+    });
+  });
+
+  it('starts a fresh Workbench run from a Build handoff instead of reopening the demo project', async () => {
+    installMockFetch({
+      streamBody:
+        'event: plan.ready\ndata: {"project_id":"wb-faq","plan":{"id":"task-root","title":"Build FAQ Concierge","status":"running","description":"","children":[],"artifact_ids":[],"log":[],"parent_id":null,"started_at":null,"completed_at":null}}\n\n',
+    });
+
+    renderWorkbench({
+      pathname: '/workbench',
+      search: '?agent=agent-v005&agentName=FAQ+Concierge&configPath=configs%2Fv005.yaml',
+      state: {
+        source: 'build',
+        agent: {
+          id: 'agent-v005',
+          name: 'FAQ Concierge',
+          model: 'gemini-2.5-pro',
+          created_at: '2026-04-13T00:00:00.000Z',
+          source: 'built',
+          config_path: 'configs/v005.yaml',
+          status: 'candidate',
+        },
+        configPath: 'configs/v005.yaml',
+        brief: 'Continue building FAQ Concierge from the saved Build config at configs/v005.yaml.',
+      },
+    });
+
+    expect(await screen.findByText('Continuing from Build')).toBeInTheDocument();
+    expect(screen.getByText(/FAQ Concierge is being materialized/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      const buildRequest = vi.mocked(fetch).mock.calls.find(([url]) =>
+        String(url).endsWith('/api/workbench/build/stream')
+      );
+      expect(buildRequest).toBeTruthy();
+      expect(JSON.parse(String(buildRequest?.[1]?.body))).toMatchObject({
+        project_id: null,
+        brief: 'Continue building FAQ Concierge from the saved Build config at configs/v005.yaml.',
+      });
+    });
+    await waitFor(() => {
+      expect(useWorkbenchStore.getState().plan?.title).toBe('Build FAQ Concierge');
     });
   });
 

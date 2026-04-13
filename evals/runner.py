@@ -177,7 +177,7 @@ class EvalRunner:
         split: str = "all",
         train_ratio: float = 0.8,
     ) -> list[TestCase]:
-        """Load dataset cases from JSONL/CSV and optionally filter by split."""
+        """Load dataset cases from JSONL/CSV/YAML and optionally filter by split."""
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
@@ -262,7 +262,7 @@ class EvalRunner:
 
     @staticmethod
     def _read_dataset_rows(path: Path) -> list[dict[str, Any]]:
-        """Read dataset rows from JSONL or CSV."""
+        """Read dataset rows from JSONL, CSV, or YAML."""
         if path.suffix.lower() == ".jsonl":
             rows: list[dict[str, Any]] = []
             with path.open("r", encoding="utf-8") as handle:
@@ -275,7 +275,17 @@ class EvalRunner:
         if path.suffix.lower() == ".csv":
             with path.open("r", encoding="utf-8", newline="") as handle:
                 return list(csv.DictReader(handle))
-        raise ValueError("Dataset format must be .jsonl or .csv")
+        if path.suffix.lower() in {".yaml", ".yml"}:
+            with path.open("r", encoding="utf-8") as handle:
+                data = yaml.safe_load(handle)
+            if not data:
+                return []
+            if isinstance(data, list):
+                return [row for row in data if isinstance(row, dict)]
+            if isinstance(data, dict) and isinstance(data.get("cases"), list):
+                return [row for row in data["cases"] if isinstance(row, dict)]
+            raise ValueError("YAML dataset must be a list of cases or contain a cases list")
+        raise ValueError("Dataset format must be .jsonl, .csv, .yaml, or .yml")
 
     def _analyze_dataset_rows(
         self,

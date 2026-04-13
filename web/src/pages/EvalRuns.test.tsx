@@ -5,6 +5,16 @@ import userEvent from '@testing-library/user-event';
 import { EvalRuns } from './EvalRuns';
 import { useActiveAgentStore } from '../lib/active-agent';
 
+type InitialEntry =
+  | string
+  | {
+      pathname: string;
+      search?: string;
+      hash?: string;
+      state?: unknown;
+      key?: string;
+    };
+
 let evalCompleteHandler: ((payload: unknown) => void) | null = null;
 
 const apiMocks = vi.hoisted(() => ({
@@ -46,7 +56,7 @@ vi.mock('../lib/toast', () => ({
   toastSuccess: vi.fn(),
 }));
 
-function renderPage(initialEntry = '/evals') {
+function renderPage(initialEntry: InitialEntry = '/evals') {
   return render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <Routes>
@@ -142,6 +152,52 @@ describe('EvalRuns', () => {
       {
         config_path: '/workspace/configs/v002.yaml',
         category: undefined,
+      },
+      expect.any(Object)
+    );
+  });
+
+  it('starts a first eval with the Build-generated eval cases path from navigation state', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-build-123', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+
+    renderPage({
+      pathname: '/evals',
+      search: '?agent=agent-v002&new=1',
+      state: {
+        agent: {
+          id: 'agent-v002',
+          name: 'Order Guardian',
+          model: 'gpt-5.4',
+          created_at: '2026-04-01T12:00:00.000Z',
+          source: 'built',
+          config_path: '/workspace/configs/v002.yaml',
+          status: 'candidate',
+        },
+        open: 'run',
+        evalCasesPath: '/workspace/evals/cases/generated_build.yaml',
+      },
+    });
+
+    await screen.findByRole('heading', { name: 'Start First Evaluation' });
+    expect(screen.getByText('/workspace/evals/cases/generated_build.yaml')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Run First Eval' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        config_path: '/workspace/configs/v002.yaml',
+        category: undefined,
+        dataset_path: '/workspace/evals/cases/generated_build.yaml',
+        split: 'all',
       },
       expect.any(Object)
     );

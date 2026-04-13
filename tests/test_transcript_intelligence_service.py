@@ -171,6 +171,35 @@ def test_generate_agent_config_falls_back_to_prd_reviewer_shape_when_live_router
     assert {tool["name"] for tool in generated["tools"]} >= {"document_lookup", "eval_case_generator"}
 
 
+def test_generate_agent_config_fallback_keeps_saas_faq_prompt_shape_when_live_json_is_invalid(tmp_path: Path) -> None:
+    router = _StubLLMRouter(
+        responses=["The requested config would include a knowledge base and billing escalation workflow."],
+        models=[SimpleNamespace(provider="google", model="gemini-2.5-pro")],
+    )
+    service = _service(tmp_path, llm_router=router)
+
+    generated = service.generate_agent_config(
+        "Build FAQ Concierge, a customer FAQ support agent for a fictional B2B SaaS. "
+        "It should answer product setup, billing plan, security, and troubleshooting questions. "
+        "It should escalate unclear billing/security issues, cite internal KB guidance, and keep a calm concise tone. "
+        "Include tools for searching the knowledge base, checking account plan status, and creating escalation tickets."
+    )
+
+    tool_names = {tool["name"] for tool in generated["tools"]}
+    routing_actions = {rule["action"] for rule in generated["routing_rules"]}
+    prompt = generated["system_prompt"].lower()
+
+    assert service.last_generation_used_llm is False
+    assert service.last_generation_failure_reason == "The live provider response was not valid JSON."
+    assert generated["metadata"]["agent_name"] == "FAQ Concierge"
+    assert generated["model"] == "gemini-2.5-pro"
+    assert "b2b saas" in prompt
+    assert "knowledge base" in prompt
+    assert "financial services" not in prompt
+    assert tool_names >= {"search_knowledge_base", "check_account_plan", "create_escalation_ticket"}
+    assert {"answer_product_faq", "escalate_billing_or_security"} <= routing_actions
+
+
 def test_import_archive_uses_llm_intent_classification_when_real_router_available(tmp_path: Path) -> None:
     router = _StubLLMRouter(
         responses=[

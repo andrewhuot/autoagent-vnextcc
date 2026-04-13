@@ -347,6 +347,49 @@ class TranscriptIntelligenceService:
             "recommended_insight_id": report.insights[0].insight_id if report.insights else None,
         }
 
+    def _looks_like_saas_support_prompt(self, lower_prompt: str) -> bool:
+        """Return whether a prompt describes a SaaS FAQ/support agent.
+
+        WHY: Words like "billing" appear in both finance and SaaS support
+        prompts. This guard keeps fallback generation anchored to the broader
+        requested product-support shape instead of drifting into banking.
+        """
+        has_support_context = any(
+            term in lower_prompt
+            for term in (
+                "faq",
+                "knowledge base",
+                "kb",
+                "product setup",
+                "troubleshooting",
+                "help center",
+                "support agent",
+            )
+        )
+        has_saas_context = any(
+            term in lower_prompt
+            for term in (
+                "saas",
+                "b2b",
+                "account plan",
+                "plan status",
+                "security question",
+                "billing plan",
+            )
+        )
+        return has_support_context and has_saas_context
+
+    def _extract_requested_agent_name(self, prompt: str) -> str | None:
+        """Extract an explicitly named agent from leading build/create phrasing."""
+        match = re.search(
+            r"\b(?i:build|create|make)\s+([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3})(?=,|\s+(?:a|an|for|that|to)\b|$)",
+            prompt.strip(),
+        )
+        if match is None:
+            return None
+        name = re.sub(r"\s+", " ", match.group(1)).strip()
+        return name or None
+
     def generate_agent_config(
         self,
         prompt: str,
@@ -411,15 +454,22 @@ class TranscriptIntelligenceService:
             )
         ):
             domain = "product_review"
+        if self._looks_like_saas_support_prompt(lower):
+            domain = "saas_support"
 
         # --- derive a short agent name from the prompt ---
+        explicit_agent_name = self._extract_requested_agent_name(prompt)
         agent_name_words = [w.capitalize() for w in re.findall(r"[a-z]+", lower) if len(w) > 3][:3]
         if requested_agent_name:
             agent_name = requested_agent_name
+        elif explicit_agent_name:
+            agent_name = explicit_agent_name
         elif any(term in lower for term in ("airline", "flight", "travel", "booking", "reservation")):
             agent_name = "AirlineCustomerSupportAgent"
         elif domain == "product_review":
             agent_name = "PRD Review Agent"
+        elif domain == "saas_support":
+            agent_name = "SaaS FAQ Support Agent"
         else:
             agent_name = "".join(agent_name_words) + "Agent" if agent_name_words else "AgentLab"
 
@@ -488,6 +538,16 @@ class TranscriptIntelligenceService:
                 "Separate factual observations from recommendations.\n\n"
                 "When asked for stronger tests, produce concrete eval ideas that target likely regressions, edge cases, "
                 "and ambiguity in the document."
+            ),
+            "saas_support": (
+                "You are a calm, concise B2B SaaS FAQ support agent. "
+                "You answer product setup, plan and billing, security, and troubleshooting questions using approved "
+                "internal knowledge base guidance.\n\n"
+                "Cite the relevant knowledge base article or policy summary when giving an answer. "
+                "For unclear billing, account plan, or security requests, create an escalation ticket with a concise "
+                "context summary instead of guessing. Do not expose internal-only notes or unsupported security claims.\n\n"
+                "Keep responses practical and easy to follow. When a user needs a step-by-step setup answer, provide "
+                "numbered steps and confirm the next action."
             ),
             "general": (
                 "You are a helpful, accurate, and professional AI assistant. "
@@ -635,6 +695,23 @@ class TranscriptIntelligenceService:
                     "parameters": {"reason": "string", "context_summary": "string"},
                 },
             ],
+            "saas_support": [
+                {
+                    "name": "search_knowledge_base",
+                    "description": "Search approved SaaS help center and internal KB guidance for product, billing, security, and troubleshooting answers.",
+                    "parameters": {"query": "string", "topic": "product_setup|billing|security|troubleshooting|general"},
+                },
+                {
+                    "name": "check_account_plan",
+                    "description": "Check the customer's current plan, feature entitlements, and billing status after identity verification.",
+                    "parameters": {"account_id": "string", "requested_capability": "string | null"},
+                },
+                {
+                    "name": "create_escalation_ticket",
+                    "description": "Create an escalation ticket for unclear billing, security, or account-specific issues with full conversation context.",
+                    "parameters": {"account_id": "string | null", "reason": "string", "context_summary": "string", "priority": "low|medium|high"},
+                },
+            ],
             "general": [
                 {
                     "name": "search_knowledge_base",
@@ -693,6 +770,12 @@ class TranscriptIntelligenceService:
                 {"condition": "request asks for harder tests, regressions, or eval coverage", "action": "generate_regression_evals", "priority": 3},
                 {"condition": "default", "action": "review_and_summarize_prd", "priority": 99},
             ],
+            "saas_support": [
+                {"condition": "topic in ['product_setup', 'troubleshooting'] and kb_article_found == true", "action": "answer_product_faq", "priority": 1},
+                {"condition": "topic in ['billing', 'account_plan'] and identity_verified == true", "action": "check_account_plan", "priority": 2},
+                {"condition": "topic in ['billing', 'security'] and confidence_score < 0.7", "action": "escalate_billing_or_security", "priority": 3},
+                {"condition": "default", "action": "answer_from_knowledge_base", "priority": 99},
+            ],
             "general": [
                 {"condition": "confidence_score < 0.4", "action": "escalate_to_human", "priority": 1},
                 {"condition": "topic == 'sensitive'", "action": "apply_safety_guardrails", "priority": 2},
@@ -738,6 +821,11 @@ class TranscriptIntelligenceService:
                 {"name": "evidence_grounding", "description": "Every review comment must cite the supplied PRD text, section, or referenced evidence.", "enforcement": "hard_block"},
                 {"name": "no_fabricated_requirements", "description": "Never invent product requirements, acceptance criteria, owners, or timelines that are not in evidence.", "enforcement": "hard_block"},
                 {"name": "regression_focus", "description": "Favor concrete regression risks, edge cases, and measurable acceptance checks over generic feedback.", "enforcement": "required"},
+            ],
+            "saas_support": [
+                {"name": "kb_grounding", "description": "Answers must be grounded in approved knowledge base guidance or clearly state that the answer is unavailable.", "enforcement": "required"},
+                {"name": "billing_security_escalation", "description": "Unclear billing, account plan, or security issues must be escalated with full context instead of guessed.", "enforcement": "hard_block"},
+                {"name": "no_internal_notes", "description": "Never expose internal-only KB notes, security implementation details, or private ticket metadata.", "enforcement": "hard_block"},
             ],
             "general": [
                 {"name": "safety_guardrails", "description": "Refuse requests for harmful, illegal, or unethical content.", "enforcement": "hard_block"},
@@ -785,6 +873,12 @@ class TranscriptIntelligenceService:
                 {"name": "evidence_grounding", "weight": 0.30, "description": "Whether findings and recommendations are grounded in the supplied PRD evidence."},
                 {"name": "regression_eval_quality", "weight": 0.20, "description": "Strength and specificity of proposed regression-focused eval cases."},
                 {"name": "review_clarity", "weight": 0.15, "description": "Clarity, actionability, and structure of the PRD review output."},
+            ],
+            "saas_support": [
+                {"name": "kb_answer_grounding", "weight": 0.35, "description": "Answers cite or accurately summarize the relevant knowledge base guidance."},
+                {"name": "billing_security_escalation_accuracy", "weight": 0.30, "description": "Unclear billing and security issues are escalated with useful context."},
+                {"name": "setup_troubleshooting_resolution", "weight": 0.20, "description": "Product setup and troubleshooting questions are resolved with clear next steps."},
+                {"name": "concise_tone", "weight": 0.15, "description": "Responses remain calm, concise, and easy to follow."},
             ],
             "general": [
                 {"name": "response_accuracy", "weight": 0.40, "description": "Factual correctness of responses against knowledge base ground truth."},

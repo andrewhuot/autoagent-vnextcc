@@ -16,8 +16,8 @@
  *   3. ⌘K focuses the input, ⌘↵ (or Enter) sends.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   cancelWorkbenchRun,
   createWorkbenchEvalBridge,
@@ -104,6 +104,8 @@ function getWorkbenchJourneySummary(input: {
 
 export function AgentWorkbench() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const [searchParams] = useSearchParams();
   const projectId = useWorkbenchStore((s) => s.projectId);
   const hydrate = useWorkbenchStore((s) => s.hydrate);
   const beginBuild = useWorkbenchStore((s) => s.beginBuild);
@@ -120,6 +122,8 @@ export function AgentWorkbench() {
   const activeRun = useWorkbenchStore((s) => s.activeRun);
   const bridge = presentation?.improvement_bridge ?? activeRun?.presentation?.improvement_bridge ?? null;
   const [evalHandoffPending, setEvalHandoffPending] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const buildHandoffStartedRef = useRef(false);
   const buildStatus = useWorkbenchStore((s) => s.buildStatus);
   const canonicalModel = useWorkbenchStore((s) => s.canonicalModel);
   const lastTest = useWorkbenchStore((s) => s.lastTest);
@@ -130,6 +134,30 @@ export function AgentWorkbench() {
     lastTest,
     runSummary,
   });
+  const buildHandoff = useMemo(() => {
+    const state = (location.state as {
+      source?: string;
+      agent?: { name?: string; config_path?: string };
+      configPath?: string;
+      brief?: string;
+    } | null) ?? null;
+    const agentName = state?.agent?.name ?? searchParams.get('agentName') ?? '';
+    const configPath = state?.configPath ?? state?.agent?.config_path ?? searchParams.get('configPath') ?? '';
+    const cameFromBuild = state?.source === 'build' || Boolean(searchParams.get('agent'));
+    const brief =
+      state?.brief ??
+      (agentName
+        ? `Continue building ${agentName}${configPath ? ` from the saved Build config at ${configPath}` : ''}.`
+        : '');
+    if (!cameFromBuild || !brief) {
+      return null;
+    }
+    return {
+      agentName: agentName || 'Build candidate',
+      configPath,
+      brief,
+    };
+  }, [location.state, searchParams]);
 
   // Track the active stream controller so we can abort on unmount.
   const activeControllerRef = useRef<AbortController | null>(null);
@@ -182,9 +210,11 @@ export function AgentWorkbench() {
           harnessState: snapshot.harness_state,
           runSummary: snapshot.run_summary,
         });
+        setHydrated(true);
       } catch (error) {
         if (cancelled) return;
         setError(error instanceof Error ? error.message : 'Workbench failed to load');
+        setHydrated(true);
       }
     })();
     return () => {
@@ -244,7 +274,7 @@ export function AgentWorkbench() {
   // Fresh build handler
   // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
-    async (brief: string) => {
+    async (brief: string, options?: { startFreshProject?: boolean }) => {
       beginBuild(brief);
       const controller = new AbortController();
       activeControllerRef.current?.abort();
@@ -253,7 +283,7 @@ export function AgentWorkbench() {
       try {
         const stream = streamWorkbenchBuild(
           {
-            project_id: projectId ?? null,
+            project_id: options?.startFreshProject ? null : projectId ?? null,
             brief,
             target,
             environment,
@@ -275,6 +305,14 @@ export function AgentWorkbench() {
     },
     [autoIterate, beginBuild, consumeStream, environment, maxIterations, projectId, setAbortController, setError, target]
   );
+
+  useEffect(() => {
+    if (!buildHandoff?.brief || buildHandoffStartedRef.current || !hydrated || !projectId || buildStatus !== 'idle') {
+      return;
+    }
+    buildHandoffStartedRef.current = true;
+    void handleSubmit(buildHandoff.brief, { startFreshProject: true });
+  }, [buildHandoff?.brief, buildStatus, handleSubmit, hydrated, projectId]);
 
   // ---------------------------------------------------------------------------
   // Iteration handler — called by IterationControls and ReflectionCard
@@ -402,6 +440,7 @@ export function AgentWorkbench() {
 
   return (
     <div className="space-y-4 px-4 pb-6 pt-2">
+      {buildHandoff ? <BuildHandoffPanel handoff={buildHandoff} /> : null}
       <OperatorNextStepCard summary={journeySummary} />
       <WorkbenchEvalHandoffPanel
         bridge={bridge}
@@ -419,6 +458,37 @@ export function AgentWorkbench() {
 }
 
 export default AgentWorkbench;
+
+function BuildHandoffPanel({
+  handoff,
+}: {
+  handoff: {
+    agentName: string;
+    configPath: string;
+    brief: string;
+  };
+}) {
+  return (
+    <section className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-4 py-3 text-[color:var(--wb-text)]">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <p className="text-[12px] font-semibold">Continuing from Build</p>
+          <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
+            {handoff.agentName} is being materialized as a fresh Workbench candidate.
+          </p>
+          {handoff.configPath ? (
+            <p className="mt-1 break-all font-mono text-[11px] text-[color:var(--wb-text-dim)]">
+              {handoff.configPath}
+            </p>
+          ) : null}
+        </div>
+        <p className="max-w-xl text-[11px] leading-5 text-[color:var(--wb-text-dim)]">
+          {handoff.brief}
+        </p>
+      </div>
+    </section>
+  );
+}
 
 function WorkbenchEvalHandoffPanel({
   bridge,

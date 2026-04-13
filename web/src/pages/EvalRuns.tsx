@@ -33,6 +33,7 @@ interface EvalJourneyState {
   source?: string;
   draftEvalCount?: number;
   latestUserRequest?: string;
+  evalCasesPath?: string;
 }
 
 /** Use selected eval evidence to point operators forward without inventing a hidden eval state. */
@@ -95,6 +96,7 @@ export function EvalRuns() {
   const selectionHydratedRef = useRef(false);
 
   const navigationState = (location.state as EvalJourneyState | null) ?? null;
+  const buildEvalCasesPath = navigationState?.evalCasesPath ?? searchParams.get('evalCasesPath') ?? undefined;
   const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
   const showGeneratorPanel =
     showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
@@ -197,12 +199,24 @@ export function EvalRuns() {
       return;
     }
 
+    const request: {
+      config_path?: string;
+      category?: string;
+      generated_suite_id?: string;
+      dataset_path?: string;
+      split?: 'train' | 'test' | 'all';
+    } = {
+      config_path: activeAgent.config_path,
+      category: options?.generatedSuiteId ? undefined : category.trim() || undefined,
+      generated_suite_id: options?.generatedSuiteId,
+    };
+    if (!options?.generatedSuiteId && buildEvalCasesPath) {
+      request.dataset_path = buildEvalCasesPath;
+      request.split = 'all';
+    }
+
     startEval.mutate(
-      {
-        config_path: activeAgent.config_path,
-        category: options?.generatedSuiteId ? undefined : category.trim() || undefined,
-        generated_suite_id: options?.generatedSuiteId,
-      },
+      request,
       {
         onSuccess: (response) => {
           setRunAgents((current) => ({
@@ -662,6 +676,9 @@ export function EvalRuns() {
               <p className="mt-1 text-sm leading-relaxed text-sky-900">
                 The saved config is already selected, so you can add an optional label and launch the first run without jumping back to Build.
               </p>
+              {buildEvalCasesPath ? (
+                <p className="mt-2 font-mono text-xs text-sky-800">{buildEvalCasesPath}</p>
+              ) : null}
             </div>
           ) : null}
 

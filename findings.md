@@ -1,5 +1,37 @@
 # Findings & Decisions
 
+## AgentLab Golden Path E2E Hardening - Codex
+
+### Mission
+
+- Test the full AgentLab UI path end to end with a concrete customer FAQ support agent idea.
+- Focus path: Build -> Workbench -> Evals -> Optimize / Improve -> Deploy.
+- Ignore pro mode.
+- Record gaps in markdown and then fix the highest-impact issues.
+
+### Initial Environment Findings
+
+- Working directory is `/Users/andrew/Desktop/agentlab`.
+- Existing unrelated local changes were present before this campaign:
+  - `evals/synthetic_dataset.json`
+  - `docs/plans/2026-04-12-cohesive-product-hardening.md`
+  - `my-agent/`
+  - `progress.txt`
+- Prior session catchup reported Workbench light-theme work was already pushed as commit `48d2e05`.
+- Frontend app lives under `web/` and uses Vite, React 19, Vitest, and Playwright config.
+- Primary routes include `/build`, `/workbench`, `/evals`, `/optimize`, `/improvements`, and `/deploy`.
+
+### Browser Golden Path Findings
+
+- Build prompt tested with `FAQ Concierge`, a B2B SaaS FAQ support agent brief covering billing, onboarding, account, security, citations, clarification, and escalation.
+- The Build prompt flow enabled `Generate Agent` and produced a draft, but the generated config content was an HR assistant:
+  - Summary: employee benefits, policies, payroll, onboarding.
+  - Tools: `get_employee_profile`, `submit_time_off_request`, `get_policy_document`.
+  - Policies: employee confidentiality, equal treatment, sensitive topic escalation.
+- Severity: critical for golden path. The first generated agent does not honor the user's agent idea, even though the UI presents it as a successful draft.
+- UX impact: users cannot trust the Build result, and downstream eval/optimize/deploy would operate on the wrong agent.
+
+
 ## P1 Workbench Eval Optimize Bridge - Codex
 
 ### Mission
@@ -428,4 +460,51 @@
   - Journey guidance broadly touches core pages, sidebar/layout, navigation, shared types, and adds `OperatorNextStepCard` plus `operator-journey`.
   - Workbench handoff focuses on `builder/workbench_bridge.py`, Workbench API/types/store-facing frontend, ArtifactViewer, AgentWorkbench, and Optimize.
   - Restart continuity touches backend tasks/events/eval, builder chat service, builder/chat API types, Workbench store/layout/feed, Build/EvalRuns/EventLog/Improvements.
-  - Product polish touches status/empty-state utilities/components and many of the same core pages/tests; likely best merged last so copy/labels normalize the combined result.
+- Product polish touches status/empty-state utilities/components and many of the same core pages/tests; likely best merged last so copy/labels normalize the combined result.
+
+---
+
+## Golden Path Live E2E Campaign - 2026-04-13
+
+### Runtime Setup Findings
+
+- Workspace mode was initially effective mock because `agentlab.yaml` has `optimizer.use_mock: true`.
+- A Google provider key is present in local environment configuration, and setting workspace mode to live makes `/api/health` report `mock_mode: false`, no mock reasons, and `real_provider_configured: true`.
+- The `browser-use` CLI is not installed in the workspace shell. Browser testing continues with Playwright tooling, but this is a setup gap for future operators following the requested browser-use workflow.
+
+### Full Golden Path Probe Findings
+
+- Build now creates the requested `FAQ Concierge` draft after the fallback fix, with SaaS FAQ tools (`search_knowledge_base`, `check_account_plan`, `create_escalation_ticket`) and routing for product FAQ, account-plan, and billing/security escalation.
+- Live provider generation is reachable, but Gemini returned non-JSON text for Build config generation. The UI falls back to preview mode and should preserve the requested domain.
+- Build preview can test the saved draft and then `Save & Run Eval` creates a candidate config and navigates to `/evals?agent=<id>&new=1`.
+- Eval starts successfully for the saved candidate and shows a live running task.
+- Workbench is not connected to the saved Build candidate. Opening `/workbench` after saving FAQ Concierge lands on demo Workbench content (`Airline Support Workbench`, M&A artifacts), so the advertised Build -> Workbench path is not truthful yet.
+- Optimize can be opened with the selected saved agent, but without a completed eval run ID it still asks the operator to run eval first. The UI lets the user arrive while the eval is only running, which is understandable but not frictionless.
+- Improvements and Deploy are reachable. Deploy lists the newly saved candidate version, but it does not carry the candidate selection from Build/Eval into the deploy form.
+
+### Fixes Applied
+
+- Added a SaaS FAQ support fallback shape for Build generation when live provider output is invalid JSON or unavailable.
+- Added explicit leading-name extraction so prompts like `Build FAQ Concierge, ...` preserve the requested agent name.
+- Added a regression test proving invalid live JSON preserves the SaaS FAQ domain instead of drifting into finance.
+- Fixed the Build -> Eval handoff so saved Build drafts pass the generated eval cases path into `/evals` and `/api/eval/run`.
+- Extended explicit dataset loading to accept Build-generated `.yaml` / `.yml` eval files, not only JSONL/CSV.
+- Added UI evidence in Eval Runs showing the generated Build eval path before the first run starts.
+- Verified live Eval now runs the 3-case `generated_build.yaml` suite for `FAQ Concierge` instead of launching the broad 55-case default suite.
+- Added a Build -> Workbench handoff. Saved Build candidates now expose `Continue to Workbench`, and Workbench can start a fresh candidate materialization from the carried agent/config context instead of reopening the demo project.
+- Added a hydration gate in Workbench so an incoming Build handoff does not get overwritten by the final default-project snapshot.
+
+### Remaining Product Gaps
+
+- Optimize still needs the completed eval run ID carried explicitly. Eval Runs has an `Optimize` CTA when the run completes, but opening `/optimize?agent=<id>` directly still asks for eval evidence.
+- Deploy lists candidate versions, including the newly saved candidate, but `/deploy?new=1` does not preselect the candidate carried from Build/Eval.
+- `browser-use` remains missing from the shell; Playwright is the verified browser path for this session.
+- Build live provider output can still fail JSON parsing. The fallback is now domain-preserving, but the live prompt/JSON contract needs hardening so fallback is not the normal path.
+
+### Latest Verification Evidence
+
+- `.venv/bin/python -m pytest tests/test_eval_pipeline.py tests/test_transcript_intelligence_service.py tests/test_builder_chat_api.py -q`: 28 passed.
+- `npm test -- src/pages/EvalRuns.test.tsx src/pages/Build.test.tsx src/pages/AgentWorkbench.test.tsx`: 43 passed.
+- `npm run build`: passed; Vite still reports the existing large main chunk warning.
+- Playwright full golden path probe confirmed the Eval POST body included `dataset_path: /Users/andrew/Desktop/agentlab/evals/cases/generated_build.yaml` and the backend completed a 3-case generated-build run.
+- Playwright Workbench handoff probe confirmed `/workbench?agent=...&agentName=FAQ+Concierge&configPath=...` displays `Continuing from Build` and POSTs `/api/workbench/build/stream` with `project_id: null`.

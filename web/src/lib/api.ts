@@ -773,7 +773,13 @@ export function useStartEval() {
   return useMutation<
     { task_id: string; message: string },
     ApiRequestError,
-    { config_path?: string; category?: string; generated_suite_id?: string }
+    {
+      config_path?: string;
+      category?: string;
+      generated_suite_id?: string;
+      dataset_path?: string;
+      split?: 'train' | 'test' | 'all';
+    }
   >({
     mutationFn: (params) =>
       fetchApi('/eval/run', {

@@ -209,12 +209,15 @@ const XML_GUIDE_LIBRARY = [
   },
 ];
 
-function buildEvalRoute(agentId: string, mode: 'run' | 'generate'): string {
+function buildEvalRoute(agentId: string, mode: 'run' | 'generate', evalCasesPath?: string): string {
   const params = new URLSearchParams({ agent: agentId });
   if (mode === 'run') {
     params.set('new', '1');
   } else {
     params.set('generator', '1');
+  }
+  if (evalCasesPath) {
+    params.set('evalCasesPath', evalCasesPath);
   }
   return `/evals?${params.toString()}`;
 }
@@ -222,12 +225,37 @@ function buildEvalRoute(agentId: string, mode: 'run' | 'generate'): string {
 function navigateToEvalWorkflow(
   navigate: ReturnType<typeof useNavigate>,
   agent: AgentLibraryItem,
-  mode: 'run' | 'generate'
+  mode: 'run' | 'generate',
+  evalCasesPath?: string
 ) {
-  navigate(buildEvalRoute(agent.id, mode), {
+  navigate(buildEvalRoute(agent.id, mode, evalCasesPath), {
     state: {
       agent,
       open: mode,
+      evalCasesPath,
+    },
+  });
+}
+
+function navigateToWorkbenchWorkflow(
+  navigate: ReturnType<typeof useNavigate>,
+  agent: AgentLibraryItem,
+  saved?: BuildSaveResult | null
+) {
+  const configPath = saved?.config_path ?? agent.config_path;
+  const params = new URLSearchParams({
+    agent: agent.id,
+    agentName: agent.name,
+    configPath,
+  });
+  const brief = `Continue building ${agent.name} from the saved Build config at ${configPath}. Materialize the candidate, produce validation evidence, and prepare it for Eval.`;
+  navigate(`/workbench?${params.toString()}`, {
+    state: {
+      source: 'build',
+      agent,
+      configPath,
+      evalCasesPath: saved?.eval_cases_path,
+      brief,
     },
   });
 }
@@ -513,7 +541,7 @@ export function BuilderChatWorkspace({
       toastSuccess('Saved to workspace', saved.config_path, {
         action: {
           label: 'Run Eval',
-          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run'),
+          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run', saved.eval_cases_path),
         },
       });
     }
@@ -553,7 +581,7 @@ export function BuilderChatWorkspace({
         throw new Error('The saved agent response did not include workspace metadata.');
       }
       applySavedAgent(payload.agent, payload.save_result, { showToast: options?.showToast ?? true });
-      return payload.agent;
+      return { agent: payload.agent, saveResult: payload.save_result };
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : 'Save failed');
       return null;
@@ -567,11 +595,14 @@ export function BuilderChatWorkspace({
   }
 
   async function handleContinueToEval() {
-    const agent = savedAgent ?? await saveCurrentBuilderAgent({ showToast: false });
+    const saved = savedAgent
+      ? { agent: savedAgent, saveResult }
+      : await saveCurrentBuilderAgent({ showToast: false });
+    const agent = saved?.agent;
     if (!agent) {
       return;
     }
-    navigateToEvalWorkflow(navigate, agent, 'run');
+    navigateToEvalWorkflow(navigate, agent, 'run', saved?.saveResult?.eval_cases_path);
   }
 
   async function handleCopyYaml() {
@@ -930,14 +961,24 @@ export function BuilderChatWorkspace({
                 />
                 {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
                 {saveResult && savedAgent ? (
-                  <button
-                    type="button"
-                    onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run')}
-                    className="mt-3 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
-                  >
-                    Continue to Eval
-                    <ArrowRight className="h-4 w-4" />
-                  </button>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                    >
+                      Continue to Workbench
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run', saveResult.eval_cases_path)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                    >
+                      Continue to Eval
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
                 ) : null}
               </div>
             </div>
@@ -1343,7 +1384,7 @@ export function StudioWorkspace({
       toastSuccess('Saved to workspace', saved.config_path, {
         action: {
           label: 'Run Eval',
-          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run'),
+          onClick: () => navigateToEvalWorkflow(navigate, agent, 'run', saved.eval_cases_path),
         },
       });
     }
@@ -1384,7 +1425,7 @@ export function StudioWorkspace({
         throw new Error('The saved agent response did not include workspace metadata.');
       }
       applySavedDraft(payload.agent, payload.save_result, { showToast: options?.showToast ?? true });
-      return payload.agent;
+      return { agent: payload.agent, saveResult: payload.save_result };
     } catch (error) {
       toastError('Save failed', error instanceof Error ? error.message : String(error));
       return null;
@@ -1398,11 +1439,14 @@ export function StudioWorkspace({
   }
 
   async function handleFlowToEvals(mode: 'run' | 'generate') {
-    const agent = savedAgent ?? await saveCurrentGeneratedAgent({ showToast: false });
+    const saved = savedAgent
+      ? { agent: savedAgent, saveResult }
+      : await saveCurrentGeneratedAgent({ showToast: false });
+    const agent = saved?.agent;
     if (!agent) {
       return;
     }
-    navigateToEvalWorkflow(navigate, agent, mode);
+    navigateToEvalWorkflow(navigate, agent, mode, saved?.saveResult?.eval_cases_path);
   }
 
   async function handleCopyYaml() {
@@ -1825,14 +1869,24 @@ export function StudioWorkspace({
                   />
                   {saveResult ? <SaveResultCard result={saveResult} className="mt-4" /> : null}
                   {saveResult && savedAgent ? (
-                    <button
-                      type="button"
-                      onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run')}
-                      className="mt-3 inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
-                    >
-                      Continue to Eval
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                      >
+                        Continue to Workbench
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run', saveResult.eval_cases_path)}
+                        className="inline-flex items-center gap-2 rounded-xl border border-sky-200 bg-sky-50 px-3.5 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                      >
+                        Continue to Eval
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
+                    </div>
                   ) : null}
                 </div>
               </div>

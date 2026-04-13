@@ -48,7 +48,7 @@ class EvalRunRequest(BaseModel):
     """Request to start an eval run."""
     config_path: Optional[str] = Field(None, description="Path to config YAML to evaluate; uses default if omitted")
     category: Optional[str] = Field(None, description="Run only a specific category of test cases")
-    dataset_path: Optional[str] = Field(None, description="Dataset file (.jsonl/.csv) for eval runs")
+    dataset_path: Optional[str] = Field(None, description="Dataset file (.jsonl/.csv/.yaml/.yml) for eval runs")
     generated_suite_id: Optional[str] = Field(
         None,
         description="Accepted or generated suite ID to run directly",

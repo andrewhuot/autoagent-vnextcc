@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -23,11 +23,22 @@ function renderJourney(initialEntry = '/build', element = <Build />) {
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route path="/build" element={element} />
-          <Route path="/evals" element={<div>Eval Page</div>} />
+          <Route path="/evals" element={<EvalRouteProbe />} />
         </Routes>
         <ToastViewport />
       </MemoryRouter>
     </QueryClientProvider>
+  );
+}
+
+function EvalRouteProbe() {
+  const location = useLocation();
+  const state = location.state as { evalCasesPath?: string } | null;
+  return (
+    <div>
+      <p>Eval Page</p>
+      <p data-testid="eval-cases-path">{state?.evalCasesPath ?? 'no eval cases path'}</p>
+    </div>
   );
 }
 
@@ -760,6 +771,9 @@ describe('Build', () => {
     await user.click(screen.getByRole('button', { name: 'Save & Run Eval' }));
 
     expect(await screen.findByText('Eval Page')).toBeInTheDocument();
+    expect(screen.getByTestId('eval-cases-path')).toHaveTextContent(
+      '/tmp/workspace/evals/cases/generated_build.yaml'
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/agents',
       expect.objectContaining({
