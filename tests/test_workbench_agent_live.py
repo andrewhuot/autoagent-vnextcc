@@ -259,6 +259,55 @@ async def test_live_agent_require_live_raises_on_provider_generation_failure() -
             pass
 
 
+@pytest.mark.asyncio
+async def test_live_agent_iterate_require_live_raises_without_router() -> None:
+    """Iteration with require_live and no router must raise, not silently template."""
+    from builder.harness import HarnessExecutionEngine
+
+    engine = HarnessExecutionEngine(store=None, event_broker=None, router=None)
+
+    request = BuildRequest(
+        project_id="wb-iter-strict",
+        brief="Build a support agent",
+        target="portable",
+        require_live=True,
+    )
+
+    with pytest.raises(RuntimeError, match="Live Workbench iteration required"):
+        async for _event in engine.iterate(
+            request,
+            existing_plan=None,
+            existing_artifacts=[],
+            follow_up="Add PII guardrail",
+        ):
+            pass
+
+
+@pytest.mark.asyncio
+async def test_live_agent_iterate_require_live_raises_when_llm_returns_garbage() -> None:
+    """Iteration with require_live must raise when the router can't produce JSON."""
+    from builder.harness import HarnessExecutionEngine
+
+    router = StubRouter(["not a json object"] * 20)
+    engine = HarnessExecutionEngine(store=None, event_broker=None, router=router)
+
+    request = BuildRequest(
+        project_id="wb-iter-live-bad",
+        brief="Build a support agent",
+        target="portable",
+        require_live=True,
+    )
+
+    with pytest.raises(RuntimeError, match="Live Workbench iteration"):
+        async for _event in engine.iterate(
+            request,
+            existing_plan=None,
+            existing_artifacts=[],
+            follow_up="Add PII guardrail",
+        ):
+            pass
+
+
 # ---------------------------------------------------------------------------
 # When the planner itself fails, the agent falls back to the canned plan.
 # ---------------------------------------------------------------------------

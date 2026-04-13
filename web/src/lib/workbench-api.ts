@@ -661,6 +661,7 @@ export interface WorkbenchRun {
   provider?: string;
   model?: string;
   mode_reason?: string;
+  require_live?: boolean;
   budget?: WorkbenchBudget;
   telemetry_summary?: WorkbenchTelemetrySummary;
   summary?: RunSummary | null;

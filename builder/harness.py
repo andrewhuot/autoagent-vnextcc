@@ -516,6 +516,16 @@ class HarnessExecutionEngine:
         follow_up: str,
         iteration_number: int = 2,
     ) -> AsyncIterator[BuildEvent]:
+        """Run a follow-up iteration, optionally backed by the live LLM router.
+
+        When ``request.require_live`` is true the harness must have a router;
+        otherwise iteration raises instead of silently falling back to the
+        template engine. This mirrors ``run()``'s strict-live contract.
+        """
+        if request.require_live and self._router is None:
+            raise RuntimeError(
+                "Live Workbench iteration required, but no live provider router is configured."
+            )
         """Handle a follow-up iteration on an existing build.
 
         Generates a focused delta plan that incorporates user feedback into the
@@ -583,7 +593,7 @@ class HarnessExecutionEngine:
             yield {"event": "task.started", "data": {"task_id": leaf.id}}
             await self._tick()
 
-            artifact, operation, log_line = _generate_iteration_step(
+            artifact, operation, log_line, generation_source = await self._generate_iteration_step_with_router(
                 leaf=leaf,
                 brief=brief,
                 domain=domain,
@@ -591,6 +601,7 @@ class HarnessExecutionEngine:
                 follow_up=follow_up,
                 existing_by_category=existing_by_category,
                 iteration_number=iteration_number,
+                require_live=request.require_live,
             )
 
             if artifact is not None:
@@ -611,6 +622,7 @@ class HarnessExecutionEngine:
                         "task_id": leaf.id,
                         "artifact": artifact.to_dict(),
                         "skill_layer": skill_layer,
+                        "source": generation_source,
                     },
                 }
                 await self._tick()
@@ -621,7 +633,11 @@ class HarnessExecutionEngine:
             completed_ops = [operation] if operation is not None else []
             yield {
                 "event": "task.completed",
-                "data": {"task_id": leaf.id, "operations": completed_ops},
+                "data": {
+                    "task_id": leaf.id,
+                    "operations": completed_ops,
+                    "source": generation_source,
+                },
             }
             await self._tick(0.04)
 
@@ -694,6 +710,70 @@ class HarnessExecutionEngine:
 
         # Template-based generation — richer than raw _fake_execute
         return (*_template_execute(leaf, brief, domain, target, working_model), "template")
+
+    async def _generate_iteration_step_with_router(
+        self,
+        *,
+        leaf: PlanTask,
+        brief: str,
+        domain: str,
+        target: str,
+        follow_up: str,
+        existing_by_category: dict[str, list[dict[str, Any]]],
+        iteration_number: int,
+        require_live: bool = False,
+    ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str], str]:
+        """Generate one iteration step, preferring a live LLM call.
+
+        Iteration is supposed to refresh an existing artifact based on user
+        feedback. When a router is configured we ask the LLM for the refreshed
+        artifact using the combined brief + follow-up; if that fails and
+        ``require_live`` is set we raise (same contract as ``_generate_step``).
+        Otherwise we fall through to the deterministic template iterator so
+        the run still completes when no credentials are available.
+        """
+        combined_brief = f"{brief.strip()}\n\nRefinement request: {follow_up.strip()}"
+
+        if require_live and self._router is None:
+            raise RuntimeError(
+                "Live Workbench iteration required, but no live provider router is configured."
+            )
+
+        if self._router is not None:
+            try:
+                llm_result = await self._try_llm_step(
+                    leaf=leaf,
+                    brief=combined_brief,
+                    domain=domain,
+                    target=target,
+                    working_model={},
+                )
+                if llm_result is not None:
+                    artifact, operation, log_line = llm_result
+                    if artifact is not None:
+                        artifact.version = iteration_number
+                    return artifact, operation, log_line, "llm"
+                if require_live:
+                    raise RuntimeError(
+                        f"Live Workbench iteration did not return usable JSON for task '{leaf.title}'."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if require_live:
+                    detail = _redact_provider_error(str(exc) or exc.__class__.__name__)
+                    raise RuntimeError(
+                        f"Live Workbench iteration failed for task '{leaf.title}': {detail}"
+                    ) from exc
+
+        artifact, operation, log_line = _generate_iteration_step(
+            leaf=leaf,
+            brief=brief,
+            domain=domain,
+            target=target,
+            follow_up=follow_up,
+            existing_by_category=existing_by_category,
+            iteration_number=iteration_number,
+        )
+        return artifact, operation, log_line, "template"
 
     async def _try_llm_step(
         self,

@@ -3547,6 +3547,7 @@ def build_run_completion_payload(project: dict[str, Any], run: dict[str, Any]) -
         "provider": run.get("provider") or (run.get("execution") or {}).get("provider"),
         "model": run.get("model") or (run.get("execution") or {}).get("model"),
         "mode_reason": run.get("mode_reason") or (run.get("execution") or {}).get("mock_reason"),
+        "require_live": bool((run.get("execution") or {}).get("require_live") or run.get("require_live") or False),
         "budget": copy.deepcopy(run.get("budget") or {}),
         "telemetry_summary": copy.deepcopy(run.get("telemetry_summary") or {}),
         "failure_reason": run.get("failure_reason"),

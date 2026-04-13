@@ -122,9 +122,12 @@ export function HarnessMetricsBar() {
   const costUsd = metrics?.costUsd ?? 0;
   const elapsedMs = metrics?.elapsedMs ?? 0;
   const executionMode = activeRun?.execution_mode;
+  const requireLive = Boolean(activeRun?.require_live);
   const executionLabel =
     executionMode === 'live'
-      ? 'Live'
+      ? requireLive
+        ? 'Strict live'
+        : 'Live'
       : executionMode === 'mock'
         ? 'Mock'
         : executionMode === 'mixed'

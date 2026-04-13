@@ -999,11 +999,6 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
         delta artifacts rather than rebuilding from scratch.
         """
         try:
-            if request.require_live:
-                raise RuntimeError(
-                    "Live Workbench iteration required, but follow-up iteration currently uses "
-                    "template generation. Run without --require-live or start a new live build."
-                )
             engine = self._make_engine()
             existing_artifacts = list(project.get("artifacts") or self._previous_artifacts)
             existing_plan = project.get("plan") or self._previous_plan
