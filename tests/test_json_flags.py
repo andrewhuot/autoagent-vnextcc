@@ -165,6 +165,15 @@ class TestJsonFlags:
         assert "score_after" in entry
         assert "change_description" in entry
 
+    def test_optimize_require_eval_evidence_exits_when_run_is_missing(self, runner):
+        result = runner.invoke(
+            cli,
+            ["optimize", "--cycles", "1", "--eval-run-id", "missing-run", "--require-eval-evidence"],
+        )
+
+        assert result.exit_code != 0
+        assert "Eval results not found for run id missing-run" in result.output
+
     def test_optimize_json_multiple_cycles(self, runner):
         result = runner.invoke(cli, ["optimize", "--cycles", "2", "--json"])
         assert result.exit_code == 0, result.output

@@ -546,6 +546,7 @@ export interface WorkbenchBridgeOptimizeRequest {
   window: number;
   force: boolean;
   require_human_approval: boolean;
+  require_eval_evidence?: boolean;
   config_path?: string | null;
   eval_run_id?: string | null;
   mode: 'standard' | 'advanced' | 'research' | string;
@@ -873,6 +874,7 @@ export async function* streamWorkbenchBuild(
     target?: WorkbenchTarget;
     environment?: string;
     mock?: boolean;
+    require_live?: boolean;
     /** Let the service autonomously run corrective iterations. */
     auto_iterate?: boolean;
     /** Hard cap on plan passes per turn (initial + corrections). */
@@ -950,6 +952,7 @@ export async function* iterateWorkbenchBuild(
     message: string;
     target?: WorkbenchTarget;
     environment?: string;
+    require_live?: boolean;
     max_iterations?: number;
     max_seconds?: number;
     max_tokens?: number;
@@ -968,6 +971,7 @@ export async function* iterateWorkbenchBuild(
       follow_up: body.message,
       target: body.target,
       environment: body.environment,
+      require_live: body.require_live,
       max_iterations: body.max_iterations,
       max_seconds: body.max_seconds,
       max_tokens: body.max_tokens,

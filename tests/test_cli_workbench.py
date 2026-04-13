@@ -576,6 +576,17 @@ class TestWorkbenchBuildStreaming:
         assert result.exit_code == 0, result.output
         assert "[workbench]" in result.output
 
+    def test_build_require_live_refuses_mock_builder(self, runner: CliRunner, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        _seed_workspace_minimal(tmp_path)
+
+        result = runner.invoke(workbench_group, [
+            "build", "Build an airline support agent", "--mock", "--require-live", "--json",
+        ])
+
+        assert result.exit_code != 0
+        assert "Live Workbench required" in result.output
+
 
 class TestWorkbenchHelp:
     def test_help_shows_commands(self, runner: CliRunner) -> None:

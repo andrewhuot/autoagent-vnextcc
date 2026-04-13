@@ -639,3 +639,81 @@ async def test_run_build_stream_marks_run_failed_when_agent_raises(tmp_path: Pat
     assert snapshot["build_status"] == "failed"
     assert snapshot["active_run"]["status"] == "failed"
     assert snapshot["active_run"]["error"] == "planner crashed"
+
+
+@pytest.mark.asyncio
+async def test_run_build_stream_marks_live_template_fallback_as_mixed(tmp_path: Path) -> None:
+    """A live-labeled run that emits template steps must become mixed in run metadata."""
+    store = WorkbenchStore(tmp_path / "workbench.json")
+    from builder.workbench import WorkbenchService
+
+    service = WorkbenchService(store)
+
+    class TemplateFallbackAgent:
+        """Agent fixture that simulates a live provider falling back for one task."""
+
+        async def run(self, request: BuildRequest, project: dict) -> object:
+            task_id = "task-template"
+            plan = PlanTask(
+                id="task-root",
+                title="Build support agent",
+                children=[PlanTask(id=task_id, title="Add support tool", parent_id="task-root")],
+            )
+            artifact = WorkbenchArtifact(
+                id="artifact-template",
+                task_id=task_id,
+                category="tool",
+                name="order_lookup",
+                summary="Lookup orders.",
+                preview="order_lookup(order_id)",
+                source="def order_lookup(order_id): ...",
+                language="python",
+                created_at="2026-04-12T00:00:00Z",
+            )
+            yield {"event": "plan.ready", "data": {"plan": plan.to_dict()}}
+            yield {"event": "task.started", "data": {"task_id": task_id}}
+            yield {"event": "artifact.updated", "data": {"task_id": task_id, "artifact": artifact.to_dict()}}
+            yield {
+                "event": "task.completed",
+                "data": {
+                    "task_id": task_id,
+                    "source": "template",
+                    "operations": [
+                        {
+                            "operation": "add_tool",
+                            "target": "tools",
+                            "label": "order_lookup",
+                            "object": {
+                                "id": "tool-order-lookup",
+                                "name": "order_lookup",
+                                "description": "Lookup orders.",
+                                "type": "function_tool",
+                                "parameters": ["order_id"],
+                            },
+                        }
+                    ],
+                },
+            }
+            yield {"event": "build.completed", "data": {"operations": []}}
+
+    stream = await service.run_build_stream(
+        project_id=None,
+        brief="Build a support agent.",
+        agent=TemplateFallbackAgent(),
+        auto_iterate=False,
+        execution={"mode": "live", "provider": "google", "model": "gemini-2.5-pro"},
+    )
+
+    events = [event async for event in stream]
+    task_completed = next(event for event in events if event["event"] == "task.completed")
+    terminal = events[-1]
+    project_id = terminal["data"]["project_id"]
+    snapshot = service.get_plan_snapshot(project_id=project_id)
+    run = snapshot["active_run"]
+
+    assert task_completed["data"]["generation_source"] == "template"
+    assert task_completed["data"]["execution_mode"] == "mixed"
+    assert terminal["data"]["execution_mode"] == "mixed"
+    assert run["execution"]["mode"] == "mixed"
+    assert run["generation_sources"] == {"template": 1}
+    assert "fell back to template" in run["mode_reason"]

@@ -28,6 +28,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Optional
@@ -55,6 +56,20 @@ from builder.workbench_plan import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+def _redact_provider_error(message: str) -> str:
+    """Remove known provider secret values from live-generation error text."""
+    try:
+        from cli.providers import redact_provider_secrets
+
+        return redact_provider_secrets(message, os.environ)
+    except Exception:  # noqa: BLE001 - redaction must never mask the root error.
+        redacted = message
+        for key, value in os.environ.items():
+            if key.endswith("_API_KEY") and value and len(value) >= 8:
+                redacted = redacted.replace(value, "[redacted]")
+        return redacted
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +408,7 @@ class HarnessExecutionEngine:
                 target=request.target,
                 working_model=working_model,
                 step_index=step_index,
+                require_live=request.require_live,
             )
 
             if artifact is not None:
@@ -413,6 +429,7 @@ class HarnessExecutionEngine:
                         "task_id": leaf.id,
                         "artifact": artifact.to_dict(),
                         "skill_layer": skill_layer,
+                        "source": generation_source,
                     },
                 }
                 await self._tick()
@@ -641,13 +658,17 @@ class HarnessExecutionEngine:
         target: str,
         working_model: dict[str, Any],
         step_index: int,
+        require_live: bool = False,
     ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str], str]:
         """Generate content for one leaf task.
 
         Tries the LLM router (if available), then falls back to template
-        generation. Never raises — errors return the template-based fallback.
+        generation. Strict live mode raises instead of using a template.
         Returns a 4-tuple where the last item is ``"llm"`` or ``"template"``.
         """
+        if require_live and self._router is None:
+            raise RuntimeError("Live Workbench generation required, but no live provider router is configured.")
+
         if self._router is not None:
             try:
                 result = await self._try_llm_step(
@@ -659,7 +680,16 @@ class HarnessExecutionEngine:
                 )
                 if result is not None:
                     return (*result, "llm")
-            except Exception:  # noqa: BLE001
+                if require_live:
+                    raise RuntimeError(
+                        f"Live Workbench generation did not return usable JSON for task '{leaf.title}'."
+                    )
+            except Exception as exc:  # noqa: BLE001
+                if require_live:
+                    detail = _redact_provider_error(str(exc) or exc.__class__.__name__)
+                    raise RuntimeError(
+                        f"Live Workbench generation failed for task '{leaf.title}': {detail}"
+                    ) from exc
                 pass  # Fall through to template generation
 
         # Template-based generation — richer than raw _fake_execute

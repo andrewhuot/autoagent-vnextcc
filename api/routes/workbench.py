@@ -73,6 +73,10 @@ class WorkbenchBuildStreamRequest(BaseModel):
     target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
     environment: str = Field(default="draft")
     mock: bool = Field(default=False, description="Force mock mode for tests.")
+    require_live: bool = Field(
+        default=False,
+        description="Fail if the Workbench cannot use live provider generation end-to-end.",
+    )
     auto_iterate: bool = Field(
         default=True,
         description="Let the service run corrective iterations after validation.",
@@ -108,6 +112,10 @@ class WorkbenchIterateRequest(BaseModel):
     target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
     environment: str = Field(default="draft")
     mock: bool = Field(default=False, description="Force mock mode for tests.")
+    require_live: bool = Field(
+        default=False,
+        description="Fail if follow-up generation would use template or mock output.",
+    )
     max_iterations: int = Field(default=3, ge=1, le=6)
     max_seconds: int | None = Field(default=None, ge=1)
     max_tokens: int | None = Field(default=None, ge=1)
@@ -357,6 +365,7 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
                 max_tokens=body.max_tokens,
                 max_cost_usd=body.max_cost_usd,
                 execution=execution,
+                require_live=body.require_live,
             )
             async for event in stream:
                 yield _format_sse(
@@ -402,6 +411,7 @@ async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> Stre
                 max_tokens=body.max_tokens,
                 max_cost_usd=body.max_cost_usd,
                 execution=execution,
+                require_live=body.require_live,
             )
             async for event in stream:
                 yield _format_sse(

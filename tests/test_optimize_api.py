@@ -570,6 +570,55 @@ def test_start_optimization_uses_selected_eval_run_context_over_global_failures(
     assert scoped_report.reason.startswith("scoped_eval_run=eval-run-1234")
 
 
+def test_start_optimization_requires_eval_evidence_before_creating_task(
+    client: TestClient,
+    app: FastAPI,
+) -> None:
+    response = client.post(
+        "/api/optimize/run",
+        json={
+            "force": True,
+            "require_eval_evidence": True,
+            "mode": "standard",
+            "objective": "",
+            "guardrails": [],
+            "research_algorithm": "",
+            "budget_cycles": 5,
+            "budget_dollars": 3.0,
+        },
+    )
+
+    assert response.status_code == 400
+    assert "Run Eval first" in response.json()["detail"]
+
+
+def test_start_optimization_rejects_incomplete_eval_evidence(
+    client: TestClient,
+    app: FastAPI,
+) -> None:
+    eval_task = Task(task_id="eval-run-in-progress", task_type="eval")
+    eval_task.status = "running"
+    app.state.task_manager._tasks[eval_task.task_id] = eval_task
+
+    response = client.post(
+        "/api/optimize/run",
+        json={
+            "force": True,
+            "require_eval_evidence": True,
+            "eval_run_id": "eval-run-in-progress",
+            "mode": "standard",
+            "objective": "",
+            "guardrails": [],
+            "research_algorithm": "",
+            "budget_cycles": 5,
+            "budget_dollars": 3.0,
+        },
+    )
+
+    assert response.status_code == 409
+    assert "results not yet available" in response.json()["detail"]
+
+
 def test_start_optimization_falls_back_to_eval_task_cases_when_structured_results_are_missing(
     tmp_path: Path,
 ) -> None:

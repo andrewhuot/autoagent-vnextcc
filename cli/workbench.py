@@ -145,6 +145,7 @@ def _compact_run(run: dict[str, Any] | None) -> dict[str, Any] | None:
         "run_id": run.get("run_id"),
         "status": run.get("status"),
         "phase": run.get("phase"),
+        "error": run.get("error"),
         "failure_reason": run.get("failure_reason"),
         "cancel_reason": run.get("cancel_reason"),
         "execution_mode": run.get("execution_mode"),
@@ -464,6 +465,7 @@ def create_command(brief: str, target: str, environment: str, json_output: bool)
 @click.option("--target", default="portable", type=TARGET_CHOICES, show_default=True)
 @click.option("--environment", default="draft", show_default=True)
 @click.option("--mock", is_flag=True, help="Force deterministic mock Workbench builder mode.")
+@click.option("--require-live", is_flag=True, help="Fail instead of using mock/template Workbench generation.")
 @click.option("--auto-iterate/--no-auto-iterate", default=True, show_default=True)
 @click.option("--max-iterations", default=3, type=click.IntRange(1, 6), show_default=True)
 @click.option("--max-seconds", default=None, type=int, help="Optional wall-clock budget.")
@@ -478,6 +480,7 @@ def build_command(
     target: str,
     environment: str,
     mock: bool,
+    require_live: bool,
     auto_iterate: bool,
     max_iterations: int,
     max_seconds: int | None,
@@ -516,6 +519,7 @@ def build_command(
                     max_tokens=max_tokens,
                     max_cost_usd=max_cost_usd,
                     execution=execution,
+                    require_live=require_live,
                 ),
                 output_format=resolved_output_format,
             )
@@ -540,7 +544,8 @@ def build_command(
         return
     render_candidate_summary(data)
     if status != "ok":
-        raise click.ClickException(str((data.get("run") or {}).get("failure_reason") or "Workbench run failed."))
+        run = data.get("run") if isinstance(data.get("run"), dict) else {}
+        raise click.ClickException(str(run.get("error") or run.get("failure_reason") or "Workbench run failed."))
 
 
 # ---------------------------------------------------------------------------
@@ -554,6 +559,7 @@ def build_command(
 @click.option("--target", default="portable", type=TARGET_CHOICES, show_default=True)
 @click.option("--environment", default="draft", show_default=True)
 @click.option("--mock", is_flag=True, help="Force deterministic mock Workbench builder mode.")
+@click.option("--require-live", is_flag=True, help="Fail instead of using mock/template Workbench generation.")
 @click.option("--max-iterations", default=3, type=click.IntRange(1, 6), show_default=True)
 @click.option("--max-seconds", default=None, type=int, help="Optional wall-clock budget.")
 @click.option("--max-tokens", default=None, type=int, help="Optional estimated-token budget.")
@@ -566,6 +572,7 @@ def iterate_command(
     target: str,
     environment: str,
     mock: bool,
+    require_live: bool,
     max_iterations: int,
     max_seconds: int | None,
     max_tokens: int | None,
@@ -600,6 +607,7 @@ def iterate_command(
                     max_tokens=max_tokens,
                     max_cost_usd=max_cost_usd,
                     execution=execution,
+                    require_live=require_live,
                 ),
                 output_format=resolved_output_format,
             )
@@ -624,7 +632,8 @@ def iterate_command(
         return
     render_candidate_summary(data)
     if status != "ok":
-        raise click.ClickException(str((data.get("run") or {}).get("failure_reason") or "Workbench iteration failed."))
+        run = data.get("run") if isinstance(data.get("run"), dict) else {}
+        raise click.ClickException(str(run.get("error") or run.get("failure_reason") or "Workbench iteration failed."))
 
 
 # ---------------------------------------------------------------------------

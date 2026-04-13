@@ -153,10 +153,12 @@ def _path_without_lsof(*, fake_npm_body: str | None = None) -> None:
 
 def test_stop_script_does_not_kill_unrelated_processes() -> None:
     with _preserved_pid_files():
-        occupant = _spawn_port_occupant(8000)
+        backend_port = _get_free_port()
+        occupant = _spawn_port_occupant(backend_port)
         try:
-            _wait_for_port(8000)
-            with _fake_lsof({8000: occupant.pid}) as env:
+            _wait_for_port(backend_port)
+            with _fake_lsof({backend_port: occupant.pid}) as env:
+                env["BACKEND_PORT"] = str(backend_port)
                 result = subprocess.run(
                     ["/bin/bash", str(REPO_ROOT / "stop.sh")],
                     cwd=REPO_ROOT,
@@ -181,10 +183,12 @@ def test_stop_script_does_not_kill_unrelated_processes() -> None:
 )
 def test_start_script_refuses_occupied_ports_without_killing_other_processes() -> None:
     with _preserved_pid_files():
-        occupant = _spawn_port_occupant(8000)
+        backend_port = _get_free_port()
+        occupant = _spawn_port_occupant(backend_port)
         try:
-            _wait_for_port(8000)
-            with _fake_lsof({8000: occupant.pid}) as env:
+            _wait_for_port(backend_port)
+            with _fake_lsof({backend_port: occupant.pid}) as env:
+                env["BACKEND_PORT"] = str(backend_port)
                 result = subprocess.run(
                     ["/bin/bash", str(REPO_ROOT / "start.sh")],
                     cwd=REPO_ROOT,
@@ -198,7 +202,7 @@ def test_start_script_refuses_occupied_ports_without_killing_other_processes() -
             combined_output = f"{result.stdout}\n{result.stderr}"
             assert result.returncode == 1
             assert occupant.poll() is None
-            assert "port 8000" in combined_output.lower()
+            assert f"port {backend_port}" in combined_output.lower()
         finally:
             if occupant.poll() is None:
                 occupant.terminate()
@@ -213,11 +217,13 @@ def test_start_script_refuses_frontend_port_conflicts_without_lsof() -> None:
     """start.sh should still block occupied frontend ports when lsof is unavailable."""
 
     with _preserved_pid_files():
-        occupant = _spawn_port_occupant(5173)
+        frontend_port = _get_free_port()
+        occupant = _spawn_port_occupant(frontend_port)
         try:
-            _wait_for_port(5173)
+            _wait_for_port(frontend_port)
             with _path_without_lsof(fake_npm_body="exit 0") as env:
                 env["BACKEND_PORT"] = str(_get_free_port())
+                env["FRONTEND_PORT"] = str(frontend_port)
                 result = subprocess.run(
                     ["/bin/bash", str(REPO_ROOT / "start.sh")],
                     cwd=REPO_ROOT,
@@ -231,7 +237,7 @@ def test_start_script_refuses_frontend_port_conflicts_without_lsof() -> None:
             combined_output = f"{result.stdout}\n{result.stderr}".lower()
             assert result.returncode == 1
             assert occupant.poll() is None
-            assert "frontend port 5173" in combined_output
+            assert f"frontend port {frontend_port}" in combined_output
         finally:
             if occupant.poll() is None:
                 occupant.terminate()

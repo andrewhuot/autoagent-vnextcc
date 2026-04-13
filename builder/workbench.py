@@ -1097,6 +1097,7 @@ class WorkbenchService:
         max_tokens: int | None = None,
         max_cost_usd: float | None = None,
         execution: dict[str, Any] | None = None,
+        require_live: bool = False,
     ) -> Any:
         """Drive a multi-turn streaming build run, yielding events the UI consumes.
 
@@ -1143,6 +1144,7 @@ class WorkbenchService:
                     max_tokens=max_tokens,
                     max_cost_usd=max_cost_usd,
                     execution=execution,
+                    require_live=require_live,
                 )
             project = existing or self.store.create_project(
                 brief=effective_brief, target=target, environment=environment
@@ -1175,7 +1177,10 @@ class WorkbenchService:
                 max_tokens=max_tokens,
                 max_cost_usd=max_cost_usd,
             ),
-            execution=execution or self._execution_metadata_from_agent(runner),
+            execution=self._execution_metadata_with_live_requirement(
+                execution or self._execution_metadata_from_agent(runner),
+                require_live=require_live,
+            ),
         )
         # Stable turn_id so every event in this run can be grouped by the UI.
         turn_id = run["run_id"]
@@ -1200,6 +1205,7 @@ class WorkbenchService:
             conversation_history=_compact_conversation(project.get("conversation", [])),
             prior_turn_summary=_summarize_prior_turns(project.get("turns", [])),
             current_model_summary=_model_summary(project["model"]),
+            require_live=require_live,
         )
         async def _stream() -> Any:
             for startup_name, startup_data in self._run_start_events(
@@ -1240,6 +1246,7 @@ class WorkbenchService:
         max_tokens: int | None = None,
         max_cost_usd: float | None = None,
         execution: dict[str, Any] | None = None,
+        require_live: bool = False,
     ) -> Any:
         """Handle a follow-up iteration on an existing build.
 
@@ -1274,7 +1281,10 @@ class WorkbenchService:
                 max_tokens=max_tokens,
                 max_cost_usd=max_cost_usd,
             ),
-            execution=execution or self._execution_metadata_from_agent(runner),
+            execution=self._execution_metadata_with_live_requirement(
+                execution or self._execution_metadata_from_agent(runner),
+                require_live=require_live,
+            ),
         )
         run["turn_id"] = run["run_id"]
         self._start_turn(project, run, brief=follow_up, mode="follow_up")
@@ -1297,6 +1307,7 @@ class WorkbenchService:
             conversation_history=_compact_conversation(project.get("conversation", [])),
             prior_turn_summary=_summarize_prior_turns(project.get("turns", [])),
             current_model_summary=_model_summary(project["model"]),
+            require_live=require_live,
         )
 
         # Use agent.iterate() if available (harness-aware agents)
@@ -1314,6 +1325,7 @@ class WorkbenchService:
                 conversation_history=request.conversation_history,
                 prior_turn_summary=request.prior_turn_summary,
                 current_model_summary=request.current_model_summary,
+                require_live=request.require_live,
             )
             source_iter = runner.run(request_with_followup, project)
 
@@ -1942,6 +1954,48 @@ class WorkbenchService:
             "live_ready": str(getattr(agent, "execution_mode", "mock")) == "live",
         }
 
+    def _execution_metadata_with_live_requirement(
+        self,
+        execution: dict[str, Any],
+        *,
+        require_live: bool,
+    ) -> dict[str, Any]:
+        """Copy execution metadata and make strict-live intent durable."""
+        payload = copy.deepcopy(execution)
+        payload["require_live"] = bool(require_live)
+        if require_live:
+            payload.setdefault("mock_reason", "")
+        return payload
+
+    def _record_generation_source(
+        self,
+        run: dict[str, Any],
+        *,
+        source: str,
+    ) -> None:
+        """Track per-task source truth and mark live-template fallback as mixed."""
+        source_name = source.strip().lower() or "unknown"
+        sources = run.setdefault("generation_sources", {})
+        sources[source_name] = int(sources.get(source_name) or 0) + 1
+
+        execution = run.get("execution") if isinstance(run.get("execution"), dict) else {}
+        mode = str(execution.get("mode") or run.get("execution_mode") or "").lower()
+        if source_name != "template" or mode not in {"live", "mixed"}:
+            execution["generation_sources"] = copy.deepcopy(sources)
+            run["execution"] = execution
+            run["generation_sources"] = copy.deepcopy(sources)
+            return
+
+        reason = "Live provider fell back to template generation for one or more Workbench tasks."
+        execution["mode"] = "mixed"
+        execution["live_ready"] = False
+        execution["mock_reason"] = reason
+        execution["generation_sources"] = copy.deepcopy(sources)
+        run["execution"] = execution
+        run["execution_mode"] = "mixed"
+        run["mode_reason"] = reason
+        run["generation_sources"] = copy.deepcopy(sources)
+
     def _current_turn(self, project: dict[str, Any], run: dict[str, Any]) -> dict[str, Any] | None:
         """Return the durable turn record for a run, if present."""
         turn_id = run.get("turn_id") or run.get("run_id")
@@ -2276,6 +2330,10 @@ class WorkbenchService:
 
                 elif event_name == "task.completed" and plan_root is not None:
                     run["phase"] = PHASE_EXECUTING
+                    source = str(data.get("source") or data.get("generation_source") or "").strip()
+                    if source:
+                        data["generation_source"] = source
+                        self._record_generation_source(run, source=source)
                     task = find_task(plan_root, str(data.get("task_id") or ""))
                     if task is not None:
                         task.status = PlanTaskStatus.DONE.value

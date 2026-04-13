@@ -127,9 +127,12 @@ export function HarnessMetricsBar() {
       ? 'Live'
       : executionMode === 'mock'
         ? 'Mock'
+        : executionMode === 'mixed'
+          ? 'Mixed'
         : executionMode
           ? executionMode
           : null;
+  const executionReason = activeRun?.mode_reason;
   const providerModel =
     activeRun?.provider || activeRun?.model
       ? [activeRun.provider, activeRun.model].filter(Boolean).join(' / ')
@@ -159,9 +162,12 @@ export function HarnessMetricsBar() {
         <span
           className={classNames(
             'rounded border border-[color:var(--wb-border)] px-1.5 py-0.5',
-            'font-medium text-[color:var(--wb-text)]'
+            'font-medium',
+            executionMode === 'mixed'
+              ? 'border-[color:var(--wb-warn)] text-[color:var(--wb-warn)]'
+              : 'text-[color:var(--wb-text)]'
           )}
-          title={providerModel}
+          title={[providerModel, executionReason].filter(Boolean).join(' - ')}
         >
           {executionLabel}
         </span>

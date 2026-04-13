@@ -1148,6 +1148,7 @@ export function useStartOptimize() {
       require_human_approval: boolean;
       config_path?: string;
       eval_run_id?: string;
+      require_eval_evidence?: boolean;
       mode: 'standard' | 'advanced' | 'research';
       objective: string;
       guardrails: string[];

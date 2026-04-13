@@ -781,7 +781,8 @@ class TestDoctorCommand:
 
         assert result.exit_code == 0
         assert "google:" in result.output.lower()
-        assert "gemini-2.5-pro ready" in result.output
+        assert "gemini-2.5-pro configured" in result.output
+        assert "live probe not run" in result.output
 
     def test_doctor_status_line_reports_ready_workspace(self, runner, tmp_dir, monkeypatch):
         """Mock-mode workspaces should still report a healthy doctor summary."""

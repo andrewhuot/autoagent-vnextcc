@@ -71,7 +71,8 @@ def test_provider_without_subcommand_behaves_like_status(runner: CliRunner) -> N
         result = runner.invoke(cli, ["provider"])
 
         assert result.exit_code == 0, result.output
-        assert "No providers configured" in result.output
+        assert "Configured providers" in result.output
+        assert "runtime config" in result.output
 
 
 def test_model_set_writes_workspace_settings_overrides(runner: CliRunner) -> None:

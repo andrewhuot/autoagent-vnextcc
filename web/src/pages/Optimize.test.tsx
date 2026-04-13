@@ -194,6 +194,7 @@ describe('Optimize', () => {
       expect.objectContaining({
         config_path: '/workspace/configs/v002.yaml',
         eval_run_id: 'eval-run-1234',
+        require_eval_evidence: true,
       }),
       expect.any(Object)
     );
@@ -217,6 +218,7 @@ describe('Optimize', () => {
       expect.objectContaining({
         config_path: '/workspace/configs/v002.yaml',
         eval_run_id: 'eval-run-query',
+        require_eval_evidence: true,
       }),
       expect.any(Object)
     );
@@ -266,6 +268,7 @@ describe('Optimize', () => {
       expect.objectContaining({
         config_path: '/workspace/configs/workbench-v003.yaml',
         eval_run_id: 'eval-workbench-123',
+        require_eval_evidence: true,
       }),
       expect.any(Object)
     );

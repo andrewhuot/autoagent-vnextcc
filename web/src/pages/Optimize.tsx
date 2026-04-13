@@ -1016,6 +1016,7 @@ function OptimizeRunSection({
         require_human_approval: requireHumanApproval,
         config_path: effectiveAgent.config_path,
         eval_run_id: evalRunId ?? undefined,
+        require_eval_evidence: Boolean(evalRunId),
         mode: optimizeMode,
         objective,
         guardrails,

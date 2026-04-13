@@ -321,7 +321,8 @@ class TestModeCLI:
 
         test_result = runner.invoke(cli, ["provider", "test"], env=env)
         assert test_result.exit_code == 0, test_result.output
-        assert "google:gemini-2.5-pro is ready" in test_result.output
+        assert "google:gemini-2.5-pro has credentials configured" in test_result.output
+        assert "live probe not run" in test_result.output
 
     def test_provider_live_probe_redacts_rejected_provider_errors(
         self,

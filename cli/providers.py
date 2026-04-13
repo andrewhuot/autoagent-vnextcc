@@ -216,7 +216,7 @@ def provider_health_checks(
                 **provider,
                 "credential_present": credential_present,
                 "message": (
-                    f"{provider['provider']}:{provider['model']} is ready"
+                    f"{provider['provider']}:{provider['model']} has credentials configured (live probe not run)"
                     if credential_present
                     else f"Missing {env_name} for {provider['provider']}:{provider['model']}"
                 ),

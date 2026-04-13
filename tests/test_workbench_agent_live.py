@@ -235,6 +235,28 @@ async def test_live_agent_falls_back_to_mock_on_persistent_parse_errors() -> Non
         event["event"] == "task.completed" and event["data"]["operations"]
         for event in events
     )
+    assert any(
+        event["event"] == "task.completed" and event["data"].get("source") == "template"
+        for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_live_agent_require_live_raises_on_provider_generation_failure() -> None:
+    """Strict live mode must fail instead of presenting template output as live."""
+    router = StubRouter(["not json at all"] * 20)
+    agent = LiveWorkbenchBuilderAgent(router=router, max_json_retries=0)
+
+    request = BuildRequest(
+        project_id="wb-strict-live",
+        brief="Build a support agent.",
+        require_live=True,
+    )
+    project = {"project_id": "wb-strict-live", "model": {"agents": [{"id": "root"}]}}
+
+    with pytest.raises(RuntimeError, match="Live Workbench generation"):
+        async for _event in agent.run(request, project):
+            pass
 
 
 # ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ class WorkbenchOptimizeRequest(BaseModel):
     window: int = 100
     force: bool = True
     require_human_approval: bool = True
+    require_eval_evidence: bool = True
     config_path: str | None = None
     eval_run_id: str | None = None
     mode: str = "standard"

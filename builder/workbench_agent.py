@@ -93,6 +93,7 @@ class BuildRequest:
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     prior_turn_summary: list[dict[str, Any]] = field(default_factory=list)
     current_model_summary: dict[str, Any] = field(default_factory=dict)
+    require_live: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +206,12 @@ class MockWorkbenchBuilderAgent(WorkbenchBuilderAgent):
         project: dict[str, Any],
     ) -> AsyncIterator[BuildEvent]:
         """Yield plan + per-task events then a terminal build.completed event."""
+        if request.require_live:
+            raise RuntimeError(
+                "Live Workbench required, but the selected builder is mock-backed. "
+                "Configure a live provider or run without --require-live."
+            )
+
         brief = request.brief.strip() or "Help users with the requested workflow."
         domain = _infer_domain(brief)
 
@@ -974,7 +981,9 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
                     self._previous_plan = (event.get("data") or {}).get("plan")
                 yield event
             self._iteration = 2  # Next call is an iteration
-        except Exception:  # noqa: BLE001 — always degrade gracefully
+        except Exception:  # noqa: BLE001 — degrade gracefully unless strict live was requested
+            if request.require_live:
+                raise
             async for event in MockWorkbenchBuilderAgent().run(request, project):
                 yield event
 
@@ -990,6 +999,11 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
         delta artifacts rather than rebuilding from scratch.
         """
         try:
+            if request.require_live:
+                raise RuntimeError(
+                    "Live Workbench iteration required, but follow-up iteration currently uses "
+                    "template generation. Run without --require-live or start a new live build."
+                )
             engine = self._make_engine()
             existing_artifacts = list(project.get("artifacts") or self._previous_artifacts)
             existing_plan = project.get("plan") or self._previous_plan
@@ -1006,7 +1020,9 @@ class LiveWorkbenchBuilderAgent(WorkbenchBuilderAgent):
                         self._previous_artifacts.append(artifact_data)
                 yield event
             self._iteration += 1
-        except Exception:  # noqa: BLE001 — degrade to mock
+        except Exception:  # noqa: BLE001 — degrade to mock unless strict live was requested
+            if request.require_live:
+                raise
             async for event in MockWorkbenchBuilderAgent().run(request, project):
                 yield event
 
