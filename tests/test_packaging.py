@@ -21,8 +21,12 @@ def test_pyproject_declares_explicit_package_discovery_for_editable_installs() -
     assert "api.*" in include
     assert "agent" in include
     assert "agent.*" in include
+    assert "adapters" in include
+    assert "adapters.*" in include
     assert "optimizer" in include
     assert "optimizer.*" in include
+    assert "portability" in include
+    assert "portability.*" in include
     assert "registry" in include
     assert "registry.*" in include
     assert "shared" in include

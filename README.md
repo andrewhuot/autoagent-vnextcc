@@ -39,14 +39,14 @@ The CLI, API, and web console all work off the same local workspace state, so yo
 ## Install
 
 ```bash
-git clone https://github.com/andrewhuot/autoagent-vnextcc.git agentlab
+git clone https://github.com/andrewhuot/agentlab.git agentlab
 cd agentlab
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 ```
 
-> **Note:** The repo name (`autoagent-vnextcc`) predates the AgentLab rebrand. The clone target `agentlab` gives you a clean local directory name.
+> **Note:** Older `autoagent-vnextcc` clone URLs currently resolve to the same repository, but `agentlab` is the canonical repo name for new installs.
 
 ### Prerequisites
 
@@ -55,6 +55,7 @@ pip install -e .
 | Python | 3.11+ | CLI, API, eval, and optimization runtime |
 | Node.js | 20+ | Web console dev mode (`./start.sh`, `npm run dev`, `npm run build`) |
 | `gcloud` | optional | CX / Google Cloud integration flows |
+| `google-auth` | optional Python package | Required only for CX commands such as `agentlab cx auth` and `agentlab cx list` |
 
 ### API keys
 

@@ -636,6 +636,27 @@ class TestCxCli:
         assert result.exit_code == 0
         assert "--credentials" in result.output
 
+    def test_cx_auth_reports_auth_errors_without_traceback(self, monkeypatch):
+        from cx_studio.errors import CxAuthError
+        from runner import cli
+        from click.testing import CliRunner
+
+        class FailingAuth:
+            def __init__(self, credentials_path=None):
+                self.credentials_path = credentials_path
+
+            def describe(self):
+                raise CxAuthError("google-auth package not installed")
+
+        monkeypatch.setattr("cx_studio.CxAuth", FailingAuth)
+
+        runner = CliRunner()
+        result = runner.invoke(cli, ["cx", "auth"])
+
+        assert result.exit_code != 0
+        assert "CX authentication failed" in result.output
+        assert "google-auth package not installed" in result.output
+
     def test_cx_import_help(self):
         from runner import cli
         from click.testing import CliRunner

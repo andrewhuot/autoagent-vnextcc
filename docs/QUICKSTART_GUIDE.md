@@ -10,7 +10,7 @@ Get from clone to a working AgentLab workspace in a few minutes.
 ## Install
 
 ```bash
-git clone https://github.com/andrewhuot/autoagent-vnextcc.git agentlab
+git clone https://github.com/andrewhuot/agentlab.git agentlab
 cd agentlab
 python3 -m venv .venv
 source .venv/bin/activate

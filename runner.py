@@ -2249,8 +2249,10 @@ def connect_openai_agents(source_path: str, output_dir: str, name: str | None) -
 
     from adapters import OpenAIAgentsAdapter, create_connected_workspace
 
-    spec = OpenAIAgentsAdapter(source_path).discover()
-    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    resolved_source = _resolve_invocation_input_path(Path(source_path))
+    resolved_output = _resolve_invocation_input_path(Path(output_dir))
+    spec = OpenAIAgentsAdapter(str(resolved_source)).discover()
+    result = create_connected_workspace(spec, output_dir=str(resolved_output), workspace_name=name)
     _print_connect_result(result)
 
 
@@ -2263,8 +2265,10 @@ def connect_anthropic(source_path: str, output_dir: str, name: str | None) -> No
 
     from adapters import AnthropicClaudeAdapter, create_connected_workspace
 
-    spec = AnthropicClaudeAdapter(source_path).discover()
-    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    resolved_source = _resolve_invocation_input_path(Path(source_path))
+    resolved_output = _resolve_invocation_input_path(Path(output_dir))
+    spec = AnthropicClaudeAdapter(str(resolved_source)).discover()
+    result = create_connected_workspace(spec, output_dir=str(resolved_output), workspace_name=name)
     _print_connect_result(result)
 
 
@@ -2277,8 +2281,9 @@ def connect_http(url: str, output_dir: str, name: str | None) -> None:
 
     from adapters import HttpWebhookAdapter, create_connected_workspace
 
+    resolved_output = _resolve_invocation_input_path(Path(output_dir))
     spec = HttpWebhookAdapter(url).discover()
-    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    result = create_connected_workspace(spec, output_dir=str(resolved_output), workspace_name=name)
     _print_connect_result(result)
 
 
@@ -2291,8 +2296,10 @@ def connect_transcript(source_file: str, output_dir: str, name: str | None) -> N
 
     from adapters import TranscriptAdapter, create_connected_workspace
 
-    spec = TranscriptAdapter(source_file).discover()
-    result = create_connected_workspace(spec, output_dir=output_dir, workspace_name=name)
+    resolved_source = _resolve_invocation_input_path(Path(source_file))
+    resolved_output = _resolve_invocation_input_path(Path(output_dir))
+    spec = TranscriptAdapter(str(resolved_source)).discover()
+    result = create_connected_workspace(spec, output_dir=str(resolved_output), workspace_name=name)
     _print_connect_result(result)
 
 
@@ -4852,9 +4859,10 @@ def deploy(
             from optimizer.change_card import ChangeCardStore
             card_store = ChangeCardStore()
             pending = card_store.list_pending(limit=200)
-            for card in pending:
-                card_store.approve(card.card_id)
-            if pending and output_format == "text":
+            if not dry_run:
+                for card in pending:
+                    card_store.approve(card.card_id)
+            if pending and output_format == "text" and not dry_run:
                 click.echo(click.style(f"  Auto-reviewed: {len(pending)} pending card(s)", fg="green"))
         except Exception:
             pass
@@ -6882,12 +6890,24 @@ def review_reject(card_id: str, reason: str) -> None:
 def review_export(card_id: str) -> None:
     """Export a change card as markdown.
 
+    Supports selectors: pending, latest.
+
     Examples:
       agentlab review export abc12345
+      agentlab review export pending
     """
+    from cli.stream2_helpers import is_selector
     from optimizer.change_card import ChangeCardStore
 
     store = ChangeCardStore()
+
+    if is_selector(card_id):
+        cards = store.list_pending(limit=1)
+        if not cards:
+            click.echo(f"No {card_id} change cards found.")
+            raise SystemExit(1)
+        card_id = cards[0].card_id
+
     card = store.get(card_id)
     if card is None:
         click.echo(f"Change card not found: {card_id}")
@@ -8708,11 +8728,13 @@ def quickstart(
         ],
     )
 
+    resolved_target_dir = str(_resolve_invocation_input_path(Path(target_dir)))
+
     # Step 1: Init
     click.echo(click.style("━━━ Step 1/4: Initialize project", fg="cyan", bold=True))
-    ctx.invoke(init_project, template="customer-support", target_dir=target_dir,
+    ctx.invoke(init_project, template="customer-support", target_dir=resolved_target_dir,
                agent_name=agent_name, platform="Google ADK", with_synthetic_data=True)
-    workspace_paths = _workspace_state_paths(target_dir)
+    workspace_paths = _workspace_state_paths(resolved_target_dir)
 
     # Step 2: Run eval baseline
     click.echo(click.style("\n━━━ Step 2/4: Run eval baseline", fg="cyan", bold=True))
@@ -8886,17 +8908,18 @@ def demo_quickstart(
 
     # Init + seed
     click.echo(click.style("▸ Setting up project...", fg="white", bold=True))
+    resolved_target_dir = str(_resolve_invocation_input_path(Path(target_dir)))
     ctx.invoke(
         init_project,
         template="customer-support",
-        target_dir=target_dir,
+        target_dir=resolved_target_dir,
         name=None,
         agent_name="Demo Agent",
         platform="Google ADK",
         with_synthetic_data=True,
         demo=True,
     )
-    workspace_paths = _workspace_state_paths(target_dir)
+    workspace_paths = _workspace_state_paths(resolved_target_dir)
 
     # Single eval
     click.echo(click.style("\n▸ Running evaluation...", fg="white", bold=True))
@@ -9911,9 +9934,13 @@ def cx_auth_cmd(credentials: str | None) -> None:
     """Validate Google Cloud credentials for CX access."""
 
     from cx_studio import CxAuth
+    from cx_studio.errors import CxStudioError
 
     auth = CxAuth(credentials_path=credentials)
-    details = auth.describe()
+    try:
+        details = auth.describe()
+    except CxStudioError as exc:
+        raise click.ClickException(f"CX authentication failed: {exc}") from exc
     click.echo("CX authentication")
     click.echo(f"  Auth type:   {details.get('auth_type') or 'unknown'}")
     click.echo(f"  Project:     {details.get('project_id') or 'unknown'}")
@@ -9935,9 +9962,14 @@ def cx_compat() -> None:
 def cx_list(project: str, location: str, credentials: str | None) -> None:
     """List CX agents in a project."""
     from cx_studio import CxAuth, CxClient
+    from cx_studio.errors import CxStudioError
+
     auth = CxAuth(credentials_path=credentials)
     client = CxClient(auth)
-    agents = client.list_agents(project, location)
+    try:
+        agents = client.list_agents(project, location)
+    except CxStudioError as exc:
+        raise click.ClickException(f"CX agent listing failed: {exc}") from exc
     if not agents:
         click.echo("No agents found.")
         return
@@ -10352,7 +10384,7 @@ def adk_deploy_cmd(path: str, target: str, project: str, region: str) -> None:
 def adk_status_cmd(path: str, json_output: bool = False) -> None:
     """Show ADK agent structure and config summary."""
     from pathlib import Path
-    from adk import parse_agent_directory
+    from adk import AdkParseError, parse_agent_directory
 
     agent_path = Path(path)
     if not agent_path.exists():
@@ -10360,7 +10392,10 @@ def adk_status_cmd(path: str, json_output: bool = False) -> None:
         return
 
     click.echo(f"  Parsing ADK agent at {path}...")
-    tree = parse_agent_directory(agent_path)
+    try:
+        tree = parse_agent_directory(agent_path)
+    except AdkParseError as exc:
+        raise click.ClickException(f"ADK status failed: {exc}") from exc
 
     if json_output:
         data = {

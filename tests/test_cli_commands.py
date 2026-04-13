@@ -89,6 +89,17 @@ class TestCLIStructure:
         result2 = runner.invoke(cli, ["run", "--help"])
         assert result2.exit_code == 0
 
+    def test_adk_status_reports_parse_errors_without_traceback(self, runner, tmp_path):
+        """`adk status` should explain invalid ADK paths without a traceback."""
+        empty_agent_dir = tmp_path / "not-an-adk-agent"
+        empty_agent_dir.mkdir()
+
+        result = runner.invoke(cli, ["adk", "status", str(empty_agent_dir)])
+
+        assert result.exit_code != 0
+        assert "ADK status failed" in result.output
+        assert "agent.py not found" in result.output
+
 
 class TestBrandedBanner:
     """Verify branded banner output on key startup surfaces."""

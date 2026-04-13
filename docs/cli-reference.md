@@ -104,9 +104,9 @@ Useful `eval results` subcommands:
 
 ```bash
 agentlab eval results --run-id eval-123 --failures
-agentlab eval results diff eval-123 --other-run eval-122
+agentlab eval results diff eval-122 eval-123
 agentlab eval results export eval-123 --format markdown
-agentlab eval results annotate eval-123 example_001 --type note --content "Needs human review"
+agentlab eval results annotate example_001 --run-id eval-123 --type note --comment "Needs human review"
 ```
 
 ### `agentlab optimize`
