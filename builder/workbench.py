@@ -442,6 +442,11 @@ def _infer_domain(brief: str) -> str:
             "telecom",
             "wireless",
             "verizon",
+            "phone company",
+            "mobile plan",
+            "phone plan",
+            "cell phone",
+            "invoice",
         ),
     ) or "phone-company" in lowered or "device payment" in lowered or "promo credit" in lowered:
         return "Phone Billing Support"
