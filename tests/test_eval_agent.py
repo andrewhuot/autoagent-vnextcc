@@ -6,9 +6,10 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
+import pytest
 
 import agent
-from agent.eval_agent import ConfiguredEvalAgent, _load_default_config
+from agent.eval_agent import ConfiguredEvalAgent, LiveEvalRequiredError, _load_default_config
 from evals.fixtures.mock_data import mock_agent_response
 from runner import cli
 
@@ -253,3 +254,19 @@ def test_eval_run_require_live_fails_when_provider_falls_back(
     assert result.exit_code != 0
     assert "require live" in result.output.lower() or "live eval required" in result.output.lower()
     assert not (workspace / ".agentlab" / "eval_results_latest.json").exists()
+
+
+def test_configured_eval_agent_per_call_require_live_refuses_mock_fallback() -> None:
+    """A strict live API run should fail one case instead of mutating to mock mode."""
+    failing_agent = ConfiguredEvalAgent(
+        llm_router=FailingRouter(),
+        default_config=_load_default_config(),
+    )
+    strict_config = _load_default_config()
+    strict_config["_eval_require_live"] = True
+
+    with pytest.raises(LiveEvalRequiredError) as exc_info:
+        failing_agent.run("Can you help with my bill?", config=strict_config)
+
+    assert "live eval required" in str(exc_info.value).lower()
+    assert failing_agent.mock_mode is False

@@ -31,6 +31,7 @@ LEGACY_EVAL_MOCK_MESSAGE = (
 )
 LIVE_FALLBACK_MESSAGE_PREFIX = "Eval agent provider failed; falling back to deterministic mock responses."
 LIVE_REQUIRED_MESSAGE_PREFIX = "Live eval required; refusing to fall back to mock mode."
+LIVE_REQUIRED_CONFIG_KEY = "_eval_require_live"
 
 
 class LiveEvalRequiredError(RuntimeError):
@@ -91,10 +92,12 @@ class ConfiguredEvalAgent:
         same interface regardless of whether the result came from a real model
         or the deterministic mock fallback.
         """
+        require_live = self._requires_live_eval(config)
+        allow_mock_fallback = self.allow_mock_fallback and not require_live
         resolved_config = self._resolve_config(config)
         instruction_overrides = self._extract_instruction_overrides(resolved_config)
         if self.mock_mode:
-            if not self.allow_mock_fallback:
+            if not allow_mock_fallback:
                 reason = self.mock_reason or "no live provider was available"
                 raise LiveEvalRequiredError(f"{LIVE_REQUIRED_MESSAGE_PREFIX} {reason}")
             return mock_agent_response(user_message, resolved_config)
@@ -123,7 +126,7 @@ class ConfiguredEvalAgent:
             )
         except Exception as exc:
             # Keep eval loops alive when a live provider is rate-limited or unavailable.
-            if not self.allow_mock_fallback:
+            if not allow_mock_fallback:
                 raise LiveEvalRequiredError(
                     f"{LIVE_REQUIRED_MESSAGE_PREFIX} {type(exc).__name__}: {exc}"
                 ) from exc
@@ -146,7 +149,24 @@ class ConfiguredEvalAgent:
 
     def _resolve_config(self, override: dict[str, Any] | None) -> dict[str, Any]:
         """Return the candidate config used for one eval execution."""
-        return copy.deepcopy(override or self.default_config)
+        sanitized_override = self._strip_internal_eval_options(override)
+        return copy.deepcopy(sanitized_override or self.default_config)
+
+    def _requires_live_eval(self, config: dict[str, Any] | None) -> bool:
+        """Return whether this single eval call must refuse mock fallback."""
+        if not isinstance(config, dict):
+            return False
+        return bool(config.get(LIVE_REQUIRED_CONFIG_KEY))
+
+    def _strip_internal_eval_options(self, config: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Remove private eval runner flags before validating a candidate config."""
+        if not isinstance(config, dict):
+            return config
+        sanitized = copy.deepcopy(config)
+        sanitized.pop(LIVE_REQUIRED_CONFIG_KEY, None)
+        if sanitized:
+            return sanitized
+        return None
 
     def _extract_instruction_overrides(self, config: dict[str, Any]) -> dict[str, Any] | None:
         """Extract per-run XML section overrides from a raw config dictionary.

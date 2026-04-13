@@ -24,6 +24,7 @@ function renderJourney(initialEntry = '/build', element = <Build />) {
         <Routes>
           <Route path="/build" element={element} />
           <Route path="/evals" element={<EvalRouteProbe />} />
+          <Route path="/workbench" element={<WorkbenchRouteProbe />} />
         </Routes>
         <ToastViewport />
       </MemoryRouter>
@@ -38,6 +39,18 @@ function EvalRouteProbe() {
     <div>
       <p>Eval Page</p>
       <p data-testid="eval-cases-path">{state?.evalCasesPath ?? 'no eval cases path'}</p>
+    </div>
+  );
+}
+
+function WorkbenchRouteProbe() {
+  const location = useLocation();
+  const state = location.state as { brief?: string } | null;
+  return (
+    <div>
+      <p>Workbench Page</p>
+      <p data-testid="workbench-search">{location.search}</p>
+      <p data-testid="workbench-brief">{state?.brief ?? 'no workbench brief'}</p>
     </div>
   );
 }
@@ -623,9 +636,10 @@ describe('Build', () => {
     expect(capturedRequestBody.instruction_xml).toEqual(expect.stringContaining('custom-prd-marker'));
   });
 
-  it('saves a generated agent and exposes a continue-to-eval handoff', async () => {
+  it('saves a generated agent and exposes eval and workbench handoffs with the original prompt', async () => {
     const user = userEvent.setup();
     const generatedConfig = mockGeneratedConfig();
+    const sourcePrompt = 'Build a Verizon-like phone-company billing support agent';
     vi.stubGlobal(
       'fetch',
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -664,7 +678,7 @@ describe('Build', () => {
 
     renderJourney();
 
-    await user.type(screen.getByLabelText('Agent description'), 'Build an order support agent');
+    await user.type(screen.getByLabelText('Agent description'), sourcePrompt);
     await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
     await screen.findByRole('heading', { name: 'Conversational Refinement' });
 
@@ -679,6 +693,15 @@ describe('Build', () => {
       '/evals?agent=agent-v002&new=1'
     );
     expect(screen.getAllByText('/tmp/workspace/configs/v002.yaml').length).toBeGreaterThan(0);
+
+    await user.click(screen.getByRole('button', { name: 'Continue to Workbench' }));
+
+    expect(await screen.findByText('Workbench Page')).toBeInTheDocument();
+    expect(screen.getByTestId('workbench-search')).toHaveTextContent(
+      'agent=agent-v002&agentName=Order+Guardian'
+    );
+    expect(screen.getByTestId('workbench-brief')).toHaveTextContent(sourcePrompt);
+    expect(screen.getByTestId('workbench-brief')).not.toHaveTextContent('Continue building Order Guardian');
   });
 
   it('collapses agent details behind a disclosure toggle by default', async () => {

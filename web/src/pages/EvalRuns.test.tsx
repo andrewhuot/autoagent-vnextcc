@@ -152,6 +152,7 @@ describe('EvalRuns', () => {
       {
         config_path: '/workspace/configs/v002.yaml',
         category: undefined,
+        require_live: true,
       },
       expect.any(Object)
     );
@@ -197,6 +198,7 @@ describe('EvalRuns', () => {
         config_path: '/workspace/configs/v002.yaml',
         category: undefined,
         dataset_path: '/workspace/evals/cases/generated_build.yaml',
+        require_live: true,
         split: 'all',
       },
       expect.any(Object)
@@ -243,6 +245,7 @@ describe('EvalRuns', () => {
       {
         config_path: '/workspace/configs/v002.yaml',
         category: undefined,
+        require_live: true,
       },
       expect.any(Object)
     );
@@ -316,6 +319,7 @@ describe('EvalRuns', () => {
       {
         config_path: '/workspace/configs/v002.yaml',
         generated_suite_id: 'suite_accepted_001',
+        require_live: true,
       },
       expect.any(Object)
     );

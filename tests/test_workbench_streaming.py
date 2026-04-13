@@ -173,6 +173,37 @@ async def test_mock_agent_emits_full_event_sequence() -> None:
     assert {"agent", "tool", "eval"}.issubset(categories)
 
 
+@pytest.mark.asyncio
+async def test_mock_agent_uses_phone_billing_domain_for_wireless_bill_briefs() -> None:
+    agent = MockWorkbenchBuilderAgent()
+    request = BuildRequest(
+        project_id="wb-phone-billing",
+        brief=(
+            "Build a Verizon-like phone-company support agent that explains bills, "
+            "monthly plan charges, device payments, taxes, surcharges, one-time fees, "
+            "roaming, credits, and why a wireless bill changed."
+        ),
+        target="portable",
+    )
+
+    events: list[dict] = []
+    async for event in agent.run(request, project={"project_id": "wb-phone-billing"}):
+        events.append(event)
+
+    plan = events[0]["data"]["plan"]
+    artifacts = [event["data"]["artifact"] for event in events if event["event"] == "artifact.updated"]
+    artifact_text = "\n".join(
+        str(artifact.get("name", "")) + "\n" + str(artifact.get("source", ""))
+        for artifact in artifacts
+    )
+
+    assert plan["title"].startswith("Build Phone Billing Support agent")
+    assert "phone_billing_explainer" in artifact_text
+    assert "Phone Billing Support agent" in artifact_text
+    assert "IT Helpdesk" not in artifact_text
+    assert "it_helpdesk" not in artifact_text
+
+
 # ---------------------------------------------------------------------------
 # Integration: SSE endpoint end-to-end
 # ---------------------------------------------------------------------------

@@ -240,7 +240,8 @@ function navigateToEvalWorkflow(
 function navigateToWorkbenchWorkflow(
   navigate: ReturnType<typeof useNavigate>,
   agent: AgentLibraryItem,
-  saved?: BuildSaveResult | null
+  saved?: BuildSaveResult | null,
+  sourceBrief?: string
 ) {
   const configPath = saved?.config_path ?? agent.config_path;
   const params = new URLSearchParams({
@@ -248,7 +249,11 @@ function navigateToWorkbenchWorkflow(
     agentName: agent.name,
     configPath,
   });
-  const brief = `Continue building ${agent.name} from the saved Build config at ${configPath}. Materialize the candidate, produce validation evidence, and prepare it for Eval.`;
+  const trimmedBrief = sourceBrief?.trim();
+  const modelHint = agent.model ? ` Preserve the saved Build model ${agent.model}.` : '';
+  const brief = trimmedBrief
+    ? `${trimmedBrief}\n\nContinue from the saved Build config at ${configPath}.${modelHint} Materialize the candidate, produce validation evidence, and prepare it for Eval.`
+    : `Continue building ${agent.name} from the saved Build config at ${configPath}.${modelHint} Materialize the candidate, produce validation evidence, and prepare it for Eval.`;
   navigate(`/workbench?${params.toString()}`, {
     state: {
       source: 'build',
@@ -427,6 +432,8 @@ export function BuilderChatWorkspace({
     : savedAgent
       ? 'Draft saved. Open Eval Runs with this exact config already selected.'
       : 'Next: save this draft, then open Eval Runs with the same config preselected.';
+  const builderWorkbenchBrief =
+    session?.messages.find((message) => message.role === 'user')?.content ?? composer.trim();
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -964,7 +971,9 @@ export function BuilderChatWorkspace({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                      onClick={() =>
+                        navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, builderWorkbenchBrief)
+                      }
                       className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                     >
                       Continue to Workbench
@@ -1088,6 +1097,7 @@ export function StudioWorkspace({
   const studioEvalHelperText = savedAgent
     ? 'The draft is saved. Generate suites or run evals immediately without reselecting the config.'
     : 'Save this draft first, then choose whether to generate evals or run them immediately from the same config.';
+  const studioWorkbenchBrief = currentMode === 'prompt' ? prompt.trim() : undefined;
 
   useEffect(() => {
     if (!agentConfig || previewComposer.trim()) {
@@ -1872,7 +1882,9 @@ export function StudioWorkspace({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                        onClick={() =>
+                          navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, studioWorkbenchBrief)
+                        }
                         className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                       >
                         Continue to Workbench

@@ -38,11 +38,12 @@ function renderWorkbench(initialEntry: InitialEntry = '/workbench') {
 
 function EvalLocationProbe() {
   const location = useLocation();
-  const state = location.state as { agent?: { name?: string; config_path?: string } } | null;
+  const state = location.state as { agent?: { id?: string; name?: string; config_path?: string } } | null;
   return (
     <div>
       <p>Eval Page</p>
       <p>{location.search}</p>
+      <p>{state?.agent?.id ?? 'No handoff id'}</p>
       <p>{state?.agent?.name ?? 'No handoff agent'}</p>
       <p>{state?.agent?.config_path ?? 'No handoff config'}</p>
     </div>
@@ -355,6 +356,71 @@ describe('AgentWorkbench', () => {
 
   it('starts a fresh Workbench run from a Build handoff instead of reopening the demo project', async () => {
     installMockFetch({
+      planSnapshot: {
+        project_id: 'wb-old',
+        name: 'IT Helpdesk Workbench',
+        target: 'portable',
+        environment: 'draft',
+        version: 3,
+        build_status: 'completed',
+        plan: {
+          id: 'task-old',
+          title: 'Build IT Helpdesk agent',
+          status: 'done',
+          description: '',
+          children: [],
+          artifact_ids: [],
+          log: [],
+          parent_id: null,
+          started_at: null,
+          completed_at: null,
+        },
+        artifacts: [
+          {
+            id: 'art-old',
+            task_id: 'task-old',
+            category: 'agent',
+            name: 'IT Helpdesk Agent — role',
+            summary: 'Old persisted artifact',
+            preview: '# IT Helpdesk Agent\n',
+            source: '# IT Helpdesk Agent\n',
+            language: 'markdown',
+            created_at: '2026-04-11T00:00:00Z',
+            version: 3,
+          },
+        ],
+        model: {
+          project: { name: 'IT Helpdesk Workbench', description: 'Old persisted project' },
+          agents: [
+            {
+              id: 'root',
+              name: 'IT Helpdesk Agent',
+              role: 'Old persisted agent',
+              model: 'gpt-5.4-mini',
+              instructions: 'Old persisted instructions.',
+              sub_agents: [],
+            },
+          ],
+          tools: [],
+          callbacks: [],
+          guardrails: [],
+          eval_suites: [],
+          environments: [{ id: 'draft', name: 'Draft', target: 'portable' }],
+          deployments: [],
+        },
+        exports: { adk: { target: 'adk', files: {} }, cx: { target: 'cx', files: {} } },
+        compatibility: [],
+        messages: [
+          {
+            id: 'old-user',
+            role: 'user',
+            content: 'Build the old IT helpdesk agent.',
+            created_at: '2026-04-11T00:00:00Z',
+            turn_id: 'turn-old',
+          },
+        ],
+        last_brief: 'Build the old IT helpdesk agent.',
+      },
       streamBody:
         'event: plan.ready\ndata: {"project_id":"wb-faq","plan":{"id":"task-root","title":"Build FAQ Concierge","status":"running","description":"","children":[],"artifact_ids":[],"log":[],"parent_id":null,"started_at":null,"completed_at":null}}\n\n',
     });
@@ -394,6 +460,12 @@ describe('AgentWorkbench', () => {
     await waitFor(() => {
       expect(useWorkbenchStore.getState().plan?.title).toBe('Build FAQ Concierge');
     });
+    expect(useWorkbenchStore.getState().messages.map((message) => message.text)).not.toContain(
+      'Build the old IT helpdesk agent.'
+    );
+    expect(useWorkbenchStore.getState().artifacts.map((artifact) => artifact.name)).not.toContain(
+      'IT Helpdesk Agent — role'
+    );
   });
 
   it('opens the review gate from the header when a completed run has handoff state', async () => {
@@ -640,6 +712,7 @@ describe('AgentWorkbench', () => {
         bridge,
         save_result: {
           config_path: '/workspace/configs/v003.yaml',
+          config_version: 3,
           eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
         },
         eval_request: bridge.evaluation.request,
@@ -664,8 +737,10 @@ describe('AgentWorkbench', () => {
       );
     });
     expect(await screen.findByText('Eval Page')).toBeInTheDocument();
+    expect(screen.getByText('agent-v003')).toBeInTheDocument();
     expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
     expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
+    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('agent=agent-v003');
     expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml');
   });
 
