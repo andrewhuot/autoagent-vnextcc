@@ -423,32 +423,38 @@ def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _infer_domain(brief: str) -> str:
     """Infer a short domain label from a plain-English brief."""
     lowered = brief.lower()
-    if _has_word(
-        lowered,
-        (
-            "billing",
-            "bill",
-            "bills",
-            "charge",
-            "charges",
-            "fee",
-            "fees",
-            "surcharge",
-            "surcharges",
-            "tax",
-            "taxes",
-            "autopay",
-            "roaming",
-            "telecom",
-            "wireless",
-            "verizon",
-            "phone company",
-            "mobile plan",
-            "phone plan",
-            "cell phone",
-            "invoice",
-        ),
-    ) or "phone-company" in lowered or "device payment" in lowered or "promo credit" in lowered:
+    if (
+        _has_word(
+            lowered,
+            (
+                "billing",
+                "bill",
+                "bills",
+                "charge",
+                "charges",
+                "fee",
+                "fees",
+                "surcharge",
+                "surcharges",
+                "tax",
+                "taxes",
+                "autopay",
+                "roaming",
+                "telecom",
+                "wireless",
+                "verizon",
+                "carrier",
+                "phone company",
+                "mobile plan",
+                "phone plan",
+                "cell phone",
+                "invoice",
+            ),
+        )
+        or _has_phrase(lowered, ("phone-company", "phone bill", "wireless bill", "monthly bill"))
+        or "device payment" in lowered
+        or "promo credit" in lowered
+    ):
         return "Phone Billing Support"
     if "airline" in lowered or "flight" in lowered or "booking" in lowered:
         return "Airline Support"
@@ -484,6 +490,42 @@ def _has_phrase(text: str, phrases: tuple[str, ...]) -> bool:
     return any(phrase in text for phrase in phrases)
 
 
+def _model_hint_from_brief(brief: str) -> str | None:
+    """Extract an explicit handoff model hint from a Build -> Workbench brief."""
+    match = re.search(r"\bsaved Build model\s+([A-Za-z0-9_.:/+-]+)", brief)
+    if not match:
+        return None
+    model = match.group(1).strip().rstrip(".,;:")
+    return model or None
+
+
+def _default_agent_model_name(brief: str) -> str:
+    """Choose the canonical root model for a new Workbench project.
+
+    WHY: Build may hand off a live Gemini-generated candidate. Workbench should
+    preserve that model when the handoff says so, and otherwise use the active
+    live runtime router instead of stamping every materialized candidate as
+    ``gpt-5.4-mini``.
+    """
+    hinted = _model_hint_from_brief(brief)
+    if hinted:
+        return hinted
+    try:
+        from cli.mode import load_runtime_with_builder_live_preference
+        from optimizer.providers import build_router_from_runtime_config
+
+        runtime = load_runtime_with_builder_live_preference()
+        router = build_router_from_runtime_config(runtime.optimizer)
+        if not getattr(router, "mock_mode", False):
+            for model in getattr(router, "models", []) or []:
+                model_name = str(getattr(model, "model", "") or "").strip()
+                if model_name:
+                    return model_name
+    except Exception:  # noqa: BLE001 - fallback keeps project creation available
+        pass
+    return "gpt-5.4-mini"
+
+
 def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> dict[str, Any]:
     """Build the initial canonical model from a plain-English brief.
 
@@ -492,6 +534,7 @@ def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> 
     """
     domain = _infer_domain(brief)
     agent_name = f"{domain} Agent" if not domain.endswith("Agent") else domain
+    model_name = _default_agent_model_name(brief)
     return {
         "project": {
             "name": f"{domain} Workbench",
@@ -502,7 +545,7 @@ def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> 
                 "id": "root",
                 "name": agent_name,
                 "role": f"Handle {domain.lower()} conversations safely and clearly.",
-                "model": "gpt-5.4-mini",
+                "model": model_name,
                 "instructions": (
                     f"{brief.strip() or 'Help the user with the requested workflow.'}\n\n"
                     "Ask one clarifying question when required details are missing. "

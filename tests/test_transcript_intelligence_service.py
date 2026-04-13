@@ -200,6 +200,35 @@ def test_generate_agent_config_fallback_keeps_saas_faq_prompt_shape_when_live_js
     assert {"answer_product_faq", "escalate_billing_or_security"} <= routing_actions
 
 
+def test_generate_agent_config_fallback_keeps_phone_billing_prompt_in_telecom_domain(tmp_path: Path) -> None:
+    router = _StubLLMRouter(
+        responses=["I would build a helpful phone billing agent, but this is not JSON."],
+        models=[SimpleNamespace(provider="google", model="gemini-2.5-pro")],
+    )
+    service = _service(tmp_path, llm_router=router)
+
+    generated = service.generate_agent_config(
+        "Build a Verizon-like phone-company support agent that explains bills to customers. "
+        "It should help explain monthly plan charges, device payments, taxes, surcharges, one-time fees, "
+        "roaming charges, credits, and common reasons a wireless bill changed."
+    )
+
+    tool_names = {tool["name"] for tool in generated["tools"]}
+    routing_actions = {rule["action"] for rule in generated["routing_rules"]}
+    policy_names = {policy["name"] for policy in generated["policies"]}
+    prompt = generated["system_prompt"].lower()
+
+    assert service.last_generation_used_llm is False
+    assert service.last_generation_failure_reason == "The live provider response was not valid JSON."
+    assert generated["model"] == "gemini-2.5-pro"
+    assert "phone-company billing" in prompt or "wireless billing" in prompt
+    assert "financial services" not in prompt
+    assert "investment" not in prompt
+    assert tool_names >= {"explain_bill_line_item", "lookup_plan_charge_reference", "create_billing_escalation"}
+    assert {"explain_billing_change", "clarify_ambiguous_charge"} <= routing_actions
+    assert {"no_account_fact_fabrication", "safe_billing_escalation"} <= policy_names
+
+
 def test_import_archive_uses_llm_intent_classification_when_real_router_available(tmp_path: Path) -> None:
     router = _StubLLMRouter(
         responses=[

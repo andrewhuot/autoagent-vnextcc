@@ -23,22 +23,47 @@ class PromoteRequest(BaseModel):
 router = APIRouter(prefix="/api/deploy", tags=["deploy"])
 
 
+def _deploy_context(request: Request) -> tuple[Any, Any]:
+    """Return deployer/version manager after refreshing disk-backed versions.
+
+    WHY: Build and Workbench can materialize candidate configs through a
+    separate version manager. Deploy must see those fresh versions before
+    status, canary, promote, or rollback actions.
+    """
+    deployer = request.app.state.deployer
+    vm = request.app.state.version_manager
+    if hasattr(vm, "reload"):
+        vm.reload()
+    deployer.version_manager = vm
+    if hasattr(deployer, "canary_manager"):
+        deployer.canary_manager.version_manager = vm
+    return deployer, vm
+
+
 @router.post("", response_model=DeployResponse, status_code=201)
 async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse:
     """Deploy a config version using the specified strategy."""
-    deployer = request.app.state.deployer
-    vm = request.app.state.version_manager
+    deployer, vm = _deploy_context(request)
 
-    if body.strategy == DeployStrategy.immediate and body.version is not None:
-        # Promote an existing version directly to active
+    if body.version is not None:
+        # Deploy an existing saved version instead of duplicating it.
         try:
-            vm.promote(body.version)
+            if body.strategy == DeployStrategy.immediate:
+                vm.promote(body.version)
+            else:
+                vm.mark_canary(body.version)
         except ValueError as exc:
             raise HTTPException(status_code=404, detail=str(exc))
+        if body.strategy == DeployStrategy.immediate:
+            return DeployResponse(
+                message=f"Promoted v{body.version:03d} to active (immediate)",
+                version=body.version,
+                strategy="immediate",
+            )
         return DeployResponse(
-            message=f"Promoted v{body.version:03d} to active (immediate)",
+            message=f"Deployed v{body.version:03d} as canary",
             version=body.version,
-            strategy="immediate",
+            strategy="canary",
         )
 
     if body.config is not None:
@@ -79,7 +104,7 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
 @router.get("/status", response_model=DeployStatusResponse)
 async def get_deploy_status(request: Request) -> DeployStatusResponse:
     """Get current deployment status including canary info."""
-    deployer = request.app.state.deployer
+    deployer, _vm = _deploy_context(request)
     status = deployer.status()
 
     canary_status: dict[str, Any] | None = None
@@ -109,7 +134,7 @@ async def get_deploy_status(request: Request) -> DeployStatusResponse:
 @router.post("/promote", response_model=DeployResponse)
 async def promote_canary(request: Request, body: PromoteRequest | None = None) -> DeployResponse:
     """Promote the current canary (or a specific version) to active."""
-    vm = request.app.state.version_manager
+    _deployer, vm = _deploy_context(request)
 
     target = body.version if body else None
     if target is None:
@@ -132,7 +157,7 @@ async def promote_canary(request: Request, body: PromoteRequest | None = None) -
 @router.post("/rollback", response_model=DeployResponse)
 async def rollback_canary(request: Request) -> DeployResponse:
     """Rollback the current canary deployment."""
-    vm = request.app.state.version_manager
+    _deployer, vm = _deploy_context(request)
     canary_ver = vm.manifest.get("canary_version")
     if canary_ver is None:
         raise HTTPException(status_code=400, detail="No active canary to rollback")

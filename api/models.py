@@ -49,6 +49,10 @@ class EvalRunRequest(BaseModel):
     config_path: Optional[str] = Field(None, description="Path to config YAML to evaluate; uses default if omitted")
     category: Optional[str] = Field(None, description="Run only a specific category of test cases")
     dataset_path: Optional[str] = Field(None, description="Dataset file (.jsonl/.csv/.yaml/.yml) for eval runs")
+    require_live: bool = Field(
+        False,
+        description="Fail the run instead of falling back to mock responses when live providers error",
+    )
     generated_suite_id: Optional[str] = Field(
         None,
         description="Accepted or generated suite ID to run directly",

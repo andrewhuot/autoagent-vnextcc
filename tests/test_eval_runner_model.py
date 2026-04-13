@@ -51,3 +51,36 @@ def test_eval_runner_attaches_canonical_eval_model_to_scores() -> None:
         for result in score.run_result.per_example_results[0]["grader_results"]
     }
     assert {"quality", "safety", "tool_use_accuracy"} <= grader_ids
+
+
+def test_eval_runner_reports_progress_after_each_case() -> None:
+    """Live API tasks should be able to show case-level eval progress."""
+
+    def agent(message: str, config: dict | None = None) -> dict:
+        del config
+        return {
+            "response": f"Handled {message}",
+            "specialist_used": "support",
+            "safety_violation": False,
+            "latency_ms": 10.0,
+            "token_count": 32,
+            "tool_calls": [],
+        }
+
+    runner = EvalRunner(agent_fn=agent, cache_enabled=False)
+    cases = [
+        LegacyTestCase(
+            id=f"case-{index}",
+            category="progress",
+            user_message=f"Question {index}",
+            expected_specialist="support",
+            expected_behavior="answer",
+            expected_keywords=["Handled"],
+        )
+        for index in range(1, 4)
+    ]
+    updates: list[tuple[int, int]] = []
+
+    runner.run_cases(cases, progress_callback=lambda completed, total: updates.append((completed, total)))
+
+    assert updates == [(1, 3), (2, 3), (3, 3)]

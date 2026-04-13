@@ -403,6 +403,40 @@ def test_template_execute_eval_task_returns_eval_artifact() -> None:
     assert len(cases) >= 2  # airline suite has 3 cases
 
 
+def test_phone_billing_templates_do_not_fall_back_to_it_helpdesk_content() -> None:
+    """Phone-company billing briefs should produce billing-specific templates."""
+    brief = (
+        "Build a Verizon-like phone-company support agent that explains wireless bills, "
+        "monthly plan charges, device payments, taxes, surcharges, one-time fees, "
+        "roaming, credits, and why a monthly bill changed."
+    )
+    domain = "Phone Billing Support"
+
+    role_artifact, _, _ = _template_execute(
+        _make_leaf("Define role and capabilities"), brief, domain, "portable", {}
+    )
+    tool_artifact, tool_operation, _ = _template_execute(
+        _make_leaf("Design tool schemas"), brief, domain, "portable", {}
+    )
+    eval_artifact, _, _ = _template_execute(
+        _make_leaf("Draft test cases"), brief, domain, "portable", {}
+    )
+
+    artifact_text = "\n".join(
+        str(artifact.source)
+        for artifact in (role_artifact, tool_artifact, eval_artifact)
+        if artifact is not None
+    )
+    assert tool_operation is not None
+    assert tool_operation["object"]["name"] == "phone_billing_explainer"
+    assert "device payments" in artifact_text
+    assert "carrier surcharges" in artifact_text or "surcharges" in artifact_text
+    assert "roaming" in artifact_text
+    assert "Diagnose common IT issues" not in artifact_text
+    assert "standard resolution procedures" not in artifact_text
+    assert "IT Helpdesk" not in artifact_text
+
+
 def test_template_execute_unknown_task_returns_note_artifact() -> None:
     leaf = _make_leaf("Do something completely unknown XYZ")
     artifact, operation, log = _template_execute(leaf, "brief", "Agent", "portable", {})

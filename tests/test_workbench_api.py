@@ -51,6 +51,27 @@ def test_plan_returns_structured_operations_without_mutating_canonical_project(t
     assert len(plan_payload["project"]["compatibility"]) >= 1
 
 
+def test_project_creation_preserves_build_handoff_model_hint(tmp_path: Path) -> None:
+    client = _make_client(tmp_path)
+
+    create = client.post(
+        "/api/workbench/projects",
+        json={
+            "brief": (
+                "Build a Verizon-like phone-company support agent that explains wireless bills. "
+                "Continue from the saved Build config at configs/v005.yaml. "
+                "Preserve the saved Build model gemini-2.5-pro."
+            )
+        },
+    )
+
+    assert create.status_code == 201
+    project = create.json()["project"]
+    root_agent = project["model"]["agents"][0]
+    assert root_agent["model"] == "gemini-2.5-pro"
+    assert root_agent["name"] == "Phone Billing Support Agent"
+
+
 def test_apply_mutates_canonical_model_creates_version_and_runs_validation(tmp_path: Path) -> None:
     client = _make_client(tmp_path)
     create = client.post(

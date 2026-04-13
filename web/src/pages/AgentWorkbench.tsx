@@ -102,6 +102,14 @@ function getWorkbenchJourneySummary(input: {
   });
 }
 
+function agentIdFromConfigVersion(configVersion: unknown): string | null {
+  const version = Number(configVersion);
+  if (!Number.isFinite(version) || version <= 0) {
+    return null;
+  }
+  return `agent-v${String(Math.trunc(version)).padStart(3, '0')}`;
+}
+
 export function AgentWorkbench() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -307,12 +315,20 @@ export function AgentWorkbench() {
   );
 
   useEffect(() => {
-    if (!buildHandoff?.brief || buildHandoffStartedRef.current || !hydrated || !projectId || buildStatus !== 'idle') {
+    const activeStatuses: BuildStatus[] = ['queued', 'running', 'reflecting', 'presenting'];
+    if (
+      !buildHandoff?.brief ||
+      buildHandoffStartedRef.current ||
+      !hydrated ||
+      !projectId ||
+      activeStatuses.includes(buildStatus)
+    ) {
       return;
     }
     buildHandoffStartedRef.current = true;
+    reset();
     void handleSubmit(buildHandoff.brief, { startFreshProject: true });
-  }, [buildHandoff?.brief, buildStatus, handleSubmit, hydrated, projectId]);
+  }, [buildHandoff?.brief, buildStatus, handleSubmit, hydrated, projectId, reset]);
 
   // ---------------------------------------------------------------------------
   // Iteration handler — called by IterationControls and ReflectionCard
@@ -395,9 +411,13 @@ export function AgentWorkbench() {
       }
 
       const candidate = materializedBridge.candidate;
+      const materializedAgentId =
+        agentIdFromConfigVersion(payload.save_result?.config_version) ??
+        `workbench-${candidate.project_id}-v${candidate.version}`;
       const params = new URLSearchParams({
         source: 'workbench',
         new: '1',
+        agent: materializedAgentId,
         projectId: candidate.project_id,
         runId: candidate.run_id,
         configPath,
@@ -418,7 +438,7 @@ export function AgentWorkbench() {
           open: 'run',
           workbenchBridge: materializedBridge,
           agent: {
-            id: `workbench-${candidate.project_id}-v${candidate.version}`,
+            id: materializedAgentId,
             name: candidate.agent_name || 'Workbench Agent',
             model: 'workbench',
             created_at: new Date().toISOString(),

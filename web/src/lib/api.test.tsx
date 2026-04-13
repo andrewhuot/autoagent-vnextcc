@@ -7,6 +7,7 @@ import {
   humanizeHttpStatus,
   useApplyCurriculum,
   useCurriculumBatches,
+  useDeploy,
   useGenerateCurriculum,
   useGeneratedSuites,
   useStartEval,
@@ -120,6 +121,19 @@ function ApplyCurriculumHarness() {
           : 'idle'}
       </p>
     </div>
+  );
+}
+
+function DeployHarness() {
+  const deploy = useDeploy();
+
+  return (
+    <button
+      type="button"
+      onClick={() => deploy.mutate({ version: 8, strategy: 'canary' })}
+    >
+      Deploy canary
+    </button>
   );
 }
 
@@ -257,6 +271,30 @@ describe('eval API hooks', () => {
     await user.click(screen.getByRole('button', { name: 'Apply curriculum' }));
 
     expect(await screen.findByText('curriculum_live_001:12')).toBeInTheDocument();
+  });
+
+  it('useDeploy posts the selected version for canary rollout', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.mocked(fetch);
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(
+        { message: 'Deployed v008 as canary', version: 8, strategy: 'canary' },
+        { status: 201 },
+      ),
+    );
+
+    renderWithClient(<DeployHarness />);
+
+    await user.click(screen.getByRole('button', { name: 'Deploy canary' }));
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/deploy',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ version: 8, strategy: 'canary' }),
+      }),
+    );
   });
 });
 

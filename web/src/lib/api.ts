@@ -624,6 +624,7 @@ function mapEvalTask(task: TaskStatusRaw): EvalRun {
     composite_score: percent(result.composite),
     total_cases: result.total_cases || 0,
     passed_cases: result.passed_cases || 0,
+    error: task.error,
     continuity: task.continuity,
   };
 }
@@ -776,6 +777,7 @@ export function useStartEval() {
     {
       config_path?: string;
       category?: string;
+      require_live?: boolean;
       generated_suite_id?: string;
       dataset_path?: string;
       split?: 'train' | 'test' | 'all';
@@ -1569,17 +1571,9 @@ export function useDeploy() {
 
   return useMutation<DeployResponse, ApiRequestError, { version: number; strategy: 'canary' | 'immediate' }>({
     mutationFn: async ({ version, strategy }) => {
-      if (strategy === 'immediate') {
-        return fetchApi('/deploy', {
-          method: 'POST',
-          body: JSON.stringify({ version, strategy: 'immediate' }),
-        });
-      }
-
-      const config = await fetchApi<ConfigShow>(`/config/show/${version}`);
       return fetchApi('/deploy', {
         method: 'POST',
-        body: JSON.stringify({ config: config.config, strategy: 'canary' }),
+        body: JSON.stringify({ version, strategy }),
       });
     },
     onSuccess: () => {

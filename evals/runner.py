@@ -24,6 +24,8 @@ from .scorer import CompositeScore, CompositeScorer, EvalResult
 if TYPE_CHECKING:
     from .results_store import EvalResultsStore
 
+ProgressCallback = Callable[[int, int], None]
+
 
 @dataclass
 class TestCase:
@@ -475,6 +477,7 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run all test cases and return composite score."""
         if dataset_path:
@@ -488,6 +491,7 @@ class EvalRunner:
             dataset_path=dataset_path,
             split=split,
             category=None,
+            progress_callback=progress_callback,
         )
 
     def run_category(
@@ -497,6 +501,7 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run test cases for a specific category only."""
         if dataset_path:
@@ -511,6 +516,7 @@ class EvalRunner:
             dataset_path=dataset_path,
             split=split,
             category=category,
+            progress_callback=progress_callback,
         )
 
     def run_cases(
@@ -520,9 +526,10 @@ class EvalRunner:
         *,
         category: str | None = None,
         split: str | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run an explicit list of test cases and return composite score."""
-        results = [self.evaluate_case(case, config) for case in cases]
+        results = self._evaluate_cases(cases, config, progress_callback=progress_callback)
         score = self.scorer.score(results)
         score.estimated_cost_usd = round((score.total_tokens / 1000.0) * self.token_cost_per_1k, 6)
         self._attach_canonical_eval_artifacts(
@@ -543,6 +550,7 @@ class EvalRunner:
         dataset_path: str | None,
         split: str,
         category: str | None,
+        progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run cases with reproducibility metadata and cache support."""
         config_payload = config or {}
@@ -613,7 +621,7 @@ class EvalRunner:
                 )
                 return score
 
-        results = [self.evaluate_case(case, config) for case in cases]
+        results = self._evaluate_cases(cases, config, progress_callback=progress_callback)
         score = self.scorer.score(results)
         score.estimated_cost_usd = round((score.total_tokens / 1000.0) * self.token_cost_per_1k, 6)
         score.provenance = {
@@ -650,6 +658,22 @@ class EvalRunner:
             category=category,
         )
         return score
+
+    def _evaluate_cases(
+        self,
+        cases: list[TestCase],
+        config: dict | None,
+        *,
+        progress_callback: ProgressCallback | None = None,
+    ) -> list[EvalResult]:
+        """Evaluate cases one by one, reporting live progress after each case."""
+        results: list[EvalResult] = []
+        total = len(cases)
+        for index, case in enumerate(cases, start=1):
+            results.append(self.evaluate_case(case, config))
+            if progress_callback is not None:
+                progress_callback(index, total)
+        return results
 
     def _attach_canonical_eval_artifacts(
         self,

@@ -300,6 +300,86 @@ class TestDeployPromoteEndpoint:
         response = client.post("/api/deploy/promote")
         assert response.status_code == 400
 
+    def test_deploy_status_refreshes_versions_created_after_deployer_start(
+        self,
+        tmp_path: Path,
+        base_config: dict,
+    ) -> None:
+        """Deploy status should include versions materialized by Build/Workbench."""
+        fastapi = pytest.importorskip("fastapi")
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from api.routes.deploy import router
+        from deployer.canary import Deployer
+        from deployer.versioning import ConfigVersionManager
+        from logger.store import ConversationStore
+
+        configs_dir = tmp_path / "configs"
+        store = ConversationStore(str(tmp_path / "conversations.db"))
+        deployer = Deployer(configs_dir=str(configs_dir), store=store)
+        vm = ConfigVersionManager(str(configs_dir))
+        vm.save_version(base_config, scores={"composite": 0.7}, status="candidate")
+
+        app = FastAPI()
+        app.include_router(router)
+        app.state.version_manager = vm
+        app.state.deployer = deployer
+
+        response = TestClient(app).get("/api/deploy/status")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["total_versions"] == 1
+        assert payload["history"][0]["version"] == 1
+
+    def test_deploy_canaries_selected_existing_version_without_duplication(
+        self,
+        tmp_path: Path,
+        base_config: dict,
+    ) -> None:
+        """Deploying a selected saved version should not create a duplicate."""
+        fastapi = pytest.importorskip("fastapi")
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from api.routes.deploy import router
+        from deployer.canary import Deployer
+        from deployer.versioning import ConfigVersionManager
+        from logger.store import ConversationStore
+
+        configs_dir = tmp_path / "configs"
+        store = ConversationStore(str(tmp_path / "conversations.db"))
+        deployer = Deployer(configs_dir=str(configs_dir), store=store)
+        vm = ConfigVersionManager(str(configs_dir))
+        version = vm.save_version(
+            base_config,
+            scores={"composite": 0.7},
+            status="candidate",
+        ).version
+
+        app = FastAPI()
+        app.include_router(router)
+        app.state.version_manager = vm
+        app.state.deployer = deployer
+
+        client = TestClient(app)
+        response = client.post(
+            "/api/deploy",
+            json={"version": version, "strategy": "canary"},
+        )
+
+        assert response.status_code == 201
+        payload = response.json()
+        assert payload["version"] == version
+        assert payload["strategy"] == "canary"
+
+        status_response = client.get("/api/deploy/status")
+        assert status_response.status_code == 200
+        status_payload = status_response.json()
+        assert status_payload["canary_version"] == version
+        assert status_payload["total_versions"] == 1
+        assert [item["version"] for item in status_payload["history"]] == [version]
+        assert status_payload["history"][0]["status"] == "canary"
+
 
 # ---------------------------------------------------------------------------
 # Fix 3: Connect import registers with running server

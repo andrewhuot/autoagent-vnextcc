@@ -755,7 +755,18 @@ def _instructions_system_prompt(brief: str, domain: str) -> str:
 def _default_tool_for_domain(domain: str, brief: str) -> dict[str, Any]:
     """Pick a representative tool name/description for the mock build."""
     lowered = (brief + " " + domain).lower()
-    if "airline" in lowered or "flight" in lowered:
+    if (
+        "phone billing" in lowered
+        or "wireless" in lowered
+        or "phone bill" in lowered
+        or "verizon" in lowered
+        or "roaming" in lowered
+        or "surcharge" in lowered
+    ):
+        name = "phone_billing_explainer"
+        description = "Explain wireless bill line items, plan charges, device payments, fees, roaming, credits, and bill changes."
+        params = ["bill_line_item"]
+    elif "airline" in lowered or "flight" in lowered:
         name = "flight_status_lookup"
         description = "Look up live flight status and disruption details."
         params = ["flight_number"]

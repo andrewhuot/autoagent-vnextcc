@@ -222,6 +222,7 @@ export interface EvalRun {
   composite_score: number;
   total_cases: number;
   passed_cases: number;
+  error?: string | null;
   continuity?: ContinuityState;
 }
 

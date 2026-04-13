@@ -11,6 +11,7 @@ import yaml
 from fastapi import APIRouter, HTTPException, Request
 
 from agent.config.runtime import load_runtime_config
+from agent.eval_agent import LIVE_REQUIRED_CONFIG_KEY
 from evals.auto_generator import AutoEvalGenerator
 from evals.execution_mode import requested_live_mode, resolve_eval_execution_mode
 from evals.runner import TestCase
@@ -99,7 +100,7 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
     eval_runner = request.app.state.eval_runner
     event_log = getattr(request.app.state, "event_log", None)
     runtime = getattr(request.app.state, "runtime_config", load_runtime_config())
-    requested_live = requested_live_mode(runtime)
+    requested_live = requested_live_mode(runtime, require_live=body.require_live)
 
     config: dict | None = None
     if body.config_path:
@@ -146,16 +147,30 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
             if not category or case.get("category") == category
         ]
 
+    eval_config = dict(config or {})
+    if body.require_live:
+        eval_config[LIVE_REQUIRED_CONFIG_KEY] = True
+    runner_config = eval_config or None
+
     def run_eval(task: Task) -> dict:
         import asyncio
 
         task.progress = 10
+
+        def report_case_progress(completed: int, total: int) -> None:
+            if total <= 0:
+                return
+            progress = min(90, 10 + int((completed / total) * 80))
+            task.progress = progress
+            task_manager.update_task(task.task_id, progress=progress)
+
         if generated_cases is not None:
             score = eval_runner.run_cases(
                 generated_cases,
-                config=config,
+                config=runner_config,
                 category=category,
                 split=split,
+                progress_callback=report_case_progress,
             )
             score.provenance = {
                 "dataset_path": f"generated_suite:{generated_suite_id}",
@@ -164,9 +179,20 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
                 "source_kind": generated_suite.source_kind if generated_suite is not None else "generated",
             }
         elif category:
-            score = eval_runner.run_category(category, config=config, dataset_path=dataset_path, split=split)
+            score = eval_runner.run_category(
+                category,
+                config=runner_config,
+                dataset_path=dataset_path,
+                split=split,
+                progress_callback=report_case_progress,
+            )
         else:
-            score = eval_runner.run(config=config, dataset_path=dataset_path, split=split)
+            score = eval_runner.run(
+                config=runner_config,
+                dataset_path=dataset_path,
+                split=split,
+                progress_callback=report_case_progress,
+            )
         task.progress = 90
 
         result = _score_to_response(task.task_id, score, datetime.now(timezone.utc))
@@ -176,7 +202,11 @@ async def start_eval_run(body: EvalRunRequest, request: Request) -> EvalRunRespo
             eval_agent=getattr(eval_runner, "eval_agent", None),
         )
         if result["mode"] == "mixed":
-            for warning in list(getattr(eval_runner, "mock_mode_messages", []) or []):
+            live_fallback_warnings = list(getattr(eval_runner, "mock_mode_messages", []) or [])
+            live_fallback_warnings.extend(
+                list(getattr(getattr(eval_runner, "eval_agent", None), "mock_mode_messages", []) or [])
+            )
+            for warning in live_fallback_warnings:
                 if warning not in result["warnings"]:
                     result["warnings"].append(warning)
                 LOG.warning("api.eval_run.live_fallback_to_mock: %s", warning)

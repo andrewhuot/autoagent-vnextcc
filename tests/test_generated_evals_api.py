@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -196,6 +197,58 @@ def test_generate_review_edit_accept_and_run_flow(tmp_path: Path) -> None:
     assert result_payload["run_id"]
     assert result_payload["total_cases"] >= 1
     assert result_payload["passed_cases"] >= 1
+
+
+def test_eval_run_require_live_marks_config_for_strict_provider_execution(tmp_path: Path) -> None:
+    """API live-only runs should pass a strict flag into the eval agent call."""
+
+    seen_configs: list[dict | None] = []
+
+    def recording_agent(message: str, config: dict | None = None) -> dict:  # noqa: ARG001
+        seen_configs.append(config)
+        return {
+            "response": "I can explain that phone bill charge clearly.",
+            "specialist_used": "support",
+            "safety_violation": False,
+            "latency_ms": 55.0,
+            "token_count": 120,
+            "tool_calls": [],
+        }
+
+    dataset_path = tmp_path / "strict-live-cases.yaml"
+    dataset_path.write_text(
+        """
+cases:
+  - id: live_001
+    category: generated_build
+    user_message: Why is there a device payment on my bill?
+    expected_specialist: support
+    expected_behavior: answer
+    expected_keywords:
+      - bill
+""".strip(),
+        encoding="utf-8",
+    )
+
+    app = _make_app(tmp_path)
+    app.state.runtime_config = SimpleNamespace(optimizer=SimpleNamespace(use_mock=False))
+    app.state.eval_runner = EvalRunner(
+        agent_fn=recording_agent,
+        history_db_path=str(tmp_path / "strict_eval_history.db"),
+        cache_enabled=False,
+    )
+    client = TestClient(app)
+
+    run_response = client.post(
+        "/api/eval/run",
+        json={"dataset_path": str(dataset_path), "require_live": True},
+    )
+    assert run_response.status_code == 202
+    task = _wait_for_task(client, run_response.json()["task_id"])
+
+    assert task["status"] == "completed"
+    assert seen_configs
+    assert seen_configs[0]["_eval_require_live"] is True
 
 
 def test_legacy_eval_generation_routes_share_generated_suite_store(tmp_path: Path) -> None:

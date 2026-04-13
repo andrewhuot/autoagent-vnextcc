@@ -110,11 +110,13 @@ class TestRequestModels:
         req = EvalRunRequest()
         assert req.config_path is None
         assert req.category is None
+        assert req.require_live is False
 
     def test_eval_run_request_with_values(self):
-        req = EvalRunRequest(config_path="configs/v001.yaml", category="safety")
+        req = EvalRunRequest(config_path="configs/v001.yaml", category="safety", require_live=True)
         assert req.config_path == "configs/v001.yaml"
         assert req.category == "safety"
+        assert req.require_live is True
 
     def test_optimize_request_defaults(self):
         req = OptimizeRequest()

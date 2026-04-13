@@ -103,14 +103,19 @@ export function EvalRuns() {
   const isAgentImproverHandoff =
     navigationState?.source === 'agent-improver' || searchParams.get('from') === 'agent-improver';
   const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
-  const latestCompletedRunId = useMemo(() => {
-    const completedRun = (runs || []).find((run) => run.status === 'completed');
+  const latestCompletedRunIdForActiveAgent = useMemo(() => {
+    if (!activeAgent) {
+      return null;
+    }
+    const completedRun = (runs || []).find(
+      (run) => run.status === 'completed' && runAgents[run.run_id]?.id === activeAgent.id
+    );
     return completedRun?.run_id ?? null;
-  }, [runs]);
+  }, [activeAgent, runAgents, runs]);
   const journeySummary = getEvalJourneySummary({
     activeAgent,
-    completedAgent: completedAgent ?? (activeAgent && latestCompletedRunId ? activeAgent : null),
-    completedRunId: completedRunId ?? latestCompletedRunId,
+    completedAgent: completedAgent ?? (activeAgent && latestCompletedRunIdForActiveAgent ? activeAgent : null),
+    completedRunId: completedRunId ?? latestCompletedRunIdForActiveAgent,
   });
 
   useEffect(() => {
@@ -204,11 +209,13 @@ export function EvalRuns() {
       category?: string;
       generated_suite_id?: string;
       dataset_path?: string;
+      require_live?: boolean;
       split?: 'train' | 'test' | 'all';
     } = {
       config_path: activeAgent.config_path,
       category: options?.generatedSuiteId ? undefined : category.trim() || undefined,
       generated_suite_id: options?.generatedSuiteId,
+      require_live: shouldRequireLiveEval(activeAgent),
     };
     if (!options?.generatedSuiteId && buildEvalCasesPath) {
       request.dataset_path = buildEvalCasesPath;
@@ -735,14 +742,20 @@ export function EvalRuns() {
               <p className="mt-2 text-xs text-gray-600">Optional label for grouping runs later in Compare and Results Explorer.</p>
             </div>
 
-            <div className="flex items-end">
+            <div className="flex flex-col items-stretch gap-2">
               <button
                 onClick={() => handleStartEval()}
                 disabled={startEval.isPending || !activeAgent}
                 className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+                title={!activeAgent ? 'Select an agent from the library above to enable this button' : undefined}
               >
                 {startEval.isPending ? 'Starting...' : isFirstRunJourney ? 'Run First Eval' : 'Start Eval'}
               </button>
+              {!activeAgent && !startEval.isPending && (
+                <p className="text-center text-xs text-amber-600">
+                  Select an agent from the Agent Library above to start an eval.
+                </p>
+              )}
             </div>
           </div>
         </section>
@@ -820,6 +833,9 @@ export function EvalRuns() {
                           <p className="text-xs text-gray-500">Progress: {run.progress}%</p>
                         )}
                         <div className="max-w-xs space-y-1">
+                          {run.status === 'failed' && run.error ? (
+                            <p className="text-xs leading-5 text-red-700">{firstErrorLine(run.error)}</p>
+                          ) : null}
                           <p className={classNames('text-xs font-semibold', continuityToneClass(continuity.state))}>
                             {continuity.label}
                           </p>
@@ -870,6 +886,15 @@ export function EvalRuns() {
       ) : null}
     </div>
   );
+}
+
+function shouldRequireLiveEval(agent: AgentLibraryItem): boolean {
+  const model = agent.model.trim().toLowerCase();
+  return Boolean(model) && !model.includes('mock');
+}
+
+function firstErrorLine(error: string): string {
+  return error.split('\n').find((line) => line.trim())?.trim() || error;
 }
 
 function summarizeEvalRunContinuity(runs: EvalRun[]) {

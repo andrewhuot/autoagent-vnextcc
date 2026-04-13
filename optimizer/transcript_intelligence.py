@@ -454,6 +454,26 @@ class TranscriptIntelligenceService:
         # --- domain detection (scored matcher) ---
         # Score each domain by keyword hits; ties break by list order (priority).
         _domain_keywords: list[tuple[str, tuple[str, ...]]] = [
+            ("telecom_billing", (
+                "verizon",
+                "phone-company",
+                "phone company",
+                "wireless",
+                "mobile carrier",
+                "carrier",
+                "phone bill",
+                "wireless bill",
+                "monthly bill",
+                "plan charge",
+                "plan charges",
+                "device payment",
+                "device payments",
+                "surcharge",
+                "surcharges",
+                "roaming",
+                "one-time fee",
+                "one-time fees",
+            )),
             ("customer_service", ("customer service", "customer support", "support", "help desk", "helpdesk", "faq", "knowledge base")),
             ("product_review", (
                 "prd",
@@ -495,6 +515,8 @@ class TranscriptIntelligenceService:
             agent_name = "PRD Review Agent"
         elif domain == "saas_support":
             agent_name = "SaaS FAQ Support Agent"
+        elif domain == "telecom_billing":
+            agent_name = "PhoneBillingSupportAgent"
         else:
             agent_name = "".join(agent_name_words) + "Agent" if agent_name_words else "AgentLab"
 
@@ -535,6 +557,18 @@ class TranscriptIntelligenceService:
                 "All advice is informational only and does not constitute financial advice. "
                 "Direct customers to a certified financial advisor for investment decisions.\n\n"
                 "Flag and escalate any suspected fraudulent activity immediately."
+            ),
+            "telecom_billing": (
+                "You are a phone-company billing support agent. You help wireless customers understand "
+                "monthly bills, plan charges, device payments, taxes, surcharges, one-time fees, roaming, "
+                "credits, and common reasons a bill changed.\n\n"
+                "Do not invent account-specific facts. Explain likely causes in plain language, then ask "
+                "for the exact line item, billing period, plan name, device payment, or promotion details "
+                "needed to verify the answer. When the issue requires actual account data, direct the "
+                "customer to the carrier portal or a human billing specialist.\n\n"
+                "Stay calm and practical. Separate recurring monthly charges from one-time charges, and "
+                "make taxes, government fees, carrier surcharges, credits, and prorated plan changes easy "
+                "to understand."
             ),
             "ecommerce": (
                 "You are an e-commerce support agent. You assist customers with order tracking, "
@@ -664,6 +698,23 @@ class TranscriptIntelligenceService:
                     "parameters": {"account_id": "string", "reason": "string"},
                 },
             ],
+            "telecom_billing": [
+                {
+                    "name": "explain_bill_line_item",
+                    "description": "Explain a wireless bill line item such as a plan charge, device payment, tax, surcharge, one-time fee, roaming charge, or credit.",
+                    "parameters": {"line_item": "string", "billing_period": "string | null", "plan_name": "string | null"},
+                },
+                {
+                    "name": "lookup_plan_charge_reference",
+                    "description": "Look up approved reference guidance for common wireless plan charges, device payments, fees, taxes, and carrier surcharges.",
+                    "parameters": {"charge_type": "string", "plan_name": "string | null"},
+                },
+                {
+                    "name": "create_billing_escalation",
+                    "description": "Create a billing-specialist handoff when exact account data or disputed charges need human review.",
+                    "parameters": {"reason": "string", "context_summary": "string", "priority": "low|medium|high"},
+                },
+            ],
             "ecommerce": [
                 {
                     "name": "lookup_order",
@@ -777,6 +828,12 @@ class TranscriptIntelligenceService:
                 {"condition": "transaction_amount > 10000", "action": "require_additional_approval", "priority": 3},
                 {"condition": "default", "action": "self_service_banking", "priority": 99},
             ],
+            "telecom_billing": [
+                {"condition": "line_item_is_ambiguous == true", "action": "clarify_ambiguous_charge", "priority": 1},
+                {"condition": "request_requires_account_specific_data == true", "action": "create_billing_escalation", "priority": 2},
+                {"condition": "bill_changed_since_last_cycle == true", "action": "explain_billing_change", "priority": 3},
+                {"condition": "default", "action": "explain_bill_line_item", "priority": 99},
+            ],
             "ecommerce": [
                 {"condition": "order_value > 500 and issue_type == 'dispute'", "action": "escalate_to_human", "priority": 1},
                 {"condition": "order_status == 'delivered' and return_window_expired == true", "action": "apply_goodwill_policy", "priority": 2},
@@ -832,6 +889,11 @@ class TranscriptIntelligenceService:
                 {"name": "no_investment_advice", "description": "Do not provide investment recommendations without required licensing disclosures.", "enforcement": "hard_block"},
                 {"name": "transaction_limits", "description": "Enforce per-session transaction limits as defined by compliance policy.", "enforcement": "required"},
             ],
+            "telecom_billing": [
+                {"name": "no_account_fact_fabrication", "description": "Never invent account-specific balances, promotions, credits, or bill amounts.", "enforcement": "hard_block"},
+                {"name": "identity_safe_billing_guidance", "description": "Explain billing concepts without exposing or requesting unnecessary sensitive account data.", "enforcement": "hard_block"},
+                {"name": "safe_billing_escalation", "description": "Escalate disputed charges, exact account lookups, and unresolved promotion questions with full context.", "enforcement": "required"},
+            ],
             "ecommerce": [
                 {"name": "return_policy_adherence", "description": "Follow the published return policy; escalate exceptions for manager approval.", "enforcement": "required"},
                 {"name": "no_unauthorized_refunds", "description": "Refunds must meet policy criteria and be logged for audit.", "enforcement": "hard_block"},
@@ -881,6 +943,12 @@ class TranscriptIntelligenceService:
                 {"name": "fraud_detection_rate", "weight": 0.40, "description": "Percentage of flagged fraudulent transactions correctly identified."},
                 {"name": "authentication_pass_rate", "weight": 0.30, "description": "Rate at which legitimate users successfully complete MFA without friction."},
                 {"name": "regulatory_compliance", "weight": 0.30, "description": "Adherence to applicable financial regulations and disclosure requirements."},
+            ],
+            "telecom_billing": [
+                {"name": "bill_explanation_accuracy", "weight": 0.35, "description": "Explains plan charges, device payments, taxes, surcharges, fees, roaming, and credits accurately."},
+                {"name": "clarification_quality", "weight": 0.25, "description": "Asks for the right line item, billing period, or plan details before answering ambiguous billing questions."},
+                {"name": "no_account_fact_fabrication", "weight": 0.25, "description": "Avoids invented account-specific facts and directs customers to verified account channels when needed."},
+                {"name": "calm_plain_language", "weight": 0.15, "description": "Keeps explanations calm, practical, and easy for customers to follow."},
             ],
             "ecommerce": [
                 {"name": "order_resolution_rate", "weight": 0.35, "description": "Percentage of order-related issues resolved in a single interaction."},

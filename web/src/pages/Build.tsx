@@ -240,7 +240,8 @@ function navigateToEvalWorkflow(
 function navigateToWorkbenchWorkflow(
   navigate: ReturnType<typeof useNavigate>,
   agent: AgentLibraryItem,
-  saved?: BuildSaveResult | null
+  saved?: BuildSaveResult | null,
+  sourceBrief?: string
 ) {
   const configPath = saved?.config_path ?? agent.config_path;
   const params = new URLSearchParams({
@@ -248,7 +249,11 @@ function navigateToWorkbenchWorkflow(
     agentName: agent.name,
     configPath,
   });
-  const brief = `Continue building ${agent.name} from the saved Build config at ${configPath}. Materialize the candidate, produce validation evidence, and prepare it for Eval.`;
+  const trimmedBrief = sourceBrief?.trim();
+  const modelHint = agent.model ? ` Preserve the saved Build model ${agent.model}.` : '';
+  const brief = trimmedBrief
+    ? `${trimmedBrief}\n\nContinue from the saved Build config at ${configPath}.${modelHint} Materialize the candidate, produce validation evidence, and prepare it for Eval.`
+    : `Continue building ${agent.name} from the saved Build config at ${configPath}.${modelHint} Materialize the candidate, produce validation evidence, and prepare it for Eval.`;
   navigate(`/workbench?${params.toString()}`, {
     state: {
       source: 'build',
@@ -427,6 +432,8 @@ export function BuilderChatWorkspace({
     : savedAgent
       ? 'Draft saved. Open Eval Runs with this exact config already selected.'
       : 'Next: save this draft, then open Eval Runs with the same config preselected.';
+  const builderWorkbenchBrief =
+    session?.messages.find((message) => message.role === 'user')?.content ?? composer.trim();
 
   async function submitMessage(message: string) {
     const trimmed = message.trim();
@@ -891,6 +898,17 @@ export function BuilderChatWorkspace({
               </div>
             </div>
 
+            {saveResult && savedAgent ? (
+              <BuildSaveSuccessBanner
+                className="mt-4"
+                configPath={saveResult.config_path}
+                onContinueToWorkbench={() =>
+                  navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, builderWorkbenchBrief)
+                }
+                onContinueToEval={() => navigateToEvalWorkflow(navigate, savedAgent, 'run', saveResult.eval_cases_path)}
+              />
+            ) : null}
+
             {session?.config ? (
               <DraftInsightsPanel
                 testId="builder-draft-insights"
@@ -948,7 +966,7 @@ export function BuilderChatWorkspace({
                   type="button"
                   onClick={() => void handleSave()}
                   disabled={!builderHasDraft || busy}
-                  className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <FolderOpen className="h-4 w-4" />
                   {savePending ? 'Saving...' : 'Save to Workspace'}
@@ -964,7 +982,9 @@ export function BuilderChatWorkspace({
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button
                       type="button"
-                      onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                      onClick={() =>
+                        navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, builderWorkbenchBrief)
+                      }
                       className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                     >
                       Continue to Workbench
@@ -1088,6 +1108,7 @@ export function StudioWorkspace({
   const studioEvalHelperText = savedAgent
     ? 'The draft is saved. Generate suites or run evals immediately without reselecting the config.'
     : 'Save this draft first, then choose whether to generate evals or run them immediately from the same config.';
+  const studioWorkbenchBrief = currentMode === 'prompt' ? prompt.trim() : undefined;
 
   useEffect(() => {
     if (!agentConfig || previewComposer.trim()) {
@@ -1825,6 +1846,17 @@ export function StudioWorkspace({
                 </div>
               </div>
 
+              {saveResult && savedAgent ? (
+                <BuildSaveSuccessBanner
+                  className="mt-4"
+                  configPath={saveResult.config_path}
+                  onContinueToWorkbench={() =>
+                    navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, studioWorkbenchBrief)
+                  }
+                  onContinueToEval={() => navigateToEvalWorkflow(navigate, savedAgent, 'run', saveResult.eval_cases_path)}
+                />
+              ) : null}
+
               <DraftInsightsPanel
                 testId="studio-draft-insights"
                 summary={summarizeGeneratedConfig(agentConfig)}
@@ -1856,7 +1888,7 @@ export function StudioWorkspace({
                     type="button"
                     onClick={() => void handleSaveToWorkspace()}
                     disabled={!agentConfig || refinementBusy}
-                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <FolderOpen className="h-4 w-4" />
                     {savePending ? 'Saving...' : 'Save to Workspace'}
@@ -1872,7 +1904,9 @@ export function StudioWorkspace({
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button
                         type="button"
-                        onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                        onClick={() =>
+                          navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult, studioWorkbenchBrief)
+                        }
                         className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
                       >
                         Continue to Workbench
@@ -2416,6 +2450,49 @@ function PreviewResultCard({
       {result.mock_mode && result.mock_reasons.length > 0 ? (
         <RecoveryCallout className="mt-3" detail={result.mock_reasons.join(' ')} />
       ) : null}
+    </div>
+  );
+}
+
+function BuildSaveSuccessBanner({
+  className,
+  configPath,
+  onContinueToWorkbench,
+  onContinueToEval,
+}: {
+  className?: string;
+  configPath: string;
+  onContinueToWorkbench: () => void;
+  onContinueToEval: () => void;
+}) {
+  return (
+    <div
+      role="region"
+      aria-label="Saved workspace next steps"
+      className={classNames('rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4', className)}
+    >
+      <p className="text-sm font-semibold text-emerald-800">
+        Saved to workspace. Ready for the next step.
+      </p>
+      <p className="mt-1 text-xs text-emerald-700">{configPath}</p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={onContinueToWorkbench}
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+        >
+          Continue to Workbench
+          <ArrowRight className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={onContinueToEval}
+          className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+        >
+          Continue to Eval
+          <ArrowRight className="h-4 w-4" />
+        </button>
+      </div>
     </div>
   );
 }
