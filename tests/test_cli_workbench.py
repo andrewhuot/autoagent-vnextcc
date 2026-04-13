@@ -14,9 +14,10 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
-from builder.workbench import WorkbenchService, WorkbenchStore
+from builder.workbench import WorkbenchService, WorkbenchStore, _infer_domain
 from cli.workbench import workbench_group
 from cli.workspace import AgentLabWorkspace
+from evals import EvalRunner
 from runner import cli
 
 
@@ -77,6 +78,18 @@ def _make_service(root: Path) -> WorkbenchService:
 # ---------------------------------------------------------------------------
 # Codex lifecycle tests — validate authoritative save/handoff semantics
 # ---------------------------------------------------------------------------
+
+
+class TestWorkbenchDomainInference:
+    """Regression coverage for prompt-domain detection used by Workbench."""
+
+    def test_phone_billing_prompt_does_not_match_it_pronoun(self) -> None:
+        brief = (
+            "Build a Verizon-like phone-company support agent. It should explain bills, "
+            "plan charges, fees, surcharges, promo credits, and roaming confusion."
+        )
+
+        assert _infer_domain(brief) == "Phone Billing Support"
 
 
 class TestWorkbenchBuildLifecycle:
@@ -141,6 +154,8 @@ class TestWorkbenchShowLifecycle:
 
             assert result.exit_code == 0, result.output
             assert "AgentLab Workbench" in result.output
+            assert "Execution:" in result.output
+            assert "mock" in result.output
             assert "Save candidate before Eval" in result.output
             assert "Eval candidate not ready" in result.output
             assert "agentlab workbench save" in result.output
@@ -177,15 +192,92 @@ class TestWorkbenchSaveLifecycle:
             save_result = data["save_result"]
             assert Path(save_result["config_path"]).exists()
             assert Path(save_result["eval_cases_path"]).exists()
+            generated_cases = yaml.safe_load(Path(save_result["eval_cases_path"]).read_text(encoding="utf-8"))
+            assert isinstance(generated_cases, dict)
+            assert isinstance(generated_cases["cases"], list)
+            assert generated_cases["cases"]
+            assert any("airline support" in case["user_message"].lower() for case in generated_cases["cases"])
+            loaded_cases = EvalRunner(cases_dir=str(Path("evals") / "cases")).load_cases()
+            assert any("airline support" in case.user_message.lower() for case in loaded_cases)
             assert data["bridge"]["evaluation"]["readiness_state"] == "ready_for_eval"
             assert data["bridge"]["optimization"]["readiness_state"] == "awaiting_eval_run"
             assert data["eval_request"]["config_path"] == save_result["config_path"]
             assert data["optimize_request_template"]["eval_run_id"] is None
+            saved_config = yaml.safe_load(Path(save_result["config_path"]).read_text(encoding="utf-8"))
+            assert saved_config["journey_build"]["source_prompt"] == (
+                "Build an airline support agent with flight status tools."
+            )
 
             refreshed = AgentLabWorkspace(root=workspace.root, metadata=workspace.metadata)
             active = refreshed.resolve_active_config()
             assert active is not None
             assert str(active.path) == save_result["config_path"]
+
+            bridge = runner.invoke(
+                cli,
+                ["workbench", "bridge", "--eval-run-id", "eval-run-123", "--json"],
+            )
+            assert bridge.exit_code == 0, bridge.output
+            bridge_payload = _json_payload(bridge.output)
+            bridge_data = bridge_payload["data"]
+            assert bridge_payload["next"] == "agentlab optimize --cycles 3"
+            assert bridge_data["candidate"]["config_path"] == save_result["config_path"]
+            assert bridge_data["candidate"]["eval_cases_path"] == save_result["eval_cases_path"]
+            assert bridge_data["evaluation"]["readiness_state"] == "ready_for_eval"
+            assert bridge_data["optimization"]["readiness_state"] == "ready_for_optimize"
+            assert bridge_data["optimization"]["request_template"]["eval_run_id"] == "eval-run-123"
+
+    def test_workbench_save_preserves_billing_routing_and_eval_cases(
+        self, runner: CliRunner,
+    ) -> None:
+        with runner.isolated_filesystem():
+            _seed_workspace(Path.cwd())
+            prompt = (
+                "Build a Verizon-like phone-company support agent. It should explain bills, "
+                "plan charges, activation fees, surcharges, taxes, device payments, promo "
+                "credits, roaming, and autopay discounts."
+            )
+            build = runner.invoke(
+                cli,
+                [
+                    "workbench",
+                    "build",
+                    prompt,
+                    "--mock",
+                    "--max-iterations",
+                    "1",
+                    "--json",
+                ],
+            )
+            assert build.exit_code == 0, build.output
+
+            result = runner.invoke(cli, ["workbench", "save", "--json"])
+
+            assert result.exit_code == 0, result.output
+            payload = _json_payload(result.output)
+            save_result = payload["data"]["save_result"]
+            saved_config = yaml.safe_load(Path(save_result["config_path"]).read_text(encoding="utf-8"))
+            support_rule = next(
+                rule for rule in saved_config["routing"]["rules"] if rule["specialist"] == "support"
+            )
+            orders_rule = next(
+                rule for rule in saved_config["routing"]["rules"] if rule["specialist"] == "orders"
+            )
+            support_keywords = set(support_rule["keywords"])
+            orders_keywords = set(orders_rule["keywords"])
+
+            assert saved_config["journey_build"]["source_prompt"] == prompt
+            assert saved_config["tools"]["faq"]["enabled"] is True
+            assert "billing" in support_keywords
+            assert "autopay" in support_keywords
+            assert "billing" not in orders_keywords
+            assert "charges" not in orders_keywords
+
+            generated_cases = yaml.safe_load(Path(save_result["eval_cases_path"]).read_text(encoding="utf-8"))
+            messages = " ".join(case["user_message"].lower() for case in generated_cases["cases"])
+            assert "bills" in messages
+            assert "promo credit" in messages
+            assert any(case.get("safety_probe") for case in generated_cases["cases"])
 
 
 class TestWorkbenchIterateLifecycle:

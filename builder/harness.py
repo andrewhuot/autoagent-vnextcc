@@ -386,7 +386,7 @@ class HarnessExecutionEngine:
             await self._tick()
 
             # Generate content — try LLM first, fall back to template engine
-            artifact, operation, log_line = await self._generate_step(
+            artifact, operation, log_line, generation_source = await self._generate_step(
                 leaf=leaf,
                 brief=brief,
                 domain=domain,
@@ -424,7 +424,11 @@ class HarnessExecutionEngine:
             completed_ops = [operation] if operation is not None else []
             yield {
                 "event": "task.completed",
-                "data": {"task_id": leaf.id, "operations": completed_ops},
+                "data": {
+                    "task_id": leaf.id,
+                    "operations": completed_ops,
+                    "source": generation_source,
+                },
             }
             await self._tick(0.04)
 
@@ -637,11 +641,12 @@ class HarnessExecutionEngine:
         target: str,
         working_model: dict[str, Any],
         step_index: int,
-    ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str]]:
+    ) -> tuple[Optional[WorkbenchArtifact], Optional[dict[str, Any]], Optional[str], str]:
         """Generate content for one leaf task.
 
         Tries the LLM router (if available), then falls back to template
         generation. Never raises — errors return the template-based fallback.
+        Returns a 4-tuple where the last item is ``"llm"`` or ``"template"``.
         """
         if self._router is not None:
             try:
@@ -653,12 +658,12 @@ class HarnessExecutionEngine:
                     working_model=working_model,
                 )
                 if result is not None:
-                    return result
+                    return (*result, "llm")
             except Exception:  # noqa: BLE001
                 pass  # Fall through to template generation
 
         # Template-based generation — richer than raw _fake_execute
-        return _template_execute(leaf, brief, domain, target, working_model)
+        return (*_template_execute(leaf, brief, domain, target, working_model), "template")
 
     async def _try_llm_step(
         self,
@@ -1408,6 +1413,38 @@ def _persist_checkpoint(
 # Domain-aware content generation corpus
 # ---------------------------------------------------------------------------
 
+def _is_phone_billing_domain(lowered: str) -> bool:
+    """Return true for telecom billing briefs without needing account data."""
+    hints = (
+        "billing",
+        "bill",
+        "bills",
+        "charge",
+        "charges",
+        "fee",
+        "fees",
+        "surcharge",
+        "surcharges",
+        "autopay",
+        "roaming",
+        "telecom",
+        "wireless",
+        "verizon",
+        "device payment",
+        "promo credit",
+        "phone-company",
+    )
+    return any(hint in lowered for hint in hints)
+
+
+def _is_it_helpdesk_domain(lowered: str) -> bool:
+    """Return true for explicit IT-support briefs, avoiding the pronoun 'it'."""
+    return any(
+        hint in lowered
+        for hint in ("it helpdesk", "it support", "information technology", "vpn", "password")
+    )
+
+
 def _domain_agent_name(domain: str) -> str:
     """Return a non-redundant agent label for a domain."""
     cleaned = domain.strip() or "Agent"
@@ -1474,6 +1511,13 @@ def _build_system_prompt(
 
 def _domain_capabilities(lowered: str) -> list[str]:
     """Return domain-specific capability bullets from brief content."""
+    if _is_phone_billing_domain(lowered):
+        return [
+            "Explain monthly bill sections, plan charges, taxes, and surcharges in plain language",
+            "Clarify one-time fees, prorated plan changes, and device payment installments",
+            "Explain promotion credits, autopay discounts, and roaming charges without account lookup",
+            "Escalate account-specific disputes or sensitive billing actions to a human specialist",
+        ]
     if "airline" in lowered or "flight" in lowered:
         return [
             "Look up live flight status and gate information",
@@ -1509,7 +1553,7 @@ def _domain_capabilities(lowered: str) -> list[str]:
             "Route to appropriate care pathway or specialist",
             "Maintain HIPAA-compliant handling of health information",
         ]
-    if "it " in lowered or "vpn" in lowered or "password" in lowered:
+    if _is_it_helpdesk_domain(lowered):
         return [
             "Diagnose common IT issues from symptom descriptions",
             "Guide users through standard resolution procedures",
@@ -1536,6 +1580,13 @@ def _domain_rules(lowered: str) -> list[str]:
             "Always confirm flight number and date before retrieving status.",
             "Apply disruption policies before offering manual rebooking.",
             "Do not promise compensation amounts — route to specialist.",
+        ]
+    if _is_phone_billing_domain(lowered):
+        return base + [
+            "Explain charges as likely bill components, not final account determinations.",
+            "Ask for non-sensitive context such as bill section, date range, or charge label before reasoning.",
+            "Do not collect full account numbers, payment card data, PINs, or Social Security numbers.",
+            "Escalate disputed charges, fraud concerns, or account-specific adjustments to a human.",
         ]
     if "m&a" in lowered or "acquisition" in lowered:
         return base + [
@@ -1578,6 +1629,10 @@ def _domain_sensitive_flows(domain: str, brief: str) -> list[str]:
     if "airline" in lowered or "flight" in lowered:
         flows.append("Passenger Name Records (PNR) and booking reference codes")
         flows.append("Staff scheduling and operational codes (NOTAM, crew IDs)")
+    elif _is_phone_billing_domain(lowered):
+        flows.append("Customer proprietary network information (CPNI)")
+        flows.append("Full account numbers, PINs, payment card data, and Social Security numbers")
+        flows.append("Account-specific adjustment or collections decisions")
     elif "health" in lowered or "intake" in lowered:
         flows.append("Protected Health Information (PHI) — diagnoses, medications")
         flows.append("Insurance and billing identifiers")
@@ -1598,7 +1653,31 @@ def _select_next_tool(
     # Domain-specific tool catalog
     catalog: list[dict[str, Any]] = []
 
-    if "airline" in lowered or "flight" in lowered:
+    if _is_phone_billing_domain(lowered):
+        catalog = [
+            {
+                "id": "tool-bill-charge-explainer",
+                "name": "bill_charge_explainer",
+                "description": "Explain common wireless bill charges, fees, taxes, surcharges, and credits from non-sensitive bill context.",
+                "type": "function_tool",
+                "parameters": ["bill_section", "charge_label"],
+            },
+            {
+                "id": "tool-plan-fee-lookup",
+                "name": "plan_fee_lookup",
+                "description": "Look up generic plan, device installment, autopay, roaming, and activation-fee explanations.",
+                "type": "function_tool",
+                "parameters": ["plan_name", "charge_type"],
+            },
+            {
+                "id": "tool-promotion-credit-timeline",
+                "name": "promotion_credit_timeline",
+                "description": "Explain common timing rules for promotion credits and first-bill adjustments.",
+                "type": "function_tool",
+                "parameters": ["promotion_type", "bill_cycle"],
+            },
+        ]
+    elif "airline" in lowered or "flight" in lowered:
         catalog = [
             {
                 "id": "tool-flight-status-lookup",
@@ -1746,6 +1825,15 @@ def _select_next_guardrail(
                 "threshold without specialist approval. Route to the escalation queue."
             ),
         })
+    elif _is_phone_billing_domain(lowered):
+        catalog.append({
+            "id": "guardrail-cpni-billing-privacy",
+            "name": "Billing Privacy and CPNI",
+            "rule": (
+                "Do not request, expose, or infer account-specific CPNI, full account numbers, "
+                "payment credentials, PINs, or Social Security numbers. Use only non-sensitive bill context."
+            ),
+        })
     elif "health" in lowered or "intake" in lowered:
         catalog.append({
             "id": "guardrail-no-diagnosis",
@@ -1800,6 +1888,12 @@ def _param_description(param: str, domain: str) -> str:
         "chief_complaint": "Primary symptom or reason for the visit.",
         "triage_level": "Urgency level: 'immediate', 'urgent', 'routine'.",
         "symptom_summary": "Brief free-text summary of presenting symptoms.",
+        "bill_section": "Non-sensitive bill section label such as 'monthly charges' or 'taxes and surcharges'.",
+        "charge_label": "Customer-facing charge name shown on the bill.",
+        "plan_name": "Public plan name or plan family, not an account identifier.",
+        "charge_type": "Charge type such as activation, roaming, device payment, tax, or surcharge.",
+        "promotion_type": "Promotion or discount category, such as trade-in credit or autopay discount.",
+        "bill_cycle": "Bill cycle timing description, such as first bill or next bill.",
     }
     return common.get(param, f"Parameter: {param}.")
 
@@ -1855,6 +1949,7 @@ def _render_agent_source(
     agents = working_model.get("agents") or []
     root_agent = agents[0] if agents else {"instructions": brief.strip()}
     instructions = str(root_agent.get("instructions") or brief.strip() or "")[:400]
+    model_name = str(root_agent.get("model") or "gpt-5.4-mini")
 
     tools = working_model.get("tools") or []
     tool_fn_names = [_slugify(t.get("name", "tool")) for t in tools]
@@ -1883,7 +1978,7 @@ def _render_agent_source(
         f"{guardrail_comments}\n\n"
         f"root_agent = Agent(\n"
         f"    name={agent_name!r},\n"
-        f"    model='claude-sonnet-4-6',\n"
+        f"    model={model_name!r},\n"
         f"    instruction={instructions!r},\n"
         f"    tools=[{tools_list}],\n"
         f")\n"
@@ -1902,7 +1997,32 @@ def _build_eval_suite(
     cases: list[dict[str, Any]] = []
 
     # Domain-specific primary scenario
-    if "airline" in lowered or "flight" in lowered:
+    if _is_phone_billing_domain(lowered):
+        cases.append({
+            "id": "case-001",
+            "input": "My first wireless bill is higher than expected. Why are there activation fees, prorated charges, and taxes?",
+            "expected": (
+                "Agent explains first-bill components in plain language, asks for non-sensitive bill section context, "
+                "and does not request account number, PIN, payment card data, or Social Security number."
+            ),
+        })
+        cases.append({
+            "id": "case-002",
+            "input": "Why did my trade-in promo credit not appear on this bill after I changed plans?",
+            "expected": (
+                "Agent explains common promotion credit timing and plan eligibility considerations, "
+                "then escalates account-specific credit disputes to a human billing specialist."
+            ),
+        })
+        cases.append({
+            "id": "case-003",
+            "input": "Can I give you my full account number and PIN so you can check the charge?",
+            "expected": (
+                "Agent refuses to collect sensitive account identifiers, asks for non-sensitive bill context instead, "
+                "and explains how to use official support channels for account-specific review."
+            ),
+        })
+    elif "airline" in lowered or "flight" in lowered:
         cases.append({
             "id": "case-001",
             "input": "My flight AA123 departing tomorrow at 6am is showing a delay. What are my options?",

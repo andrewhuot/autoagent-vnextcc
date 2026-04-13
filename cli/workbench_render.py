@@ -37,7 +37,9 @@ _EVENT_RENDERERS: dict[str, Any] = {
     "task.started": lambda d: f"[task] {d.get('title', d.get('task_id', 'task'))} ...started",
     "task.progress": lambda d: f"[task] {d.get('title', '')}: {d.get('note', d.get('message', ''))}",
     "task.completed": lambda d: click.style(
-        f"[task] {d.get('title', d.get('task_id', 'task'))} ...done", fg="green",
+        f"[task] {d.get('title', d.get('task_id', 'task'))} ...done"
+        + (f" [{d['source']}]" if d.get("source") else ""),
+        fg="green",
     ),
     "message.delta": lambda _d: None,
     "artifact.updated": lambda d: f"[artifact] {(d.get('artifact') or d).get('name', 'artifact')} updated",
@@ -171,6 +173,13 @@ def render_candidate_summary(data: dict[str, Any], *, compact: bool = False) -> 
     click.echo(f"  Target:    {data.get('target')} / {data.get('environment')}")
     click.echo(f"  Version:   {data.get('version')}")
     click.echo(f"  Run:       {run.get('status') or 'none'}")
+    if run.get("execution_mode") or run.get("provider") or run.get("model"):
+        execution_label = str(run.get("execution_mode") or "unknown")
+        provider_label = str(run.get("provider") or "").strip()
+        model_label = str(run.get("model") or "").strip()
+        provider_model = ":".join(part for part in (provider_label, model_label) if part)
+        suffix = f" via {provider_model}" if provider_model else ""
+        click.echo(f"  Execution: {execution_label}{suffix}")
     if run.get("failure_reason"):
         click.echo(f"  Reason:    {run.get('failure_reason')}")
     click.echo(f"  Agent:     {agent_card.get('name')} ({agent_card.get('model')})")

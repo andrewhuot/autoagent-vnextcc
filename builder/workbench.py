@@ -423,6 +423,33 @@ def _dedupe_by_id(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _infer_domain(brief: str) -> str:
     """Infer a short domain label from a plain-English brief."""
     lowered = brief.lower()
+    if _has_word(
+        lowered,
+        (
+            "billing",
+            "bill",
+            "bills",
+            "charge",
+            "charges",
+            "fee",
+            "fees",
+            "surcharge",
+            "surcharges",
+            "tax",
+            "taxes",
+            "autopay",
+            "roaming",
+            "telecom",
+            "wireless",
+            "verizon",
+            "phone company",
+            "mobile plan",
+            "phone plan",
+            "cell phone",
+            "invoice",
+        ),
+    ) or "phone-company" in lowered or "device payment" in lowered or "promo credit" in lowered:
+        return "Phone Billing Support"
     if "airline" in lowered or "flight" in lowered or "booking" in lowered:
         return "Airline Support"
     if "refund" in lowered or "order" in lowered:
@@ -431,7 +458,10 @@ def _infer_domain(brief: str) -> str:
         return "Sales Qualification"
     if "health" in lowered or "intake" in lowered:
         return "Healthcare Intake"
-    if "it " in lowered or "vpn" in lowered or "password" in lowered:
+    if (
+        _has_phrase(lowered, ("it helpdesk", "it support", "information technology"))
+        or _has_word(lowered, ("vpn", "password"))
+    ):
         return "IT Helpdesk"
     if (
         "m&a" in lowered
@@ -442,6 +472,16 @@ def _infer_domain(brief: str) -> str:
     ):
         return "M&A Analyst"
     return "Agent"
+
+
+def _has_word(text: str, words: tuple[str, ...]) -> bool:
+    """Match domain hints as words so pronouns like 'it' do not steer routing."""
+    return any(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
+
+
+def _has_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+    """Return whether any normalized phrase appears in the brief."""
+    return any(phrase in text for phrase in phrases)
 
 
 def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> dict[str, Any]:
@@ -1186,6 +1226,7 @@ class WorkbenchService:
             "messages": list(project.get("messages", [])),
             "model": project.get("model"),
             "exports": project.get("exports"),
+            "materialized_candidate": project.get("materialized_candidate"),
             "compatibility": project.get("compatibility"),
             "last_test": project.get("last_test"),
             "activity": list(project.get("activity", [])),
@@ -1390,6 +1431,61 @@ class WorkbenchService:
             self.store.save_project(project)
             exports = project["exports"]
         return copy.deepcopy(exports.get("generated_config") or {})
+
+    def materialization_source_prompt(self, *, project_id: str) -> str:
+        """Return the original operator brief to preserve in saved runtime configs.
+
+        WHY: Eval and Optimize reports are much easier to interpret when the
+        saved config records the user intent that created the Workbench
+        candidate, not only the opaque Workbench project id.
+        """
+        project = self._require_project(project_id)
+        last_brief = str(project.get("last_brief") or "").strip()
+        if last_brief:
+            return last_brief
+        project_model = project.get("model") if isinstance(project.get("model"), dict) else {}
+        description = str((project_model.get("project") or {}).get("description") or "").strip()
+        if description:
+            return description
+        return f"Workbench project {project_id}"
+
+    def record_materialized_candidate(
+        self,
+        *,
+        project_id: str,
+        config_path: str,
+        eval_cases_path: str,
+        category: str | None = None,
+        dataset_path: str | None = None,
+        generated_suite_id: str | None = None,
+        split: str = "all",
+    ) -> dict[str, Any]:
+        """Persist saved candidate paths so read-only bridge calls remain useful.
+
+        WHY: `workbench save` is the point where a draft becomes runnable
+        Eval input. Subsequent `workbench bridge --eval-run-id ...` commands
+        must remember those saved files instead of asking the operator to save
+        the same candidate again.
+        """
+        project = self._require_project(project_id)
+        materialized = {
+            "config_path": str(config_path),
+            "eval_cases_path": str(eval_cases_path),
+            "category": category,
+            "dataset_path": dataset_path,
+            "generated_suite_id": generated_suite_id,
+            "split": split,
+            "updated_at": _now_iso(),
+        }
+        project["materialized_candidate"] = copy.deepcopy(materialized)
+        runs = project.get("runs") if isinstance(project.get("runs"), dict) else {}
+        active_run_id = project.get("active_run_id")
+        run = runs.get(active_run_id) if isinstance(active_run_id, str) else None
+        if isinstance(run, dict):
+            run["materialized_candidate"] = copy.deepcopy(materialized)
+            self._refresh_run_handoff(project, run)
+        self.store.save_project(project)
+        return copy.deepcopy(materialized)
 
     def build_improvement_bridge_payload(
         self,
@@ -3547,6 +3643,7 @@ def canonical_to_generated_config(model: dict[str, Any]) -> dict[str, Any]:
         }
         for tool in model.get("tools", [])
     ]
+    eval_cases = _generated_eval_cases_from_model(model)
     return {
         "model": root.get("model", "gpt-5.4-mini"),
         "system_prompt": root.get("instructions", ""),
@@ -3575,12 +3672,47 @@ def canonical_to_generated_config(model: dict[str, Any]) -> dict[str, Any]:
             }
             for suite in model.get("eval_suites", [])
         ],
+        "eval_cases": eval_cases,
         "metadata": {
             "agent_name": root.get("name", "Workbench Agent"),
             "created_from": "agent_builder_workbench",
             "canonical_version": 1,
         },
     }
+
+
+def _generated_eval_cases_from_model(model: dict[str, Any]) -> list[dict[str, Any]]:
+    """Flatten canonical Workbench eval suites into runnable eval case drafts."""
+    cases: list[dict[str, Any]] = []
+    for suite in model.get("eval_suites", []):
+        if not isinstance(suite, dict):
+            continue
+        suite_slug = _slugify(str(suite.get("name") or suite.get("id") or "generated_build"))
+        for index, case in enumerate(suite.get("cases") or [], start=1):
+            if not isinstance(case, dict):
+                continue
+            user_message = str(case.get("input") or case.get("user_message") or "").strip()
+            if not user_message:
+                continue
+            expected = str(case.get("expected") or case.get("reference_answer") or "").strip()
+            expected_lower = expected.lower()
+            should_refuse = any(
+                token in expected_lower
+                for token in ("decline", "refuse", "privacy", "pii", "private user data")
+            )
+            cases.append(
+                {
+                    "id": f"{suite_slug}_{case.get('id') or index}",
+                    "category": suite_slug or "generated_build",
+                    "user_message": user_message,
+                    "expected_specialist": "support",
+                    "expected_behavior": "refuse" if should_refuse else "answer",
+                    "expected_keywords": [],
+                    "safety_probe": should_refuse,
+                    "reference_answer": expected,
+                }
+            )
+    return cases
 
 
 def render_adk_agent_py(model: dict[str, Any]) -> str:

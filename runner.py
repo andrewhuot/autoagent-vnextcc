@@ -1691,29 +1691,77 @@ def _artifact_to_seed_config(prompt: str, artifact: dict) -> dict:
     intent_names = [str(item.get("name", "")) for item in intents if item.get("name")]
     intent_human = ", ".join(name.replace("_", " ") for name in intent_names)
     guardrail_text = " ".join(str(item) for item in guardrails)
+    business_rules = " ".join(str(item) for item in artifact.get("business_rules", []))
+    escalation_conditions = " ".join(str(item) for item in artifact.get("escalation_conditions", []))
+    auth_steps = " ".join(str(item) for item in artifact.get("auth_steps", []))
+    prompt_context = " ".join(
+        part for part in (prompt, intent_human, business_rules, escalation_conditions, auth_steps) if part
+    )
 
     config["prompts"]["root"] = (
         "You are AgentLab, a production customer support orchestrator. "
+        f"Build brief: {prompt}. "
         f"Primary intents: {intent_human or 'general support'}. "
+        f"Business rules: {business_rules or 'standard support policy'}. "
         f"Follow these guardrails: {guardrail_text or 'standard policy controls'}. "
         "Escalate with verified context when self-service cannot resolve safely."
     )
 
     order_keywords = {"order", "tracking", "cancel", "cancellation", "shipping", "address", "refund"}
+    support_keywords = {"support", "help"}
+    recommendation_keywords = {"recommend", "recommendation", "compare", "suggest"}
+    order_hints = {"order", "tracking", "cancel", "cancellation", "shipping", "address", "refund"}
+    recommendation_hints = {"recommend", "recommendation", "compare", "suggest", "sales", "lead"}
     for intent in intent_names:
-        order_keywords.update(intent.replace("_", " ").split())
+        parts = set(intent.replace("_", " ").split())
+        if parts & order_hints:
+            order_keywords.update(parts)
+        elif parts & recommendation_hints:
+            recommendation_keywords.update(parts)
+        else:
+            support_keywords.update(parts)
+    if _is_billing_build_context(prompt_context):
+        support_keywords.update(
+            {
+                "billing",
+                "bill",
+                "charge",
+                "charges",
+                "plan",
+                "fees",
+                "surcharges",
+                "taxes",
+                "autopay",
+                "roaming",
+                "device",
+                "promo",
+                "credit",
+                "wireless",
+            }
+        )
     rules = config.get("routing", {}).get("rules", [])
     for rule in rules:
         if rule.get("specialist") == "orders":
             current = set(rule.get("keywords", []))
             merged = sorted(current.union(order_keywords))
             rule["keywords"] = merged
+        elif rule.get("specialist") == "support":
+            current = set(rule.get("keywords", []))
+            merged = sorted(current.union(support_keywords))
+            rule["keywords"] = merged
+        elif rule.get("specialist") == "recommendations":
+            current = set(rule.get("keywords", []))
+            merged = sorted(current.union(recommendation_keywords))
+            rule["keywords"] = merged
 
     if any(str(conn).lower() == "shopify" for conn in connectors):
         config["tools"]["orders_db"]["enabled"] = True
     if any(str(conn).lower() == "zendesk" for conn in connectors):
         config["tools"]["faq"]["enabled"] = True
-    if tools:
+    tool_text = " ".join(str(value) for tool in tools if isinstance(tool, dict) for value in tool.values()).lower()
+    if _is_billing_build_context(f"{prompt_context} {tool_text}"):
+        config["tools"]["faq"]["enabled"] = True
+    elif tools:
         config["tools"]["catalog"]["enabled"] = True
 
     config["optimizer"]["use_skills"] = True
@@ -1731,6 +1779,34 @@ def _artifact_to_seed_config(prompt: str, artifact: dict) -> dict:
     return config
 
 
+def _is_billing_build_context(text: str) -> bool:
+    """Detect billing build artifacts so routing does not default to order support."""
+    lowered = text.lower()
+    return any(
+        hint in lowered
+        for hint in (
+            "billing",
+            "bill",
+            "bills",
+            "charge",
+            "charges",
+            "fee",
+            "fees",
+            "surcharge",
+            "surcharges",
+            "tax",
+            "taxes",
+            "autopay",
+            "device payment",
+            "promo credit",
+            "roaming",
+            "wireless",
+            "phone-company",
+            "verizon",
+        )
+    )
+
+
 def _write_generated_eval_cases(path: Path, artifact: dict) -> None:
     """Write eval cases derived from build artifact suggested tests."""
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1741,14 +1817,26 @@ def _write_generated_eval_cases(path: Path, artifact: dict) -> None:
         expected_behavior = str(test.get("expected_behavior", "")).strip()
         lowered = user_message.lower()
         expected_specialist = "orders" if any(token in lowered for token in ["order", "shipping", "cancel", "address"]) else "support"
-        expected_keywords = ["order"] if expected_specialist == "orders" else ["help"]
+        if _is_billing_build_context(lowered):
+            expected_keywords = [
+                token
+                for token in ["bill", "charge", "fee", "tax", "promo", "credit", "plan", "autopay", "roaming"]
+                if token in lowered
+            ] or ["billing"]
+        else:
+            expected_keywords = ["order"] if expected_specialist == "orders" else ["help"]
+        expected_behavior_label = "refuse" if any(
+            token in expected_behavior.lower()
+            for token in ("refuse", "decline", "sensitive", "identifier", "pin", "account number")
+        ) else "answer"
         cases.append(
             {
                 "id": f"build_{idx:03d}",
                 "category": "generated_build",
                 "user_message": user_message or f"Generated build test #{idx}",
                 "expected_specialist": expected_specialist,
-                "expected_behavior": "answer",
+                "expected_behavior": expected_behavior_label,
+                "safety_probe": expected_behavior_label == "refuse",
                 "expected_keywords": expected_keywords,
                 "expected_notes": expected_behavior,
             }
@@ -2761,12 +2849,12 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         if category:
             score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
             progress.phase_completed("eval", message=f"Category '{category}' complete")
-            progress.next_action("agentlab improve")
+            progress.next_action("agentlab optimize --cycles 3")
             score_heading = f"Category: {category}"
         else:
             score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
             progress.phase_completed("eval", message="Full eval suite complete")
-            progress.next_action("agentlab improve")
+            progress.next_action("agentlab optimize --cycles 3")
             score_heading = "Full eval suite"
     except LiveEvalRequiredError as exc:
         raise click.ClickException(str(exc)) from exc
@@ -2820,7 +2908,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         payload = _score_to_dict(score)
         payload["mode"] = eval_mode
         payload["run_id"] = score.run_id
-        click.echo(json_response("ok", payload, next_cmd="agentlab improve"))
+        click.echo(json_response("ok", payload, next_cmd="agentlab optimize --cycles 3"))
         return
 
     click.echo(click.style(f"\n  Status: {_score_status_label(score.composite)}", fg="magenta"))

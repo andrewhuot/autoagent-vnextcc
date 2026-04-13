@@ -334,6 +334,40 @@ class TestJourneyCommands:
             assert list(Path("configs").glob("v*_built_*.yaml"))
             assert Path("evals/cases/generated_build.yaml").exists()
 
+    def test_build_billing_prompt_generates_billing_config_and_evals(self, runner):
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli,
+                [
+                    "build",
+                    (
+                        "Build a Verizon-like phone-company billing support agent that explains "
+                        "bills, plan charges, fees, surcharges, device payments, promo credits, "
+                        "roaming charges, and autopay discounts."
+                    ),
+                ],
+            )
+
+            assert result.exit_code == 0, result.output
+            config_path = next(Path("configs").glob("v*_built_*.yaml"))
+            config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            root_prompt = config["prompts"]["root"].lower()
+            support_rule = next(
+                rule for rule in config["routing"]["rules"] if rule["specialist"] == "support"
+            )
+            order_rule = next(
+                rule for rule in config["routing"]["rules"] if rule["specialist"] == "orders"
+            )
+            assert "billing" in root_prompt
+            assert "autopay" in root_prompt
+            assert "billing" in support_rule["keywords"]
+            assert "autopay" in support_rule["keywords"]
+            assert "billing" not in order_rule["keywords"]
+            generated_cases = yaml.safe_load(Path("evals/cases/generated_build.yaml").read_text(encoding="utf-8"))
+            messages = " ".join(case["user_message"].lower() for case in generated_cases["cases"])
+            assert "wireless bill" in messages
+            assert "promo credit" in messages
+
     def test_changes_group_exists_and_lists_cards(self, runner):
         result_help = runner.invoke(cli, ["changes", "--help"])
         assert result_help.exit_code == 0
@@ -479,6 +513,47 @@ class TestEvalCommands:
 
         assert result.exit_code == 0
         assert captured["use_real_agent"] is True
+
+    def test_eval_run_json_points_to_optimize_next(self, runner, monkeypatch):
+        """JSON output should guide operators to the supported Optimize command."""
+        fake_score = SimpleNamespace(
+            quality=0.8,
+            safety=1.0,
+            latency=0.9,
+            cost=0.95,
+            composite=0.87,
+            confidence_intervals={},
+            safety_failures=0,
+            total_cases=1,
+            passed_cases=1,
+            total_tokens=0,
+            estimated_cost_usd=0.0,
+            warnings=[],
+            provenance={},
+            run_id="run-next-optimize",
+            results=[],
+        )
+
+        class _FakeEvalRunner:
+            mock_mode_messages: list[str] = []
+
+            def run(self, config=None, dataset_path=None, split="all"):
+                del config, dataset_path, split
+                return fake_score
+
+        monkeypatch.setattr(
+            runner_module,
+            "_build_eval_runner",
+            lambda *args, **kwargs: _FakeEvalRunner(),
+        )
+        monkeypatch.setattr(runner_module, "_warn_mock_modes", lambda **kwargs: None)
+
+        result = runner.invoke(cli, ["eval", "run", "--json"])
+
+        assert result.exit_code == 0, result.output
+        payload = json.loads(result.output)
+        assert payload["next"] == "agentlab optimize --cycles 3"
+        assert "improve" not in payload["next"]
 
     def test_eval_run_prefers_workspace_mock_mode_over_live_runtime_config(
         self,

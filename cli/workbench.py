@@ -303,12 +303,22 @@ def _materialize_candidate(
 
     try:
         generated_config = service.generated_config_for_bridge(project_id=project_id)
+        source_prompt = service.materialization_source_prompt(project_id=project_id)
         saved = persist_generated_config(
             generated_config,
             artifact_store=_artifact_store_for_workspace(workspace),
             source="workbench_cli",
-            source_prompt=f"Workbench project {project_id}",
+            source_prompt=source_prompt,
             builder_session_id=project_id,
+        )
+        service.record_materialized_candidate(
+            project_id=project_id,
+            config_path=saved.config_path,
+            eval_cases_path=saved.eval_cases_path,
+            category=category,
+            dataset_path=dataset_path,
+            generated_suite_id=generated_suite_id,
+            split=split,
         )
         bridge = service.build_improvement_bridge_payload(
             project_id=project_id,
@@ -337,6 +347,19 @@ def _materialize_candidate(
             "optimize_requires_eval_run": True,
         },
     }
+
+
+def _bridge_next_command(bridge: dict[str, Any]) -> str:
+    """Choose the next CLI command from persisted bridge readiness."""
+    evaluation = bridge.get("evaluation") if isinstance(bridge.get("evaluation"), dict) else {}
+    optimization = bridge.get("optimization") if isinstance(bridge.get("optimization"), dict) else {}
+    if optimization.get("readiness_state") == "ready_for_optimize":
+        return "agentlab optimize --cycles 3"
+    request = evaluation.get("request") if isinstance(evaluation.get("request"), dict) else {}
+    config_path = request.get("config_path")
+    if evaluation.get("readiness_state") == "ready_for_eval" and config_path:
+        return f"agentlab eval run --config {config_path}"
+    return "agentlab workbench save"
 
 
 # ---------------------------------------------------------------------------
@@ -911,6 +934,6 @@ def bridge_command(project_id: str | None, eval_run_id: str | None,
         ) from exc
 
     if json_output:
-        _emit_envelope("ok", bridge, next_command="agentlab workbench save")
+        _emit_envelope("ok", bridge, next_command=_bridge_next_command(bridge))
         return
     render_bridge_status(bridge)

@@ -125,6 +125,19 @@ def build_workbench_improvement_bridge(
     run exists. Before that, Optimize is represented as an awaiting-eval template.
     """
 
+    materialized = project.get("materialized_candidate") if isinstance(project.get("materialized_candidate"), dict) else {}
+    config_path = config_path or _non_empty_string(materialized.get("config_path"))
+    eval_cases_path = eval_cases_path or _non_empty_string(materialized.get("eval_cases_path"))
+    category = category if category is not None else _non_empty_string(materialized.get("category"))
+    dataset_path = dataset_path if dataset_path is not None else _non_empty_string(materialized.get("dataset_path"))
+    generated_suite_id = (
+        generated_suite_id
+        if generated_suite_id is not None
+        else _non_empty_string(materialized.get("generated_suite_id"))
+    )
+    if split == "all" and materialized.get("split"):
+        split = str(materialized["split"])
+
     exports = project.get("exports") if isinstance(project.get("exports"), dict) else {}
     generated_config = exports.get("generated_config") if isinstance(exports.get("generated_config"), dict) else {}
     validation = _latest_validation(project, run)
@@ -204,6 +217,12 @@ def _coerce_bridge(bridge: WorkbenchImprovementHandoff | dict[str, Any]) -> Work
     if isinstance(bridge, WorkbenchImprovementHandoff):
         return bridge
     return WorkbenchImprovementHandoff.model_validate(bridge)
+
+
+def _non_empty_string(value: Any) -> str | None:
+    """Return a stripped string only when persisted optional bridge fields are set."""
+    text = str(value or "").strip()
+    return text or None
 
 
 def _latest_validation(project: dict[str, Any], run: dict[str, Any]) -> dict[str, Any]:
