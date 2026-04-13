@@ -316,6 +316,23 @@ class CxStudioClient:
         )
         return [self._parse_page(item) for item in items]
 
+    def create_page(
+        self,
+        flow_name: str,
+        payload: dict[str, object],
+        page_id: str | None = None,
+    ) -> CxPage:
+        """Create a page under a flow."""
+
+        response = self._request_json(
+            "POST",
+            f"{flow_name}/pages",
+            location=self._location_from_name(flow_name),
+            params={"pageId": page_id} if page_id else None,
+            json_body=payload,
+        )
+        return self._parse_page(response)
+
     def update_page(
         self,
         page_name: str,
