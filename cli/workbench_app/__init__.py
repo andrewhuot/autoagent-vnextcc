@@ -22,6 +22,13 @@ from cli.workbench_app.commands import (
     SlashCommand,
     SlashCommandKind,
 )
+from cli.workbench_app.slash import (
+    DispatchResult,
+    SlashContext,
+    build_builtin_registry,
+    dispatch,
+    parse_slash_line,
+)
 
 __all__ = [
     "CommandContext",
@@ -29,12 +36,17 @@ __all__ = [
     "CommandRegistry",
     "CommandSource",
     "DEFAULT_PROMPT",
+    "DispatchResult",
     "LocalCommand",
     "LocalJSXCommand",
     "PromptCommand",
     "SlashCommand",
     "SlashCommandKind",
+    "SlashContext",
     "StubAppResult",
+    "build_builtin_registry",
     "build_status_line",
+    "dispatch",
+    "parse_slash_line",
     "run_workbench_app",
 ]

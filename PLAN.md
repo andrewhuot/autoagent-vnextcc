@@ -52,10 +52,19 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       `input_provider` + `echo` seams so tests drive the loop without a TTY. The full
       prompt_toolkit `Application` lands with T16; for now the loop wraps plain `input()`
       plus the shared `build_status_line` helper that T06 will replace.*
-- [ ] **T05** — Extract slash-command handler registry from `cli/repl.py` into
+- [x] **T05** — Extract slash-command handler registry from `cli/repl.py` into
       `cli/workbench_app/slash.py` with a typed `SlashCommand` dataclass (name, help,
       handler, autocomplete args). Port `/help /status /config /memory /doctor /review
-      /mcp /compact /resume /exit`.
+      /mcp /compact /resume /exit`. *All ten built-ins register as `LocalCommand`
+      instances via `build_builtin_registry()`. Handlers receive a `SlashContext`
+      (workspace/session/session_store/echo/click_invoker/registry) and delegate to
+      existing Click commands through an injectable `ClickInvoker` so no business
+      logic is duplicated. Exit is signalled via `ctx.request_exit()`, which keeps
+      handler return types aligned with `LocalHandler`. `dispatch()` also enforces
+      that only `local`-kind commands run inline — `local-jsx` and `prompt` variants
+      are recognised but deferred to T08b/T05b respectively. The full `onDone`
+      display-routing protocol lands in T05b. Coverage:
+      `tests/test_workbench_slash.py` (34 tests).*
 - [ ] **T05b** — Implement Claude Code's `onDone` return protocol in
       `cli/workbench_app/slash.py`:
       `onDone(result: str | None, *, display: 'skip'|'system'|'user'='user',
