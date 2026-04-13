@@ -37,8 +37,9 @@ class TestQuickstartOpenFlag:
 
     def test_quickstart_no_open_runs(self, runner):
         """quickstart --no-open should complete without starting server."""
-        result = runner.invoke(cli, ["quickstart", "--no-open"])
-        assert result.exit_code == 0
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli, ["quickstart", "--no-open"])
+            assert result.exit_code == 0
 
 class TestDemoOpenFlag:
     def test_demo_quickstart_has_open_flag(self, runner):
@@ -48,5 +49,6 @@ class TestDemoOpenFlag:
 
     def test_demo_quickstart_no_open_runs(self, runner):
         """demo quickstart --no-open should complete without starting server."""
-        result = runner.invoke(cli, ["demo", "quickstart", "--no-open"])
-        assert result.exit_code == 0
+        with runner.isolated_filesystem():
+            result = runner.invoke(cli, ["demo", "quickstart", "--no-open"])
+            assert result.exit_code == 0

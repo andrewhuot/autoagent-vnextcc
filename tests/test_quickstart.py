@@ -151,6 +151,24 @@ class TestQuickstartCommand:
         assert not (tmp_path / "optimizer_memory.db").exists()
         assert not (tmp_path / ".agentlab" / "best_score.txt").exists()
 
+    def test_quickstart_relative_dir_uses_invocation_cwd_inside_parent_workspace(
+        self,
+        runner,
+        tmp_path,
+        monkeypatch,
+    ):
+        parent = tmp_path / "parent-workspace"
+        child = parent / "child"
+        (parent / ".agentlab").mkdir(parents=True)
+        child.mkdir(parents=True)
+        monkeypatch.chdir(child)
+
+        result = runner.invoke(cli, ["quickstart", "--dir", "quickstart-agent", "--no-open"])
+
+        assert result.exit_code == 0, result.output
+        assert (child / "quickstart-agent" / "agentlab.yaml").exists()
+        assert not (parent / "quickstart-agent").exists()
+
 
 # ---------------------------------------------------------------------------
 # Demo command

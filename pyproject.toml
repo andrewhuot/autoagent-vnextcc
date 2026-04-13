@@ -40,6 +40,8 @@ py-modules = ["runner"]
 include = [
     "a2a",
     "a2a.*",
+    "adapters",
+    "adapters.*",
     "adk",
     "adk.*",
     "agent",
@@ -90,6 +92,8 @@ include = [
     "optimizer.*",
     "policy_opt",
     "policy_opt.*",
+    "portability",
+    "portability.*",
     "registry",
     "registry.*",
     "rewards",

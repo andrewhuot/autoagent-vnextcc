@@ -151,6 +151,25 @@ def test_deploy_skips_prompt_in_dont_ask_mode(
         assert "canary" in result.output.lower()
 
 
+def test_deploy_auto_review_dry_run_keeps_review_cards_pending(runner: CliRunner) -> None:
+    """A dry-run auto-review deployment should preview without approving pending cards."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", "."])
+        assert init_result.exit_code == 0, init_result.output
+        _seed_candidate_config(Path("."))
+        card = _seed_pending_change_card(Path("."))
+
+        result = runner.invoke(cli, ["deploy", "--auto-review", "--yes", "--dry-run"])
+
+        assert result.exit_code == 0, result.output
+        assert "Dry run" in result.output
+
+        store = ChangeCardStore(db_path=".agentlab/change_cards.db")
+        reloaded = store.get(card.card_id)
+        assert reloaded is not None
+        assert reloaded.status == "pending"
+
+
 def test_review_apply_uses_permission_gate(
     runner: CliRunner,
     monkeypatch: pytest.MonkeyPatch,
@@ -198,6 +217,20 @@ def test_review_apply_pending_resolves_selector(
         assert result.exit_code == 0, result.output
         assert prompts
         assert card.card_id in result.output
+
+
+def test_review_export_pending_resolves_selector(runner: CliRunner) -> None:
+    """`review export pending` should resolve the newest pending change card."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", "."])
+        assert init_result.exit_code == 0, init_result.output
+        card = _seed_pending_change_card(Path("."))
+
+        result = runner.invoke(cli, ["review", "export", "pending"])
+
+        assert result.exit_code == 0, result.output
+        assert card.title in result.output
+        assert "# Proposed Change" in result.output
 
 
 def test_permissions_show_and_set_surface_workspace_mode(runner: CliRunner) -> None:

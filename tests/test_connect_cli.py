@@ -57,3 +57,50 @@ def test_connect_transcript_creates_workspace_with_imported_assets(
     adapter_spec = json.loads((workspace / ".agentlab" / "adapter_spec.json").read_text(encoding="utf-8"))
     assert adapter_spec["adapter"] == "transcript"
     assert adapter_spec["agent_name"] == "transcript-import"
+
+
+def test_connect_transcript_resolves_relative_paths_from_invocation_cwd(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """`connect transcript --file ./x` should use the caller's cwd even inside a parent workspace."""
+
+    parent = tmp_path / "parent-workspace"
+    child = parent / "imports"
+    (parent / ".agentlab").mkdir(parents=True)
+    child.mkdir(parents=True)
+    transcript_file = child / "conversations.jsonl"
+    transcript_file.write_text(
+        json.dumps(
+            {
+                "id": "conv-1",
+                "messages": [
+                    {"role": "user", "content": "Reset my password."},
+                    {"role": "assistant", "content": "Use the reset link in your email."},
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    monkeypatch.chdir(child)
+
+    result = runner.invoke(
+        cli,
+        [
+            "connect",
+            "transcript",
+            "--file",
+            "./conversations.jsonl",
+            "--name",
+            "imported-agent",
+        ],
+    )
+
+    workspace = child / "imported-agent"
+
+    assert result.exit_code == 0, result.output
+    assert workspace.is_dir()
+    assert (workspace / ".agentlab" / "adapter_spec.json").exists()

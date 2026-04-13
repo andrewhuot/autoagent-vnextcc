@@ -14,7 +14,7 @@ This guide walks the current first-run CLI flow from install to review and deplo
 From the repository root:
 
 ```bash
-git clone https://github.com/andrewhuot/autoagent-vnextcc.git agentlab
+git clone https://github.com/andrewhuot/agentlab.git agentlab
 cd agentlab
 python3 -m venv .venv
 source .venv/bin/activate
@@ -25,6 +25,7 @@ Requirements:
 
 - Python 3.11+
 - Node.js 20+ for the web console and frontend tooling
+- `google-auth` only for Google CX commands such as `agentlab cx auth`, `agentlab cx list`, import, export, and sync
 
 ## 2. Explore the starter templates
 
@@ -416,6 +417,7 @@ The web UI equivalent lives at `/connect`.
 Authenticate and browse CX agents:
 
 ```bash
+pip install google-auth
 agentlab cx auth
 agentlab cx list --project PROJECT --location us-central1
 ```
