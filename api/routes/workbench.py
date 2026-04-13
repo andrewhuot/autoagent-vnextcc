@@ -245,8 +245,17 @@ async def create_eval_bridge(
             generated_config,
             artifact_store=_build_artifact_store(request),
             source="builder_chat",
-            source_prompt=f"Workbench project {project_id}",
+            source_prompt=service.materialization_source_prompt(project_id=project_id),
             builder_session_id=project_id,
+        )
+        service.record_materialized_candidate(
+            project_id=project_id,
+            config_path=saved.config_path,
+            eval_cases_path=saved.eval_cases_path,
+            category=body.category,
+            dataset_path=body.dataset_path,
+            generated_suite_id=body.generated_suite_id,
+            split=body.split,
         )
     except RuntimeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

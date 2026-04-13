@@ -42,6 +42,32 @@ RAW_UPLOAD_EXTENSIONS = {".json", ".csv", ".txt", ".md", ".jsonl"}
 KNOWN_INTENTS = tuple(INTENT_KEYWORDS.keys()) + ("general_support",)
 
 
+def _is_phone_billing_prompt(lowered_prompt: str) -> bool:
+    """Return true when a build prompt is about telecom or wireless billing support."""
+    hints = (
+        "billing",
+        "bill",
+        "bills",
+        "charge",
+        "charges",
+        "fee",
+        "fees",
+        "surcharge",
+        "surcharges",
+        "tax",
+        "taxes",
+        "autopay",
+        "device payment",
+        "promo credit",
+        "roaming",
+        "telecom",
+        "wireless",
+        "phone-company",
+        "verizon",
+    )
+    return any(hint in lowered_prompt for hint in hints)
+
+
 @dataclass
 class TranscriptConversation:
     conversation_id: str
@@ -1233,18 +1259,34 @@ class TranscriptIntelligenceService:
             Complete agent artifact with intents, tools, journeys, and integration templates.
         """
         lower = prompt.lower()
+        billing_prompt = _is_phone_billing_prompt(lower)
         intents: list[dict[str, str]] = []
-        if "order tracking" in lower or "track" in lower:
+        if billing_prompt:
+            intents.extend(
+                [
+                    {"name": "billing_explanation", "description": "Explain monthly bills, charges, fees, taxes, and surcharges in plain language."},
+                    {"name": "plan_fee_explanation", "description": "Clarify plan charges, device payments, roaming, activation fees, and autopay discounts."},
+                    {"name": "promotion_credit_timing", "description": "Explain promotion credit timing and common first-bill confusion."},
+                ]
+            )
+        if not billing_prompt and ("order tracking" in lower or "track" in lower):
             intents.append({"name": "order_tracking", "description": "Help customers find the latest shipment and order status."})
-        if "cancellation" in lower or "cancel" in lower:
+        if not billing_prompt and ("cancellation" in lower or "cancel" in lower):
             intents.append({"name": "cancellation", "description": "Handle order cancellation requests within policy."})
-        if "shipping-address" in lower or "shipping address" in lower or "address change" in lower:
+        if not billing_prompt and ("shipping-address" in lower or "shipping address" in lower or "address change" in lower):
             intents.append({"name": "address_change", "description": "Support shipping address updates after identity verification."})
         if not intents:
             intents.append({"name": "general_support", "description": "Handle common customer support requests."})
 
         tools: list[dict[str, str]] = []
         normalized_connectors = [connector.strip() for connector in connectors if connector.strip()]
+        if billing_prompt:
+            tools.extend(
+                [
+                    {"name": "bill_charge_explainer", "connector": "Knowledge Base", "purpose": "Explain common bill sections, one-time charges, taxes, surcharges, and discounts from non-sensitive context."},
+                    {"name": "plan_fee_lookup", "connector": "Knowledge Base", "purpose": "Look up generic plan, device payment, activation-fee, roaming, and autopay explanations."},
+                ]
+            )
         if any(connector.lower() == "shopify" for connector in normalized_connectors):
             tools.extend(
                 [
@@ -1256,23 +1298,48 @@ class TranscriptIntelligenceService:
         if any(connector.lower() == "amazon connect" for connector in normalized_connectors):
             tools.append({"name": "amazon_connect_handoff", "connector": "Amazon Connect", "purpose": "Escalate to live support with full context payloads."})
 
-        escalation_conditions = [
-            "Escalate when the customer lacks the order number and identity fallback checks fail.",
-            "Escalate when policy constraints block self-service resolution.",
-        ]
+        if billing_prompt:
+            escalation_conditions = [
+                "Escalate when the customer disputes an account-specific charge or requests an adjustment.",
+                "Escalate fraud, collections, payment, or identity-sensitive billing concerns to a human specialist.",
+            ]
+        else:
+            escalation_conditions = [
+                "Escalate when the customer lacks the order number and identity fallback checks fail.",
+                "Escalate when policy constraints block self-service resolution.",
+            ]
 
-        suggested_tests = [
-            {
-                "name": "order-tracking-without-order-number",
-                "user_message": "Where is my order? I do not have the order number.",
-                "expected_behavior": "The agent verifies identity, attempts fallback lookup, and escalates only if verification fails.",
-            },
-            {
-                "name": "cancel-order-in-policy",
-                "user_message": "Please cancel my order before it ships.",
-                "expected_behavior": "The agent checks policy, cancels the order, and confirms the action.",
-            },
-        ]
+        if billing_prompt:
+            suggested_tests = [
+                {
+                    "name": "first-wireless-bill-explanation",
+                    "user_message": "My first wireless bill is higher than expected. Why do I see activation fees, prorated charges, and taxes?",
+                    "expected_behavior": "The agent explains first-bill components, asks only for non-sensitive bill context, and avoids requesting account identifiers.",
+                },
+                {
+                    "name": "promo-credit-timing",
+                    "user_message": "Why did my promo credit not show up after I changed plans?",
+                    "expected_behavior": "The agent explains promotion credit timing and plan eligibility at a general level, then escalates account-specific disputes.",
+                },
+                {
+                    "name": "avoid-sensitive-billing-identifiers",
+                    "user_message": "Can I give you my full account number and PIN so you can check this charge?",
+                    "expected_behavior": "The agent refuses to collect sensitive identifiers and redirects to non-sensitive context or official support channels.",
+                },
+            ]
+        else:
+            suggested_tests = [
+                {
+                    "name": "order-tracking-without-order-number",
+                    "user_message": "Where is my order? I do not have the order number.",
+                    "expected_behavior": "The agent verifies identity, attempts fallback lookup, and escalates only if verification fails.",
+                },
+                {
+                    "name": "cancel-order-in-policy",
+                    "user_message": "Please cancel my order before it ships.",
+                    "expected_behavior": "The agent checks policy, cancels the order, and confirms the action.",
+                },
+            ]
         integration_templates = self._build_integration_templates(
             connectors=normalized_connectors,
             prompt=prompt,
@@ -1281,14 +1348,29 @@ class TranscriptIntelligenceService:
         return {
             "connectors": normalized_connectors,
             "intents": intents,
-            "business_rules": [
-                "Verify customer identity before account or shipment changes.",
-                "Prefer self-service resolution before escalation.",
-            ],
-            "auth_steps": [
-                "Collect verified identifier such as order number or customer email.",
-                "Use fallback lookup when the order number is unavailable.",
-            ],
+            "business_rules": (
+                [
+                    "Explain likely billing components without making account-specific determinations.",
+                    "Use non-sensitive bill context such as bill section, charge label, cycle timing, or public plan name.",
+                    "Escalate disputed charges, fraud concerns, and account adjustments to a human specialist.",
+                ]
+                if billing_prompt
+                else [
+                    "Verify customer identity before account or shipment changes.",
+                    "Prefer self-service resolution before escalation.",
+                ]
+            ),
+            "auth_steps": (
+                [
+                    "Do not collect full account numbers, PINs, payment card data, or Social Security numbers.",
+                    "Ask for non-sensitive context before explaining a charge.",
+                ]
+                if billing_prompt
+                else [
+                    "Collect verified identifier such as order number or customer email.",
+                    "Use fallback lookup when the order number is unavailable.",
+                ]
+            ),
             "escalation_conditions": escalation_conditions,
             "channel_behavior": [
                 "Use concise status updates in chat.",
@@ -1296,20 +1378,37 @@ class TranscriptIntelligenceService:
             ],
             "journeys": [
                 {
-                    "name": "order-support",
-                    "steps": [
-                        "Detect the intent from the customer request.",
-                        "Run verification and connector lookups.",
-                        "Resolve in self-service when possible.",
-                        "Escalate with context when required.",
-                    ],
+                    "name": "billing-support" if billing_prompt else "order-support",
+                    "steps": (
+                        [
+                            "Identify whether the user is asking about charges, plans, fees, credits, roaming, or discounts.",
+                            "Ask for non-sensitive bill context when details are missing.",
+                            "Explain the likely billing reason in plain language.",
+                            "Escalate account-specific disputes or sensitive actions with safe context.",
+                        ]
+                        if billing_prompt
+                        else [
+                            "Detect the intent from the customer request.",
+                            "Run verification and connector lookups.",
+                            "Resolve in self-service when possible.",
+                            "Escalate with context when required.",
+                        ]
+                    ),
                 }
             ],
             "tools": tools,
-            "guardrails": [
-                "Never disclose internal notes or pricing artifacts.",
-                "Require verification before modifying orders or personal details.",
-            ],
+            "guardrails": (
+                [
+                    "Never collect or disclose full account numbers, PINs, SSNs, payment card data, or CPNI.",
+                    "Do not promise credits, refunds, or account adjustments without human review.",
+                    "Explain charges as general guidance unless an authenticated billing system provides verified facts.",
+                ]
+                if billing_prompt
+                else [
+                    "Never disclose internal notes or pricing artifacts.",
+                    "Require verification before modifying orders or personal details.",
+                ]
+            ),
             "suggested_tests": suggested_tests,
             "integration_templates": integration_templates,
             "workspace_access": {

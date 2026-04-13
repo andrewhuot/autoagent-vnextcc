@@ -85,12 +85,21 @@ _RECOMMENDATION_HINTS = {
     "suggest",
 }
 _SUPPORT_HINTS = {
+    "account",
+    "autopay",
+    "bill",
+    "billing",
     "bug",
+    "charge",
+    "charges",
     "complaint",
     "damage",
+    "device",
     "disruption",
     "error",
     "escalate",
+    "fee",
+    "fees",
     "hardware",
     "help",
     "issue",
@@ -99,9 +108,36 @@ _SUPPORT_HINTS = {
     "problem",
     "safety",
     "support",
+    "surcharge",
+    "surcharges",
+    "tax",
+    "taxes",
     "troubleshoot",
     "vip",
     "vpn",
+    "wireless",
+}
+
+_BILLING_HINTS = {
+    "account",
+    "autopay",
+    "bill",
+    "billing",
+    "charge",
+    "charges",
+    "credit",
+    "device",
+    "fee",
+    "fees",
+    "payment",
+    "plan",
+    "promo",
+    "roaming",
+    "surcharge",
+    "surcharges",
+    "tax",
+    "taxes",
+    "wireless",
 }
 
 
@@ -433,7 +469,24 @@ def _apply_builtin_tool_flags(tools: dict[str, Any], generated_config: dict[str,
     if isinstance(tools.get("orders_db"), dict):
         tools["orders_db"]["enabled"] = any(token in tool_text for token in ("order", "refund", "shipping", "booking", "flight", "reservation", "status"))
     if isinstance(tools.get("faq"), dict):
-        tools["faq"]["enabled"] = any(token in tool_text for token in ("faq", "knowledge", "policy", "help", "article"))
+        tools["faq"]["enabled"] = any(
+            token in tool_text
+            for token in (
+                "faq",
+                "knowledge",
+                "policy",
+                "help",
+                "article",
+                "bill",
+                "billing",
+                "charge",
+                "fee",
+                "surcharge",
+                "tax",
+                "autopay",
+                "roaming",
+            )
+        )
 
 
 def _extract_tokens(text: str) -> list[str]:
@@ -472,7 +525,12 @@ def _infer_specialist(text: str, tokens: list[str]) -> str:
     support_score = sum(1 for token in token_set if token in _SUPPORT_HINTS) + sum(
         1 for hint in _SUPPORT_HINTS if hint in lowered
     )
+    billing_score = sum(1 for token in token_set if token in _BILLING_HINTS) + sum(
+        1 for hint in _BILLING_HINTS if hint in lowered
+    )
 
+    if billing_score:
+        return "support"
     if recommendation_score > max(order_score, support_score):
         return "recommendations"
     if order_score >= support_score:
@@ -485,23 +543,31 @@ def _write_generated_eval_cases(path: Path, generated_config: dict[str, Any]) ->
     path.parent.mkdir(parents=True, exist_ok=True)
     cases: list[dict[str, Any]] = []
 
+    for index, entry in enumerate(generated_config.get("eval_cases") or [], start=1):
+        if not isinstance(entry, dict):
+            continue
+        normalized = _normalize_generated_eval_case(entry, index=index)
+        if normalized is not None:
+            cases.append(normalized)
+
     routing_rules = [item for item in generated_config.get("routing_rules", []) if isinstance(item, dict)]
-    for index, rule in enumerate(routing_rules[:3], start=1):
-        source_text = f"{rule.get('condition', '')} {rule.get('action', '')}"
-        tokens = _extract_tokens(source_text)
-        specialist = _infer_specialist(source_text, tokens)
-        leading_token = tokens[0] if tokens else specialist
-        cases.append(
-            {
-                "id": f"build_{index:03d}",
-                "category": "generated_build",
-                "user_message": f"I need help with {leading_token}.",
-                "expected_specialist": specialist,
-                "expected_behavior": "answer",
-                "expected_keywords": tokens[:3] or [specialist],
-                "expected_notes": str(rule.get("condition") or rule.get("action") or "Generated routing case."),
-            }
-        )
+    if not cases:
+        for index, rule in enumerate(routing_rules[:3], start=1):
+            source_text = f"{rule.get('condition', '')} {rule.get('action', '')}"
+            tokens = _extract_tokens(source_text)
+            specialist = _infer_specialist(source_text, tokens)
+            leading_token = tokens[0] if tokens else specialist
+            cases.append(
+                {
+                    "id": f"build_{index:03d}",
+                    "category": "generated_build",
+                    "user_message": f"I need help with {leading_token}.",
+                    "expected_specialist": specialist,
+                    "expected_behavior": "answer",
+                    "expected_keywords": tokens[:3] or [specialist],
+                    "expected_notes": str(rule.get("condition") or rule.get("action") or "Generated routing case."),
+                }
+            )
 
     if not cases:
         criteria = [item for item in generated_config.get("eval_criteria", []) if isinstance(item, dict)]
@@ -534,4 +600,41 @@ def _write_generated_eval_cases(path: Path, generated_config: dict[str, Any]) ->
             }
         ]
 
-    path.write_text(yaml.safe_dump(cases, sort_keys=False), encoding="utf-8")
+    path.write_text(yaml.safe_dump({"cases": cases}, sort_keys=False), encoding="utf-8")
+
+
+def _normalize_generated_eval_case(entry: dict[str, Any], *, index: int) -> dict[str, Any] | None:
+    """Normalize a Workbench eval-suite case into the EvalRunner directory schema."""
+    user_message = str(entry.get("user_message") or entry.get("input") or "").strip()
+    if not user_message:
+        return None
+
+    reference_answer = str(entry.get("reference_answer") or entry.get("expected") or "").strip()
+    tokens = _extract_tokens(f"{user_message} {reference_answer}")
+    behavior = str(entry.get("expected_behavior") or "").strip().lower()
+    if behavior not in {"answer", "refuse", "route_correctly"}:
+        expected_lower = reference_answer.lower()
+        behavior = "refuse" if any(
+            token in expected_lower
+            for token in ("decline", "refuse", "pii", "private", "sensitive")
+        ) else "answer"
+    safety_probe = bool(entry.get("safety_probe")) or behavior == "refuse"
+    keywords_raw = entry.get("expected_keywords")
+    if isinstance(keywords_raw, str):
+        expected_keywords = [item.strip() for item in keywords_raw.split(",") if item.strip()]
+    elif isinstance(keywords_raw, list):
+        expected_keywords = [str(item).strip() for item in keywords_raw if str(item).strip()]
+    else:
+        expected_keywords = tokens[:4]
+
+    return {
+        "id": str(entry.get("id") or f"build_{index:03d}"),
+        "category": str(entry.get("category") or "generated_build"),
+        "user_message": user_message,
+        "expected_specialist": str(entry.get("expected_specialist") or "support"),
+        "expected_behavior": behavior,
+        "safety_probe": safety_probe,
+        "expected_keywords": expected_keywords,
+        "expected_tool": entry.get("expected_tool"),
+        "reference_answer": reference_answer,
+    }
