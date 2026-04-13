@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -14,6 +14,16 @@ function renderBanner(initialEntry = '/evals') {
 }
 
 describe('MockModeBanner', () => {
+  beforeEach(() => {
+    // Reset the dismiss flag so test ordering can't leak banner-hidden state
+    // (an earlier test's click on Dismiss would otherwise silence later tests).
+    try {
+      window.localStorage.removeItem('agentlab-mock-banner-dismissed');
+    } catch {
+      // ignore
+    }
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
   });

@@ -146,6 +146,19 @@ export function Demo() {
 
   return (
     <div className="space-y-6">
+      <div
+        role="note"
+        data-testid="demo-scripted-ribbon"
+        className="rounded-md border border-yellow-300 bg-yellow-50 px-4 py-3 text-sm text-yellow-900"
+      >
+        <strong className="font-semibold">Scripted demo.</strong>{' '}
+        This page replays a pre-recorded optimization journey for showcase purposes. For real
+        cycles, use{' '}
+        <a href="/optimize" className="font-semibold underline hover:text-yellow-950">
+          /optimize
+        </a>
+        .
+      </div>
       <PageHeader
         title="VP Demo: E-commerce Support Bot"
         description="Watch AgentLab optimize a real-world support bot from 0.62 → 0.87 health"

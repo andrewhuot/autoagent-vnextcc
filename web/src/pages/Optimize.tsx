@@ -848,11 +848,20 @@ function OptimizeRunSection({
           pendingReview: result.pending_review,
         });
         if (result.pending_review) {
-          toastInfo('Pending human review', result.status_message || 'Review the proposal before deployment.');
+          toastInfo(
+            'Cycle complete — proposal ready for review',
+            result.status_message || 'Review the proposal below before deployment.',
+          );
         } else if (result.accepted) {
-          toastSuccess('Optimization cycle finished', result.status_message || 'Change accepted.');
+          toastSuccess(
+            'Cycle complete — change accepted',
+            result.status_message || 'Optimizer applied a winning proposal this cycle.',
+          );
         } else {
-          toastInfo('Optimization cycle finished', result.status_message || 'No deployable change this cycle.');
+          toastInfo(
+            'Cycle complete — no deployable change',
+            result.status_message || 'Optimizer ran but found no improvement this cycle.',
+          );
         }
       }
       handledTerminalTaskId.current = taskStatus.data.task_id;

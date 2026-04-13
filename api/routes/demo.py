@@ -106,6 +106,15 @@ async def run_demo_optimization(request: Request) -> StreamingResponse:
     async def event_generator() -> AsyncGenerator[str, None]:
         """Generate SSE events for the VP demo optimization journey."""
 
+        # First event: tell the client unambiguously that this is a scripted
+        # showcase and not a real optimization cycle. The UI overlay should
+        # surface this as a persistent ribbon.
+        notice = {
+            "scripted": True,
+            "message": "This is a scripted showcase, not a live optimization. See /optimize for real cycles.",
+        }
+        yield f"event: demo_notice\ndata: {json.dumps(notice)}\n\n"
+
         # Act 1: Discovery
         yield f"event: act_start\ndata: {json.dumps({'act': 1, 'title': 'Discovery', 'description': 'Analyzing 41 conversations...'})}\n\n"
         await asyncio.sleep(1.0)
@@ -268,5 +277,7 @@ async def run_demo_optimization(request: Request) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
+            # Loud out-of-band signal that this stream is a scripted showcase.
+            "X-AgentLab-Demo": "scripted",
         },
     )
