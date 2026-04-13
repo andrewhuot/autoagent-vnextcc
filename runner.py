@@ -517,11 +517,24 @@ def _create_workspace(
 
 
 def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
-    """Default fresh workspaces to mock mode unless the user explicitly opts into live or auto."""
+    """Resolve bootstrap mode using API-key presence when the caller left it default.
+
+    WHY: The CLI is live-first. When a user has a provider key in their
+    environment, we should not silently coerce `auto` to `mock`. When no key is
+    present and the caller passed `mode=auto` (default), keep the legacy
+    safe-default of `mock` so non-interactive scripts don't blow up on a
+    missing key.
+    """
     source = ctx.get_parameter_source("mode")
-    if mode == "auto" and source is ParameterSource.DEFAULT:
-        return "mock"
-    return mode
+    if mode != "auto":
+        return mode
+    if source is not ParameterSource.DEFAULT:
+        return "auto"
+
+    from cli.workspace_env import hydrate_provider_key_aliases, PROVIDER_API_KEY_ENV_VARS
+    hydrate_provider_key_aliases()
+    has_key = any(os.environ.get(name) for name in PROVIDER_API_KEY_ENV_VARS)
+    return "live" if has_key else "mock"
 
 
 def _doctor_fix_workspace(workspace: AgentLabWorkspace) -> list[str]:
@@ -2139,8 +2152,8 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
             else:
                 from cli.onboarding import run_onboarding
 
-                choice = run_onboarding()
-                if choice == "demo":
+                outcome = run_onboarding()
+                if outcome.workspace == "demo":
                     ctx.invoke(
                         init_project,
                         template="customer-support",
@@ -2150,8 +2163,9 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
                         platform="Google ADK",
                         with_synthetic_data=True,
                         demo=True,
+                        mode=outcome.mode,
                     )
-                elif choice == "empty":
+                elif outcome.workspace == "empty":
                     ctx.invoke(
                         init_project,
                         template="minimal",
@@ -2161,6 +2175,7 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
                         platform="Google ADK",
                         with_synthetic_data=False,
                         demo=False,
+                        mode=outcome.mode,
                     )
         else:
             ctx.invoke(
@@ -2802,62 +2817,83 @@ def build_agent(
 ) -> None:
     """Build an agent artifact from natural language and scaffold eval/deploy handoff files."""
     from cli.output import resolve_output_format
-    from cli.progress import ProgressRenderer
+    from cli.progress import PhaseSpinner, ProgressRenderer
     from optimizer.transcript_intelligence import TranscriptIntelligenceService
 
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("build", message="Generate build artifact from prompt")
 
-    target = Path(output_dir).resolve()
-    workspace = discover_workspace()
-    register_in_workspace = workspace is not None and target == workspace.root
-    target.mkdir(parents=True, exist_ok=True)
-    (target / ".agentlab").mkdir(parents=True, exist_ok=True)
-    (target / "configs").mkdir(parents=True, exist_ok=True)
-    (target / "evals" / "cases").mkdir(parents=True, exist_ok=True)
+    with PhaseSpinner("Preparing workspace", output_format=resolved_output_format) as spinner:
+        target = Path(output_dir).resolve()
+        workspace = discover_workspace()
+        register_in_workspace = workspace is not None and target == workspace.root
+        target.mkdir(parents=True, exist_ok=True)
+        (target / ".agentlab").mkdir(parents=True, exist_ok=True)
+        (target / "configs").mkdir(parents=True, exist_ok=True)
+        (target / "evals" / "cases").mkdir(parents=True, exist_ok=True)
 
-    resolved_connectors = [item.strip() for item in connectors if item.strip()]
-    if not resolved_connectors:
-        resolved_connectors = _infer_connectors_from_prompt(prompt)
+        resolved_connectors = [item.strip() for item in connectors if item.strip()]
+        if not resolved_connectors:
+            resolved_connectors = _infer_connectors_from_prompt(prompt)
 
-    live_artifact, live_model_label, live_failure_reason = _build_artifact_live(
-        prompt, resolved_connectors
-    )
-    if live_artifact is not None:
-        artifact = live_artifact
-    else:
-        service = TranscriptIntelligenceService()
-        artifact = service.build_agent_artifact(prompt, resolved_connectors)
-    artifact["skills"] = _build_skill_recommendations(artifact)
-    artifact["source_prompt"] = prompt
-
-    config = _artifact_to_seed_config(prompt, artifact)
-    config_yaml = yaml.safe_dump(config, sort_keys=False)
-    built_version: int | None = None
-    if register_in_workspace and workspace is not None:
-        store = ConversationStore(db_path=str(workspace.conversation_db))
-        deployer = Deployer(configs_dir=str(workspace.configs_dir), store=store)
-        saved_version = deployer.version_manager.save_version(
-            config,
-            scores={"composite": 0.0},
-            status="candidate",
+        spinner.update("Calling LLM to design agent")
+        progress.phase_started("build.llm", message="Generate artifact via provider")
+        live_artifact, live_model_label, live_failure_reason = _build_artifact_live(
+            prompt, resolved_connectors
         )
-        built_version = saved_version.version
-        config_path = workspace.configs_dir / saved_version.filename
-        workspace.set_active_config(saved_version.version, filename=saved_version.filename)
-    else:
-        config_path = _next_built_config_path(target / "configs")
-        config_path.write_text(config_yaml, encoding="utf-8")
-    progress.artifact_written("config", path=str(config_path))
+        if live_artifact is not None:
+            artifact = live_artifact
+            progress.phase_completed(
+                "build.llm",
+                message=f"Generated via {live_model_label}" if live_model_label else "Generated via live LLM",
+            )
+        else:
+            service = TranscriptIntelligenceService()
+            artifact = service.build_agent_artifact(prompt, resolved_connectors)
+            progress.phase_completed(
+                "build.llm",
+                message=(
+                    f"Used pattern fallback ({live_failure_reason})"
+                    if live_failure_reason
+                    else "Used pattern fallback (no provider key)"
+                ),
+            )
+        artifact["skills"] = _build_skill_recommendations(artifact)
+        artifact["source_prompt"] = prompt
 
-    eval_path = target / "evals" / "cases" / "generated_build.yaml"
-    _write_generated_eval_cases(eval_path, artifact)
-    progress.artifact_written("evals", path=str(eval_path))
+        spinner.update("Generating eval cases")
+        progress.phase_started("build.evals", message="Scaffold eval suite from artifact")
+        config = _artifact_to_seed_config(prompt, artifact)
+        config_yaml = yaml.safe_dump(config, sort_keys=False)
+        built_version: int | None = None
+        if register_in_workspace and workspace is not None:
+            store = ConversationStore(db_path=str(workspace.conversation_db))
+            deployer = Deployer(configs_dir=str(workspace.configs_dir), store=store)
+            saved_version = deployer.version_manager.save_version(
+                config,
+                scores={"composite": 0.0},
+                status="candidate",
+            )
+            built_version = saved_version.version
+            config_path = workspace.configs_dir / saved_version.filename
+            workspace.set_active_config(saved_version.version, filename=saved_version.filename)
+        else:
+            config_path = _next_built_config_path(target / "configs")
+            config_path.write_text(config_yaml, encoding="utf-8")
+        progress.artifact_written("config", path=str(config_path))
 
-    artifact_path = target / ".agentlab" / "build_artifact_latest.json"
-    artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
-    progress.artifact_written("artifact", path=str(artifact_path))
+        eval_path = target / "evals" / "cases" / "generated_build.yaml"
+        _write_generated_eval_cases(eval_path, artifact)
+        progress.artifact_written("evals", path=str(eval_path))
+        progress.phase_completed("build.evals", message="Eval suite scaffolded")
+
+        spinner.update("Writing build artifacts")
+        progress.phase_started("build.artifacts", message="Persist build outputs")
+        artifact_path = target / ".agentlab" / "build_artifact_latest.json"
+        artifact_path.write_text(json.dumps(artifact, indent=2), encoding="utf-8")
+        progress.artifact_written("artifact", path=str(artifact_path))
+        spinner.update("Build complete")
 
     prompt_summary = " ".join(prompt.split())
     title = prompt_summary[:72] if len(prompt_summary) <= 72 else f"{prompt_summary[:69]}..."
@@ -2891,6 +2927,7 @@ def build_agent(
         ),
         legacy_payload=artifact,
     )
+    progress.phase_completed("build.artifacts", message="Wrote build outputs")
     progress.phase_completed("build", message="Build artifact ready")
     progress.next_action("agentlab eval run")
 
@@ -3771,9 +3808,16 @@ def _run_optimize_cycle(
     config_path: Path | None = None,
     eval_run_id: str | None = None,
     require_eval_evidence: bool = False,
+    spinner: "PhaseSpinner | None" = None,
 ) -> tuple[dict, float]:
     """Run one optimize iteration and persist a matching experiment-log entry."""
+
+    def _phase(label: str) -> None:
+        if spinner is not None:
+            spinner.update(label)
+
     try:
+        _phase(f"Cycle {display_cycle} — loading eval evidence")
         workspace = discover_workspace()
         active_config = workspace.resolve_active_config() if workspace is not None and config_path is None else None
         scoped_config_path = config_path or (active_config.path if active_config is not None else None)
@@ -3852,6 +3896,7 @@ def _run_optimize_cycle(
 
         failure_samples = _build_eval_failure_samples(latest_eval_data)
         current_config = _load_optimize_current_config(deployer=deployer, config_path=config_path)
+        _phase(f"Cycle {display_cycle} — proposing candidate config")
         new_config, opt_status = optimizer.optimize(
             report,
             current_config,
@@ -3903,7 +3948,9 @@ def _run_optimize_cycle(
         if new_config is not None:
             from optimizer.change_card import ChangeCardStore
 
+            _phase(f"Cycle {display_cycle} — evaluating candidate")
             score = eval_runner.run(config=new_config)
+            _phase(f"Cycle {display_cycle} — deciding outcome")
             candidate_scores = _score_to_dict(score)
             candidate_version, candidate_path = _persist_candidate_config(
                 deployer,
@@ -4057,7 +4104,7 @@ def optimize(
       agentlab optimize --mode advanced --cycles 3
     """
     from cli.output import resolve_output_format
-    from cli.progress import ProgressRenderer
+    from cli.progress import PhaseSpinner, ProgressRenderer
     from cli.usage import enforce_workspace_budget
     from optimizer.cost_tracker import CostTracker
     from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
@@ -4196,26 +4243,34 @@ def optimize(
     try:
         while True:
             cost_before = _proposer_total_cost(proposer)
-            cycle_result, all_time_best = _run_optimize_cycle(
-                cycle_number=next_cycle_number,
-                display_cycle=display_cycle,
-                display_total=None if continuous else cycles,
-                continuous=continuous,
-                json_output=(resolved_output_format == "json"),
-                full_auto=full_auto,
-                store=store,
-                observer=observer,
-                optimizer=optimizer,
-                deployer=deployer,
-                memory=memory,
-                eval_runner=eval_runner,
-                best_score_file=best_score_file,
-                all_time_best=all_time_best,
-                log_path=log_path,
-                config_path=resolved_config_path,
-                eval_run_id=eval_run_id,
-                require_eval_evidence=require_eval_evidence,
-            )
+            with PhaseSpinner(
+                f"Cycle {display_cycle} — starting",
+                output_format=resolved_output_format,
+            ) as cycle_spinner:
+                cycle_result, all_time_best = _run_optimize_cycle(
+                    cycle_number=next_cycle_number,
+                    display_cycle=display_cycle,
+                    display_total=None if continuous else cycles,
+                    continuous=continuous,
+                    json_output=(resolved_output_format == "json"),
+                    full_auto=full_auto,
+                    store=store,
+                    observer=observer,
+                    optimizer=optimizer,
+                    deployer=deployer,
+                    memory=memory,
+                    eval_runner=eval_runner,
+                    best_score_file=best_score_file,
+                    all_time_best=all_time_best,
+                    log_path=log_path,
+                    config_path=resolved_config_path,
+                    eval_run_id=eval_run_id,
+                    require_eval_evidence=require_eval_evidence,
+                    spinner=cycle_spinner,
+                )
+                cycle_spinner.update(
+                    f"Cycle {cycle_result['experiment_cycle']} — {cycle_result['status']}"
+                )
             cost_after = _proposer_total_cost(proposer)
             cycle_cost = max(0.0, round(cost_after - cost_before, 8))
             cycle_delta = float(cycle_result.get("delta") or 0.0)

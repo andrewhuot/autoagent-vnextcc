@@ -16,6 +16,26 @@ PROVIDER_API_KEY_ENV_VARS = (
     "GOOGLE_API_KEY",
 )
 
+# Common aliases that users may paste into their shell even though our runtime
+# config reads the canonical *_API_KEY var. Mirror them so credential detection
+# and provider routing pick the key up without requiring the user to rename it.
+PROVIDER_API_KEY_ALIASES: dict[str, tuple[str, ...]] = {
+    "GOOGLE_API_KEY": ("GEMINI_API_KEY", "GOOGLE_GENAI_API_KEY"),
+}
+
+
+def hydrate_provider_key_aliases(environ: dict[str, str] | None = None) -> None:
+    """Copy known aliases into their canonical env vars when the canonical is empty."""
+    target = environ if environ is not None else os.environ
+    for canonical, aliases in PROVIDER_API_KEY_ALIASES.items():
+        if str(target.get(canonical) or "").strip():
+            continue
+        for alias in aliases:
+            value = str(target.get(alias) or "").strip()
+            if value:
+                target[canonical] = value
+                break
+
 
 def workspace_env_path(start: Path | None = None) -> Path:
     """Return the workspace-local env-file path used for saved provider keys."""
@@ -108,6 +128,7 @@ def load_workspace_env(
     for key, value in loaded.items():
         if override or key not in target:
             target[key] = value
+    hydrate_provider_key_aliases(target)
     return loaded
 
 
