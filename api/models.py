@@ -625,6 +625,10 @@ class OptimizeRequest(BaseModel):
         None,
         description="Optional eval run ID used to scope optimization context to a specific run",
     )
+    require_eval_evidence: bool = Field(
+        False,
+        description="Require a completed eval run before starting optimization.",
+    )
     mode: str = Field(
         "standard",
         pattern="^(standard|advanced|research)$",
@@ -948,6 +952,7 @@ class DeployRequest(BaseModel):
     version: Optional[int] = Field(None, description="Specific version number to promote")
     strategy: DeployStrategy = Field(DeployStrategy.canary, description="Deployment strategy")
     scores: dict[str, Any] = Field(default_factory=dict, description="Score snapshot for this deploy")
+    attempt_id: Optional[str] = Field(None, description="Optimizer attempt that produced this config; used for lineage tracking")
 
 
 class DeployResponse(BaseModel):

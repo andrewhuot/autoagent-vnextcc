@@ -75,7 +75,9 @@ from api.routes import (
     compare as compare_routes,
     results as results_routes,
     reviews as reviews_routes,
+    improvements as improvements_routes,
 )
+from api.optimize_event_bus import OptimizeEventBus
 from api.tasks import TaskManager
 from api.workspace_state import resolve_workspace_state
 from api.websocket import ConnectionManager
@@ -352,6 +354,14 @@ async def lifespan(app: FastAPI):
     app.state.deployer = deployer
     app.state.task_manager = task_manager
     app.state.ws_manager = ws_manager
+    app.state.optimize_event_bus = OptimizeEventBus()
+    from optimizer.improvement_lineage import ImprovementLineageStore
+    app.state.improvement_lineage = ImprovementLineageStore(
+        db_path=os.environ.get(
+            "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+            ".agentlab/improvement_lineage.db",
+        )
+    )
     app.state.builder_store = builder_store
     app.state.builder_project_manager = builder_project_manager
     app.state.builder_orchestrator = builder_orchestrator
@@ -576,6 +586,7 @@ app.include_router(preferences_routes.router)
 app.include_router(generated_evals_routes.router)
 app.include_router(compare_routes.router)
 app.include_router(results_routes.router)
+app.include_router(improvements_routes.router)
 # Check if a2a_routes has a well-known endpoint and wire it up
 # The a2a router registers /.well-known/agent-card.json directly (no prefix)
 # so we include the router without an additional prefix to keep the path correct.

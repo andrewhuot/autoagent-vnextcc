@@ -226,6 +226,24 @@ def _build_scoped_optimization_context(
     return report, failure_samples
 
 
+def _assert_eval_run_ready_for_optimization(request: Request, eval_run_id: str | None) -> None:
+    """Validate the explicit Eval evidence gate before background Optimize starts."""
+    if not eval_run_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Optimize requires completed Eval evidence. Run Eval first and pass eval_run_id.",
+        )
+    task_manager = request.app.state.task_manager
+    eval_task = task_manager.get_task(eval_run_id)
+    if eval_task is None or eval_task.task_type != "eval":
+        raise HTTPException(status_code=404, detail=f"Eval run not found: {eval_run_id}")
+    if eval_task.status != "completed" or not isinstance(eval_task.result, dict):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Eval run {eval_run_id} is {eval_task.status}; results not yet available",
+        )
+
+
 def _ensure_active_config(deployer: Any) -> dict:
     """Return active config; bootstrap from base config if none exists yet."""
     from pathlib import Path
@@ -294,6 +312,8 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
     task_manager = request.app.state.task_manager
     ws_manager = request.app.state.ws_manager
     event_log = getattr(request.app.state, "event_log", None)
+    event_bus = getattr(request.app.state, "optimize_event_bus", None)
+    improvement_lineage = getattr(request.app.state, "improvement_lineage", None)
     observer = request.app.state.observer
     optimizer = request.app.state.optimizer
     deployer = request.app.state.deployer
@@ -301,6 +321,9 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
     store = request.app.state.conversation_store
     pending_review_store = getattr(request.app.state, "pending_review_store", None)
     optimization_memory = request.app.state.optimization_memory
+
+    if body.require_eval_evidence:
+        _assert_eval_run_ready_for_optimization(request, body.eval_run_id)
 
     window = body.window
     force = body.force
@@ -316,6 +339,10 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
     def run_optimize(task: Task) -> dict:
         import asyncio
 
+        def emit(event_type: str, data: dict[str, Any]) -> None:
+            if event_bus is not None:
+                event_bus.emit(task.task_id, event_type, data)
+
         original_strategy = optimizer.search_strategy
         original_max_candidates = optimizer.search_budget.max_candidates
         original_max_eval_budget = optimizer.search_budget.max_eval_budget
@@ -327,6 +354,16 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
         optimizer.search_budget.max_cost_dollars = body.budget_dollars
 
         task.progress = 10
+        emit(
+            "cycle_start",
+            {
+                "cycle": 1,
+                "total": 1,
+                "mode": body.mode,
+                "eval_run_id": body.eval_run_id,
+                "config_path": body.config_path,
+            },
+        )
         try:
             if body.eval_run_id:
                 report, failure_samples = _build_scoped_optimization_context(
@@ -338,9 +375,37 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                 report = observer.observe(window=window)
                 failure_samples = _build_failure_samples(store)
             task.progress = 20
+            _buckets_for_stream = dict(getattr(report, "failure_buckets", {}) or {})
+            emit(
+                "diagnosis",
+                {
+                    "failure_buckets": _buckets_for_stream,
+                    "dominant": max(
+                        (k for k, v in _buckets_for_stream.items() if v > 0),
+                        key=_buckets_for_stream.get,
+                        default=None,
+                    ),
+                    "total_failures": int(sum(_buckets_for_stream.values())),
+                    "needs_optimization": bool(getattr(report, "needs_optimization", False)),
+                    "reason": getattr(report, "reason", None),
+                    "sample_count": len(failure_samples),
+                },
+            )
 
             if not report.needs_optimization and not force:
                 diagnostics = optimizer.get_strategy_diagnostics()
+                emit(
+                    "decision",
+                    {
+                        "accepted": False,
+                        "reason": "system_healthy",
+                        "detail": "No optimization needed — metrics above thresholds.",
+                    },
+                )
+                emit(
+                    "optimization_complete",
+                    {"status": "noop", "reason": "system_healthy"},
+                )
                 result = OptimizeCycleResult(
                     accepted=False,
                     status_message=f"System healthy; no optimization needed (mode={body.mode})",
@@ -366,12 +431,47 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                 current_config = _ensure_active_config(deployer)
 
             task.progress = 40
+            emit(
+                "proposal_start",
+                {
+                    "mode": body.mode,
+                    "objective": body.objective,
+                    "failure_count": len(failure_samples),
+                },
+            )
             new_config, status_msg = optimizer.optimize(
                 report,
                 current_config,
                 failure_samples=failure_samples,
             )
             task.progress = 70
+            _latest_attempt_for_stream = None
+            try:
+                _latest_attempt_for_stream = optimization_memory.recent(limit=1)[0]
+            except Exception:
+                _latest_attempt_for_stream = None
+            emit(
+                "proposal",
+                {
+                    "accepted": new_config is not None,
+                    "status_message": status_msg,
+                    "change_description": (
+                        _latest_attempt_for_stream.change_description
+                        if _latest_attempt_for_stream is not None
+                        else None
+                    ),
+                    "config_section": (
+                        _latest_attempt_for_stream.config_section
+                        if _latest_attempt_for_stream is not None
+                        else None
+                    ),
+                    "attempt_id": (
+                        _latest_attempt_for_stream.attempt_id
+                        if _latest_attempt_for_stream is not None
+                        else None
+                    ),
+                },
+            )
 
             deploy_msg: str | None = None
             score_before: float | None = None
@@ -380,10 +480,28 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
             broadcast_type = "optimize_complete"
 
             if new_config is not None:
+                emit(
+                    "evaluation_start",
+                    {"target": "baseline+candidate"},
+                )
                 baseline = eval_runner.run(config=current_config)
                 score_before = baseline.composite
                 score = eval_runner.run(config=new_config)
                 score_after = score.composite
+                emit(
+                    "evaluation",
+                    {
+                        "score_before": round(float(score_before or 0.0), 4),
+                        "score_after": round(float(score_after or 0.0), 4),
+                        "improvement": round(
+                            float((score_after or 0.0) - (score_before or 0.0)), 4
+                        ),
+                        "quality": round(float(score.quality or 0.0), 4),
+                        "safety": round(float(score.safety or 0.0), 4),
+                        "latency": round(float(score.latency or 0.0), 4),
+                        "cost": round(float(score.cost or 0.0), 4),
+                    },
+                )
 
                 scores_dict = {
                     "quality": score.quality,
@@ -466,6 +584,68 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
             ).model_dump()
             task.result = result
 
+            emit(
+                "decision",
+                {
+                    "accepted": new_config is not None,
+                    "pending_review": pending_review is not None,
+                    "status_message": result["status_message"],
+                    "score_before": score_before,
+                    "score_after": score_after,
+                    "change_description": change_desc,
+                    "attempt_id": (
+                        pending_review.attempt_id if pending_review is not None else None
+                    ),
+                },
+            )
+            # Lineage: record accept/reject against the most recent attempt so
+            # the Improvements API can show a complete history per proposal.
+            if improvement_lineage is not None and recent:
+                try:
+                    lineage_attempt_id = recent[0].attempt_id
+                    lineage_event_type = (
+                        "pending_review"
+                        if pending_review is not None
+                        else ("accept" if new_config is not None else "reject")
+                    )
+                    improvement_lineage.record(
+                        lineage_attempt_id,
+                        lineage_event_type,
+                        payload={
+                            "status_message": result["status_message"],
+                            "score_before": score_before,
+                            "score_after": score_after,
+                            "change_description": change_desc,
+                            "eval_run_id": body.eval_run_id,
+                        },
+                    )
+                except Exception:
+                    LOG.debug("Failed to record improvement lineage", exc_info=True)
+            emit(
+                "cycle_complete",
+                {
+                    "cycle": 1,
+                    "accepted": new_config is not None,
+                    "score_delta": (
+                        (score_after or 0.0) - (score_before or 0.0)
+                        if score_before is not None and score_after is not None
+                        else None
+                    ),
+                },
+            )
+            emit(
+                "optimization_complete",
+                {
+                    "status": "pending_review" if pending_review is not None else ("accepted" if new_config is not None else "rejected"),
+                    "baseline": score_before,
+                    "final": score_after,
+                    "change_description": change_desc,
+                    "attempt_id": (
+                        pending_review.attempt_id if pending_review is not None else None
+                    ),
+                },
+            )
+
             # Best-effort websocket broadcast
             broadcast_payload = {
                 "type": broadcast_type,
@@ -497,11 +677,22 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                     LOG.debug("Failed to bridge optimize broadcast to event log", exc_info=True)
 
             return result
+        except Exception as exc:
+            emit(
+                "error",
+                {
+                    "error": str(exc),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise
         finally:
             optimizer.search_strategy = original_strategy
             optimizer.search_budget.max_candidates = original_max_candidates
             optimizer.search_budget.max_eval_budget = original_max_eval_budget
             optimizer.search_budget.max_cost_dollars = original_max_cost
+            if event_bus is not None:
+                event_bus.close(task.task_id)
 
     task = task_manager.create_task("optimize", run_optimize)
     return OptimizeResponse(task_id=task.task_id, message="Optimization started")

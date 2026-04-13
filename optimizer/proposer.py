@@ -73,7 +73,7 @@ class Proposer:
 
     def __init__(
         self,
-        use_mock: bool = True,
+        use_mock: bool = False,
         llm_router: LLMRouter | None = None,
         mock_reason: str = "",
     ) -> None:

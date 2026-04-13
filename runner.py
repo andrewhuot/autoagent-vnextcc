@@ -1040,6 +1040,62 @@ def _latest_eval_payload_for_active_config(active_config_path: Path | None) -> t
     return latest_path, latest_payload
 
 
+def _eval_payload_run_id(data: dict) -> str:
+    """Return the run id from an eval payload or envelope."""
+    payload = _unwrap_eval_payload(data)
+    return str(payload.get("run_id") or data.get("run_id") or "").strip()
+
+
+def _eval_payload_for_run_id(
+    eval_run_id: str,
+    *,
+    config_path: Path | None = None,
+) -> tuple[Path | None, dict | None]:
+    """Find an eval result payload by run id, optionally scoped to a config path."""
+    target_run_id = eval_run_id.strip()
+    if not target_run_id:
+        return None, None
+
+    for candidate in _list_eval_result_files(limit=100):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        if _eval_payload_run_id(data) != target_run_id:
+            continue
+        if config_path is not None:
+            payload = _unwrap_eval_payload(data)
+            payload_config = payload.get("config_path") or data.get("config_path")
+            if payload_config and not _paths_match(Path(str(payload_config)), config_path):
+                continue
+        return candidate, data
+    return None, None
+
+
+def _resolve_optimize_config_path(config_path: str | None) -> Path | None:
+    """Resolve an optional Optimize config path relative to the invocation cwd."""
+    if not config_path:
+        return None
+    return _resolve_invocation_input_path(Path(config_path))
+
+
+def _load_optimize_current_config(
+    *,
+    deployer: Deployer,
+    config_path: Path | None,
+) -> dict:
+    """Load the config being optimized, falling back to the active deployment."""
+    if config_path is None:
+        return _ensure_active_config(deployer)
+    if not config_path.exists():
+        raise click.ClickException(f"Config file not found: {config_path}")
+    try:
+        with config_path.open("r", encoding="utf-8") as handle:
+            return yaml.safe_load(handle) or {}
+    except yaml.YAMLError as exc:
+        raise click.ClickException(f"Could not parse config file: {config_path}") from exc
+
+
 def _normalize_eval_failure_bucket(result: dict) -> str:
     """Map eval-result failures into optimizer-friendly failure families."""
     category = str(result.get("category", "")).strip().lower()
@@ -3712,27 +3768,41 @@ def _run_optimize_cycle(
     best_score_file: Path,
     all_time_best: float,
     log_path: Path,
+    config_path: Path | None = None,
+    eval_run_id: str | None = None,
+    require_eval_evidence: bool = False,
 ) -> tuple[dict, float]:
     """Run one optimize iteration and persist a matching experiment-log entry."""
     try:
         workspace = discover_workspace()
-        active_config = workspace.resolve_active_config() if workspace is not None else None
-        latest_eval_path, latest_eval_data = _latest_eval_payload_for_active_config(
-            active_config.path if active_config is not None else None
-        )
+        active_config = workspace.resolve_active_config() if workspace is not None and config_path is None else None
+        scoped_config_path = config_path or (active_config.path if active_config is not None else None)
+        if eval_run_id:
+            latest_eval_path, latest_eval_data = _eval_payload_for_run_id(
+                eval_run_id,
+                config_path=scoped_config_path,
+            )
+        else:
+            latest_eval_path, latest_eval_data = _latest_eval_payload_for_active_config(scoped_config_path)
         if latest_eval_path is None or latest_eval_data is None:
+            if eval_run_id:
+                description = f"Eval results not found for run id {eval_run_id}."
+            elif scoped_config_path is not None:
+                description = f"No eval results found for config {scoped_config_path}. Run `agentlab eval run --config {scoped_config_path}` first."
+            else:
+                description = "No eval results found for the active config. Run `agentlab eval run` first."
+            blocked = bool(require_eval_evidence or eval_run_id)
             entry = make_experiment_log_entry(
                 cycle=cycle_number,
-                status="skip",
-                description="No eval results found for the active config. Run `agentlab eval run` first.",
+                status="crash" if blocked else "skip",
+                description=description,
                 score_before=None,
                 score_after=None,
             )
             append_experiment_log_entry(entry, path=log_path)
             if not json_output and not continuous and display_total is not None:
                 click.echo(
-                    f"\n  Cycle {display_cycle}/{display_total} — No eval results found for the active config. "
-                    "Run `agentlab eval run` first."
+                    f"\n  Cycle {display_cycle}/{display_total} — {description}"
                 )
             return (
                 {
@@ -3780,8 +3850,8 @@ def _run_optimize_cycle(
                 all_time_best,
             )
 
-        current_config = _ensure_active_config(deployer)
         failure_samples = _build_eval_failure_samples(latest_eval_data)
+        current_config = _load_optimize_current_config(deployer=deployer, config_path=config_path)
         new_config, opt_status = optimizer.optimize(
             report,
             current_config,
@@ -3940,6 +4010,14 @@ def _run_optimize_cycle(
 @click.option("--strategy", default=None, hidden=True, help="[DEPRECATED] Use --mode instead.")
 @click.option("--db", default=DB_PATH, show_default=True, help="Conversation store DB.")
 @click.option("--configs-dir", default=CONFIGS_DIR, show_default=True, help="Configs directory.")
+@click.option("--config", "config_path", default=None, help="Optimize a specific config path instead of the active config.")
+@click.option("--eval-run-id", default=None, help="Use a specific eval run as optimization evidence.")
+@click.option(
+    "--require-eval-evidence",
+    is_flag=True,
+    default=False,
+    help="Fail if no completed eval evidence is available for this optimization.",
+)
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
 @click.option("--full-auto", is_flag=True, default=False,
               help="Danger mode: auto-promote accepted configs without manual review.")
@@ -3960,6 +4038,9 @@ def optimize(
     strategy: str | None,
     db: str,
     configs_dir: str,
+    config_path: str | None,
+    eval_run_id: str | None,
+    require_eval_evidence: bool,
     memory_db: str,
     full_auto: bool,
     dry_run: bool,
@@ -4025,6 +4106,9 @@ def optimize(
             "full_auto": full_auto,
             "db": db,
             "configs_dir": configs_dir,
+            "config_path": config_path,
+            "eval_run_id": eval_run_id,
+            "require_eval_evidence": require_eval_evidence,
             "memory_db": memory_db,
             "max_budget_usd": max_budget_usd,
         }
@@ -4058,7 +4142,11 @@ def optimize(
         adversarial_simulator,
         skill_autolearner,
     ) = _build_runtime_components()
-    resolution = resolve_config_snapshot(command="optimize")
+    resolved_config_path = _resolve_optimize_config_path(config_path)
+    resolution = resolve_config_snapshot(
+        config_path=str(resolved_config_path) if resolved_config_path is not None else None,
+        command="optimize",
+    )
     persist_config_lockfile(resolution)
     _warn_mock_modes(proposer=proposer, json_output=(resolved_output_format == "json"))
     store = ConversationStore(db_path=db)
@@ -4124,6 +4212,9 @@ def optimize(
                 best_score_file=best_score_file,
                 all_time_best=all_time_best,
                 log_path=log_path,
+                config_path=resolved_config_path,
+                eval_run_id=eval_run_id,
+                require_eval_evidence=require_eval_evidence,
             )
             cost_after = _proposer_total_cost(proposer)
             cycle_cost = max(0.0, round(cost_after - cost_before, 8))
@@ -4140,6 +4231,8 @@ def optimize(
                     f"{cycle_result['status']} ({cycle_delta:+.2f})"
                 ),
             )
+            if (require_eval_evidence or eval_run_id) and cycle_result["status"] == "crash":
+                raise click.ClickException(str(cycle_result.get("change_description") or "Missing eval evidence."))
 
             experiments_run += 1
             if cycle_result["status"] == "keep":
@@ -4353,6 +4446,158 @@ def improve_run(auto: bool, json_output: bool = False) -> None:
         click.echo("  agentlab autofix suggest")
 
 
+@improve_group.command("list")
+@click.option("--status", default=None, help="Filter by classified status (proposed, pending_review, accepted, rejected, deployed_canary, promoted, rolled_back, measured).")
+@click.option("--limit", default=20, show_default=True, type=int, help="Max rows to show.")
+@click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
+@click.option("--lineage-db", default=os.environ.get("AGENTLAB_IMPROVEMENT_LINEAGE_DB", ".agentlab/improvement_lineage.db"), show_default=True, help="Improvement lineage DB.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def improve_list(
+    status: str | None,
+    limit: int,
+    memory_db: str,
+    lineage_db: str,
+    json_output: bool,
+) -> None:
+    """List improvements with their lineage (proposal -> deploy -> measurement)."""
+    from optimizer.improvement_lineage import ImprovementLineageStore
+    from optimizer.memory import OptimizationMemory
+
+    memory = OptimizationMemory(db_path=memory_db)
+    lineage = ImprovementLineageStore(db_path=lineage_db)
+
+    attempts = sorted(memory.get_all(), key=lambda a: a.timestamp, reverse=True)
+
+    def classify(raw_status: str, lineage_types: list[str]) -> str:
+        if "promote" in lineage_types:
+            return "measured" if "measurement" in lineage_types else "promoted"
+        if "rollback" in lineage_types:
+            return "rolled_back"
+        if "deploy_canary" in lineage_types:
+            return "deployed_canary"
+        if raw_status.startswith("rejected"):
+            return "rejected"
+        if raw_status == "accepted":
+            return "accepted"
+        return "proposed"
+
+    rows: list[dict] = []
+    for attempt in attempts:
+        events = lineage.events_for(attempt.attempt_id)
+        types = [e.event_type for e in events]
+        classified = classify(attempt.status, types)
+        if status and classified != status:
+            continue
+        rows.append(
+            {
+                "attempt_id": attempt.attempt_id,
+                "status": classified,
+                "raw_status": attempt.status,
+                "change": attempt.change_description,
+                "section": attempt.config_section,
+                "score_before": attempt.score_before,
+                "score_after": attempt.score_after,
+                "deployed_version": next(
+                    (e.version for e in reversed(events) if e.event_type in ("promote", "deploy_canary") and e.version is not None),
+                    None,
+                ),
+                "measurement": next(
+                    (e.payload for e in reversed(events) if e.event_type == "measurement"),
+                    None,
+                ),
+                "lineage": types,
+            }
+        )
+        if len(rows) >= limit:
+            break
+
+    if json_output:
+        click.echo(json.dumps({"total": len(rows), "items": rows}, indent=2))
+        return
+
+    if not rows:
+        click.echo("No improvements found.")
+        return
+
+    click.echo(click.style(f"Improvements ({len(rows)} shown):", fg="cyan", bold=True))
+    click.echo(
+        f"{'ID':<10} {'STATUS':<18} {'SECTION':<22} {'v':>4}  CHANGE"
+    )
+    click.echo("-" * 100)
+    for row in rows:
+        ver = f"v{row['deployed_version']:03d}" if row["deployed_version"] is not None else "—"
+        click.echo(
+            f"{row['attempt_id'][:8]:<10} "
+            f"{row['status']:<18} "
+            f"{(row['section'] or '—')[:22]:<22} "
+            f"{ver:>4}  "
+            f"{(row['change'] or '')[:60]}"
+        )
+
+
+@improve_group.command("show")
+@click.argument("attempt_id", required=True)
+@click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
+@click.option("--lineage-db", default=os.environ.get("AGENTLAB_IMPROVEMENT_LINEAGE_DB", ".agentlab/improvement_lineage.db"), show_default=True, help="Improvement lineage DB.")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def improve_show(attempt_id: str, memory_db: str, lineage_db: str, json_output: bool) -> None:
+    """Show a single improvement with its full lineage."""
+    from optimizer.improvement_lineage import ImprovementLineageStore
+    from optimizer.memory import OptimizationMemory
+
+    memory = OptimizationMemory(db_path=memory_db)
+    lineage = ImprovementLineageStore(db_path=lineage_db)
+
+    matches = [a for a in memory.get_all() if a.attempt_id.startswith(attempt_id)]
+    if not matches:
+        click.echo(click.style(f"No improvement with attempt_id prefix {attempt_id!r}", fg="red"), err=True)
+        raise SystemExit(1)
+    if len(matches) > 1:
+        click.echo(click.style(f"Ambiguous prefix {attempt_id!r}, matches {len(matches)} improvements.", fg="yellow"), err=True)
+        raise SystemExit(1)
+
+    attempt = matches[0]
+    events = lineage.events_for(attempt.attempt_id)
+
+    if json_output:
+        click.echo(json.dumps(
+            {
+                "attempt_id": attempt.attempt_id,
+                "status": attempt.status,
+                "change": attempt.change_description,
+                "config_section": attempt.config_section,
+                "score_before": attempt.score_before,
+                "score_after": attempt.score_after,
+                "timestamp": attempt.timestamp,
+                "lineage": [
+                    {
+                        "event_type": e.event_type,
+                        "timestamp": e.timestamp,
+                        "version": e.version,
+                        "payload": e.payload,
+                    }
+                    for e in events
+                ],
+            },
+            indent=2,
+        ))
+        return
+
+    click.echo(click.style(f"Improvement {attempt.attempt_id}", fg="cyan", bold=True))
+    click.echo(f"  Change:   {attempt.change_description}")
+    click.echo(f"  Section:  {attempt.config_section or '—'}")
+    click.echo(f"  Status:   {attempt.status}")
+    if attempt.score_before is not None or attempt.score_after is not None:
+        before = f"{attempt.score_before:.4f}" if attempt.score_before is not None else "n/a"
+        after = f"{attempt.score_after:.4f}" if attempt.score_after is not None else "n/a"
+        click.echo(f"  Scores:   before={before} after={after}")
+    click.echo(f"  Lineage ({len(events)} events):")
+    for e in events:
+        when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.timestamp))
+        ver = f" v{e.version:03d}" if e.version is not None else ""
+        click.echo(f"    [{when}] {e.event_type}{ver}")
+
+
 @improve_group.command("optimize")
 @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
 @click.option("--continuous", is_flag=True, default=False, help="Loop indefinitely until Ctrl+C.")
@@ -4389,6 +4634,9 @@ def improve_optimize(
         strategy=strategy,
         db=db,
         configs_dir=configs_dir,
+        config_path=None,
+        eval_run_id=None,
+        require_eval_evidence=False,
         memory_db=memory_db,
         full_auto=full_auto,
         dry_run=dry_run,
@@ -6136,7 +6384,7 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             if check["credential_present"]:
                 click.echo(
                     f"  {check['provider'] + ':':<22}"
-                    + click.style(f"\u2713 {check['model']} ready{source_note}", fg="green")
+                    + click.style(f"\u2713 {check['model']} configured{source_note}; live probe not run", fg="green")
                 )
             elif check.get("source") == "runtime config":
                 env_name = check.get("api_key_env") or "an API key"
