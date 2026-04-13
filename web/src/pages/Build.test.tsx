@@ -682,9 +682,16 @@ describe('Build', () => {
     await user.click(screen.getByRole('button', { name: 'Generate Agent' }));
     await screen.findByRole('heading', { name: 'Conversational Refinement' });
 
-    await user.click(screen.getByRole('button', { name: 'Save to Workspace' }));
+    const saveButton = screen.getByRole('button', { name: 'Save to Workspace' });
+    expect(saveButton).toHaveClass('bg-gray-900');
+    expect(saveButton).toHaveClass('text-white');
+    await user.click(saveButton);
 
-    expect(await screen.findByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
+    const saveBanner = await screen.findByRole('region', { name: 'Saved workspace next steps' });
+    expect(saveBanner).toHaveTextContent('Saved to workspace. Ready for the next step.');
+    expect(saveBanner).toHaveTextContent('/tmp/workspace/configs/v002.yaml');
+    expect(within(saveBanner).getByRole('button', { name: 'Continue to Workbench' })).toBeInTheDocument();
+    expect(within(saveBanner).getByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
     const journey = screen.getByRole('region', { name: 'Operator journey' });
     expect(within(journey).getByText('Current step: Build')).toBeInTheDocument();
     expect(within(journey).getByText('Next: run eval')).toBeInTheDocument();
@@ -694,7 +701,7 @@ describe('Build', () => {
     );
     expect(screen.getAllByText('/tmp/workspace/configs/v002.yaml').length).toBeGreaterThan(0);
 
-    await user.click(screen.getByRole('button', { name: 'Continue to Workbench' }));
+    await user.click(within(saveBanner).getByRole('button', { name: 'Continue to Workbench' }));
 
     expect(await screen.findByText('Workbench Page')).toBeInTheDocument();
     expect(screen.getByTestId('workbench-search')).toHaveTextContent(

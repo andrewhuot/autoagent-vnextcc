@@ -1,5 +1,71 @@
 # Findings & Decisions
 
+## Live UI Integration Merge - Codex
+
+### Mission
+
+- Stay on `/Users/andrew/Desktop/agentlab-live-ui-merge-codex` branch `feat/live-ui-golden-path-integration-codex`.
+- Use `feat/live-ui-golden-path-codex` as the backbone and selectively port UI polish plus Playwright coverage from `feat/live-ui-golden-path-claude-opus`.
+- Do not push and do not merge the entire Claude branch.
+- Preserve Codex backend/UI flow correctness, especially Build handoff/saved-version behavior and EvalRuns strict-live/selected-agent behavior.
+
+### Initial Findings
+
+- Required overlap command completed before source edits.
+- Diff stat across requested paths:
+  - `web/src/components/workbench/ChatInput.tsx`: 3 lines changed.
+  - `web/src/pages/Build.test.tsx`: 30 lines changed.
+  - `web/src/pages/Build.tsx`: 48 lines changed.
+  - `web/src/pages/EvalRuns.tsx`: 37 lines changed.
+  - `web/tests/builder-flow.spec.ts`: 8 lines changed.
+  - `web/tests/live-golden-path-deep.spec.ts`: 280 lines added.
+  - `web/tests/live-golden-path.spec.ts`: 274 lines added.
+  - `web/tests/verify-fixes.spec.ts`: 70 lines added.
+- Worktree started clean on `feat/live-ui-golden-path-integration-codex`.
+- Session catchup script produced no additional output.
+
+### Merge Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Start with wholesale checkout only for user-approved Claude-only files | Keeps scope bounded and avoids accidentally replacing flow-critical Codex files. |
+| Manually inspect Codex and Claude versions before patching Build/EvalRuns | Needed to separate UX polish from flow correctness changes. |
+
+### Wholesale Port Findings
+
+- `web/src/components/workbench/ChatInput.tsx` Claude update changes the send button from an icon-only square to a compact labeled button when text is present.
+- `web/tests/builder-flow.spec.ts` Claude update broadens ignored aborted request noise and loosens eval URL matching so additional query params do not fail the flow test.
+- Three Claude Playwright specs were added wholesale:
+  - `web/tests/live-golden-path.spec.ts`
+  - `web/tests/live-golden-path-deep.spec.ts`
+  - `web/tests/verify-fixes.spec.ts`
+
+### Manual Merge Findings
+
+- `Build.tsx` retained the Codex `navigateToWorkbenchWorkflow` behavior that carries the original prompt and saved model hint into Workbench.
+- Build UX polish added:
+  - Primary dark Save to Workspace styling for Builder Chat and Studio save buttons.
+  - A persistent saved-next-steps banner above the lower preview/save details area.
+  - Banner CTA buttons for Continue to Workbench and Continue to Eval.
+- `Build.test.tsx` now covers the saved-next-steps banner and still verifies the Workbench handoff preserves the original prompt.
+- `EvalRuns.tsx` retained Codex strict-live request behavior (`require_live`) and active-agent completed-run filtering.
+- EvalRuns UX polish added only the disabled Start Eval title and helper text when no agent is selected.
+
+### Verification Findings
+
+- `web/node_modules` was absent, so `npm ci` was required before frontend test execution.
+- Literal shell command `cd web && vitest run ...` fails in zsh because `vitest` is not on PATH; the installed project binary works via `./node_modules/.bin/vitest`.
+- Touched page check passed: `cd web && ./node_modules/.bin/vitest run src/pages/Build.test.tsx src/pages/EvalRuns.test.tsx` reported 2 files passed and 34 tests passed.
+- Global `pytest tests/test_workbench_api.py tests/test_workbench_streaming.py -q` used Homebrew Python without FastAPI, so a project `.venv` was created with `uv` and `.[dev]`.
+- Backend verification in the project venv passed:
+  - `pytest tests/test_p0_journey_fixes.py -q`: 20 passed.
+  - `pytest tests/test_workbench_api.py tests/test_workbench_streaming.py -q`: 23 passed.
+  - `pytest tests/test_eval_agent.py tests/test_generated_evals_api.py -q`: 10 passed.
+- Full frontend verification via local binary passed: `cd web && ./node_modules/.bin/vitest run` reported 56 files passed and 394 tests passed.
+- Playwright environment caveat: ports 8000 and 5173 were occupied by another `/Users/andrew/Desktop/agentlab` checkout, and 5174 was also occupied. This branch frontend was started on 5175.
+- Practical Playwright subset passed: `PLAYWRIGHT_BASE_URL=http://127.0.0.1:5175 ./node_modules/.bin/playwright test tests/builder-flow.spec.ts tests/verify-fixes.spec.ts --workers=1` reported 5 passed.
+- The two live golden path specs were not run because their API paths target hardcoded localhost:8000 through Vite proxy/direct page requests, and localhost:8000 was occupied by a different checkout with a real provider configured.
+
 ## AgentLab Golden Path E2E Hardening - Codex
 
 ### Mission

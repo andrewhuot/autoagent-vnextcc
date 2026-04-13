@@ -206,7 +206,11 @@ function trackPageIssues(page: Page) {
   const badResponses: string[] = [];
 
   const ignorable = (entry: string) =>
-    entry.includes('/favicon.ico') || entry.includes('/ws') || entry.includes('WebSocket connection');
+    entry.includes('/favicon.ico') ||
+    entry.includes('/ws') ||
+    entry.includes('WebSocket connection') ||
+    entry.includes(':: net::ERR_ABORTED') ||
+    entry.includes('/api/health :: net::ERR_ABORTED');
 
   page.on('console', (msg) => {
     if (msg.type() === 'error') {
@@ -276,7 +280,7 @@ test('builder flow clarifies the save-to-eval handoff and downloads config', asy
 
   await dialog.getByRole('button', { name: 'Close configuration modal' }).click();
   await page.getByRole('button', { name: 'Save & Run Eval' }).click();
-  await expect(page).toHaveURL(/\/evals\?agent=.*new=1$/);
+  await expect(page).toHaveURL(/\/evals\?agent=.*new=1/);
   await expect(page.getByRole('heading', { name: 'Start First Evaluation' })).toBeVisible();
   await expect(page.getByText('Saved draft from Build', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Run First Eval' })).toBeVisible();

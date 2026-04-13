@@ -742,14 +742,20 @@ export function EvalRuns() {
               <p className="mt-2 text-xs text-gray-600">Optional label for grouping runs later in Compare and Results Explorer.</p>
             </div>
 
-            <div className="flex items-end">
+            <div className="flex flex-col items-stretch gap-2">
               <button
                 onClick={() => handleStartEval()}
                 disabled={startEval.isPending || !activeAgent}
                 className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
+                title={!activeAgent ? 'Select an agent from the library above to enable this button' : undefined}
               >
                 {startEval.isPending ? 'Starting...' : isFirstRunJourney ? 'Run First Eval' : 'Start Eval'}
               </button>
+              {!activeAgent && !startEval.isPending && (
+                <p className="text-center text-xs text-amber-600">
+                  Select an agent from the Agent Library above to start an eval.
+                </p>
+              )}
             </div>
           </div>
         </section>

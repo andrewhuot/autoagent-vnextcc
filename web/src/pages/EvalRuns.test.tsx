@@ -222,6 +222,20 @@ describe('EvalRuns', () => {
     expect(within(journey).queryByText('Next: optimize candidate')).not.toBeInTheDocument();
   });
 
+  it('explains why the eval start button is disabled until an agent is selected', () => {
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    renderPage('/evals?new=1');
+
+    const startButton = screen.getByRole('button', { name: 'Start Eval' });
+    expect(startButton).toBeDisabled();
+    expect(startButton).toHaveAttribute(
+      'title',
+      'Select an agent from the library above to enable this button'
+    );
+    expect(screen.getByText('Select an agent from the Agent Library above to start an eval.')).toBeInTheDocument();
+  });
+
   it('starts a new eval from the empty-state CTA when an agent is selected', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {
