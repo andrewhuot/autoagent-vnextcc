@@ -670,7 +670,8 @@ describe('Build', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save to Workspace' }));
 
-    expect(await screen.findByRole('button', { name: 'Continue to Eval' })).toBeInTheDocument();
+    const evalButtons = await screen.findAllByRole('button', { name: 'Continue to Eval' });
+    expect(evalButtons.length).toBeGreaterThanOrEqual(1);
     const journey = screen.getByRole('region', { name: 'Operator journey' });
     expect(within(journey).getByText('Current step: Build')).toBeInTheDocument();
     expect(within(journey).getByText('Next: run eval')).toBeInTheDocument();

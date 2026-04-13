@@ -1825,6 +1825,32 @@ export function StudioWorkspace({
                 </div>
               </div>
 
+              {saveResult && savedAgent ? (
+                <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-4">
+                  <p className="text-sm font-semibold text-emerald-800">
+                    Saved to workspace — ready for the next step
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => navigateToWorkbenchWorkflow(navigate, savedAgent, saveResult)}
+                      className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-semibold text-gray-700 transition hover:bg-gray-50"
+                    >
+                      Continue to Workbench
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateToEvalWorkflow(navigate, savedAgent, 'run', saveResult.eval_cases_path)}
+                      className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-3.5 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+                    >
+                      Continue to Eval
+                      <ArrowRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <DraftInsightsPanel
                 testId="studio-draft-insights"
                 summary={summarizeGeneratedConfig(agentConfig)}
@@ -1856,7 +1882,7 @@ export function StudioWorkspace({
                     type="button"
                     onClick={() => void handleSaveToWorkspace()}
                     disabled={!agentConfig || refinementBusy}
-                    className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="inline-flex items-center gap-2 rounded-xl bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <FolderOpen className="h-4 w-4" />
                     {savePending ? 'Saving...' : 'Save to Workspace'}

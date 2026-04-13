@@ -142,7 +142,7 @@ export function ChatInput({ onSubmit, onCancel, placeholder }: ChatInputProps) {
             onClick={handleSubmit}
             disabled={!value.trim()}
             className={classNames(
-              'flex h-8 w-8 items-center justify-center rounded-md transition',
+              'flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition',
               value.trim()
                 ? 'bg-[color:var(--wb-accent)] text-[color:var(--wb-accent-fg)] hover:opacity-90'
                 : 'bg-[color:var(--wb-bg-hover)] text-[color:var(--wb-text-muted)]'
@@ -151,6 +151,7 @@ export function ChatInput({ onSubmit, onCancel, placeholder }: ChatInputProps) {
             title="Send (⌘↵)"
           >
             <Send className="h-3.5 w-3.5" />
+            {value.trim() ? <span>Send</span> : null}
           </button>
         )}
       </div>
