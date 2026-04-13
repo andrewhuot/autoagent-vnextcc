@@ -158,6 +158,60 @@ describe('EvalRuns', () => {
     );
   });
 
+  it('keeps resolving the URL agent when the first agent list is stale', async () => {
+    const staleAgent = {
+      id: 'agent-v001',
+      name: 'Old Agent',
+      model: 'gpt-5.3',
+      created_at: '2026-03-31T12:00:00.000Z',
+      source: 'built',
+      config_path: '/workspace/configs/v001.yaml',
+      status: 'candidate',
+    };
+    const freshAgent = {
+      id: 'agent-v016',
+      name: 'Greenleaf Guide',
+      model: 'gemini-2.5-pro',
+      created_at: '2026-04-13T12:00:00.000Z',
+      source: 'built',
+      config_path: '/workspace/configs/v016.yaml',
+      status: 'candidate',
+    };
+    let currentAgents = [staleAgent];
+    apiMocks.useAgents.mockImplementation(() => ({
+      data: currentAgents,
+      isLoading: false,
+    }));
+    apiMocks.useAgent.mockReturnValue({
+      data: undefined,
+      isLoading: false,
+    });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
+
+    const { rerender } = renderPage('/evals?agent=agent-v016&new=1');
+
+    expect(screen.getByText('Resolving selected agent...')).toBeInTheDocument();
+
+    currentAgents = [freshAgent, staleAgent];
+    rerender(
+      <MemoryRouter initialEntries={['/evals?agent=agent-v016&new=1']}>
+        <Routes>
+          <Route path="/evals" element={<EvalRuns />} />
+          <Route path="/optimize" element={<div>Optimize Page</div>} />
+        </Routes>
+      </MemoryRouter>
+    );
+
+    expect((await screen.findAllByText('Greenleaf Guide')).length).toBeGreaterThan(0);
+    expect(screen.queryByText('No agent selected')).not.toBeInTheDocument();
+  });
+
   it('starts a first eval with the Build-generated eval cases path from navigation state', async () => {
     const user = userEvent.setup();
     const mutate = vi.fn((_params, options) => {

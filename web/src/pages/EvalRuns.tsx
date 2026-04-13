@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { FlaskConical, Plus, X, Wand2 } from 'lucide-react';
 import {
@@ -79,8 +79,15 @@ export function EvalRuns() {
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeAgent, setActiveAgent } = useActiveAgent();
+  const navigationState = (location.state as EvalJourneyState | null) ?? null;
+  const requestedAgentId = navigationState?.agent?.id ?? searchParams.get('agent');
   const { data: agents } = useAgents();
-  const { data: selectedAgentDetail } = useAgent(activeAgent?.id);
+  const agentDetailId =
+    requestedAgentId && activeAgent?.id !== requestedAgentId ? requestedAgentId : activeAgent?.id;
+  const {
+    data: selectedAgentDetail,
+    isError: selectedAgentDetailError,
+  } = useAgent(agentDetailId);
   const { data: runs, isLoading, isError, refetch } = useEvalRuns();
   const {
     data: generatedSuites = [],
@@ -100,15 +107,26 @@ export function EvalRuns() {
   const [runAgents, setRunAgents] = useState<Record<string, AgentLibraryItem>>({});
   const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
   const [completedRunId, setCompletedRunId] = useState<string | null>(null);
-  const selectionHydratedRef = useRef(false);
 
-  const navigationState = (location.state as EvalJourneyState | null) ?? null;
   const buildEvalCasesPath = navigationState?.evalCasesPath ?? searchParams.get('evalCasesPath') ?? undefined;
   const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
   const showGeneratorPanel =
     showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
   const isAgentImproverHandoff =
     navigationState?.source === 'agent-improver' || searchParams.get('from') === 'agent-improver';
+  const requestedAgentFromList = useMemo(() => {
+    if (!requestedAgentId || !agents?.length) {
+      return null;
+    }
+    return agents.find((agent) => agent.id === requestedAgentId) ?? null;
+  }, [agents, requestedAgentId]);
+  const isResolvingRequestedAgent = Boolean(
+    requestedAgentId &&
+      activeAgent?.id !== requestedAgentId &&
+      !requestedAgentFromList &&
+      !selectedAgentDetail &&
+      !selectedAgentDetailError
+  );
   const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
   const latestCompletedRunIdForActiveAgent = useMemo(() => {
     if (!activeAgent) {
@@ -126,29 +144,33 @@ export function EvalRuns() {
   });
 
   useEffect(() => {
-    if (selectionHydratedRef.current) {
-      return;
-    }
     if (navigationState?.agent) {
-      setActiveAgent(navigationState.agent);
-      selectionHydratedRef.current = true;
+      if (activeAgent?.id !== navigationState.agent.id) {
+        setActiveAgent(navigationState.agent);
+      }
       return;
     }
 
-    const agentId = searchParams.get('agent');
-    if (!agentId) {
-      selectionHydratedRef.current = true;
+    if (!requestedAgentId || activeAgent?.id === requestedAgentId) {
       return;
     }
-    if (!agents?.length) {
+
+    if (requestedAgentFromList) {
+      setActiveAgent(requestedAgentFromList);
       return;
     }
-    const matched = agents.find((agent) => agent.id === agentId);
-    if (matched) {
-      setActiveAgent(matched);
+
+    if (selectedAgentDetail?.id === requestedAgentId) {
+      setActiveAgent(selectedAgentDetail);
     }
-    selectionHydratedRef.current = true;
-  }, [agents, navigationState?.agent, searchParams, setActiveAgent]);
+  }, [
+    activeAgent?.id,
+    navigationState?.agent,
+    requestedAgentFromList,
+    requestedAgentId,
+    selectedAgentDetail,
+    setActiveAgent,
+  ]);
 
   useEffect(() => {
     const unsubscribe = wsClient.onMessage('eval_complete', (payload) => {
@@ -395,7 +417,7 @@ export function EvalRuns() {
         }
       />
 
-      <AgentSelector onChange={syncAgentSearchParam} />
+      <AgentSelector isResolving={isResolvingRequestedAgent} onChange={syncAgentSearchParam} />
 
       <OperatorNextStepCard summary={journeySummary} />
 

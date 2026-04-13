@@ -102,11 +102,12 @@ from cli.workbench import workbench_group
 from cli.mode import load_runtime_with_mode_preference, mode_group, summarize_mode_state
 from cli.permissions import permissions_group
 from cli.providers import (
-    configured_providers,
+    configured_or_runtime_providers,
     default_api_key_env_for,
     default_model_for,
     normalize_model_name,
     provider_health_checks,
+    provider_live_health_checks,
     providers_file_path,
     sync_runtime_config,
     upsert_provider,
@@ -2456,7 +2457,10 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
 def provider_list() -> None:
     """List configured providers for the current workspace."""
     workspace = _require_workspace("provider")
-    providers = configured_providers(providers_file_path(workspace))
+    providers = configured_or_runtime_providers(
+        providers_file_path(workspace),
+        runtime_config_path=workspace.runtime_config_path,
+    )
     if not providers:
         click.echo("No providers configured. Run `agentlab provider configure`.")
         return
@@ -2465,23 +2469,65 @@ def provider_list() -> None:
     click.echo("====================")
     for provider in providers:
         env_name = provider.get("api_key_env") or "n/a"
-        click.echo(f"- {provider['provider']}  model={provider['model']}  env={env_name}")
+        source = provider.get("source") or "registry"
+        click.echo(f"- {provider['provider']}  model={provider['model']}  env={env_name}  source={source}")
 
 
 @provider_group.command("test")
-def provider_test() -> None:
+@click.option(
+    "--live",
+    "live_probe",
+    is_flag=True,
+    help="Make a tiny provider API call in addition to checking credential presence.",
+)
+def provider_test(live_probe: bool) -> None:
     """Validate configured providers have the credentials needed for live use."""
     workspace = _require_workspace("provider")
-    checks = provider_health_checks(providers_file_path(workspace))
+    provider_path = providers_file_path(workspace)
+    checks = provider_health_checks(
+        provider_path,
+        runtime_config_path=workspace.runtime_config_path,
+    )
     if not checks:
         raise click.ClickException("No providers configured. Run `agentlab provider configure` first.")
 
-    failures = [check for check in checks if not check["credential_present"]]
+    registry_failures = [
+        check
+        for check in checks
+        if not check["credential_present"] and check.get("source") != "runtime config"
+    ]
+    ready_checks = [check for check in checks if check["credential_present"]]
     for check in checks:
-        marker = click.style("✓", fg="green") if check["credential_present"] else click.style("✗", fg="red")
-        click.echo(f"{marker} {check['message']}")
-    if failures:
+        if check["credential_present"]:
+            marker = click.style("✓", fg="green")
+            message = check["message"]
+        elif check.get("source") == "runtime config":
+            marker = click.style("⚠", fg="yellow")
+            message = f"{check['message']} (optional unless selected)"
+        else:
+            marker = click.style("✗", fg="red")
+            message = check["message"]
+        click.echo(f"{marker} {message}")
+    if registry_failures:
         raise click.ClickException("Provider check failed. Export the missing credentials and retry.")
+    if not ready_checks:
+        raise click.ClickException("Provider check failed. Export credentials for at least one runtime provider.")
+
+    if live_probe:
+        live_checks = provider_live_health_checks(
+            provider_path,
+            runtime_config_path=workspace.runtime_config_path,
+        )
+        if not live_checks:
+            raise click.ClickException("Live provider check failed. No credentialed providers were available to probe.")
+
+        live_failures = [check for check in live_checks if not check["live_ok"]]
+        for check in live_checks:
+            marker = click.style("✓", fg="green") if check["live_ok"] else click.style("✗", fg="red")
+            click.echo(f"{marker} {check['message']}")
+        if live_failures:
+            raise click.ClickException("Live provider check failed. Fix provider access and retry.")
+        click.echo("Live provider check passed.")
 
     click.echo("Provider check passed.")
 
@@ -5886,39 +5932,29 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     # ------------------------------------------------------------------
     click.echo("\nProvider Profiles")
     provider_path = providers_file_path(workspace)
-    providers = configured_providers(provider_path)
-    if providers:
-        checks = provider_health_checks(provider_path)
+    checks = provider_health_checks(provider_path, runtime_config_path=config_path)
+    if checks:
         for check in checks:
+            source_note = " (from runtime config)" if check.get("source") == "runtime config" else ""
             if check["credential_present"]:
                 click.echo(
                     f"  {check['provider'] + ':':<22}"
-                    + click.style(f"\u2713 {check['model']} ready", fg="green")
+                    + click.style(f"\u2713 {check['model']} ready{source_note}", fg="green")
+                )
+            elif check.get("source") == "runtime config":
+                env_name = check.get("api_key_env") or "an API key"
+                click.echo(
+                    f"  {check['provider'] + ':':<22}"
+                    + click.style(
+                        f"\u26a0 {check['model']} missing {env_name} (optional unless selected)",
+                        fg="yellow",
+                    )
                 )
             else:
                 issues.append(check["message"])
                 click.echo(
                     f"  {check['provider'] + ':':<22}"
                     + click.style(f"\u2717 {check['model']} missing {check['api_key_env']}", fg="red")
-                )
-    elif mode_summary["providers"]:
-        for provider in mode_summary["providers"]:
-            env_name = provider.get("api_key_env") or "an API key"
-            if provider.get("credential_set"):
-                click.echo(
-                    f"  {provider['provider'] + ':':<22}"
-                    + click.style(
-                        f"\u2713 {provider['model']} ready (from runtime config)",
-                        fg="green",
-                    )
-                )
-            else:
-                click.echo(
-                    f"  {provider['provider'] + ':':<22}"
-                    + click.style(
-                        f"\u26a0 {provider['model']} missing {env_name} (optional unless selected)",
-                        fg="yellow",
-                    )
                 )
     else:
         click.echo(

@@ -106,7 +106,7 @@ def load_workspace_env(
     target = environ if environ is not None else os.environ
     loaded = read_workspace_env(workspace_env_path(start))
     for key, value in loaded.items():
-        if override or not target.get(key):
+        if override or key not in target:
             target[key] = value
     return loaded
 

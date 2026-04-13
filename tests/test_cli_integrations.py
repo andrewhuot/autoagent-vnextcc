@@ -6,6 +6,7 @@ import io
 import json
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from click.testing import CliRunner
@@ -288,3 +289,73 @@ class TestModeCLI:
         assert doctor_result.exit_code == 0, doctor_result.output
         assert "Running in MOCK mode" in doctor_result.output
         assert "workspace preference" in doctor_result.output.lower()
+
+    def test_provider_commands_use_runtime_configured_providers_without_registry(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Provider CLI status should agree with doctor/live-mode runtime readiness."""
+        runner = CliRunner()
+        workspace = tmp_path / "runtime-provider"
+        env = {
+            "OPENAI_API_KEY": "",
+            "ANTHROPIC_API_KEY": "",
+            "GOOGLE_API_KEY": "g-test-key",
+        }
+        init_result = runner.invoke(
+            cli,
+            ["init", "--dir", str(workspace), "--mode", "live"],
+            env=env,
+        )
+        assert init_result.exit_code == 0, init_result.output
+        assert not (workspace / ".agentlab" / "providers.json").exists()
+
+        monkeypatch.chdir(workspace)
+
+        list_result = runner.invoke(cli, ["provider", "list"], env=env)
+        assert list_result.exit_code == 0, list_result.output
+        assert "google" in list_result.output.lower()
+        assert "gemini-2.5-pro" in list_result.output
+        assert "runtime config" in list_result.output.lower()
+
+        test_result = runner.invoke(cli, ["provider", "test"], env=env)
+        assert test_result.exit_code == 0, test_result.output
+        assert "google:gemini-2.5-pro is ready" in test_result.output
+
+    def test_provider_live_probe_redacts_rejected_provider_errors(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Live provider probes should expose access failures without leaking keys."""
+        from optimizer import providers as optimizer_providers
+
+        runner = CliRunner()
+        workspace = tmp_path / "runtime-provider-live-probe"
+        secret = "g-test-secret-1234567890"
+        env = {
+            "OPENAI_API_KEY": "",
+            "ANTHROPIC_API_KEY": "",
+            "GOOGLE_API_KEY": secret,
+        }
+        init_result = runner.invoke(
+            cli,
+            ["init", "--dir", str(workspace), "--mode", "live"],
+            env=env,
+        )
+        assert init_result.exit_code == 0, init_result.output
+
+        def fail_generate(self: SimpleNamespace, request: object) -> object:
+            raise RuntimeError(f"HTTP Error 403: {secret}")
+
+        monkeypatch.setattr(optimizer_providers.LLMRouter, "generate", fail_generate)
+        monkeypatch.chdir(workspace)
+
+        result = runner.invoke(cli, ["provider", "test", "--live"], env=env)
+
+        assert result.exit_code != 0, result.output
+        assert "rejected the live probe" in result.output
+        assert "Gemini API is enabled" in result.output
+        assert secret not in result.output
+        assert "[redacted]" in result.output

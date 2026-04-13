@@ -9,6 +9,7 @@ import type { AgentLibraryItem } from '../lib/types';
 interface AgentSelectorProps {
   title?: string;
   description?: string;
+  isResolving?: boolean;
   onChange?: (agent: AgentLibraryItem | null) => void;
 }
 
@@ -21,6 +22,7 @@ const sourceLabel: Record<string, string> = {
 export function AgentSelector({
   title = 'Agent Library',
   description = 'Choose which saved agent this workflow should use.',
+  isResolving = false,
   onChange,
 }: AgentSelectorProps) {
   const { data: agents, isLoading } = useAgents();
@@ -73,6 +75,10 @@ export function AgentSelector({
                   {sourceLabel[activeAgent.source] ?? activeAgent.source}
                 </span>
               </>
+            ) : isResolving ? (
+              <span className="rounded-full border border-sky-200 bg-sky-50 px-3 py-1 text-xs font-medium text-sky-700">
+                Resolving selected agent...
+              </span>
             ) : (
               <span className="rounded-full border border-dashed border-gray-300 px-3 py-1 text-xs font-medium text-gray-500">
                 No agent selected
@@ -91,11 +97,14 @@ export function AgentSelector({
             <select
               id="agent-selector"
               aria-label="Agent selector"
+              aria-busy={isResolving}
               value={activeAgent?.id ?? ''}
               onChange={(event) => handleSelection(event.target.value)}
               className="w-full appearance-none rounded-xl border border-gray-300 bg-white px-3 py-2.5 pr-10 text-sm text-gray-900 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-100"
             >
-              <option value="">No agent selected</option>
+              <option value="">
+                {isResolving ? 'Loading agent selection' : activeAgent ? 'Choose another agent' : 'No agent selected'}
+              </option>
               {(agents ?? []).map((agent) => (
                 <option key={agent.id} value={agent.id}>
                   {agent.name} · {agent.model}
@@ -110,7 +119,7 @@ export function AgentSelector({
         </div>
       </div>
 
-      {!activeAgent && !isLoading && (
+      {!activeAgent && !isLoading && !isResolving && (
         <div className="mt-4 rounded-xl border border-dashed border-gray-200 bg-gray-50 px-4 py-3">
           <p className="text-sm text-gray-600">
             Pick an agent from the library or create one first so Eval and Optimize can stay on the same config.
