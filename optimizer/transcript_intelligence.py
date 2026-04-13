@@ -405,6 +405,48 @@ class TranscriptIntelligenceService:
         )
         return has_support_context and has_saas_context
 
+    def _looks_like_lawn_garden_prompt(self, lower_prompt: str) -> bool:
+        """Return whether a prompt describes lawn and garden retail support.
+
+        WHY: Safety guardrails such as "avoid medical claims" can otherwise
+        make the fallback classify a garden-store agent as healthcare.
+        """
+        has_garden_context = any(
+            term in lower_prompt
+            for term in (
+                "lawn and garden",
+                "garden center",
+                "garden centre",
+                "garden store",
+                "plant care",
+                "planting plan",
+                "planting-plan",
+                "greenhouse",
+                "nursery",
+                "soil",
+                "mulch",
+                "fertilizer",
+                "pesticide",
+                "watering",
+            )
+        )
+        has_retail_context = any(
+            term in lower_prompt
+            for term in (
+                "store",
+                "retail",
+                "website chat",
+                "delivery",
+                "return",
+                "returns",
+                "catalog",
+                "product",
+                "customer",
+                "escalation",
+            )
+        )
+        return has_garden_context and has_retail_context
+
     def _extract_requested_agent_name(self, prompt: str) -> str | None:
         """Extract an explicitly named agent from leading build/create phrasing."""
         match = re.search(
@@ -474,6 +516,20 @@ class TranscriptIntelligenceService:
                 "one-time fee",
                 "one-time fees",
             )),
+            ("lawn_garden", (
+                "lawn and garden",
+                "garden center",
+                "garden centre",
+                "garden store",
+                "plant care",
+                "planting plan",
+                "planting-plan",
+                "nursery",
+                "soil",
+                "mulch",
+                "fertilizer",
+                "pesticide",
+            )),
             ("customer_service", ("customer service", "customer support", "support", "help desk", "helpdesk", "faq", "knowledge base")),
             ("product_review", (
                 "prd",
@@ -501,6 +557,8 @@ class TranscriptIntelligenceService:
         domain = _scores[0][2] if _scores else "general"
         if self._looks_like_saas_support_prompt(lower):
             domain = "saas_support"
+        if self._looks_like_lawn_garden_prompt(lower):
+            domain = "lawn_garden"
 
         # --- derive a short agent name from the prompt ---
         explicit_agent_name = self._extract_requested_agent_name(prompt)
@@ -517,6 +575,8 @@ class TranscriptIntelligenceService:
             agent_name = "SaaS FAQ Support Agent"
         elif domain == "telecom_billing":
             agent_name = "PhoneBillingSupportAgent"
+        elif domain == "lawn_garden":
+            agent_name = "GardenStoreSupportAgent"
         else:
             agent_name = "".join(agent_name_words) + "Agent" if agent_name_words else "AgentLab"
 
@@ -578,6 +638,17 @@ class TranscriptIntelligenceService:
                 "Proactively provide order updates and shipping estimates.\n\n"
                 "Escalate to a human agent for complex disputes, high-value orders, or when policy "
                 "does not cover the customer's situation."
+            ),
+            "lawn_garden": (
+                "You are a lawn and garden store support agent. You help website visitors with plant care, "
+                "planting plans, product selection, delivery questions, returns, and store escalation paths.\n\n"
+                "Ground advice in approved product pages, plant care guides, local growing-zone context, and "
+                "store policies. Ask clarifying questions about location, sunlight, soil, watering, plant type, "
+                "and timing before giving a planting plan. For delivery, return, or account-specific requests, "
+                "use store policy guidance and escalate when verified order data is required.\n\n"
+                "Do not make unsupported medical, pesticide safety, or legal claims. For pesticide use, toxicity, "
+                "or safety-sensitive situations, direct customers to the product label, qualified local experts, "
+                "or emergency services when appropriate."
             ),
             "hr": (
                 "You are an HR assistant helping employees with questions about benefits, policies, "
@@ -737,6 +808,28 @@ class TranscriptIntelligenceService:
                     "parameters": {"order_id": "string", "new_address": "object"},
                 },
             ],
+            "lawn_garden": [
+                {
+                    "name": "search_garden_catalog",
+                    "description": "Search approved lawn and garden products, plants, supplies, and availability guidance.",
+                    "parameters": {"query": "string", "store_location": "string | null"},
+                },
+                {
+                    "name": "lookup_plant_care_guide",
+                    "description": "Find approved plant care and planting-plan guidance for a plant, growing condition, or season.",
+                    "parameters": {"plant_or_project": "string", "growing_zone": "string | null", "conditions": "string | null"},
+                },
+                {
+                    "name": "check_delivery_or_return_policy",
+                    "description": "Look up store delivery, pickup, return, and exchange policy guidance.",
+                    "parameters": {"topic": "delivery|pickup|return|exchange", "order_context": "string | null"},
+                },
+                {
+                    "name": "create_store_escalation",
+                    "description": "Create a human handoff for order-specific, safety-sensitive, or policy-exception requests.",
+                    "parameters": {"reason": "string", "context_summary": "string", "priority": "low|medium|high"},
+                },
+            ],
             "hr": [
                 {
                     "name": "get_employee_profile",
@@ -840,6 +933,13 @@ class TranscriptIntelligenceService:
                 {"condition": "identity_verified == false", "action": "verify_via_order_number_or_email", "priority": 3},
                 {"condition": "default", "action": "standard_order_support", "priority": 99},
             ],
+            "lawn_garden": [
+                {"condition": "topic in ['plant_care', 'product_selection'] and approved_guide_found == true", "action": "answer_plant_care", "priority": 1},
+                {"condition": "topic == 'planting_plan' and context_is_sufficient == true", "action": "build_planting_plan", "priority": 2},
+                {"condition": "topic in ['delivery', 'return', 'exchange']", "action": "answer_delivery_or_return", "priority": 3},
+                {"condition": "safety_sensitive == true or account_specific_order_data_required == true", "action": "create_store_escalation", "priority": 4},
+                {"condition": "default", "action": "answer_from_garden_guides", "priority": 99},
+            ],
             "hr": [
                 {"condition": "topic == 'workplace_dispute'", "action": "escalate_to_hrbp", "priority": 1},
                 {"condition": "employee_verified == false", "action": "verify_employee_identity", "priority": 2},
@@ -899,6 +999,11 @@ class TranscriptIntelligenceService:
                 {"name": "no_unauthorized_refunds", "description": "Refunds must meet policy criteria and be logged for audit.", "enforcement": "hard_block"},
                 {"name": "order_verification", "description": "Verify order ownership before disclosing or modifying order details.", "enforcement": "hard_block"},
             ],
+            "lawn_garden": [
+                {"name": "approved_guidance_grounding", "description": "Plant care and product recommendations must be grounded in approved catalog, care guide, or policy sources.", "enforcement": "required"},
+                {"name": "no_medical_or_pesticide_safety_claims", "description": "Never make unsupported medical, pesticide safety, toxicity, or legal claims; defer to product labels and qualified experts.", "enforcement": "hard_block"},
+                {"name": "safe_store_escalation", "description": "Escalate safety-sensitive, order-specific, and policy-exception requests with full context.", "enforcement": "required"},
+            ],
             "hr": [
                 {"name": "employee_confidentiality", "description": "Never disclose one employee's information to another without authorization.", "enforcement": "hard_block"},
                 {"name": "equal_treatment", "description": "Provide consistent policy information to all employees regardless of level.", "enforcement": "required"},
@@ -955,6 +1060,12 @@ class TranscriptIntelligenceService:
                 {"name": "return_policy_accuracy", "weight": 0.30, "description": "Correct application of return and refund policy."},
                 {"name": "customer_effort_score", "weight": 0.20, "description": "How easy customers find it to get their issue resolved."},
                 {"name": "escalation_rate", "weight": 0.15, "description": "Rate of human escalation; lower indicates better self-service coverage."},
+            ],
+            "lawn_garden": [
+                {"name": "plant_care_grounding", "weight": 0.30, "description": "Plant care and planting-plan answers are grounded in approved guides and relevant growing context."},
+                {"name": "delivery_return_policy_accuracy", "weight": 0.25, "description": "Delivery, pickup, return, and exchange answers follow current store policy."},
+                {"name": "safe_claim_handling", "weight": 0.25, "description": "Medical, pesticide safety, toxicity, and emergency questions are handled with safe deferral or escalation."},
+                {"name": "store_escalation_quality", "weight": 0.20, "description": "Order-specific and policy-exception cases are escalated with useful context."},
             ],
             "hr": [
                 {"name": "policy_accuracy", "weight": 0.40, "description": "Accuracy of HR policy information provided to employees."},

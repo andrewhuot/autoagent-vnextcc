@@ -139,6 +139,26 @@ describe('workbench-store', () => {
     expect(messages[0].text).toBe('Here is the plan for your agent.');
   });
 
+  it('keeps word-boundary chunks readable when deltas omit leading spaces', () => {
+    dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
+    dispatch({
+      event: 'message.delta',
+      data: { task_id: 'task-root', text: 'Lawn and Garden Support agent. I' },
+    });
+    dispatch({
+      event: 'message.delta',
+      data: { task_id: 'task-root', text: "'ll start with Define role" },
+    });
+    dispatch({
+      event: 'message.delta',
+      data: { task_id: 'task-root', text: 'and render artifacts' },
+    });
+    const messages = useWorkbenchStore.getState().messages;
+    expect(messages[0].text).toBe(
+      "Lawn and Garden Support agent. I'll start with Define role and render artifacts"
+    );
+  });
+
   it('stores artifacts and auto-focuses the most recent one', () => {
     dispatch({ event: 'plan.ready', data: { plan: makePlan() } });
     dispatch({

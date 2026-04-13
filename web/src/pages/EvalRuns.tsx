@@ -43,6 +43,13 @@ function getEvalJourneySummary(input: {
   completedRunId: string | null;
 }) {
   if (input.completedAgent && input.completedRunId) {
+    const optimizeParams = new URLSearchParams({
+      agent: input.completedAgent.id,
+      evalRunId: input.completedRunId,
+    });
+    if (input.completedAgent.config_path) {
+      optimizeParams.set('configPath', input.completedAgent.config_path);
+    }
     return createJourneyStatusSummary({
       currentStep: 'eval',
       status: 'ready',
@@ -50,7 +57,7 @@ function getEvalJourneySummary(input: {
       summary: `${input.completedAgent.name} has a completed eval run. Use that same run context for Optimize.`,
       nextLabel: 'Optimize candidate',
       nextDescription: 'Open Optimize with the completed eval run and selected agent carried forward.',
-      href: `/optimize?agent=${encodeURIComponent(input.completedAgent.id)}&evalRunId=${encodeURIComponent(input.completedRunId)}`,
+      href: `/optimize?${optimizeParams.toString()}`,
     });
   }
 
@@ -422,12 +429,19 @@ export function EvalRuns() {
             <button
               type="button"
               onClick={() =>
-                navigate(`/optimize?agent=${encodeURIComponent(completedAgent.id)}`, {
+                navigate(
+                  `/optimize?${new URLSearchParams({
+                    agent: completedAgent.id,
+                    evalRunId: completedRunId,
+                    ...(completedAgent.config_path ? { configPath: completedAgent.config_path } : {}),
+                  }).toString()}`,
+                  {
                   state: {
                     agent: completedAgent,
                     evalRunId: completedRunId,
                   },
-                })
+                  }
+                )
               }
               className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
             >

@@ -456,6 +456,8 @@ def _infer_domain(brief: str) -> str:
         or "promo credit" in lowered
     ):
         return "Phone Billing Support"
+    if _is_lawn_garden_context(lowered):
+        return "Lawn and Garden Support"
     if "airline" in lowered or "flight" in lowered or "booking" in lowered:
         return "Airline Support"
     if "refund" in lowered or "order" in lowered:
@@ -480,6 +482,42 @@ def _infer_domain(brief: str) -> str:
     return "Agent"
 
 
+def _is_lawn_garden_context(lowered: str) -> bool:
+    """Return whether text describes lawn and garden retail support."""
+    has_garden_terms = (
+        _has_phrase(
+            lowered,
+            (
+                "lawn and garden",
+                "garden center",
+                "garden centre",
+                "garden store",
+                "plant care",
+                "planting plan",
+                "planting-plan",
+            ),
+        )
+        or _has_word(lowered, ("greenhouse", "nursery", "soil", "mulch", "fertilizer", "pesticide", "watering"))
+    )
+    has_retail_terms = _has_word(
+        lowered,
+        ("store", "retail", "delivery", "return", "returns", "catalog", "product", "customer", "escalation"),
+    ) or "website chat" in lowered
+    return has_garden_terms and has_retail_terms
+
+
+def _extract_requested_agent_name(brief: str) -> str | None:
+    """Extract an explicitly named agent from leading build/create phrasing."""
+    match = re.search(
+        r"\b(?i:build|create|make|design)\s+([A-Z][A-Za-z0-9]*(?:\s+[A-Z][A-Za-z0-9]*){0,3})(?=,|\s+(?:a|an|for|that|to)\b|$)",
+        brief.strip(),
+    )
+    if match is None:
+        return None
+    name = re.sub(r"\s+", " ", match.group(1)).strip()
+    return name or None
+
+
 def _has_word(text: str, words: tuple[str, ...]) -> bool:
     """Match domain hints as words so pronouns like 'it' do not steer routing."""
     return any(re.search(rf"\b{re.escape(word)}\b", text) for word in words)
@@ -497,6 +535,46 @@ def _model_hint_from_brief(brief: str) -> str | None:
         return None
     model = match.group(1).strip().rstrip(".,;:")
     return model or None
+
+
+def _brief_from_saved_config(config_path: str | None, fallback: str) -> str:
+    """Recover the original Build intent from a saved config path when safe.
+
+    WHY: URL-only Build -> Workbench handoffs often contain just an agent name
+    and config path. The saved config carries the richer source prompt, which
+    keeps Workbench from re-inferring a generic domain.
+    """
+    if not config_path:
+        return fallback
+    try:
+        workspace_root = Path.cwd().resolve()
+        resolved = Path(config_path).expanduser().resolve()
+        if workspace_root not in (resolved, *resolved.parents):
+            return fallback
+        if not resolved.is_file():
+            return fallback
+        loaded = yaml.safe_load(resolved.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, yaml.YAMLError):
+        return fallback
+    if not isinstance(loaded, dict):
+        return fallback
+
+    journey_build = loaded.get("journey_build") if isinstance(loaded.get("journey_build"), dict) else {}
+    metadata = loaded.get("metadata") if isinstance(loaded.get("metadata"), dict) else {}
+    generated_config = (
+        metadata.get("generated_config")
+        if isinstance(metadata.get("generated_config"), dict)
+        else {}
+    )
+    candidates = [
+        journey_build.get("source_prompt"),
+        journey_build.get("system_prompt"),
+        generated_config.get("system_prompt"),
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return fallback
 
 
 def _default_agent_model_name(brief: str) -> str:
@@ -533,11 +611,12 @@ def _default_model(brief: str, *, target: WorkbenchTarget, environment: str) -> 
     and CX artifacts are downstream compiler output, never the source of truth.
     """
     domain = _infer_domain(brief)
-    agent_name = f"{domain} Agent" if not domain.endswith("Agent") else domain
+    explicit_agent_name = _extract_requested_agent_name(brief)
+    agent_name = explicit_agent_name or (f"{domain} Agent" if not domain.endswith("Agent") else domain)
     model_name = _default_agent_model_name(brief)
     return {
         "project": {
-            "name": f"{domain} Workbench",
+            "name": f"{agent_name} Workbench" if explicit_agent_name else f"{domain} Workbench",
             "description": brief.strip() or "New agent workbench project.",
         },
         "agents": [
@@ -677,7 +756,7 @@ def _append_assistant_chunk(
             continue
         if message.get("task_id") != task_id:
             continue
-        message["content"] = f"{message.get('content', '')}{chunk}"
+        message["content"] = _append_text_delta(str(message.get("content") or ""), chunk)
         return
     conversation.append(
         {
@@ -690,6 +769,21 @@ def _append_assistant_chunk(
             "kind": "narration",
         }
     )
+
+
+def _append_text_delta(current: str, delta: str) -> str:
+    """Join streamed word chunks without crushing adjacent words."""
+    next_text = delta.strip()
+    previous = current.rstrip()
+    if not next_text:
+        return previous
+    if not previous:
+        return next_text
+    if current[-1:].isspace() or delta[:1].isspace():
+        return f"{previous}{delta}".strip()
+    if re.match(r"^[,.;:!?)}\]'\"’]", next_text) or re.search(r"[(\[{/'\"‘-]$", previous):
+        return f"{previous}{next_text}".strip()
+    return f"{previous} {next_text}".strip()
 
 
 class WorkbenchStore:
@@ -993,6 +1087,7 @@ class WorkbenchService:
         *,
         project_id: str | None,
         brief: str,
+        config_path: str | None = None,
         target: str = "portable",
         environment: str = "draft",
         agent: Any = None,
@@ -1027,6 +1122,7 @@ class WorkbenchService:
         )
 
         runner = agent if agent is not None else build_default_agent()
+        effective_brief = _brief_from_saved_config(config_path, brief)
 
         if project_id:
             try:
@@ -1034,11 +1130,11 @@ class WorkbenchService:
             except KeyError:
                 existing = None
 
-            if existing is not None and existing.get("artifacts") and brief:
+            if existing is not None and existing.get("artifacts") and effective_brief:
                 # Project has prior artifacts — treat as an iteration.
                 return await self.run_iteration_stream(
                     project_id=project_id,
-                    follow_up=brief,
+                    follow_up=effective_brief,
                     target=target,
                     environment=environment,
                     agent=runner,
@@ -1049,11 +1145,11 @@ class WorkbenchService:
                     execution=execution,
                 )
             project = existing or self.store.create_project(
-                brief=brief, target=target, environment=environment
+                brief=effective_brief, target=target, environment=environment
             )
         else:
             project = self.store.create_project(
-                brief=brief, target=target, environment=environment
+                brief=effective_brief, target=target, environment=environment
             )
         project.setdefault("plan", None)
         project.setdefault("artifacts", [])
@@ -1064,13 +1160,13 @@ class WorkbenchService:
         project.setdefault("conversation", [])
         project.setdefault("turns", [])
         project["build_status"] = "running"
-        project["last_brief"] = brief
+        project["last_brief"] = effective_brief
         project["target"] = target
         project["environment"] = environment
         started_model = copy.deepcopy(project["model"])
         run = self._start_run(
             project,
-            brief=brief,
+            brief=effective_brief,
             target=target,
             environment=environment,
             budget=_normalize_budget(
@@ -1084,12 +1180,12 @@ class WorkbenchService:
         # Stable turn_id so every event in this run can be grouped by the UI.
         turn_id = run["run_id"]
         run["turn_id"] = turn_id
-        self._start_turn(project, run, brief=brief, mode="initial")
+        self._start_turn(project, run, brief=effective_brief, mode="initial")
         self._append_message(
             project,
             run,
             role="user",
-            text=brief,
+            text=effective_brief,
             task_id=None,
             append_to_previous=False,
         )
@@ -1097,7 +1193,7 @@ class WorkbenchService:
 
         request = BuildRequest(
             project_id=project["project_id"],
-            brief=brief,
+            brief=effective_brief,
             target=target,
             environment=environment,
             mode="initial",
@@ -1107,7 +1203,7 @@ class WorkbenchService:
         )
         async def _stream() -> Any:
             for startup_name, startup_data in self._run_start_events(
-                project, run, brief=brief, mode="initial",
+                project, run, brief=effective_brief, mode="initial",
             ):
                 event_payload = self._prepare_stream_event(
                     project, run, startup_name, startup_data,
@@ -1123,7 +1219,7 @@ class WorkbenchService:
                 run=run,
                 started_model=started_model,
                 mode="initial",
-                brief=brief,
+                brief=effective_brief,
                 auto_iterate=auto_iterate,
             ):
                 yield event
@@ -2660,7 +2756,7 @@ class WorkbenchService:
                 and last.get("task_id") == task_id
                 and last.get("run_id") == run["run_id"]
             ):
-                last["text"] = f"{last.get('text', '')}{text}".strip()
+                last["text"] = _append_text_delta(str(last.get("text") or ""), text)
                 last["updated_at"] = _now_iso()
                 continue
             collection.append(
@@ -2683,7 +2779,7 @@ class WorkbenchService:
             and last.get("task_id") == task_id
             and last.get("turn_id") == run.get("turn_id")
         ):
-            last["content"] = f"{last.get('content', '')}{text}".strip()
+            last["content"] = _append_text_delta(str(last.get("content") or ""), text)
             last["updated_at"] = _now_iso()
             return
         conversation.append(

@@ -3,7 +3,7 @@
 ## Goal
 Walk a brand-new user (us, simulating a real customer) through the agentlab golden path:
 **Build → Workbench → Evals → Optimize/Improve → Deploy** — using a real Gemini API key
-(`AIzaSyCT_e6LmUOCalKdL5tBIoBfi1y6IKyN_xU`) in live mode, building a **Customer FAQ Support Chat Agent**.
+(`GOOGLE_API_KEY from local .env`) in live mode, building a **Customer FAQ Support Chat Agent**.
 
 For every step, drive the actual UI via the Chrome browser MCP (`mcp__claude-in-chrome__*`)
 against `http://localhost:5173`. Capture screenshots, console errors, and network failures.

@@ -574,3 +574,144 @@
 - `npm run build`: passed; Vite still reports the existing large main chunk warning.
 - Playwright full golden path probe confirmed the Eval POST body included `dataset_path: /Users/andrew/Desktop/agentlab/evals/cases/generated_build.yaml` and the backend completed a 3-case generated-build run.
 - Playwright Workbench handoff probe confirmed `/workbench?agent=...&agentName=FAQ+Concierge&configPath=...` displays `Continuing from Build` and POSTs `/api/workbench/build/stream` with `project_id: null`.
+
+## Greenhouse Guide Live Hardening Pass - 2026-04-13
+
+### Mission
+
+- Test the simple-mode UI journey end to end with a concrete lawn and garden store chat agent.
+- Use live mode with `GOOGLE_API_KEY from local .env`.
+- Keep Pro mode out of scope.
+- Fix the highest-impact friction that prevents a non-expert user from moving through Build, Workbench, Eval, Optimize, Improvements, and Deploy without guessing.
+
+### Initial Findings
+
+- The current branch is `feat/golden-path-faq-bot-ralph`.
+- `browser-use` is still unavailable in the shell; Playwright and Chrome MCP are available.
+- Literal provider-key-looking strings were present in `PLAN.md` and `PROMPT.md`; they were redacted before live testing.
+
+### Build
+
+- Issue: generating `Greenhouse Guide` from `/build` produced a candidate named correctly but configured as a healthcare assistant.
+- Page / action: `/build` -> fill Agent description with a lawn and garden store website chat agent prompt -> Generate Agent -> inspect generated configuration.
+- Observed behavior: system prompt referenced healthcare, tools included appointment and patient lookups, and policies included HIPAA/clinical advice guardrails.
+- Expected behavior: the candidate should stay in the lawn/garden retail domain with plant care, planting plans, delivery, returns, and escalation handling.
+- Severity: critical, because the first golden-path artifact carries the wrong domain into Workbench, Evals, Optimize, and Deploy.
+- Suspected root cause: fallback domain detection had healthcare keywords but no lawn/garden retail guard, so negative safety phrasing such as avoiding medical claims could pull the fallback into the wrong domain.
+- Fix owner: Codex.
+- Verification evidence: added and passed `test_generate_agent_config_fallback_keeps_lawn_garden_prompt_out_of_healthcare_domain`; full `tests/test_transcript_intelligence_service.py` passed.
+
+- Issue: live Build preview failure is framed as mock/missing-key recovery even when health reports live provider readiness.
+- Page / action: `/build` -> generate Greenhouse Guide -> `Test Agent` preview.
+- Observed behavior: `/api/intelligence/preview-agent` returned `mock_mode: true` with a provider `HTTP Error 403: Forbidden`; the UI copy said live preview was not ready and suggested adding API keys.
+- Expected behavior: if live mode is configured but the provider rejects the call, the UI should say the provider request failed and preserve the live-mode diagnostic without implying local key setup is missing.
+- Severity: medium, because it does not block saving but undermines operator trust during live testing.
+- Suspected root cause: preview fallback copy collapses all provider failures into the same no-key/mock recovery path.
+- Fix owner: future UX/API polish unless it blocks final verification.
+- Verification evidence: browser network inspection during the Greenhouse Guide Build pass.
+
+### Workbench
+
+- Issue: the Workbench operator journey card dropped candidate context by linking to bare `/evals?new=1`.
+- Page / action: `/workbench` opened from saved Greenhouse Guide Build candidate -> wait for materialization -> inspect journey card.
+- Observed behavior: the lower Workbench handoff button could save/open Eval with agent and config context, but the main journey card still sent users to an unscoped Eval page.
+- Expected behavior: the page-level next step should use the Workbench handoff action so users do not have to infer which Eval agent/config belongs to the candidate.
+- Severity: high, because the most prominent CTA can lose the golden-path context.
+- Suspected root cause: `getWorkbenchJourneySummary` only knew local build readiness and did not use the typed Workbench bridge state.
+- Fix owner: Codex.
+- Verification evidence: `web/src/pages/AgentWorkbench.test.tsx` now passes with the handoff context assertions.
+
+- Issue: Workbench -> Eval omitted the generated eval cases path.
+- Page / action: `/workbench` -> `Save candidate and open Eval`.
+- Observed behavior: navigation carried `agent`, `projectId`, `runId`, and `configPath`, but not `evalCasesPath`; Eval would therefore not send `dataset_path` for this Workbench-generated candidate.
+- Expected behavior: `/evals?agent=<id>&new=1&evalCasesPath=<path>` and the navigation state both preserve the generated dataset path.
+- Severity: high, because Optimize evidence depends on evaluating the exact generated candidate cases.
+- Suspected root cause: the bridge endpoint returned `eval_cases_path` in `save_result`, but the evaluation request did not default `dataset_path` to that file and the frontend did not copy it into the route.
+- Fix owner: Codex.
+- Verification evidence: backend bridge regression asserts `dataset_path == save_result["eval_cases_path"]`; frontend test asserts `evalCasesPath` is present in the route and state.
+
+- Issue: the first Workbench harness guardrail for Greenhouse Guide could be generic PII instead of the domain-specific pesticide/medical safety guardrail.
+- Page / action: `/workbench` materialization after Build handoff -> inspect generated guardrail artifact.
+- Observed behavior: the correct garden domain and tools were present, but the first guardrail artifact could still be `PII Protection`.
+- Expected behavior: lawn/garden store briefs should prioritize `No Unsupported Pesticide or Medical Claims` because that is the key risk named in the user prompt.
+- Severity: medium, because a later guardrail could still exist, but the first artifact shapes user trust and review focus.
+- Suspected root cause: `_select_next_guardrail` appended domain-specific guardrails after generic PII/internal-code entries.
+- Fix owner: Codex.
+- Verification evidence: added and passed `test_select_next_guardrail_prioritizes_lawn_garden_safety`.
+
+### Eval
+
+- Issue: Eval -> Optimize CTA did not include the selected config path.
+- Page / action: `/evals` from Workbench candidate -> complete run -> inspect Optimize CTA.
+- Observed behavior: the journey link included `agent` and `evalRunId`, but not `configPath`.
+- Expected behavior: `/optimize?agent=<id>&evalRunId=<run-id>&configPath=<path>` so Optimize cannot accidentally drift to a different saved candidate.
+- Severity: high, because Optimize must operate on the candidate that produced the completed eval evidence.
+- Suspected root cause: Eval completion state tracked run ID and agent, but the summary link only serialized the agent ID and run ID.
+- Fix owner: Codex.
+- Verification evidence: `web/src/pages/EvalRuns.test.tsx` now asserts the Optimize handoff includes `configPath`.
+
+- Issue: the current strict-live Greenhouse Guide eval run failed because the live provider returned `HTTP Error 403: Forbidden`.
+- Page / action: `/evals?source=workbench&new=1&agent=agent-v015&configPath=...&evalCasesPath=...` -> `Start Eval`.
+- Observed behavior: the Eval request correctly posted the generated dataset path, then the backend marked the task failed with strict-live fallback refused.
+- Expected behavior: strict live mode should not silently accept mock success; the UI should make the provider failure and next recovery step obvious.
+- Severity: high for live validation, because it blocked completing the fresh Greenhouse run through Eval in this session.
+- Suspected root cause: provider authorization/quota behavior outside the UI flow, plus limited failed-run recovery guidance in the Eval UI.
+- Fix owner: Codex for UI recovery polish; provider owner for credential/quota.
+- Verification evidence: Chrome network request body included `{"config_path":"configs/v015.yaml","require_live":true,"dataset_path":"/Users/andrew/Desktop/agentlab/evals/cases/generated_build.yaml","split":"all"}` and the failed run reported provider `HTTP Error 403: Forbidden`.
+
+### Workbench Reopen
+
+- Issue: URL-only Workbench handoffs could still drop the saved Build context after refresh or direct open.
+- Page / action: `/workbench?agent=agent-v014&agentName=Greenhouse+Guide&configPath=...` -> wait for automatic materialization.
+- Observed behavior: before the fix, Workbench created a generic `Agent` with `agent_lookup` rather than the saved lawn/garden candidate.
+- Expected behavior: the saved config path should let Workbench recover the original Build prompt and materialize the same candidate domain.
+- Severity: high, because users can naturally refresh or copy the handoff URL and lose the candidate without knowing why.
+- Suspected root cause: the frontend passed only a vague continuation brief and the backend did not accept/read `config_path` during stream materialization.
+- Fix owner: Codex.
+- Verification evidence: browser retry showed `Greenhouse Guide Workbench`, `Lawn and Garden Support Agent`, `garden_catalog_search`, `plant_care_guide_lookup.py`, tomato/pesticide evals, and `No Unsupported Pesticide or Medical Claims`.
+
+### Optimize
+
+- Issue: the fresh Greenhouse optimization cycle ended as a no-op instead of creating a reviewable proposal.
+- Page / action: `/optimize?agent=agent-v015&evalRunId=1a68f28c-10f&configPath=...` -> start optimization with human approval required.
+- Observed behavior: `/api/optimize/run` posted the carried `eval_run_id` and config path, then the task completed as `REJECTED (rejected_noop): Proposal did not change config (mode=standard)`.
+- Expected behavior: if the UI offers an improvement cycle, users should either receive a concrete proposal in Review or a clear explanation with a one-click recovery path.
+- Severity: medium, because the evidence contract is now correct but the review stage can still feel like a dead end.
+- Suspected root cause: the current standard optimizer can produce an unchanged proposal for this candidate/eval pair.
+- Fix owner: future Optimize/Review polish.
+- Verification evidence: Chrome network request body included `eval_run_id: "1a68f28c-10f"`, `config_path: "configs/v015.yaml"`, and `require_human_approval: true`.
+
+### Improvements
+
+- Issue: the Greenhouse pass could not validate a fresh approve/reject proposal because Optimize produced a rejected no-op.
+- Page / action: optimize completion -> `/improvements?tab=review`.
+- Observed behavior: no new review item was available for the current Greenhouse optimization cycle.
+- Expected behavior: approved optimization output should flow into Review with an obvious next step to Deploy.
+- Severity: medium, because it is the only unverified stage in the simple-mode golden path after this pass.
+- Suspected root cause: upstream no-op optimize result prevented review artifact creation.
+- Fix owner: future Optimize/Improvements owner.
+- Verification evidence: route remains reachable, but no Greenhouse proposal was generated in this live cycle.
+
+### Deploy
+
+- Issue: Deploy did not preselect a carried candidate version from the route.
+- Page / action: `/deploy?new=1&version=v015&from=optimize`.
+- Observed behavior: before the fix, the deploy form opened with `Select version`, forcing the user to infer the intended candidate from the version list.
+- Expected behavior: Deploy should preselect the carried candidate/canary version and show the canary state before promotion.
+- Severity: high, because deploying the wrong candidate is a costly golden-path error.
+- Suspected root cause: the Deploy page ignored `version` query params while opening the `new=1` form.
+- Fix owner: Codex.
+- Verification evidence: browser retry showed v15 selected; Chrome network inspection confirmed `/api/deploy` posted `{"version":15,"strategy":"canary"}` and `/api/deploy/promote` posted `{"version":15}` after the UI showed canary state.
+
+### Remaining UX Gaps
+
+- Fixed in this pass: Workbench streamed text could concatenate words in the conversation feed, for example `Lawnand`, `I'llstart`, and `Definerole`. Frontend streaming and backend persistence now insert a space when word-boundary chunks omit leading whitespace, while preserving punctuation and contractions.
+- Repeated saves create multiple `Greenhouse Guide` entries in Eval agent selection. The correct candidate can be selected by carried route state, but the library list is visually noisy.
+- Build preview provider errors still use mock/missing-key framing even when `/api/health` reports live provider readiness.
+- A focused Playwright regression now pins the Greenhouse Guide Workbench -> Eval -> Optimize -> Deploy handoff contracts in `web/tests/greenhouse-guide-contracts.spec.ts`, but the CLI browser runner still cannot launch Chromium in this environment.
+
+### Verification Blockers
+
+- `cd web && PLAYWRIGHT_BASE_URL=http://127.0.0.1:5173 npx playwright test tests/operator-main-journey.spec.ts tests/live-golden-path.spec.ts --workers=1` did not reach the app. Chromium headless shell failed at launch with macOS MachPort rendezvous `Permission denied (1100)`. Manual Chrome MCP testing remains the browser evidence for this pass.
+- Added `web/tests/greenhouse-guide-contracts.spec.ts` for mocked regression coverage of the carried `evalCasesPath`, `dataset_path`, `eval_run_id`, and deploy `version` contracts. `npx playwright test tests/greenhouse-guide-contracts.spec.ts --list` passed, but browser execution is subject to the same local Chromium launch blocker.
+- `cd web && PLAYWRIGHT_BASE_URL=http://127.0.0.1:5173 npx playwright test tests/greenhouse-guide-contracts.spec.ts --workers=1` hit the same Chromium launch failure before assertions could run.

@@ -25,9 +25,9 @@ vi.mock('../lib/toast', () => ({
   toastSuccess: vi.fn(),
 }));
 
-function renderPage() {
+function renderPage(initialEntry = '/deploy') {
   return render(
-    <MemoryRouter initialEntries={['/deploy']}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <Deploy />
     </MemoryRouter>
   );
@@ -179,6 +179,41 @@ describe('Deploy', () => {
 
     expect(deployMutate).toHaveBeenCalledWith(
       { version: 9, strategy: 'immediate' },
+      expect.any(Object)
+    );
+  });
+
+  it('preselects a deploy version carried in the route', async () => {
+    const user = userEvent.setup();
+    const deployMutate = vi.fn();
+    apiMocks.useDeployStatus.mockReturnValue({
+      data: {
+        active_version: 7,
+        canary_version: null,
+        total_versions: 9,
+        canary_status: null,
+        history: [],
+      },
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    apiMocks.useDeploy.mockReturnValue({
+      mutate: deployMutate,
+      isPending: false,
+    });
+
+    renderPage('/deploy?new=1&version=v009&from=review');
+
+    const versionSelect = screen.getByRole('combobox', { name: 'Version' });
+    expect(versionSelect).toHaveValue('9');
+    const journey = screen.getByRole('region', { name: 'Operator journey' });
+    expect(within(journey).getByText('Version v9 is selected. Start a canary before promoting production traffic.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Deploy' }));
+
+    expect(deployMutate).toHaveBeenCalledWith(
+      { version: 9, strategy: 'canary' },
       expect.any(Object)
     );
   });

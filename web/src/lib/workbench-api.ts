@@ -869,6 +869,7 @@ export async function* streamWorkbenchBuild(
   body: {
     project_id?: string | null;
     brief: string;
+    config_path?: string | null;
     target?: WorkbenchTarget;
     environment?: string;
     mock?: boolean;

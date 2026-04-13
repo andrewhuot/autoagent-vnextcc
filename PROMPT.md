@@ -23,7 +23,7 @@ building a **Customer FAQ Support Chat Agent** for a SaaS billing tool.
 - Stop: `./stop.sh`.
 
 ## Live Mode
-- Gemini API key for testing: **`AIzaSyCT_e6LmUOCalKdL5tBIoBfi1y6IKyN_xU`**
+- Gemini API key for testing: **`GOOGLE_API_KEY from local .env`**
 - Always test in **live mode**. Mock mode hides real bugs — only use it if a task explicitly says so.
 - Set the key via the UI's settings page if possible; otherwise via the backend's settings API.
 

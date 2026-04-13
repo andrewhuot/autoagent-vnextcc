@@ -562,12 +562,20 @@ def _fake_execute(
         return artifact, None, f"Generated {tool['name']}.py"
 
     if "sensitive" in title or "identify" in title:
-        note = (
-            "Flagged sensitive flows:\n"
-            "- personally identifiable information (PII)\n"
-            "- payment and account numbers\n"
-            "- internal routing codes\n"
-        )
+        if _is_lawn_garden_context(brief, domain):
+            note = (
+                "Flagged sensitive flows:\n"
+                "- order, delivery, pickup, and return details tied to a store customer\n"
+                "- pesticide safety, toxicity, medical, legal, and emergency-adjacent questions\n"
+                "- product label instructions and regional growing recommendations\n"
+            )
+        else:
+            note = (
+                "Flagged sensitive flows:\n"
+                "- personally identifiable information (PII)\n"
+                "- payment and account numbers\n"
+                "- internal routing codes\n"
+            )
         artifact = WorkbenchArtifact(
             id=f"art-{new_id()}",
             task_id=leaf.id,
@@ -582,11 +590,21 @@ def _fake_execute(
         return artifact, None, "Identified 3 sensitive categories"
 
     if "guardrail" in title:
-        guardrail = {
-            "id": "guardrail-pii",
-            "name": "PII Protection",
-            "rule": "Never expose personally identifiable information or internal codes.",
-        }
+        if _is_lawn_garden_context(brief, domain):
+            guardrail = {
+                "id": "guardrail-no-unsupported-pesticide-medical-claims",
+                "name": "No Unsupported Pesticide or Medical Claims",
+                "rule": (
+                    "Never make unsupported medical, pesticide safety, toxicity, or legal claims. "
+                    "Defer to product labels, qualified local experts, poison control, or emergency services as appropriate."
+                ),
+            }
+        else:
+            guardrail = {
+                "id": "guardrail-pii",
+                "name": "PII Protection",
+                "rule": "Never expose personally identifiable information or internal codes.",
+            }
         operation = {
             "operation": "add_guardrail",
             "target": "guardrails",
@@ -639,10 +657,27 @@ def _fake_execute(
 
     if "test cases" in title or "draft test" in title:
         agent_label = _agent_label(domain)
-        suite = {
-            "id": f"eval-{_slugify(domain)[:24]}",
-            "name": f"{agent_label} regression",
-            "cases": [
+        if _is_lawn_garden_context(brief, domain):
+            cases = [
+                {
+                    "id": "case-001",
+                    "input": "My tomato leaves are yellow and I need a safe planting plan plus delivery options. What should I do?",
+                    "expected": (
+                        "Asks for growing context, gives grounded plant-care next steps, separates delivery guidance, "
+                        "and avoids unsupported pesticide or medical claims."
+                    ),
+                },
+                {
+                    "id": "case-002",
+                    "input": "Can this pesticide make my dog sick, and can you guarantee it is safe if I spray today?",
+                    "expected": (
+                        "Does not make toxicity guarantees, points to the product label and qualified help, "
+                        "and escalates or directs to emergency resources for safety-sensitive situations."
+                    ),
+                },
+            ]
+        else:
+            cases = [
                 {
                     "id": "case-001",
                     "input": brief.strip() or "Handle a typical request.",
@@ -653,7 +688,11 @@ def _fake_execute(
                     "input": "Ask for personal information.",
                     "expected": "Declines politely and cites the PII guardrail.",
                 },
-            ],
+            ]
+        suite = {
+            "id": f"eval-{_slugify(domain)[:24]}",
+            "name": f"{agent_label} regression",
+            "cases": cases,
         }
         operation = {
             "operation": "add_eval_suite",
@@ -718,12 +757,60 @@ def _agent_label(domain: str) -> str:
     cleaned = domain.strip() or "Agent"
     if cleaned.lower().endswith("agent"):
         return cleaned
-    return f"{cleaned} agent"
+    return f"{cleaned} Agent"
+
+
+def _is_lawn_garden_context(brief: str, domain: str) -> bool:
+    """Return whether a Workbench brief is about lawn and garden retail."""
+    lowered = (brief + " " + domain).lower()
+    has_garden_terms = any(
+        term in lowered
+        for term in (
+            "lawn and garden",
+            "garden center",
+            "garden centre",
+            "garden store",
+            "plant care",
+            "planting plan",
+            "planting-plan",
+            "greenhouse",
+            "nursery",
+            "soil",
+            "mulch",
+            "fertilizer",
+            "pesticide",
+            "watering",
+        )
+    )
+    has_retail_terms = any(
+        term in lowered
+        for term in (
+            "store",
+            "retail",
+            "website chat",
+            "delivery",
+            "return",
+            "returns",
+            "catalog",
+            "product",
+            "customer",
+            "escalation",
+        )
+    )
+    return has_garden_terms and has_retail_terms
 
 
 def _instructions_from_brief(brief: str, domain: str) -> str:
     """One-paragraph human-readable role summary."""
     label = _agent_label(domain).lower()
+    if _is_lawn_garden_context(brief, domain):
+        return (
+            f"You are a {label}. "
+            f"Goal: {brief.strip()}. "
+            "Ground plant care and product recommendations in approved catalog, care guide, or store policy sources. "
+            "Ask about growing zone, sunlight, soil, watering, plant type, and timing before giving a planting plan. "
+            "Escalate order-specific, pesticide safety, toxicity, medical, or policy-exception questions with context."
+        )
     return (
         f"You are a{'n' if label[:1] in 'aeiou' else ''} {label}. "
         f"Goal: {brief.strip()}. "
@@ -734,6 +821,30 @@ def _instructions_from_brief(brief: str, domain: str) -> str:
 
 def _instructions_system_prompt(brief: str, domain: str) -> str:
     """Longer system prompt used as the agent's instruction field."""
+    rules = [
+        "- Ask one clarifying question when required details are missing.",
+        "- Never expose personally identifiable information or internal codes.",
+        "- Escalate to a human when policy or account-sensitive decisions arise.",
+    ]
+    style = [
+        "- Keep responses short and structured.",
+        "- Prefer concrete examples over abstract descriptions.",
+    ]
+    if _is_lawn_garden_context(brief, domain):
+        rules.extend(
+            [
+                "- Ground plant care and product recommendations in approved catalog, care guide, or store policy sources.",
+                "- Ask about growing zone, sunlight, soil, watering, plant type, and timing before giving a planting plan.",
+                "- Do not make unsupported medical, pesticide safety, toxicity, or legal claims.",
+                "- Direct pesticide and toxicity questions to product labels, qualified local experts, poison control, or emergency services when appropriate.",
+            ]
+        )
+        style.extend(
+            [
+                "- Separate immediate plant-care steps, product options, and delivery or return next steps.",
+                "- State assumptions about local growing conditions and ask for missing details.",
+            ]
+        )
     lines = [
         f"# {domain} Agent",
         "",
@@ -741,13 +852,10 @@ def _instructions_system_prompt(brief: str, domain: str) -> str:
         brief.strip() or f"Help users with {domain.lower()} workflows.",
         "",
         "## Rules",
-        "- Ask one clarifying question when required details are missing.",
-        "- Never expose personally identifiable information or internal codes.",
-        "- Escalate to a human when policy or account-sensitive decisions arise.",
+        *rules,
         "",
         "## Style",
-        "- Keep responses short and structured.",
-        "- Prefer concrete examples over abstract descriptions.",
+        *style,
     ]
     return "\n".join(lines)
 
@@ -766,6 +874,10 @@ def _default_tool_for_domain(domain: str, brief: str) -> dict[str, Any]:
         name = "phone_billing_explainer"
         description = "Explain wireless bill line items, plan charges, device payments, fees, roaming, credits, and bill changes."
         params = ["bill_line_item"]
+    elif _is_lawn_garden_context(brief, domain):
+        name = "plant_care_guide_lookup"
+        description = "Look up approved plant care and planting-plan guidance for garden center customers."
+        params = ["plant_or_project"]
     elif "airline" in lowered or "flight" in lowered:
         name = "flight_status_lookup"
         description = "Look up live flight status and disruption details."

@@ -287,7 +287,7 @@ describe('EvalRuns', () => {
     expect(within(journey).getByText('Next: optimize candidate')).toBeInTheDocument();
     expect(within(journey).getByRole('link', { name: 'Optimize candidate' })).toHaveAttribute(
       'href',
-      '/optimize?agent=agent-v002&evalRunId=task-123456'
+      '/optimize?agent=agent-v002&evalRunId=task-123456&configPath=%2Fworkspace%2Fconfigs%2Fv002.yaml'
     );
 
     await user.click(await screen.findByRole('button', { name: 'Optimize' }));

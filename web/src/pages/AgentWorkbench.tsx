@@ -72,6 +72,7 @@ function getWorkbenchJourneySummary(input: {
   canonicalModel: WorkbenchCanonicalModel | null;
   lastTest: WorkbenchTestResult | null;
   runSummary: RunSummary | null;
+  bridge: WorkbenchImprovementBridge | null;
 }) {
   const hasCandidate = Boolean(input.canonicalModel?.agents?.length);
   const runCompleted = input.runSummary?.status === 'completed';
@@ -79,14 +80,20 @@ function getWorkbenchJourneySummary(input: {
   const isReadyForEval = hasCandidate && (input.buildStatus === 'done' || runCompleted || validationPassed);
 
   if (isReadyForEval) {
+    const needsMaterialization = input.bridge?.evaluation.status === 'needs_saved_config';
+    const hasBridgeAction = Boolean(input.bridge && input.bridge.evaluation.status !== 'blocked');
     return createJourneyStatusSummary({
       currentStep: 'workbench',
       status: 'ready',
       statusLabel: statusLabel('ready'),
-      summary: 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
-      nextLabel: 'Run eval',
-      nextDescription: 'Open Eval Runs and launch the first evaluation for this candidate.',
-      href: '/evals?new=1',
+      summary: needsMaterialization
+        ? 'The Workbench candidate has build evidence. Save it once so Eval can run against the exact generated config and dataset.'
+        : 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
+      nextLabel: needsMaterialization ? 'Prepare Eval handoff' : 'Run eval',
+      nextDescription: hasBridgeAction
+        ? 'Open Eval through the Workbench handoff so the saved config and generated eval cases stay attached.'
+        : 'Open Eval Runs and launch the first evaluation for this candidate.',
+      href: hasBridgeAction ? undefined : '/evals?new=1',
     });
   }
 
@@ -141,6 +148,7 @@ export function AgentWorkbench() {
     canonicalModel,
     lastTest,
     runSummary,
+    bridge,
   });
   const buildHandoff = useMemo(() => {
     const state = (location.state as {
@@ -282,7 +290,7 @@ export function AgentWorkbench() {
   // Fresh build handler
   // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
-    async (brief: string, options?: { startFreshProject?: boolean }) => {
+    async (brief: string, options?: { startFreshProject?: boolean; seedConfigPath?: string }) => {
       beginBuild(brief);
       const controller = new AbortController();
       activeControllerRef.current?.abort();
@@ -293,6 +301,7 @@ export function AgentWorkbench() {
           {
             project_id: options?.startFreshProject ? null : projectId ?? null,
             brief,
+            config_path: options?.seedConfigPath,
             target,
             environment,
             auto_iterate: autoIterate,
@@ -327,8 +336,11 @@ export function AgentWorkbench() {
     }
     buildHandoffStartedRef.current = true;
     reset();
-    void handleSubmit(buildHandoff.brief, { startFreshProject: true });
-  }, [buildHandoff?.brief, buildStatus, handleSubmit, hydrated, projectId, reset]);
+    void handleSubmit(buildHandoff.brief, {
+      startFreshProject: true,
+      seedConfigPath: buildHandoff.configPath || undefined,
+    });
+  }, [buildHandoff?.brief, buildHandoff?.configPath, buildStatus, handleSubmit, hydrated, projectId, reset]);
 
   // ---------------------------------------------------------------------------
   // Iteration handler — called by IterationControls and ReflectionCard
@@ -406,6 +418,10 @@ export function AgentWorkbench() {
         materializedBridge.evaluation.request?.config_path ??
         materializedBridge.candidate.config_path ??
         payload.save_result.config_path;
+      const evalCasesPath =
+        materializedBridge.evaluation.request?.dataset_path ??
+        materializedBridge.candidate.eval_cases_path ??
+        payload.save_result.eval_cases_path;
       if (!configPath) {
         throw new Error('The Workbench candidate did not return a saved config path.');
       }
@@ -428,6 +444,9 @@ export function AgentWorkbench() {
       if (materializedBridge.evaluation.request?.generated_suite_id) {
         params.set('generatedSuiteId', materializedBridge.evaluation.request.generated_suite_id);
       }
+      if (evalCasesPath) {
+        params.set('evalCasesPath', evalCasesPath);
+      }
       if (materializedBridge.evaluation.request?.split) {
         params.set('split', materializedBridge.evaluation.request.split);
       }
@@ -437,6 +456,7 @@ export function AgentWorkbench() {
           source: 'workbench',
           open: 'run',
           workbenchBridge: materializedBridge,
+          evalCasesPath,
           agent: {
             id: materializedAgentId,
             name: candidate.agent_name || 'Workbench Agent',
@@ -461,7 +481,7 @@ export function AgentWorkbench() {
   return (
     <div className="space-y-4 px-4 pb-6 pt-2">
       {buildHandoff ? <BuildHandoffPanel handoff={buildHandoff} /> : null}
-      <OperatorNextStepCard summary={journeySummary} />
+      <OperatorNextStepCard summary={journeySummary} onAction={bridge ? handleOpenEval : undefined} />
       <WorkbenchEvalHandoffPanel
         bridge={bridge}
         isPending={evalHandoffPending}
