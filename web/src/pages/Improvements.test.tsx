@@ -8,12 +8,14 @@ const apiMocks = vi.hoisted(() => ({
   useExperiments: vi.fn(),
   useOptimizeHistory: vi.fn(),
   useUnifiedReviewStats: vi.fn(),
+  useOpportunities: vi.fn(),
 }));
 
 vi.mock('../lib/api', () => ({
   useExperiments: apiMocks.useExperiments,
   useOptimizeHistory: apiMocks.useOptimizeHistory,
   useUnifiedReviewStats: apiMocks.useUnifiedReviewStats,
+  useOpportunities: apiMocks.useOpportunities,
 }));
 
 vi.mock('./Experiments', () => ({
@@ -50,6 +52,11 @@ describe('Improvements', () => {
     });
     apiMocks.useUnifiedReviewStats.mockReturnValue({
       data: undefined,
+    });
+    apiMocks.useOpportunities.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
     });
   });
 

@@ -524,6 +524,8 @@ export function Setup() {
             <div className="mt-4 space-y-3">
               {KEY_FIELDS.map((field) => {
                 const status = apiKeyStatusByName[field.envName];
+                const detectedFromEnv =
+                  status?.configured === true && status.source === 'environment';
                 const statusLabel = status?.configured
                   ? status.source === 'workspace'
                     ? `Saved in workspace: ${status.masked_value}`
@@ -539,45 +541,55 @@ export function Setup() {
                         </label>
                         <p className="mt-1 text-xs leading-5 text-slate-600">{field.helper}</p>
                         <p className="mt-2 text-xs font-medium text-slate-500">{statusLabel}</p>
+                        {detectedFromEnv ? (
+                          <p className="mt-1 text-xs leading-5 text-emerald-700">
+                            Using <code className="rounded bg-emerald-50 px-1 py-0.5 font-mono">${field.envName}</code> from shell env.
+                          </p>
+                        ) : null}
                       </div>
-                      <StatusTag configured={status?.configured === true} />
-                    </div>
-                    <div className="mt-3 flex flex-col gap-3 xl:flex-row">
-                      <input
-                        id={field.envName}
-                        type="password"
-                        value={draftKeys[field.envName]}
-                        onChange={(event) =>
-                          setDraftKeys((current) => ({
-                            ...current,
-                            [field.envName]: event.target.value,
-                          }))
-                        }
-                        placeholder={status?.masked_value ? `Saved: ${status.masked_value}` : `Paste ${field.label}`}
-                        autoComplete="off"
-                        className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10"
+                      <StatusTag
+                        configured={status?.configured === true}
+                        detectedFromEnv={detectedFromEnv}
                       />
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void handleTestConnection(field.provider, field.envName, field.label)}
-                          disabled={isMutating}
-                          aria-label={`Test ${field.label} connection`}
-                          className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Test Connection
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void handleSaveAndTest(field)}
-                          disabled={isMutating}
-                          aria-label={`Save & Test ${field.label}`}
-                          className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Save & Test
-                        </button>
-                      </div>
                     </div>
+                    {detectedFromEnv ? null : (
+                      <div className="mt-3 flex flex-col gap-3 xl:flex-row">
+                        <input
+                          id={field.envName}
+                          type="password"
+                          value={draftKeys[field.envName]}
+                          onChange={(event) =>
+                            setDraftKeys((current) => ({
+                              ...current,
+                              [field.envName]: event.target.value,
+                            }))
+                          }
+                          placeholder={status?.masked_value ? `Saved: ${status.masked_value}` : `Paste ${field.label}`}
+                          autoComplete="off"
+                          className="min-w-0 flex-1 rounded-xl border border-slate-300 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-slate-900 focus:ring-2 focus:ring-slate-900/10"
+                        />
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleTestConnection(field.provider, field.envName, field.label)}
+                            disabled={isMutating}
+                            aria-label={`Test ${field.label} connection`}
+                            className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Test Connection
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void handleSaveAndTest(field)}
+                            disabled={isMutating}
+                            aria-label={`Save & Test ${field.label}`}
+                            className="rounded-xl bg-slate-900 px-3 py-2 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Save & Test
+                          </button>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -732,7 +744,20 @@ function KeyValue({ label, value }: { label: string; value: string }) {
   );
 }
 
-function StatusTag({ configured }: { configured: boolean }) {
+function StatusTag({
+  configured,
+  detectedFromEnv = false,
+}: {
+  configured: boolean;
+  detectedFromEnv?: boolean;
+}) {
+  if (detectedFromEnv) {
+    return (
+      <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800">
+        Detected from environment
+      </span>
+    );
+  }
   return (
     <span
       className={classNames(
