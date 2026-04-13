@@ -239,6 +239,20 @@ async def _consume_workbench_stream(
     output_format: str,
 ) -> list[dict[str, Any]]:
     """Consume a Workbench async stream after awaiting the service factory."""
+    harness = None
+    renderer = None
+    if output_format == "text":
+        from cli.auto_harness import HarnessEvent, HarnessRenderer, HarnessSession, resolve_cli_ui
+        from cli.permissions import PermissionManager
+
+        if resolve_cli_ui("text", requested_ui=None) == "claude":
+            harness = HarnessSession(permission_mode=PermissionManager().mode)
+            renderer = HarnessRenderer()
+            harness.emit(HarnessEvent("session.started", message="AgentLab Workbench"))
+            harness.emit(HarnessEvent("stage.started", message="Running Workbench stream"))
+            click.echo(renderer.render(harness.snapshot()))
+            click.echo("")
+
     stream = await stream_factory
     events: list[dict[str, Any]] = []
     async for event in stream:
@@ -246,10 +260,18 @@ async def _consume_workbench_stream(
         if output_format == "stream-json":
             click.echo(json.dumps(event, default=str))
         elif output_format == "text":
-            render_workbench_event(
-                str(event.get("event") or "message"),
-                event.get("data") if isinstance(event.get("data"), dict) else {},
-            )
+            event_name = str(event.get("event") or "message")
+            data = event.get("data") if isinstance(event.get("data"), dict) else {}
+            if harness is not None and renderer is not None:
+                from cli.auto_harness import workbench_event_to_harness_event
+
+                adapted = workbench_event_to_harness_event(event_name, data)
+                if adapted is not None:
+                    harness.emit(adapted)
+                    click.echo(renderer.render(harness.snapshot()))
+                    click.echo("")
+                    continue
+            render_workbench_event(event_name, data)
     return events
 
 
@@ -946,3 +968,27 @@ def bridge_command(project_id: str | None, eval_run_id: str | None,
         _emit_envelope("ok", bridge, next_command=_bridge_next_command(bridge))
         return
     render_bridge_status(bridge)
+
+
+# ---------------------------------------------------------------------------
+# interactive (T04 — Claude-Code-style REPL stub)
+# ---------------------------------------------------------------------------
+
+
+@workbench_group.command("interactive")
+@click.option(
+    "--no-banner",
+    is_flag=True,
+    help="Skip the startup banner (useful in recorded sessions).",
+)
+def interactive_command(no_banner: bool) -> None:
+    """Launch the interactive Claude-Code-style workbench shell (stub).
+
+    This is the T04 stub: banner, status line, echo-only input loop.
+    Upcoming tasks wire the slash-command registry, streaming transcript,
+    tool-call blocks, and full-screen screens onto this loop.
+    """
+    from cli.workbench_app.app import run_workbench_app
+
+    workspace = discover_workspace()
+    run_workbench_app(workspace, show_banner=not no_banner)
