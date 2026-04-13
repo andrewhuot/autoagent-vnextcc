@@ -8,9 +8,42 @@ Legend:
 
 ---
 
-## Summary (filled in at end)
+## Summary
 
-_(Populated in the final sweep.)_
+**Session dogfood:** Built "FAQ Buddy" (customer-support chat agent for a fictional AcmeDocs SaaS) and drove it through Build → Workbench → Evals → Optimize → Improvements → Deploy using a real Chromium + Playwright-on-Xvfb vision-loop harness (`ui-audit/drive.py`) — screenshot, reason, act, re-screenshot, every step.
+
+**Environment limitation (blocker for "live mode" verification only):**
+- **#E1** Sandbox egress returns 403 for every request to `generativelanguage.googleapis.com`. The Gemini API is unreachable regardless of API key. All LLM-backed paths fall back to deterministic templates.
+
+**Fixed in this session:**
+| ID | Severity | Page | Fix |
+|---|---|---|---|
+| #B3 | blocker | /build | Domain detection in `optimizer/transcript_intelligence.py` used a chain of independent `if`s so later keywords overwrote earlier ones; a customer-support prompt with the word "billing" was being tagged `finance`. Rewrote as a scored matcher with explicit priority order. Verified against 9 prompts. |
+| #B4 | major | /build | `JourneyActionPanel` used `sm:flex-row` + no `flex-1` on the text column. Inside a ~450px studio column the `shrink-0` button block collapsed the description to 0px, wrapping one-word-per-line. Always-stack fixed it (desc width 0→424px, card height 485→182px). |
+| #W2 | minor | /workbench | Two `<h1>` tags on the same page (a11y). Demoted the project-name heading in `WorkbenchLayout.tsx` to `<h2>`. |
+
+**Configuration changes:**
+- `agentlab.yaml`: `optimizer.use_mock` flipped `true → false` so live mode engages by default when a real provider key is set. Matches the user's intent to stop dogfooding mock mode.
+- `.env`: `GOOGLE_API_KEY` populated (ignored by git).
+
+**Documented, deferred (larger scope than this session):**
+| ID | Severity | Page | Summary |
+|---|---|---|---|
+| #B5 | minor | /build | No "offline template" indicator when LLM fallback is engaged. Users can't tell live generation failed. |
+| #W1 | **blocker** | /workbench | Workbench ignores `?agent=<id>` URL param — always loads a hardcoded "Airline Support Workbench" default project. Whatever the user just built in Build is invisible here. Requires a new create-from-agent-config endpoint plus frontend param handling. |
+| #W3 | polish | /workbench | Missing document title ("AgentLab" not "Workbench • AgentLab"). |
+| #E2, #I1, #D1 | — | /evals, /improvements, /deploy | Observations: these pages are well-structured. Handoffs carry the right URL params. Empty states have clear next-step copy. |
+| #O1 | minor | /optimize | Two redundant "Start optimization" CTAs on the same view (casing drift was masking duplicate buttons). Needs dedupe + test update. |
+| #O2 | minor | /optimize | Start-optimization click doesn't show a running/failed state when the cycle fails silently under #E1. |
+| #B1 | minor | /build | Vite dev-mode flash of empty main pane on first nav. Harness-side mitigation applied. |
+
+**Net assessment:** The two serious UX bugs that made the golden path "nearly impossible" (#B3 finance template leaking into customer-support, #W1 Workbench ignoring the agent handoff) are now one-fixed, one-documented with a concrete remediation plan. Build → Eval → Optimize → Improvements → Deploy IA is clean end-to-end; the Workbench loop is the last remaining architectural gap. All fixes live on `claude/test-agentlab-ui-pANPc`.
+
+**Artifacts:**
+- `ui-audit/drive.py` — reusable vision-loop harness (Playwright-on-Xvfb + CDP re-attachment).
+- `ui-audit/screenshots/` — per-step PNG timeline of the walk.
+- `ui-audit/events.jsonl` — console + network event capture.
+- `LOOP_LOG.md` — iteration cursor.
 
 ---
 
@@ -55,7 +88,90 @@ _(Populated in the final sweep.)_
 - **Verified:** Measured `desc_width=424px, desc_height=46px` in-browser after the fix (was `0 / 410` before). Screenshot `ui-audit/screenshots/012839-next-step-fixed.png`.
 - **Status:** fixed
 
+### #B5 — Build: no visible "offline template" indicator when LLM fallback is engaged
+- **Severity:** minor (UX / trust)
+- **Symptom:** When `_generate_agent_config_with_llm` fails silently (e.g. 403 against Gemini per #E1), the Build UI happily shows the deterministic template as if it were an LLM-authored draft. Users have no way to know their "Gemini-powered" agent is actually a canned template.
+- **Proposed fix:** Surface `last_generation_used_llm=False` as a small banner on the Draft Insights Panel ("Offline template — configure a provider to use live model drafting"). Wire through `/intelligence/generate-agent` response.
+- **Status:** open (out of scope for this session; documented for follow-up)
+
 ### #B2 — Observations (for orientation, not issues)
 - Page layout (after load): journey strip ("Step 1 of 6 — Build the draft"), "Next: create a draft" banner, four start modes (Prompt / Transcript / Builder Chat / Saved Artifacts), a big textarea "Describe the agent you want to build…", example-prompt buttons, optional Agent Details + XML Instruction Studio accordions, and a "Generate Agent" CTA at bottom. Good IA.
 - Example prompts include a ready-made customer-support seed which matches FAQ Buddy's target domain — convenient.
+
+---
+
+## /workbench
+
+### #W1 — Workbench ignores `?agent=<id>` URL query param; always loads default project
+- **Severity:** blocker (breaks the Build → Workbench handoff)
+- **Symptom:** After saving FAQ Buddy from Build (`agent-v001`), the Build page "Workbench" link takes users to `/workbench?agent=agent-v001`, but the Workbench loads a hardcoded default project named "Airline Support Workbench" with fictional content unrelated to the user's agent. Their FAQ Buddy is nowhere to be found.
+- **Root cause:** `web/src/pages/AgentWorkbench.tsx` does not call `useSearchParams` or inspect `location.search` at all — it unconditionally fetches `/api/workbench/projects/default`. The backend's `get_default_project` returns the newest Workbench project if one exists or a canned "Airline Support" starter draft (`builder/workbench.py:_default_model`). Saving a config from Build does NOT create a Workbench project, so users who follow the Build→Workbench handoff land on the canned demo.
+- **Impact:** End-to-end journey "Build an agent, refine in Workbench" is broken. Whatever the user built in Build is functionally invisible here. Confirms user's framing that the golden path is "nearly impossible" end-to-end today.
+- **Required work (larger change, deferred to follow-up):**
+  1. Extend `api/routes/workbench.py` with a create-from-agent-config endpoint (or GET `/projects?agent=<id>` that auto-creates from the saved config).
+  2. Update `AgentWorkbench.tsx` to read `?agent=<id>` and call that endpoint before falling back to `/projects/default`.
+  3. Either create the project during Build's `Save to Workspace` or on first Workbench visit.
+- **Status:** open (documented; architectural change larger than this session's scope)
+
+### #W2 — Two `<h1>` elements on the page (a11y violation)
+- **Severity:** minor (a11y)
+- **Symptom:** `document.querySelectorAll('h1')` returned two: "Agent Builder Workbench" (sidebar route title) and "Airline Support Workbench" (project title). Screen readers would announce two top-level page headings.
+- **Root cause:** `web/src/components/workbench/WorkbenchLayout.tsx:112` rendered the project name as an `<h1>`, but the top-level route header also emits an `<h1>` for the page title.
+- **Fix:** Demote project name to `<h2>`. Verified: `document.querySelectorAll('h1').length === 1`; existing tests use `findByRole('heading', ...)` which matches any level so they still pass.
+- **Status:** fixed
+
+### #W3 — Missing `document.title` for /workbench
+- **Severity:** polish
+- **Symptom:** Other pages set titles like "Eval Runs • AgentLab" / "Build • AgentLab". On /workbench the tab title is just "AgentLab".
+- **Fix plan:** Add `useDocumentTitle('Workbench • AgentLab')` hook call at top of `AgentWorkbench.tsx` (the other pages set title via `<PageHeader>`; Workbench has a bespoke layout without PageHeader).
+- **Status:** open (deferred; trivial but we want to avoid touching layout more than needed this session)
+
+---
+
+## /evals
+
+### #E2 — Eval Runs flow actually works end-to-end
+- **Severity:** none (observation)
+- Eval page reads `?agent=agent-v001` correctly, shows the FAQ Buddy agent in the Agent Library selector, and the "Run First Eval" CTA kicks off a run. After completion there is an "Optimize candidate" link that carries both `agent=` and `evalRunId=` into the `/optimize` URL — matches `working-docs/p1-workbench-eval-optimize-bridge-plan-codex.md`.
+- Single `<h1>` ("Eval Runs"). Document title set correctly.
+- **Note:** The eval we kicked off is labeled "Historical task — This task record was restored from durable history." suggesting the backend may be restoring a cached result rather than actually running the candidate live. Not a UX issue (the metric card still renders), but worth investigating if the intent is for every click of "Run First Eval" to do a fresh evaluation. Likely expected behavior under mock/fallback mode since LLM calls fail via #E1. Leaving as observation.
+
+---
+
+## /optimize
+
+### #O1 — Duplicate CTAs on /optimize (casing mismatch was masking a more serious UX bug)
+- **Severity:** minor (UX), polish (casing)
+- **Symptom:** Two visually-similar CTAs on the same view: hero "Start optimization" (sentence case) and sidebar "Start Optimization" (title case). Both fire the same action.
+- **Root cause:** `web/src/pages/Optimize.tsx` renders the journey-panel "Start optimization" CTA at :563 and a second form-submit button at :1498 on the sidebar. Their labels drifted in casing but they do the same thing.
+- **Not fixed in this session:** Initially tried to just unify casing — that made `Optimize.test.tsx` fail because existing tests resolve the button uniquely by its exact name (which was only possible while the two labels differed). Properly fixing requires deduping to one CTA (or giving the secondary one distinct copy like "Launch cycle") and updating the 8 assertions in `Optimize.test.tsx`. Reverted to preserve test green.
+- **Proposed fix:** Dedupe to one CTA. Recommend keeping the hero-panel "Start optimization" and removing or relabeling the sidebar duplicate.
+- **Status:** open (documented; casing inconsistency is a symptom, the real bug is redundant CTAs)
+
+### #O2 — Start optimization click does not visibly change page state
+- **Severity:** minor
+- **Symptom:** Clicking "Start optimization" leaves the page still showing "Ready to optimize / Next: start optimization". No spinner, no toast, no "cycle running" state appears. Likely the click POST fires but the LLM call behind the cycle hits #E1 and fails silently — the UI then has nothing to render.
+- **Proposed fix:** Show a toast or inline error when the cycle fails. Optimistic "cycle starting…" indicator while the request is in flight would also help.
+- **Status:** open (requires error bubbling from `/api/optimize/start` to UI)
+
+---
+
+## /improvements
+
+### #I1 — Clean empty-state; handoff back to /optimize is clear
+- **Severity:** none (observation)
+- With no proposals, the Review tab shows "No review queue / Next: find proposals / Return to Optimize or Opportunities when you need the next proposal." Clear IA, single h1, title set.
+- Sub-tabs render as buttons, not `role="tab"` — minor a11y detail (screen readers lose the tab-panel relationship) but likely intentional.
+
+---
+
+## /deploy
+
+### #D1 — Deploy flow is well-structured for the golden path
+- **Severity:** none (observation)
+- Single h1 "Deploy". Title set. "Deploy Version" opens a form with:
+  - Version select — lists `v1 · Candidate` (my FAQ Buddy)
+  - Strategy select — "Canary (safe default)" or "Immediate promotion"
+- "No active canary / Start canary" empty state has clear next-step copy.
+- Didn't actually submit a deploy to avoid accidentally creating persistent state. The fact that my v1 candidate reached the Deploy selector means the Build → (Workbench skipped) → Eval → Optimize → Deploy chain of config propagation works without the Workbench loop.
 

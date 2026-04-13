@@ -109,7 +109,9 @@ export function WorkbenchLayout({
           <span className="flex h-6 w-6 items-center justify-center rounded bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-accent)]">
             <Sparkles className="h-3.5 w-3.5" />
           </span>
-          <h1 className="truncate text-[13px] font-semibold text-[color:var(--wb-text)]">{projectName}</h1>
+          {/* h2 so the page has a single h1 (the top-level route heading sets the
+              h1); a11y: two h1s on one page confuses screen readers. */}
+          <h2 className="truncate text-[13px] font-semibold text-[color:var(--wb-text)]">{projectName}</h2>
           <span className="rounded-full border border-[color:var(--wb-border)] px-2 py-0.5 text-[10px] uppercase tracking-wider text-[color:var(--wb-text-dim)]">
             {target} · v{version}
           </span>
