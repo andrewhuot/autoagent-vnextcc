@@ -1,9 +1,10 @@
 """Regression tests for _infer_domain word-boundary and telecom domain fixes."""
 
-from builder.workbench import _infer_domain
+from builder.workbench import _default_model, _infer_domain
 
 
 PHONE_BILLING_DOMAIN = "Phone Billing Support"
+LAWN_GARDEN_DOMAIN = "Lawn and Garden Support"
 
 
 class TestInferDomainWordBoundary:
@@ -55,6 +56,21 @@ class TestInferDomainTelecom:
 
 class TestInferDomainExistingDomains:
     """Existing domains still work correctly."""
+
+    def test_lawn_garden_beats_negative_medical_safety_caveat(self):
+        brief = (
+            "Build Greenhouse Guide, a lawn and garden store website chat agent. "
+            "It should answer plant care, planting-plan, delivery, return, and escalation questions. "
+            "It should avoid unsupported medical or pesticide safety claims."
+        )
+        assert _infer_domain(brief) == LAWN_GARDEN_DOMAIN
+
+    def test_explicit_greenhouse_guide_name_is_preserved_in_default_model(self):
+        brief = "Build Greenhouse Guide, a lawn and garden store website chat agent."
+        model = _default_model(brief, target="portable", environment="draft")
+
+        assert model["project"]["name"] == "Greenhouse Guide Workbench"
+        assert model["agents"][0]["name"] == "Greenhouse Guide"
 
     def test_airline(self):
         assert _infer_domain("Build a flight booking agent") == "Airline Support"

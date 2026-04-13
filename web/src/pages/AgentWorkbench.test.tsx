@@ -38,7 +38,10 @@ function renderWorkbench(initialEntry: InitialEntry = '/workbench') {
 
 function EvalLocationProbe() {
   const location = useLocation();
-  const state = location.state as { agent?: { id?: string; name?: string; config_path?: string } } | null;
+  const state = location.state as {
+    agent?: { id?: string; name?: string; config_path?: string };
+    evalCasesPath?: string;
+  } | null;
   return (
     <div>
       <p>Eval Page</p>
@@ -46,6 +49,7 @@ function EvalLocationProbe() {
       <p>{state?.agent?.id ?? 'No handoff id'}</p>
       <p>{state?.agent?.name ?? 'No handoff agent'}</p>
       <p>{state?.agent?.config_path ?? 'No handoff config'}</p>
+      <p>{state?.evalCasesPath ?? 'No eval cases path'}</p>
     </div>
   );
 }
@@ -603,6 +607,7 @@ describe('AgentWorkbench', () => {
         primary_action_target: '/evals?source=workbench&new=1',
         request: {
           config_path: '/workspace/configs/v003.yaml',
+          dataset_path: '/workspace/evals/cases/generated_build.yaml',
           split: 'all',
         },
         start_endpoint: '/api/eval/run',
@@ -740,8 +745,12 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('agent-v003')).toBeInTheDocument();
     expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
     expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
+    expect(screen.getByText('/workspace/evals/cases/generated_build.yaml')).toBeInTheDocument();
     expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('agent=agent-v003');
     expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml');
+    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent(
+      'evalCasesPath=%2Fworkspace%2Fevals%2Fcases%2Fgenerated_build.yaml'
+    );
   });
 
   it('labels an interrupted hydrated run as restored historical work', async () => {

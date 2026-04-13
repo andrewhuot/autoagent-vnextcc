@@ -229,6 +229,40 @@ def test_generate_agent_config_fallback_keeps_phone_billing_prompt_in_telecom_do
     assert {"no_account_fact_fabrication", "safe_billing_escalation"} <= policy_names
 
 
+def test_generate_agent_config_fallback_keeps_lawn_garden_prompt_out_of_healthcare_domain(tmp_path: Path) -> None:
+    router = _StubLLMRouter(
+        responses=["I would build a garden center support agent, but this is not JSON."],
+        models=[SimpleNamespace(provider="google", model="gemini-2.5-pro")],
+    )
+    service = _service(tmp_path, llm_router=router)
+
+    generated = service.generate_agent_config(
+        "Build Greenhouse Guide, a lawn and garden store website chat agent. "
+        "It should answer plant care, planting-plan, delivery, return, and escalation questions. "
+        "It should avoid unsupported medical or pesticide safety claims, explain when to consult labels "
+        "or local experts, and escalate account-specific or safety-sensitive situations."
+    )
+
+    tool_names = {tool["name"] for tool in generated["tools"]}
+    routing_actions = {rule["action"] for rule in generated["routing_rules"]}
+    policy_names = {policy["name"] for policy in generated["policies"]}
+    prompt = generated["system_prompt"].lower()
+
+    assert service.last_generation_used_llm is False
+    assert service.last_generation_failure_reason == "The live provider response was not valid JSON."
+    assert generated["metadata"]["agent_name"] == "Greenhouse Guide"
+    assert generated["model"] == "gemini-2.5-pro"
+    assert "lawn and garden" in prompt
+    assert "plant care" in prompt
+    assert "healthcare" not in prompt
+    assert "hipaa" not in prompt
+    assert "patient" not in prompt
+    assert "appointment" not in prompt
+    assert tool_names >= {"search_garden_catalog", "lookup_plant_care_guide", "create_store_escalation"}
+    assert {"answer_plant_care", "create_store_escalation"} <= routing_actions
+    assert {"no_medical_or_pesticide_safety_claims", "safe_store_escalation"} <= policy_names
+
+
 def test_import_archive_uses_llm_intent_classification_when_real_router_available(tmp_path: Path) -> None:
     router = _StubLLMRouter(
         responses=[

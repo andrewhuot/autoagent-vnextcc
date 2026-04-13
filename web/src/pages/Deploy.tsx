@@ -18,7 +18,19 @@ type PendingConfirmation =
   | { type: 'promote'; canaryVersion: number | null };
 
 /** Translate deploy status into the shared journey card without changing rollout behavior. */
-function getDeployJourneySummary(deployStatus: DeployStatus) {
+function parseDeployVersionParam(rawVersion: string | null): string {
+  if (!rawVersion) {
+    return '';
+  }
+  const match = rawVersion.trim().match(/^v?0*(\d+)$/i);
+  if (!match) {
+    return '';
+  }
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed) : '';
+}
+
+function getDeployJourneySummary(deployStatus: DeployStatus, requestedVersion: string) {
   if (deployStatus.canary_status) {
     return createJourneyStatusSummary({
       currentStep: 'deploy',
@@ -34,10 +46,12 @@ function getDeployJourneySummary(deployStatus: DeployStatus) {
     currentStep: 'deploy',
     status: 'waiting',
     statusLabel: 'No active canary',
-    summary: 'Start a canary from a candidate version before promoting production traffic.',
+    summary: requestedVersion
+      ? `Version v${requestedVersion} is selected. Start a canary before promoting production traffic.`
+      : 'Start a canary from a candidate version before promoting production traffic.',
     nextLabel: 'Start canary',
     nextDescription: 'Open the deploy form, choose a candidate version, and keep the canary strategy selected.',
-    href: '/deploy?new=1',
+    href: requestedVersion ? `/deploy?new=1&version=v${requestedVersion}` : '/deploy?new=1',
   });
 }
 
@@ -54,19 +68,19 @@ export function Deploy() {
   const [strategy, setStrategy] = useState<'canary' | 'immediate'>('canary');
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const showDeployForm = showForm || searchParams.get('new') === '1';
+  const requestedVersion = parseDeployVersionParam(searchParams.get('version'));
   const activeConfig = deployStatus?.active_version
     ? configs?.find((entry) => entry.version === deployStatus.active_version) || null
     : null;
-  // useConfigs returns versions sorted by version number desc, so index 0 is the latest.
-  const latestConfig = configs && configs.length > 0 ? configs[0] : null;
 
-  // When the deploy form is shown and no version is chosen yet, default to the latest candidate
-  // so the primary "Deploy" button is actionable without requiring the user to guess.
   useEffect(() => {
-    if (showDeployForm && !version && latestConfig) {
-      setVersion(String(latestConfig.version));
+    if (!showDeployForm || !requestedVersion) {
+      return;
     }
-  }, [showDeployForm, version, latestConfig]);
+    if (configs?.some((config) => String(config.version) === requestedVersion)) {
+      setVersion(requestedVersion);
+    }
+  }, [configs, requestedVersion, showDeployForm]);
 
   function closeForm() {
     setShowForm(false);
@@ -212,7 +226,7 @@ export function Deploy() {
     );
   }
 
-  const journeySummary = getDeployJourneySummary(deployStatus);
+  const journeySummary = getDeployJourneySummary(deployStatus, requestedVersion);
 
   return (
     <div className="space-y-6">
@@ -371,7 +385,6 @@ export function Deploy() {
                 {(configs || []).map((config) => (
                   <option key={config.version} value={config.version}>
                     v{config.version} · {statusLabel(config.status)}
-                    {latestConfig && config.version === latestConfig.version ? ' (latest)' : ''}
                   </option>
                 ))}
               </select>

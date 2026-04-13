@@ -439,7 +439,7 @@ def _eval_handoff_target(
     if request and request.generated_suite_id:
         params["generatedSuiteId"] = request.generated_suite_id
     if request and request.dataset_path:
-        params["datasetPath"] = request.dataset_path
+        params["evalCasesPath"] = request.dataset_path
     if request and request.category:
         params["category"] = request.category
     if request and request.split:

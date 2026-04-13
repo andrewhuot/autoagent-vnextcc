@@ -670,7 +670,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         ) {
           messages[messages.length - 1] = {
             ...last,
-            text: `${last.text}${text}`.trim(),
+            text: appendMessageDelta(last.text, text),
           };
         } else {
           messages.push({
@@ -1100,6 +1100,20 @@ function messageFromApi(message: WorkbenchMessage): AssistantMessage {
     text: message.text,
     createdAt: Date.parse(message.created_at) || Date.now(),
   };
+}
+
+function appendMessageDelta(current: string, delta: string): string {
+  const next = delta.trim();
+  const previous = current.trimEnd();
+  if (!next) return previous;
+  if (!previous) return next;
+  if (/\s$/.test(current) || /^\s/.test(delta)) {
+    return `${previous}${delta}`.trim();
+  }
+  if (/^[,.;:!?)}\]'"’]/.test(next) || /[(\[{/'"‘-]$/.test(previous)) {
+    return `${previous}${next}`.trim();
+  }
+  return `${previous} ${next}`.trim();
 }
 
 type HarnessMetricsWire = NonNullable<WorkbenchHarnessState['last_metrics']>;

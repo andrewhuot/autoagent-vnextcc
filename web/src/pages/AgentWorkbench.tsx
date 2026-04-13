@@ -41,8 +41,6 @@ import { toastError } from '../lib/toast';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { statusLabel } from '../lib/utils';
-import { useActiveAgent } from '../lib/active-agent';
-import type { AgentLibraryItem } from '../lib/types';
 
 function mapWorkbenchBuildStatus(status: string | undefined): BuildStatus {
   switch (status) {
@@ -74,6 +72,7 @@ function getWorkbenchJourneySummary(input: {
   canonicalModel: WorkbenchCanonicalModel | null;
   lastTest: WorkbenchTestResult | null;
   runSummary: RunSummary | null;
+  bridge: WorkbenchImprovementBridge | null;
 }) {
   const hasCandidate = Boolean(input.canonicalModel?.agents?.length);
   const runCompleted = input.runSummary?.status === 'completed';
@@ -81,14 +80,20 @@ function getWorkbenchJourneySummary(input: {
   const isReadyForEval = hasCandidate && (input.buildStatus === 'done' || runCompleted || validationPassed);
 
   if (isReadyForEval) {
+    const needsMaterialization = input.bridge?.evaluation.status === 'needs_saved_config';
+    const hasBridgeAction = Boolean(input.bridge && input.bridge.evaluation.status !== 'blocked');
     return createJourneyStatusSummary({
       currentStep: 'workbench',
       status: 'ready',
       statusLabel: statusLabel('ready'),
-      summary: 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
-      nextLabel: 'Run eval',
-      nextDescription: 'Open Eval Runs and launch the first evaluation for this candidate.',
-      href: '/evals?new=1',
+      summary: needsMaterialization
+        ? 'The Workbench candidate has build evidence. Save it once so Eval can run against the exact generated config and dataset.'
+        : 'The Workbench candidate has build evidence. Run Eval before sending it into Optimize.',
+      nextLabel: needsMaterialization ? 'Prepare Eval handoff' : 'Run eval',
+      nextDescription: hasBridgeAction
+        ? 'Open Eval through the Workbench handoff so the saved config and generated eval cases stay attached.'
+        : 'Open Eval Runs and launch the first evaluation for this candidate.',
+      href: hasBridgeAction ? undefined : '/evals?new=1',
     });
   }
 
@@ -138,21 +143,12 @@ export function AgentWorkbench() {
   const canonicalModel = useWorkbenchStore((s) => s.canonicalModel);
   const lastTest = useWorkbenchStore((s) => s.lastTest);
   const runSummary = useWorkbenchStore((s) => s.runSummary);
-  const turnCount = useWorkbenchStore((s) => s.turns.length);
-  const lastBrief = useWorkbenchStore((s) => s.lastBrief);
-
-  // Build-draft import affordance. We read from the shared active-agent store
-  // (populated by /build's setActiveAgent) and offer a one-click import rather
-  // than auto-populating the composer — the user may have intentionally come
-  // to /workbench to start fresh.
-  const { activeAgent } = useActiveAgent();
-  const [buildImportPrefill, setBuildImportPrefill] = useState<string | undefined>(undefined);
-  const [buildImportDismissed, setBuildImportDismissed] = useState(false);
   const journeySummary = getWorkbenchJourneySummary({
     buildStatus,
     canonicalModel,
     lastTest,
     runSummary,
+    bridge,
   });
   const buildHandoff = useMemo(() => {
     const state = (location.state as {
@@ -294,7 +290,7 @@ export function AgentWorkbench() {
   // Fresh build handler
   // ---------------------------------------------------------------------------
   const handleSubmit = useCallback(
-    async (brief: string, options?: { startFreshProject?: boolean }) => {
+    async (brief: string, options?: { startFreshProject?: boolean; seedConfigPath?: string }) => {
       beginBuild(brief);
       const controller = new AbortController();
       activeControllerRef.current?.abort();
@@ -305,6 +301,7 @@ export function AgentWorkbench() {
           {
             project_id: options?.startFreshProject ? null : projectId ?? null,
             brief,
+            config_path: options?.seedConfigPath,
             target,
             environment,
             auto_iterate: autoIterate,
@@ -339,8 +336,11 @@ export function AgentWorkbench() {
     }
     buildHandoffStartedRef.current = true;
     reset();
-    void handleSubmit(buildHandoff.brief, { startFreshProject: true });
-  }, [buildHandoff?.brief, buildStatus, handleSubmit, hydrated, projectId, reset]);
+    void handleSubmit(buildHandoff.brief, {
+      startFreshProject: true,
+      seedConfigPath: buildHandoff.configPath || undefined,
+    });
+  }, [buildHandoff?.brief, buildHandoff?.configPath, buildStatus, handleSubmit, hydrated, projectId, reset]);
 
   // ---------------------------------------------------------------------------
   // Iteration handler — called by IterationControls and ReflectionCard
@@ -418,6 +418,10 @@ export function AgentWorkbench() {
         materializedBridge.evaluation.request?.config_path ??
         materializedBridge.candidate.config_path ??
         payload.save_result.config_path;
+      const evalCasesPath =
+        materializedBridge.evaluation.request?.dataset_path ??
+        materializedBridge.candidate.eval_cases_path ??
+        payload.save_result.eval_cases_path;
       if (!configPath) {
         throw new Error('The Workbench candidate did not return a saved config path.');
       }
@@ -440,6 +444,9 @@ export function AgentWorkbench() {
       if (materializedBridge.evaluation.request?.generated_suite_id) {
         params.set('generatedSuiteId', materializedBridge.evaluation.request.generated_suite_id);
       }
+      if (evalCasesPath) {
+        params.set('evalCasesPath', evalCasesPath);
+      }
       if (materializedBridge.evaluation.request?.split) {
         params.set('split', materializedBridge.evaluation.request.split);
       }
@@ -449,6 +456,7 @@ export function AgentWorkbench() {
           source: 'workbench',
           open: 'run',
           workbenchBridge: materializedBridge,
+          evalCasesPath,
           agent: {
             id: materializedAgentId,
             name: candidate.agent_name || 'Workbench Agent',
@@ -470,38 +478,10 @@ export function AgentWorkbench() {
     }
   }, [navigate]);
 
-  // Only offer the "Import from Build" banner if the operator hasn't already
-  // started a workbench session here (no turns, no prior brief, no live
-  // build) and we aren't already running the dedicated nav handoff from
-  // /build. This keeps the composer undisturbed for anyone who arrived at
-  // /workbench to start fresh.
-  const hasWorkbenchSession =
-    turnCount > 0 ||
-    Boolean(lastBrief) ||
-    buildStatus !== 'idle';
-  const showBuildImportBanner =
-    !buildHandoff &&
-    !buildImportDismissed &&
-    !hasWorkbenchSession &&
-    Boolean(activeAgent);
-
-  const handleImportFromBuild = useCallback(() => {
-    if (!activeAgent) return;
-    setBuildImportPrefill(briefFromActiveAgent(activeAgent));
-    setBuildImportDismissed(true);
-  }, [activeAgent]);
-
   return (
     <div className="space-y-4 px-4 pb-6 pt-2">
       {buildHandoff ? <BuildHandoffPanel handoff={buildHandoff} /> : null}
-      {showBuildImportBanner && activeAgent ? (
-        <BuildDraftImportBanner
-          agent={activeAgent}
-          onImport={handleImportFromBuild}
-          onDismiss={() => setBuildImportDismissed(true)}
-        />
-      ) : null}
-      <OperatorNextStepCard summary={journeySummary} />
+      <OperatorNextStepCard summary={journeySummary} onAction={bridge ? handleOpenEval : undefined} />
       <WorkbenchEvalHandoffPanel
         bridge={bridge}
         isPending={evalHandoffPending}
@@ -510,83 +490,14 @@ export function AgentWorkbench() {
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
-        footer={
-          <ChatInput
-            onSubmit={handleSubmit}
-            onCancel={handleCancel}
-            prefill={buildImportPrefill}
-          />
-        }
+        footer={<ChatInput onSubmit={handleSubmit} onCancel={handleCancel} />}
         iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>
   );
 }
 
-/**
- * Map a Build-draft agent into a composer brief string. We include the name
- * and config-path context so the workbench stream has enough signal to
- * continue work on that candidate without having to re-describe it.
- */
-function briefFromActiveAgent(agent: AgentLibraryItem): string {
-  const configLine = agent.config_path
-    ? `\nSaved Build config: ${agent.config_path}`
-    : '';
-  const modelLine = agent.model ? `\nPrimary model: ${agent.model}` : '';
-  return `Continue building ${agent.name} from the Build draft.${modelLine}${configLine}\n\nRefine the existing configuration here — validate its instructions, tools, and guardrails, and propose iterations as needed.`;
-}
-
 export default AgentWorkbench;
-
-function BuildDraftImportBanner({
-  agent,
-  onImport,
-  onDismiss,
-}: {
-  agent: AgentLibraryItem;
-  onImport: () => void;
-  onDismiss: () => void;
-}) {
-  return (
-    <section
-      className="rounded-md border border-[color:var(--wb-accent-border)] bg-[color:var(--wb-accent-weak)] px-4 py-3 text-[color:var(--wb-text)]"
-      aria-label="Import draft from Build"
-    >
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-        <div className="min-w-0">
-          <p className="text-[12px] font-semibold text-[color:var(--wb-accent)]">
-            Continue with draft from Build
-          </p>
-          <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
-            You described {agent.name} on Build. Import that draft into the
-            Workbench composer instead of starting from scratch.
-          </p>
-          {agent.config_path ? (
-            <p className="mt-1 break-all font-mono text-[11px] text-[color:var(--wb-text-dim)]">
-              {agent.config_path}
-            </p>
-          ) : null}
-        </div>
-        <div className="flex flex-shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={onDismiss}
-            className="inline-flex items-center justify-center rounded-md border border-[color:var(--wb-border)] bg-transparent px-3 py-1.5 text-[12px] font-medium text-[color:var(--wb-text-soft)] transition hover:text-[color:var(--wb-text)]"
-          >
-            Start fresh
-          </button>
-          <button
-            type="button"
-            onClick={onImport}
-            className="inline-flex items-center justify-center rounded-md bg-[color:var(--wb-accent)] px-3 py-1.5 text-[12px] font-medium text-[color:var(--wb-accent-fg)] transition hover:opacity-90"
-          >
-            Import from Build
-          </button>
-        </div>
-      </div>
-    </section>
-  );
-}
 
 function BuildHandoffPanel({
   handoff,

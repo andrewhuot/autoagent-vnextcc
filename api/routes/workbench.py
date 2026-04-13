@@ -66,6 +66,10 @@ class WorkbenchBuildStreamRequest(BaseModel):
 
     project_id: str | None = Field(default=None)
     brief: str = Field(min_length=1)
+    config_path: str | None = Field(
+        default=None,
+        description="Optional saved Build config path used to hydrate a Workbench handoff.",
+    )
     target: str = Field(default="portable", pattern="^(portable|adk|cx)$")
     environment: str = Field(default="draft")
     mock: bool = Field(default=False, description="Force mock mode for tests.")
@@ -253,7 +257,7 @@ async def create_eval_bridge(
             config_path=saved.config_path,
             eval_cases_path=saved.eval_cases_path,
             category=body.category,
-            dataset_path=body.dataset_path,
+            dataset_path=body.dataset_path or saved.eval_cases_path,
             generated_suite_id=body.generated_suite_id,
             split=body.split,
         )
@@ -266,7 +270,7 @@ async def create_eval_bridge(
             config_path=saved.config_path,
             eval_cases_path=saved.eval_cases_path,
             category=body.category,
-            dataset_path=body.dataset_path,
+            dataset_path=body.dataset_path or saved.eval_cases_path,
             generated_suite_id=body.generated_suite_id,
             split=body.split,
         )
@@ -343,6 +347,7 @@ async def stream_build(request: Request, body: WorkbenchBuildStreamRequest) -> S
             stream = await service.run_build_stream(
                 project_id=body.project_id,
                 brief=body.brief,
+                config_path=body.config_path,
                 target=body.target,
                 environment=body.environment,
                 agent=agent,

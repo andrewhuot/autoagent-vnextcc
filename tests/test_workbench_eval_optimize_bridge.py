@@ -121,7 +121,9 @@ def test_materialized_eval_bridge_saves_candidate_and_returns_downstream_request
     assert bridge["evaluation"]["primary_action_target"].startswith("/evals?")
     assert f"workbenchProjectId={project_id}" in bridge["evaluation"]["primary_action_target"]
     assert "configPath=" in bridge["evaluation"]["primary_action_target"]
+    assert "evalCasesPath=" in bridge["evaluation"]["primary_action_target"]
     assert bridge["evaluation"]["request"]["config_path"] == save_result["config_path"]
+    assert bridge["evaluation"]["request"]["dataset_path"] == save_result["eval_cases_path"]
     assert bridge["evaluation"]["request"]["split"] == "all"
     assert payload["eval_request"] == bridge["evaluation"]["request"]
 

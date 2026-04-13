@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { FlaskConical, Loader2, Plus, X, Wand2 } from 'lucide-react';
+import { FlaskConical, Plus, X, Wand2 } from 'lucide-react';
 import {
   useAgent,
   useApplyCurriculum,
   useCurriculumBatches,
   useEvalRuns,
   useGenerateCurriculum,
-  useGenerateEvals,
   useGeneratedSuites,
   useStartEval,
   useAgents,
@@ -44,6 +43,13 @@ function getEvalJourneySummary(input: {
   completedRunId: string | null;
 }) {
   if (input.completedAgent && input.completedRunId) {
+    const optimizeParams = new URLSearchParams({
+      agent: input.completedAgent.id,
+      evalRunId: input.completedRunId,
+    });
+    if (input.completedAgent.config_path) {
+      optimizeParams.set('configPath', input.completedAgent.config_path);
+    }
     return createJourneyStatusSummary({
       currentStep: 'eval',
       status: 'ready',
@@ -51,7 +57,7 @@ function getEvalJourneySummary(input: {
       summary: `${input.completedAgent.name} has a completed eval run. Use that same run context for Optimize.`,
       nextLabel: 'Optimize candidate',
       nextDescription: 'Open Optimize with the completed eval run and selected agent carried forward.',
-      href: `/optimize?agent=${encodeURIComponent(input.completedAgent.id)}&evalRunId=${encodeURIComponent(input.completedRunId)}`,
+      href: `/optimize?${optimizeParams.toString()}`,
     });
   }
 
@@ -84,7 +90,6 @@ export function EvalRuns() {
   const startEval = useStartEval();
   const generateCurriculum = useGenerateCurriculum();
   const applyCurriculum = useApplyCurriculum();
-  const generateEvals = useGenerateEvals();
 
   const [showForm, setShowForm] = useState(false);
   const [showGenerator, setShowGenerator] = useState(false);
@@ -95,9 +100,7 @@ export function EvalRuns() {
   const [runAgents, setRunAgents] = useState<Record<string, AgentLibraryItem>>({});
   const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
   const [completedRunId, setCompletedRunId] = useState<string | null>(null);
-  const [highlightSuiteId, setHighlightSuiteId] = useState<string | null>(null);
   const selectionHydratedRef = useRef(false);
-  const suiteRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const navigationState = (location.state as EvalJourneyState | null) ?? null;
   const buildEvalCasesPath = navigationState?.evalCasesPath ?? searchParams.get('evalCasesPath') ?? undefined;
@@ -280,56 +283,6 @@ export function EvalRuns() {
     setSearchParams(next, { replace: true });
   }
 
-  function openGeneratorPanel() {
-    setGeneratedSuiteId(null);
-    setShowGenerator(true);
-  }
-
-  function handleGenerateEvalsClick() {
-    if (!activeAgent) {
-      openGeneratorPanel();
-      return;
-    }
-
-    const agentConfig = selectedAgentDetail?.config;
-    if (!agentConfig) {
-      // Config hasn't loaded yet (or is missing) — fall back to the panel so the
-      // user can confirm or paste a config instead of firing an empty payload.
-      openGeneratorPanel();
-      return;
-    }
-
-    generateEvals.mutate(
-      { agent_config: agentConfig, agent_name: activeAgent.name },
-      {
-        onSuccess: (data) => {
-          toastSuccess(`Generated ${data.total_cases} eval cases`);
-          setShowGenerator(false);
-          setGeneratedSuiteId(null);
-          setHighlightSuiteId(data.suite_id);
-          const next = new URLSearchParams(searchParams);
-          next.delete('generator');
-          setSearchParams(next, { replace: true });
-        },
-        onError: (err) => {
-          toastError('Failed to generate evals', err.message);
-        },
-      },
-    );
-  }
-
-  useEffect(() => {
-    if (!highlightSuiteId) {
-      return;
-    }
-    const node = suiteRefs.current[highlightSuiteId];
-    if (node) {
-      node.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    }
-    const timer = window.setTimeout(() => setHighlightSuiteId(null), 2500);
-    return () => window.clearTimeout(timer);
-  }, [highlightSuiteId, generatedSuites]);
-
   function handleGenerateCurriculum() {
     generateCurriculum.mutate(
       {},
@@ -421,34 +374,16 @@ export function EvalRuns() {
         description="Launch evaluations, inspect progress, and compare the quality impact of different runs."
         actions={
           <div className="flex items-center gap-2">
-            <div className="flex flex-col items-end gap-1">
-              <button
-                onClick={handleGenerateEvalsClick}
-                disabled={generateEvals.isPending}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
-              >
-                {generateEvals.isPending ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Generating…
-                  </>
-                ) : (
-                  <>
-                    <Wand2 className="h-4 w-4" />
-                    Generate Evals
-                  </>
-                )}
-              </button>
-              {activeAgent && (
-                <button
-                  type="button"
-                  onClick={openGeneratorPanel}
-                  className="text-xs text-gray-500 underline-offset-2 hover:text-gray-700 hover:underline"
-                >
-                  Customize…
-                </button>
-              )}
-            </div>
+            <button
+              onClick={() => {
+                setShowGenerator(true);
+                setGeneratedSuiteId(null);
+              }}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+            >
+              <Wand2 className="h-4 w-4" />
+              Generate Evals
+            </button>
             <button
               onClick={openCreateForm}
               className="inline-flex items-center gap-2 rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
@@ -494,12 +429,19 @@ export function EvalRuns() {
             <button
               type="button"
               onClick={() =>
-                navigate(`/optimize?agent=${encodeURIComponent(completedAgent.id)}`, {
+                navigate(
+                  `/optimize?${new URLSearchParams({
+                    agent: completedAgent.id,
+                    evalRunId: completedRunId,
+                    ...(completedAgent.config_path ? { configPath: completedAgent.config_path } : {}),
+                  }).toString()}`,
+                  {
                   state: {
                     agent: completedAgent,
                     evalRunId: completedRunId,
                   },
-                })
+                  }
+                )
               }
               className="inline-flex items-center justify-center rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800"
             >
@@ -606,20 +548,8 @@ export function EvalRuns() {
             {generatedSuites.map((suite) => {
               const expanded = expandedSuiteId === suite.suite_id;
               const createdAt = suite.created_at ?? suite.updated_at ?? new Date().toISOString();
-              const highlighted = highlightSuiteId === suite.suite_id;
               return (
-                <div
-                  key={suite.suite_id}
-                  ref={(node) => {
-                    suiteRefs.current[suite.suite_id] = node;
-                  }}
-                  className={classNames(
-                    'rounded-lg border bg-gray-50 p-4 transition',
-                    highlighted
-                      ? 'border-sky-400 ring-2 ring-sky-200'
-                      : 'border-gray-200',
-                  )}
-                >
+                <div key={suite.suite_id} className="rounded-lg border border-gray-200 bg-gray-50 p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">

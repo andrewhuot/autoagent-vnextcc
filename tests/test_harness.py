@@ -316,6 +316,15 @@ def test_select_next_guardrail_domain_specific_for_health() -> None:
     assert "diagnosis" in guardrail["rule"].lower() or "clinician" in guardrail["rule"].lower()
 
 
+def test_select_next_guardrail_prioritizes_lawn_garden_safety() -> None:
+    guardrail = _select_next_guardrail(
+        "Lawn and Garden Support",
+        "Build Greenhouse Guide for a garden store website chat agent with planting plans and pesticide safety caveats",
+        set(),
+    )
+    assert guardrail["name"] == "No Unsupported Pesticide or Medical Claims"
+
+
 def test_eval_suite_airline_has_meaningful_cases() -> None:
     suite = _build_eval_suite("Airline Support", "Build an airline booking agent", {})
     assert len(suite["cases"]) >= 2
