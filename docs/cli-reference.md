@@ -49,6 +49,53 @@ Subcommands:
 
 - `show` — show the latest or selected build artifact
 
+### `agentlab workbench`
+
+Build, inspect, iterate, and materialize a Workbench candidate from the terminal.
+
+Common commands:
+
+```bash
+agentlab workbench                                    # show status (default)
+agentlab workbench create "Build a support agent"     # new project
+agentlab workbench build "Add flight status tool"     # stream a build
+agentlab workbench iterate "Add a guardrail for PII"  # follow-up turn
+agentlab workbench save                               # materialize for eval
+agentlab workbench bridge --json                      # eval readiness
+```
+
+Subcommands:
+
+- `status` — show the current project status (default when invoked bare)
+- `create` — create a new Workbench project from a brief
+- `build` — run the Workbench build loop for a natural-language brief
+- `iterate` — apply a follow-up turn to the latest or selected project
+- `show` — show the candidate card, artifacts, validation, readiness, and next step
+- `list` — list all Workbench projects in the workspace
+- `plan` — plan changes without executing them
+- `apply` — apply an approved change plan and run validation
+- `test` — run deterministic validation checks
+- `rollback` — roll back to a prior version
+- `cancel` — cancel an active build run
+- `save` — materialize the candidate into `configs/` and generated eval cases
+- `bridge` — show Eval/Optimize handoff readiness
+
+Useful options:
+
+- `--project-id TEXT`
+- `--target [portable|adk|cx]`
+- `--environment TEXT`
+- `--mock`
+- `--auto-iterate / --no-auto-iterate`
+- `--max-iterations INTEGER`
+- `--max-seconds INTEGER`
+- `--max-tokens INTEGER`
+- `--max-cost-usd FLOAT`
+- `--json`
+- `--output-format [text|json|stream-json]`
+
+`workbench save` writes the generated Workbench candidate into the normal AgentLab workspace, updates the active local config, writes `evals/cases/generated_build.yaml`, and returns an Eval request plus an Optimize request template. It does **not** start Eval, Optimize, AutoFix, review approval, or deployment.
+
 ### `agentlab eval`
 
 Run evals, inspect results, compare runs, and generate eval suites.

@@ -218,6 +218,36 @@ Build a customer support agent that handles refund escalations, checks order his
 
 The healthy path is not "Workbench made it, ship it." The healthy path is "Workbench built a candidate, Eval measured it, Optimize improved it if needed, Improvements captured the human decision, and Deploy shipped the reviewed version."
 
+## CLI workflow
+
+Workbench is also available from the CLI for terminal-first agent iteration.
+
+```bash
+agentlab workbench create "Build a customer support agent that handles refund escalations."
+agentlab workbench build "Build a customer support agent that handles refund escalations."
+agentlab workbench show
+agentlab workbench iterate "Add a regression eval for refund requests with missing order ids."
+agentlab workbench save
+agentlab eval run --config <saved-config-path>
+```
+
+Useful commands:
+
+| Command | Purpose |
+|---------|---------|
+| `agentlab workbench create "..."` | Create a new Workbench project from a brief. |
+| `agentlab workbench build "..."` | Run the Workbench build loop for a brief. |
+| `agentlab workbench show` | Inspect the candidate card, artifacts, validation, and bridge readiness. |
+| `agentlab workbench status` | Show a compact readiness and next-step view. |
+| `agentlab workbench iterate "..."` | Add a follow-up turn to the latest Workbench project. |
+| `agentlab workbench save` | Materialize the candidate into the normal workspace config path for Eval. |
+| `agentlab workbench bridge --json` | Print the typed Eval/Optimize bridge payload for automation. |
+| `agentlab workbench plan "..."` | Plan changes without executing them. |
+| `agentlab workbench test` | Run deterministic structural validation. |
+| `agentlab workbench list` | List all Workbench projects. |
+
+The CLI follows the same boundary as the web Workbench. `workbench save` writes the generated config into `configs/`, writes generated eval cases, sets the saved candidate as the active local config, and returns Eval/Optimize handoff data. It does not start Eval or Optimize.
+
 ## API endpoints
 
 | Method | Path | Description |
