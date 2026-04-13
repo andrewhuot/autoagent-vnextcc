@@ -22,6 +22,7 @@ web/screenshots/
 configs/manifest.json
 configs/v[0-9]*.yaml
 !configs/v001_base.yaml
+evals/cases/generated_*.yaml
 
 # Session planning artifacts
 task_plan.md
