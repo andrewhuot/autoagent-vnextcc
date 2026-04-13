@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,10 +12,24 @@ from agent.config.runtime import RuntimeConfig, RuntimeModelConfig, load_runtime
 from cli.errors import click_error
 from cli.json_envelope import render_json_envelope
 from cli.permissions import load_workspace_settings, save_workspace_settings
+from cli.workspace_env import load_workspace_env
 
 
 def _model_key(model: RuntimeModelConfig) -> str:
     return f"{model.provider}:{model.model}"
+
+
+def _model_is_credentialled(model: RuntimeModelConfig) -> bool:
+    """Return whether the given model has a provider API key available in the environment."""
+    env_name = (model.api_key_env or "").strip()
+    if not env_name:
+        return False
+    return bool(os.environ.get(env_name))
+
+
+def _credentialled_models(runtime: RuntimeConfig) -> list[RuntimeModelConfig]:
+    """Return the subset of runtime models whose api_key_env is populated."""
+    return [m for m in runtime.optimizer.models if _model_is_credentialled(m)]
 
 
 def list_available_models(root: str | Path = ".") -> list[dict[str, Any]]:
@@ -40,6 +55,13 @@ def _resolve_model_choice(
     *,
     fallback_index: int = 0,
 ) -> RuntimeModelConfig | None:
+    """Resolve the model to use for a role, preferring providers with credentials.
+
+    WHY: Previously we indexed into the full model list, which meant a user with
+    only a Gemini key would still see Proposer=openai:gpt-4o. Now we filter to
+    credentialled models first so roles match the keys actually on file. Explicit
+    user overrides are always honored (credentialled or not).
+    """
     if requested_key:
         normalized = requested_key.strip().lower()
         exact = [
@@ -50,19 +72,26 @@ def _resolve_model_choice(
             return exact[0]
     if not runtime.optimizer.models:
         return None
-    index = min(max(fallback_index, 0), len(runtime.optimizer.models) - 1)
-    return runtime.optimizer.models[index]
+
+    pool = _credentialled_models(runtime) or list(runtime.optimizer.models)
+    index = min(max(fallback_index, 0), len(pool) - 1)
+    return pool[index]
 
 
 def effective_model_surface(root: str | Path = ".") -> dict[str, Any]:
     """Return effective proposer/evaluator selections for the workspace."""
     workspace_root = Path(root)
+    load_workspace_env(workspace_root)
     runtime = load_runtime_config(str(workspace_root / "agentlab.yaml"))
     settings = load_workspace_settings(workspace_root)
     model_settings = settings.get("models", {}) if isinstance(settings.get("models"), dict) else {}
 
+    credentialled = _credentialled_models(runtime)
+    pool_size = len(credentialled) if credentialled else len(runtime.optimizer.models)
+    evaluator_fallback = 1 if pool_size > 1 else 0
+
     proposer = _resolve_model_choice(runtime, model_settings.get("proposer"), fallback_index=0)
-    evaluator = _resolve_model_choice(runtime, model_settings.get("evaluator"), fallback_index=1 if len(runtime.optimizer.models) > 1 else 0)
+    evaluator = _resolve_model_choice(runtime, model_settings.get("evaluator"), fallback_index=evaluator_fallback)
 
     def _surface_entry(model: RuntimeModelConfig | None, selected_key: str | None) -> dict[str, Any] | None:
         if model is None:
@@ -72,12 +101,28 @@ def effective_model_surface(root: str | Path = ".") -> dict[str, Any]:
             "provider": model.provider,
             "model": model.model,
             "override": selected_key,
+            "credentialed": _model_is_credentialled(model),
+            "api_key_env": model.api_key_env,
         }
 
     return {
         "proposer": _surface_entry(proposer, model_settings.get("proposer")),
         "evaluator": _surface_entry(evaluator, model_settings.get("evaluator")),
     }
+
+
+def _render_effective_entry(entry: dict[str, Any] | None) -> str:
+    if not entry:
+        return "n/a"
+    key = entry.get("key", "n/a")
+    env_name = entry.get("api_key_env") or ""
+    if entry.get("credentialed"):
+        suffix = f"(key set via {env_name})" if env_name else "(key set)"
+    elif env_name:
+        suffix = f"(missing {env_name} — will fall back to mock)"
+    else:
+        suffix = "(no provider credentials)"
+    return f"{key} {suffix}"
 
 
 def apply_model_overrides(runtime: RuntimeConfig, root: str | Path = ".") -> RuntimeConfig:
@@ -132,8 +177,8 @@ def show_models(json_output: bool = False) -> None:
         click.echo(render_json_envelope("ok", data, next_command="agentlab model list"))
         return
     click.echo("Effective models")
-    click.echo(f"  Proposer:  {data.get('proposer', {}).get('key', 'n/a')}")
-    click.echo(f"  Evaluator: {data.get('evaluator', {}).get('key', 'n/a')}")
+    click.echo(f"  Proposer:  {_render_effective_entry(data.get('proposer'))}")
+    click.echo(f"  Evaluator: {_render_effective_entry(data.get('evaluator'))}")
 
 
 @model_group.command("set")

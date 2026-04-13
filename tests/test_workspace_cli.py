@@ -83,14 +83,35 @@ def test_init_demo_seeds_workspace_state(runner: CliRunner, tmp_path: Path) -> N
     assert "demo" in result.output.lower()
 
 
-def test_init_defaults_to_mock_mode_even_when_api_keys_exist(
+def test_init_defaults_to_live_when_api_key_is_present(
     runner: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Fresh workspaces should stay in mock mode until live mode is explicitly requested."""
-    workspace = tmp_path / "mock-default"
+    """Fresh workspaces should go live automatically when any provider key is available.
+
+    WHY: The CLI is live-first. Silently coercing `--mode auto` to mock when a
+    real key exists used to mask a misleading experience (mock results while
+    the user thought they were live). Live-first matches the new onboarding.
+    """
+    workspace = tmp_path / "live-default"
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    result = runner.invoke(cli, ["init", "--dir", str(workspace)])
+
+    assert result.exit_code == 0, result.output
+    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
+
+
+def test_init_defaults_to_mock_when_no_api_keys_present(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without any provider keys, `init` stays in mock mode so scripted setups still work."""
+    workspace = tmp_path / "mock-default"
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
 
     result = runner.invoke(cli, ["init", "--dir", str(workspace)])
 

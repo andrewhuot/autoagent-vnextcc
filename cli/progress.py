@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
+import os
+import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -12,6 +17,116 @@ from cli.output import emit_stream_json
 
 
 EventWriter = Callable[[str], None]
+
+
+_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
+_SPINNER_ASCII_FRAMES = ("|", "/", "-", "\\")
+
+
+def _spinner_enabled(output_format: str) -> bool:
+    """Only animate when emitting text to a real TTY (not JSON, not CI, not pipes)."""
+    if output_format != "text":
+        return False
+    if os.environ.get("AGENTLAB_NO_SPINNER"):
+        return False
+    if os.environ.get("CI"):
+        return False
+    stream = sys.stdout
+    try:
+        return bool(stream.isatty())
+    except Exception:  # noqa: BLE001 - defensive against exotic streams
+        return False
+
+
+def _select_frames() -> tuple[str, ...]:
+    """Pick unicode braille frames when the environment supports them, else ASCII."""
+    encoding = (getattr(sys.stdout, "encoding", "") or "").lower()
+    if "utf" in encoding:
+        return _SPINNER_FRAMES
+    return _SPINNER_ASCII_FRAMES
+
+
+class PhaseSpinner:
+    """TTY spinner that advertises the current long-running phase.
+
+    Use as a context manager. `update(label)` swaps the visible phase without
+    breaking the animation; `echo(text)` temporarily pauses frames so an
+    external message prints cleanly.
+
+    Silent no-op when stdout isn't a TTY or the output format is JSON.
+    """
+
+    def __init__(self, label: str, *, output_format: str = "text") -> None:
+        self._label = label
+        self._enabled = _spinner_enabled(output_format)
+        self._frames = _select_frames()
+        self._started_at = 0.0
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._lock = threading.Lock()
+        self._last_width = 0
+
+    def __enter__(self) -> "PhaseSpinner":
+        self._started_at = time.monotonic()
+        if self._enabled:
+            # Hide cursor for a cleaner animation; restore on exit.
+            sys.stdout.write("\x1b[?25l")
+            sys.stdout.flush()
+            self._stop_event.clear()
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        elapsed = max(0.0, time.monotonic() - self._started_at)
+        if self._thread is not None:
+            self._stop_event.set()
+            self._thread.join(timeout=1.0)
+            self._thread = None
+        if self._enabled:
+            with self._lock:
+                self._clear_line()
+                marker = "✓" if exc is None else "✗"
+                color = "green" if exc is None else "red"
+                sys.stdout.write(click.style(f"{marker} {self._label} ({elapsed:.1f}s)\n", fg=color))
+                sys.stdout.write("\x1b[?25h")  # restore cursor
+                sys.stdout.flush()
+
+    def update(self, label: str) -> None:
+        """Swap the visible phase label mid-run."""
+        with self._lock:
+            self._label = label
+            if self._enabled:
+                self._clear_line()
+
+    def echo(self, message: str) -> None:
+        """Emit a message without the spinner frame interleaving."""
+        with self._lock:
+            if self._enabled:
+                self._clear_line()
+            click.echo(message)
+
+    def _run(self) -> None:
+        for frame in itertools.cycle(self._frames):
+            if self._stop_event.is_set():
+                return
+            with self._lock:
+                elapsed = time.monotonic() - self._started_at
+                line = f"{frame} {self._label} ({elapsed:.1f}s)"
+                self._clear_line()
+                sys.stdout.write(line)
+                sys.stdout.flush()
+                self._last_width = len(line)
+            if self._stop_event.wait(0.1):
+                return
+
+    def _clear_line(self) -> None:
+        if self._last_width:
+            sys.stdout.write("\r" + " " * self._last_width + "\r")
+        else:
+            sys.stdout.write("\r")
+        sys.stdout.flush()
+        self._last_width = 0
 
 
 @dataclass
