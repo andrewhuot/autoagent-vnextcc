@@ -2,13 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import shlex
+import sys
 import time
 import uuid
 from typing import Any
 
 import click
 
+from cli.auto_harness import (
+    HarnessEvent,
+    HarnessRenderer,
+    HarnessSession,
+    MessageQueue,
+    PermissionFooter,
+    resolve_cli_ui,
+)
+from cli.permissions import PermissionManager, update_workspace_settings
 from cli.sessions import Session, SessionStore
 from cli.settings import resolve_settings
 
@@ -213,8 +224,11 @@ def _route_free_text(text: str, workspace: Any) -> None:
         click.echo("  (Free-text editing available in a future release.)")
 
 
-def run_shell(workspace: Any, *, session_store: SessionStore | None = None) -> None:
-    """Run the interactive REPL shell for the current workspace."""
+def _create_shell_session(
+    workspace: Any,
+    session_store: SessionStore | None,
+) -> tuple[Session, SessionStore | None]:
+    """Create the persisted or ephemeral shell session shared by both UIs."""
     if session_store is None and workspace is not None:
         session_store = SessionStore(workspace.root)
 
@@ -227,11 +241,68 @@ def run_shell(workspace: Any, *, session_store: SessionStore | None = None) -> N
             started_at=time.time(),
             updated_at=time.time(),
         )
+    return session, session_store
+
+
+def _record_shell_input(
+    session: Session,
+    session_store: SessionStore | None,
+    user_input: str,
+) -> None:
+    """Record user input in the shell transcript before command routing."""
+    if session_store is not None:
+        session_store.append_entry(session, "user", user_input)
+        session_store.append_command(session, user_input)
+
+
+def _process_shell_input(
+    user_input: str,
+    *,
+    workspace: Any,
+    session: Session,
+    session_store: SessionStore | None,
+) -> bool:
+    """Execute one shell input and return True when the shell should exit."""
+    _record_shell_input(session, session_store, user_input)
+
+    if user_input.startswith("/"):
+        return _handle_slash_command(
+            user_input,
+            workspace=workspace,
+            session=session,
+            session_store=session_store or SessionStore.__new__(SessionStore),
+        )
+
+    _route_free_text(user_input, workspace)
+    return False
+
+
+def run_shell(
+    workspace: Any,
+    *,
+    session_store: SessionStore | None = None,
+    ui: str = "auto",
+) -> None:
+    """Run the interactive REPL shell for the current workspace."""
+    session, session_store = _create_shell_session(workspace, session_store)
 
     settings = resolve_settings(
         workspace_dir=workspace.root if workspace else None,
     )
     prompt_str = settings.get("shell.prompt", "agentlab> ")
+
+    resolved_ui = resolve_cli_ui("text", requested_ui=ui)
+    if resolved_ui == "claude" and _stdio_is_tty():
+        try:
+            _run_harness_shell(
+                workspace,
+                session=session,
+                session_store=session_store,
+                prompt_str=prompt_str,
+            )
+            return
+        except ImportError:
+            click.echo("  prompt_toolkit is not installed; falling back to classic shell.")
 
     status_bar = _build_status_bar(workspace)
     click.echo(click.style("\n  AgentLab Shell", fg="cyan", bold=True))
@@ -248,24 +319,148 @@ def run_shell(workspace: Any, *, session_store: SessionStore | None = None) -> N
         if not user_input:
             continue
 
-        if session_store is not None:
-            session_store.append_entry(session, "user", user_input)
-            session_store.append_command(session, user_input)
-
-        if user_input.startswith("/"):
-            should_exit = _handle_slash_command(
-                user_input,
-                workspace=workspace,
-                session=session,
-                session_store=session_store or SessionStore.__new__(SessionStore),
-            )
-            if should_exit:
-                click.echo("  Goodbye.")
-                break
-            continue
-
-        _route_free_text(user_input, workspace)
+        should_exit = _process_shell_input(
+            user_input,
+            workspace=workspace,
+            session=session,
+            session_store=session_store,
+        )
+        if should_exit:
+            click.echo("  Goodbye.")
+            break
 
     if session_store is not None:
         session.updated_at = time.time()
         session_store.save(session)
+
+
+def _stdio_is_tty() -> bool:
+    """Return True when both shell input and output can support a live prompt."""
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _run_harness_shell(
+    workspace: Any,
+    *,
+    session: Session,
+    session_store: SessionStore | None,
+    prompt_str: str,
+) -> None:
+    """Run the prompt_toolkit-backed shell that can queue input while busy."""
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.patch_stdout import patch_stdout
+    except ImportError:
+        raise
+
+    async def _main() -> None:
+        permission_root = workspace.root if workspace is not None else "."
+        footer = PermissionFooter(PermissionManager(root=permission_root).mode)
+        harness = HarnessSession(permission_mode=footer.mode)
+        queue = MessageQueue()
+        renderer = HarnessRenderer()
+        bindings = KeyBindings()
+
+        @bindings.add("s-tab")
+        def _cycle_permission_mode(event) -> None:  # noqa: ANN001 - prompt_toolkit callback
+            del event
+            footer.cycle()
+            harness.emit(HarnessEvent("permission.mode_changed", message=footer.mode))
+            if workspace is not None:
+                update_workspace_settings(
+                    {"permissions": {"mode": footer.mode}},
+                    root=workspace.root,
+                )
+
+        prompt_session = PromptSession(
+            message=prompt_str,
+            bottom_toolbar=lambda: footer.render(),
+            key_bindings=bindings,
+        )
+        harness.emit(HarnessEvent("session.started", message="AgentLab Shell"))
+        harness.emit(
+            HarnessEvent(
+                "stage.started",
+                message="Waiting for input",
+            )
+        )
+        harness.emit(
+            HarnessEvent(
+                "plan.ready",
+                payload={
+                    "tasks": [
+                        {"id": "route", "title": "Route command or prompt"},
+                        {"id": "run", "title": "Run selected AgentLab workflow"},
+                        {"id": "queue", "title": "Drain queued input"},
+                    ]
+                },
+            )
+        )
+        click.echo(click.style("\n  AgentLab Shell", fg="cyan", bold=True))
+        click.echo(renderer.render(harness.snapshot()))
+
+        active_task: asyncio.Task[bool] | None = None
+        stop_requested = False
+
+        async def _run_input(text: str) -> bool:
+            harness.emit(HarnessEvent("task.started", task_id="route", task="Route command or prompt"))
+            loop = asyncio.get_running_loop()
+            should_exit = await loop.run_in_executor(
+                None,
+                lambda: _process_shell_input(
+                    text,
+                    workspace=workspace,
+                    session=session,
+                    session_store=session_store,
+                ),
+            )
+            harness.emit(HarnessEvent("task.completed", task_id="route", task="Route command or prompt"))
+            return should_exit
+
+        def _drain_next() -> None:
+            nonlocal active_task
+            if active_task is None and queue.items():
+                queued = queue.pop_next()
+                harness.emit(HarnessEvent("task.started", task_id="queue", task="Drain queued input"))
+                active_task = asyncio.create_task(_run_input(queued.text))
+
+        with patch_stdout():
+            while not stop_requested:
+                if active_task is not None and active_task.done():
+                    stop_requested = active_task.result()
+                    active_task = None
+                    harness.emit(HarnessEvent("task.completed", task_id="run", task="Run selected AgentLab workflow"))
+                    _drain_next()
+                    if stop_requested:
+                        break
+
+                try:
+                    user_input = (await prompt_session.prompt_async()).strip()
+                except (EOFError, KeyboardInterrupt):
+                    click.echo("\n  Goodbye.")
+                    break
+
+                if not user_input:
+                    continue
+
+                if active_task is not None and not active_task.done():
+                    queue.add(user_input)
+                    harness.emit(HarnessEvent("input.queued", message=user_input))
+                    click.echo(renderer.render(harness.snapshot()))
+                    continue
+
+                harness.emit(HarnessEvent("task.started", task_id="run", task="Run selected AgentLab workflow"))
+                active_task = asyncio.create_task(_run_input(user_input))
+
+            if active_task is not None and not active_task.done():
+                await active_task
+
+        if session_store is not None:
+            session.updated_at = time.time()
+            session_store.save(session)
+
+    asyncio.run(_main())

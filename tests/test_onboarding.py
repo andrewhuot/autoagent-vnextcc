@@ -45,6 +45,28 @@ def test_onboarding_without_key_prompts_and_saves(monkeypatch: pytest.MonkeyPatc
     assert "GOOGLE_API_KEY=fake-google-key" in env_file.read_text(encoding="utf-8")
 
 
+def test_onboarding_provider_prompt_defaults_to_api_key_collection(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """First-run onboarding should make live/API-key setup the default path."""
+    _clear_keys(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    defaults: list[str | None] = []
+
+    def fake_prompt(*args, **kwargs):  # noqa: ANN002, ANN003
+        defaults.append(kwargs.get("default"))
+        if len(defaults) == 1:
+            return "1"
+        return "4"
+
+    with patch("click.prompt", side_effect=fake_prompt):
+        result = run_onboarding()
+
+    assert result.mode == "mock"
+    assert defaults[:2] == ["1", "1"]
+
+
 def test_onboarding_user_picks_mock_for_now(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
