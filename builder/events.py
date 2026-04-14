@@ -41,6 +41,9 @@ class BuilderEventType(str, Enum):
     TASK_FAILED = "task.failed"
     SESSION_OPENED = "session.opened"
     SESSION_CLOSED = "session.closed"
+    EXECUTION_STARTED = "execution.started"
+    WORKER_PHASE_CHANGED = "worker.phase_changed"
+    EXECUTION_COMPLETED = "execution.completed"
 
 
 # Event types that represent significant lifecycle transitions and should
@@ -53,6 +56,9 @@ LIFECYCLE_EVENT_TYPES = frozenset({
     BuilderEventType.SESSION_CLOSED,
     BuilderEventType.EVAL_STARTED,
     BuilderEventType.EVAL_COMPLETED,
+    BuilderEventType.EXECUTION_STARTED,
+    BuilderEventType.WORKER_PHASE_CHANGED,
+    BuilderEventType.EXECUTION_COMPLETED,
 })
 
 

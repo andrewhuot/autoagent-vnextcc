@@ -64,10 +64,11 @@ import type {
   TranscriptReport,
   TranscriptReportSummary,
 } from '../lib/types';
-import type { ArtifactRef } from '../lib/builder-types';
+import type { ArtifactRef, CoordinatorExecutionRun, WorkerExecutionResult } from '../lib/builder-types';
+import { builderApi } from '../lib/builder-api';
 import { classNames, statusLabel } from '../lib/utils';
 
-type BuildTab = 'prompt' | 'transcript' | 'builder-chat' | 'saved-artifacts';
+type BuildTab = 'prompt' | 'transcript' | 'builder-chat' | 'saved-artifacts' | 'coordinator';
 type StudioMode = 'prompt' | 'transcript';
 type StudioPhase = 'setup' | 'refine';
 
@@ -368,6 +369,10 @@ export function Build() {
             active={activeTab === 'saved-artifacts'}
             localArtifacts={savedArtifacts}
           />
+        </BuildTabPanel>
+
+        <BuildTabPanel id="coordinator-panel" active={activeTab === 'coordinator'}>
+          <CoordinatorExecutionPanel />
         </BuildTabPanel>
       </div>
     </div>
@@ -2840,10 +2845,17 @@ function BuildTabBar({
       eyebrow: 'Resume work',
       description: 'Return to saved drafts and transcript outputs.',
     },
+    {
+      id: 'coordinator',
+      label: 'Coordinator',
+      icon: <ListTree className="h-4 w-4" />,
+      eyebrow: 'Worker runtime',
+      description: 'Plan, execute, and inspect coordinator-worker runs.',
+    },
   ];
 
   return (
-    <div role="tablist" aria-label="Build sections" className="grid gap-3 lg:grid-cols-4">
+    <div role="tablist" aria-label="Build sections" className="grid gap-3 lg:grid-cols-5">
       {tabs.map((tab) => (
         <button
           key={tab.id}
@@ -2921,6 +2933,12 @@ function BuildJourneyPanel({ activeTab }: { activeTab: BuildTab }) {
       description:
         'Resume work without starting over. Saved artifacts keep draft outputs and transcript reports in one place.',
       nextStep: 'Pick the draft you want to continue refining or validating next.',
+    },
+    coordinator: {
+      hint: 'Coordinator-worker runtime',
+      description:
+        'Create a coordinator plan for a task, execute it, and inspect worker results and synthesis.',
+      nextStep: 'Enter a task ID with a plan, then execute and review worker outcomes.',
     },
   };
 
@@ -3777,12 +3795,230 @@ function loadStoredBuildArtifacts(): BuildArtifact[] {
   }
 }
 
+const PHASE_LABELS: Record<string, string> = {
+  pending: 'Pending',
+  gathering_context: 'Gathering context',
+  acting: 'Acting',
+  verifying: 'Verifying',
+  completed: 'Completed',
+  failed: 'Failed',
+  blocked: 'Blocked',
+};
+
+const PHASE_COLORS: Record<string, string> = {
+  pending: 'bg-gray-100 text-gray-600',
+  gathering_context: 'bg-blue-100 text-blue-700',
+  acting: 'bg-amber-100 text-amber-700',
+  verifying: 'bg-purple-100 text-purple-700',
+  completed: 'bg-green-100 text-green-700',
+  failed: 'bg-red-100 text-red-700',
+  blocked: 'bg-orange-100 text-orange-700',
+};
+
+function WorkerNodeCard({ result }: { result: WorkerExecutionResult }) {
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm font-semibold text-gray-900">
+          {result.worker_role.replace(/_/g, ' ')}
+        </span>
+        <span
+          className={classNames(
+            'rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
+            PHASE_COLORS[result.phase] ?? 'bg-gray-100 text-gray-600'
+          )}
+        >
+          {PHASE_LABELS[result.phase] ?? result.phase}
+        </span>
+      </div>
+      {result.summary && (
+        <p className="mt-2 text-sm leading-relaxed text-gray-600">{result.summary}</p>
+      )}
+      {result.error && (
+        <p className="mt-2 text-sm text-red-600">Error: {result.error}</p>
+      )}
+      {result.artifacts_produced.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {result.artifacts_produced.map((artifact) => (
+            <span
+              key={artifact}
+              className="rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700"
+            >
+              {artifact}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CoordinatorExecutionPanel() {
+  const [taskId, setTaskId] = useState('');
+  const [execution, setExecution] = useState<CoordinatorExecutionRun | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleExecute() {
+    if (!taskId.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const run = await builderApi.coordinator.execute(taskId.trim());
+      setExecution(run);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Execution failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleInspect() {
+    if (!taskId.trim()) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const run = await builderApi.coordinator.getExecution(taskId.trim());
+      setExecution(run);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'No execution found');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const workerResults = execution
+    ? Object.values(execution.worker_states)
+    : [];
+  const synthesis = execution?.synthesis as Record<string, unknown> | undefined;
+
+  return (
+    <div className="space-y-6">
+      <div className="rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm">
+        <h3 className="text-lg font-semibold text-gray-900">Coordinator-Worker Runtime</h3>
+        <p className="mt-1 text-sm text-gray-500">
+          Execute a coordinator plan on a task and inspect worker lifecycle results.
+        </p>
+
+        <div className="mt-4 flex items-end gap-3">
+          <div className="flex-1">
+            <label htmlFor="coord-task-id" className="block text-sm font-medium text-gray-700">
+              Task ID
+            </label>
+            <input
+              id="coord-task-id"
+              type="text"
+              value={taskId}
+              onChange={(e: ChangeEvent<HTMLInputElement>) => setTaskId(e.target.value)}
+              placeholder="Enter task ID with a coordinator plan"
+              className="mt-1 block w-full rounded-xl border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={handleExecute}
+            disabled={loading || !taskId.trim()}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
+          >
+            {loading ? 'Running…' : 'Execute Plan'}
+          </button>
+          <button
+            type="button"
+            onClick={handleInspect}
+            disabled={loading || !taskId.trim()}
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+          >
+            Inspect
+          </button>
+        </div>
+
+        {error && (
+          <div className="mt-3 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-500" />
+            <p className="text-sm text-red-700">{error}</p>
+          </div>
+        )}
+      </div>
+
+      {execution && (
+        <>
+          <div className="rounded-[28px] border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="flex items-center justify-between">
+              <h4 className="text-sm font-semibold text-gray-900">
+                Execution: {execution.run_id.slice(0, 8)}
+              </h4>
+              <span
+                className={classNames(
+                  'rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
+                  execution.status === 'completed'
+                    ? 'bg-green-100 text-green-700'
+                    : execution.status === 'failed'
+                      ? 'bg-red-100 text-red-700'
+                      : 'bg-blue-100 text-blue-700'
+                )}
+              >
+                {execution.status}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-gray-500">Goal: {execution.goal}</p>
+            <p className="mt-1 text-xs text-gray-400">Plan: {execution.plan_id}</p>
+          </div>
+
+          <div className="space-y-3">
+            <h4 className="text-sm font-semibold text-gray-700">
+              Worker Results ({workerResults.length})
+            </h4>
+            {workerResults.map((result) => (
+              <WorkerNodeCard key={result.node_id} result={result} />
+            ))}
+          </div>
+
+          {synthesis && (
+            <div className="rounded-[28px] border border-sky-100 bg-sky-50/50 p-6 shadow-sm">
+              <h4 className="text-sm font-semibold text-sky-900">Coordinator Synthesis</h4>
+              <p className="mt-2 text-sm text-sky-800">
+                {String(synthesis.status ?? '')}
+              </p>
+              <div className="mt-3 grid grid-cols-3 gap-3 text-center">
+                <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                  <p className="text-lg font-bold text-green-600">
+                    {String(synthesis.completed_count ?? 0)}
+                  </p>
+                  <p className="text-[11px] font-medium text-gray-500">Completed</p>
+                </div>
+                <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                  <p className="text-lg font-bold text-red-600">
+                    {String(synthesis.failed_count ?? 0)}
+                  </p>
+                  <p className="text-[11px] font-medium text-gray-500">Failed</p>
+                </div>
+                <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                  <p className="text-lg font-bold text-orange-600">
+                    {String(synthesis.blocked_count ?? 0)}
+                  </p>
+                  <p className="text-[11px] font-medium text-gray-500">Blocked</p>
+                </div>
+              </div>
+              {synthesis.next_step ? (
+                <p className="mt-3 text-sm text-sky-700">
+                  Next: {String(synthesis.next_step)}
+                </p>
+              ) : null}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function parseBuildTab(value: string | null): BuildTab | null {
   if (
     value === 'prompt' ||
     value === 'transcript' ||
     value === 'builder-chat' ||
-    value === 'saved-artifacts'
+    value === 'saved-artifacts' ||
+    value === 'coordinator'
   ) {
     return value;
   }

@@ -453,3 +453,124 @@ class TestSpecialistsAPI:
         assert any(entry["worker_role"] == "eval_author" for entry in data["tasks"])
         assert any(entry.get("materialized_task_id") for entry in data["tasks"])
         assert data["skill_context"]["buildtime_skills"] == ["prompt_hardening"]
+
+
+# ---------------------------------------------------------------------------
+# Coordinator execution
+# ---------------------------------------------------------------------------
+
+class TestCoordinatorExecutionAPI:
+    def _setup_task_with_plan(self, client):
+        project_resp = client.post(
+            "/api/builder/projects",
+            json={"name": "Exec Project", "buildtime_skills": ["prompt_hardening"]},
+        )
+        project_id = project_resp.json()["project_id"]
+        session_resp = client.post(
+            "/api/builder/sessions",
+            json={"project_id": project_id, "title": "exec session"},
+        )
+        session_id = session_resp.json()["session_id"]
+        task_resp = client.post(
+            "/api/builder/tasks",
+            json={
+                "session_id": session_id,
+                "project_id": project_id,
+                "title": "build and eval",
+                "description": "build and eval",
+            },
+        )
+        task_id = task_resp.json()["task_id"]
+
+        client.post(
+            "/api/builder/coordinator/plan",
+            json={
+                "task_id": task_id,
+                "goal": "Build an agent and add evals",
+            },
+        )
+        return task_id
+
+    def test_execute_plan_returns_completed_run(self, client):
+        task_id = self._setup_task_with_plan(client)
+        resp = client.post(
+            "/api/builder/coordinator/execute",
+            json={"task_id": task_id},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+        assert data["task_id"] == task_id
+        assert len(data["worker_states"]) > 0
+        assert data["synthesis"]["completed_count"] > 0
+
+    def test_get_execution_after_execute(self, client):
+        task_id = self._setup_task_with_plan(client)
+        client.post(
+            "/api/builder/coordinator/execute",
+            json={"task_id": task_id},
+        )
+
+        resp = client.get(f"/api/builder/coordinator/execution/{task_id}")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "completed"
+
+    def test_get_execution_404_without_execution(self, client):
+        project_resp = client.post(
+            "/api/builder/projects", json={"name": "P"}
+        )
+        project_id = project_resp.json()["project_id"]
+        session_resp = client.post(
+            "/api/builder/sessions",
+            json={"project_id": project_id},
+        )
+        session_id = session_resp.json()["session_id"]
+        task_resp = client.post(
+            "/api/builder/tasks",
+            json={
+                "session_id": session_id,
+                "project_id": project_id,
+                "title": "no plan",
+                "description": "no plan",
+            },
+        )
+        task_id = task_resp.json()["task_id"]
+
+        resp = client.get(f"/api/builder/coordinator/execution/{task_id}")
+        assert resp.status_code == 404
+
+    def test_execute_without_plan_400(self, client):
+        project_resp = client.post(
+            "/api/builder/projects", json={"name": "P"}
+        )
+        project_id = project_resp.json()["project_id"]
+        session_resp = client.post(
+            "/api/builder/sessions",
+            json={"project_id": project_id},
+        )
+        session_id = session_resp.json()["session_id"]
+        task_resp = client.post(
+            "/api/builder/tasks",
+            json={
+                "session_id": session_id,
+                "project_id": project_id,
+                "title": "no plan",
+                "description": "no plan",
+            },
+        )
+        task_id = task_resp.json()["task_id"]
+
+        resp = client.post(
+            "/api/builder/coordinator/execute",
+            json={"task_id": task_id},
+        )
+        assert resp.status_code == 400
+
+    def test_execute_with_nonexistent_task_404(self, client):
+        resp = client.post(
+            "/api/builder/coordinator/execute",
+            json={"task_id": "nonexistent-id"},
+        )
+        assert resp.status_code == 404

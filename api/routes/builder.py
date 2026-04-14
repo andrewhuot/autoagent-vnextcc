@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from builder.chat_service import BuilderChatService
+from builder.coordinator_runtime import CoordinatorRuntime
 from builder.events import BuilderEventType, event_to_dict, serialize_sse_event
 from builder.specialists import list_specialists
 from builder.types import (
@@ -140,6 +141,10 @@ class CreateReleaseRequest(BaseModel):
     eval_bundle_id: str | None = None
     deployment_target: str = ""
     changelog: str = ""
+
+
+class ExecutePlanRequest(BaseModel):
+    task_id: str
 
 
 class PromoteReleaseRequest(BaseModel):
@@ -696,6 +701,47 @@ async def create_coordinator_plan(
             extra_context=body.extra_context,
         )
     )
+
+
+@router.post("/coordinator/execute")
+async def execute_coordinator_plan(
+    request: Request,
+    body: ExecutePlanRequest,
+) -> dict[str, Any]:
+    """Execute a coordinator plan that was previously created on a task."""
+    store = _state(request, "builder_store")
+    events = _state(request, "builder_events")
+    task = store.get_task(body.task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    plan = task.metadata.get("coordinator_plan")
+    if plan is None:
+        raise HTTPException(status_code=400, detail="Task has no coordinator plan to execute")
+
+    runtime = CoordinatorRuntime(store=store, events=events)
+    run = runtime.execute_plan(task=task, plan=plan)
+    return _jsonable(runtime._serialize_run(run))
+
+
+@router.get("/coordinator/execution/{task_id}")
+async def get_coordinator_execution(
+    request: Request,
+    task_id: str,
+) -> dict[str, Any]:
+    """Retrieve the latest coordinator execution run for a task."""
+    store = _state(request, "builder_store")
+    events = _state(request, "builder_events")
+    task = store.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    runtime = CoordinatorRuntime(store=store, events=events)
+    run = runtime.get_execution(task)
+    if run is None:
+        raise HTTPException(status_code=404, detail="No execution found for this task")
+
+    return _jsonable(runtime._serialize_run(run))
 
 
 @router.get("/specialists")

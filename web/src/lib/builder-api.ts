@@ -10,6 +10,8 @@ import type {
   BuilderProposal,
   BuilderSession,
   BuilderTask,
+  CoordinatorExecutionRun,
+  CoordinatorPlan,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
@@ -266,6 +268,24 @@ export const builderApi = {
         method: 'POST',
         body: JSON.stringify(payload),
       });
+    },
+  },
+
+  coordinator: {
+    plan(payload: { task_id: string; goal: string; requested_roles?: string[]; materialize_tasks?: boolean }): Promise<CoordinatorPlan> {
+      return request('/coordinator/plan', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+    },
+    execute(taskId: string): Promise<CoordinatorExecutionRun> {
+      return request('/coordinator/execute', {
+        method: 'POST',
+        body: JSON.stringify({ task_id: taskId }),
+      });
+    },
+    getExecution(taskId: string): Promise<CoordinatorExecutionRun> {
+      return request(`/coordinator/execution/${taskId}`);
     },
   },
 };

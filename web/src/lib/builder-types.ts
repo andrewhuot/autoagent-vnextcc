@@ -28,13 +28,17 @@ export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
 
 export type SpecialistRole =
   | 'orchestrator'
+  | 'build_engineer'
   | 'requirements_analyst'
+  | 'prompt_engineer'
   | 'adk_architect'
   | 'tool_engineer'
   | 'skill_author'
   | 'guardrail_author'
   | 'eval_author'
+  | 'optimization_engineer'
   | 'trace_analyst'
+  | 'deployment_engineer'
   | 'release_manager';
 
 export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
@@ -295,7 +299,81 @@ export type BuilderEventType =
   | 'eval.completed'
   | 'approval.requested'
   | 'task.completed'
-  | 'task.failed';
+  | 'task.failed'
+  | 'execution.started'
+  | 'worker.phase_changed'
+  | 'execution.completed';
+
+export type WorkerNodePhase =
+  | 'pending'
+  | 'gathering_context'
+  | 'acting'
+  | 'verifying'
+  | 'completed'
+  | 'failed'
+  | 'blocked';
+
+export type ExecutionRunStatus = 'pending' | 'running' | 'completed' | 'failed';
+
+export interface WorkerExecutionResult {
+  node_id: string;
+  worker_role: string;
+  phase: WorkerNodePhase;
+  context_summary: string;
+  outputs: Record<string, unknown>;
+  artifacts_produced: string[];
+  summary: string;
+  error: string | null;
+  started_at: number | null;
+  completed_at: number | null;
+}
+
+export interface CoordinatorExecutionRun {
+  run_id: string;
+  plan_id: string;
+  task_id: string;
+  session_id: string;
+  project_id: string;
+  goal: string;
+  status: ExecutionRunStatus;
+  worker_states: Record<string, WorkerExecutionResult>;
+  synthesis: Record<string, unknown>;
+  started_at: number | null;
+  completed_at: number | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CoordinatorPlan {
+  plan_id: string;
+  mode: string;
+  root_task_id: string;
+  session_id: string;
+  project_id: string;
+  goal: string;
+  tasks: CoordinatorPlanNode[];
+  worker_registry: Record<string, unknown>[];
+  skill_context: Record<string, unknown>;
+  synthesis: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface CoordinatorPlanNode {
+  task_id: string;
+  title: string;
+  description: string;
+  worker_role: string;
+  depends_on: string[];
+  selected_tools: string[];
+  skill_layer: string;
+  skill_candidates: string[];
+  permission_scope: string[];
+  expected_artifacts: string[];
+  routing_reason: string;
+  status: string;
+  provenance: Record<string, unknown>;
+  materialized_task_id?: string;
+}
 
 export interface BuilderEvent<T = Record<string, unknown>> {
   event_id: string;

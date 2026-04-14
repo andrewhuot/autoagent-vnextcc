@@ -812,3 +812,116 @@ describe('Build', () => {
     );
   });
 });
+
+describe('Coordinator tab', () => {
+  const user = userEvent.setup();
+
+  it('renders coordinator tab button', () => {
+    renderPage();
+    expect(screen.getByRole('tab', { name: 'Coordinator' })).toBeInTheDocument();
+  });
+
+  it('shows coordinator panel when tab is selected via URL', () => {
+    renderPage('/build?tab=coordinator');
+    expect(screen.getByText('Coordinator-Worker Runtime')).toBeInTheDocument();
+    expect(screen.getByLabelText('Task ID')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Execute Plan' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Inspect' })).toBeInTheDocument();
+  });
+
+  it('execute button is disabled without task ID', () => {
+    renderPage('/build?tab=coordinator');
+    const button = screen.getByRole('button', { name: 'Execute Plan' });
+    expect(button).toBeDisabled();
+  });
+
+  it('shows journey guidance for coordinator tab', () => {
+    renderPage('/build?tab=coordinator');
+    expect(screen.getByText('Coordinator-worker runtime')).toBeInTheDocument();
+  });
+
+  it('shows error when execution fails', async () => {
+    const fetchMock = vi.fn((url: string) => {
+      if (typeof url === 'string' && url.includes('/coordinator/execute')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ detail: 'Task not found' }), {
+            status: 404,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        );
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage('/build?tab=coordinator');
+
+    const input = screen.getByLabelText('Task ID');
+    await user.type(input, 'nonexistent');
+    await user.click(screen.getByRole('button', { name: 'Execute Plan' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Task not found')).toBeInTheDocument();
+    });
+  });
+
+  it('renders execution results after successful execute', async () => {
+    const mockRun = {
+      run_id: 'run-abc123',
+      plan_id: 'plan-xyz',
+      task_id: 'task-1',
+      session_id: 'sess-1',
+      project_id: 'proj-1',
+      goal: 'Build an agent',
+      status: 'completed',
+      worker_states: {
+        'worker-1': {
+          node_id: 'worker-1',
+          worker_role: 'build_engineer',
+          phase: 'completed',
+          context_summary: 'gathered context',
+          outputs: {},
+          artifacts_produced: ['source_diff'],
+          summary: 'Build Engineer completed successfully',
+          error: null,
+          started_at: 1000,
+          completed_at: 1001,
+        },
+      },
+      synthesis: {
+        status: 'all workers completed',
+        completed_count: 1,
+        failed_count: 0,
+        blocked_count: 0,
+        next_step: 'Review artifacts and proceed.',
+      },
+      started_at: 1000,
+      completed_at: 1001,
+      created_at: 1000,
+      updated_at: 1001,
+    };
+
+    const fetchMock = vi.fn((url: string) => {
+      if (typeof url === 'string' && url.includes('/coordinator/execute')) {
+        return Promise.resolve(jsonResponse(mockRun));
+      }
+      return Promise.resolve(jsonResponse({}));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    renderPage('/build?tab=coordinator');
+
+    const input = screen.getByLabelText('Task ID');
+    await user.type(input, 'task-1');
+    await user.click(screen.getByRole('button', { name: 'Execute Plan' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/run-abc1/)).toBeInTheDocument();
+    });
+
+    expect(screen.getByText(/Build an agent/)).toBeInTheDocument();
+    expect(screen.getByText('build engineer')).toBeInTheDocument();
+    expect(screen.getByText('source_diff')).toBeInTheDocument();
+    expect(screen.getByText('all workers completed')).toBeInTheDocument();
+  });
+});

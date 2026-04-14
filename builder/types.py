@@ -38,6 +38,18 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+class WorkerNodePhase(str, Enum):
+    """Execution phase of a single worker node in a coordinator plan."""
+
+    PENDING = "pending"
+    GATHERING_CONTEXT = "gathering_context"
+    ACTING = "acting"
+    VERIFYING = "verifying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
 class ArtifactType(str, Enum):
     """Artifact kinds emitted by builder tasks."""
 
@@ -407,9 +419,55 @@ class ReleaseCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+class ExecutionRunStatus(str, Enum):
+    """Status of an entire coordinator execution run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+@dataclass
+class WorkerExecutionResult:
+    """Persisted execution result for one worker node."""
+
+    node_id: str = ""
+    worker_role: str = ""
+    phase: WorkerNodePhase = WorkerNodePhase.PENDING
+    context_summary: str = ""
+    outputs: dict[str, Any] = field(default_factory=dict)
+    artifacts_produced: list[str] = field(default_factory=list)
+    summary: str = ""
+    error: str | None = None
+    started_at: float | None = None
+    completed_at: float | None = None
+
+
+@dataclass
+class CoordinatorExecutionRun:
+    """Full execution run for a coordinator plan."""
+
+    run_id: str = field(default_factory=new_id)
+    plan_id: str = ""
+    task_id: str = ""
+    session_id: str = ""
+    project_id: str = ""
+    goal: str = ""
+    status: ExecutionRunStatus = ExecutionRunStatus.PENDING
+    worker_states: dict[str, WorkerExecutionResult] = field(default_factory=dict)
+    synthesis: dict[str, Any] = field(default_factory=dict)
+    started_at: float | None = None
+    completed_at: float | None = None
+    created_at: float = field(default_factory=now_ts)
+    updated_at: float = field(default_factory=now_ts)
+
+
 __all__ = [
     "ExecutionMode",
     "TaskStatus",
+    "WorkerNodePhase",
+    "ExecutionRunStatus",
     "ArtifactType",
     "ApprovalScope",
     "SpecialistRole",
@@ -429,6 +487,8 @@ __all__ = [
     "EvalBundle",
     "TraceBookmark",
     "ReleaseCandidate",
+    "WorkerExecutionResult",
+    "CoordinatorExecutionRun",
     "now_ts",
     "new_id",
 ]
