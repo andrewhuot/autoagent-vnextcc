@@ -362,7 +362,7 @@ def _run_harness_shell(
         footer = PermissionFooter(PermissionManager(root=permission_root).mode)
         harness = HarnessSession(permission_mode=footer.mode)
         queue = MessageQueue()
-        renderer = HarnessRenderer()
+        renderer = HarnessRenderer(include_footer=False)
         bindings = KeyBindings()
 
         @bindings.add("s-tab")
@@ -377,15 +377,15 @@ def _run_harness_shell(
                 )
 
         prompt_session = PromptSession(
-            message=prompt_str,
-            bottom_toolbar=lambda: footer.render(),
+            message=renderer.prompt_message() if prompt_str == "agentlab> " else prompt_str,
+            bottom_toolbar=lambda: footer.render_toolbar(harness.snapshot()),
             key_bindings=bindings,
         )
         harness.emit(HarnessEvent("session.started", message="AgentLab Shell"))
         harness.emit(
             HarnessEvent(
-                "stage.started",
-                message="Waiting for input",
+                "message.delta",
+                message="Ready. Type a prompt or slash command.",
             )
         )
         harness.emit(
@@ -407,7 +407,13 @@ def _run_harness_shell(
         stop_requested = False
 
         async def _run_input(text: str) -> bool:
-            harness.emit(HarnessEvent("task.started", task_id="route", task="Route command or prompt"))
+            harness.emit(
+                HarnessEvent(
+                    "task.started",
+                    task_id="route",
+                    task="Route command or prompt",
+                )
+            )
             loop = asyncio.get_running_loop()
             should_exit = await loop.run_in_executor(
                 None,
@@ -418,14 +424,31 @@ def _run_harness_shell(
                     session_store=session_store,
                 ),
             )
-            harness.emit(HarnessEvent("task.completed", task_id="route", task="Route command or prompt"))
+            harness.emit(
+                HarnessEvent(
+                    "task.completed",
+                    task_id="route",
+                    task="Route command or prompt",
+                )
+            )
             return should_exit
 
         def _drain_next() -> None:
             nonlocal active_task
             if active_task is None and queue.items():
                 queued = queue.pop_next()
-                harness.emit(HarnessEvent("task.started", task_id="queue", task="Drain queued input"))
+                if harness.queue.items():
+                    harness.queue.pop_next()
+                harness.emit(
+                    HarnessEvent("stage.started", message=_input_stage_label(queued.text))
+                )
+                harness.emit(
+                    HarnessEvent(
+                        "task.started",
+                        task_id="queue",
+                        task="Drain queued input",
+                    )
+                )
                 active_task = asyncio.create_task(_run_input(queued.text))
 
         with patch_stdout():
@@ -433,7 +456,14 @@ def _run_harness_shell(
                 if active_task is not None and active_task.done():
                     stop_requested = active_task.result()
                     active_task = None
-                    harness.emit(HarnessEvent("task.completed", task_id="run", task="Run selected AgentLab workflow"))
+                    harness.emit(
+                        HarnessEvent(
+                            "task.completed",
+                            task_id="run",
+                            task="Run selected AgentLab workflow",
+                        )
+                    )
+                    harness.emit(HarnessEvent("stage.completed", message="Done"))
                     _drain_next()
                     if stop_requested:
                         break
@@ -453,7 +483,14 @@ def _run_harness_shell(
                     click.echo(renderer.render(harness.snapshot()))
                     continue
 
-                harness.emit(HarnessEvent("task.started", task_id="run", task="Run selected AgentLab workflow"))
+                harness.emit(HarnessEvent("stage.started", message=_input_stage_label(user_input)))
+                harness.emit(
+                    HarnessEvent(
+                        "task.started",
+                        task_id="run",
+                        task="Run selected AgentLab workflow",
+                    )
+                )
                 active_task = asyncio.create_task(_run_input(user_input))
 
             if active_task is not None and not active_task.done():
@@ -464,3 +501,13 @@ def _run_harness_shell(
             session_store.save(session)
 
     asyncio.run(_main())
+
+
+def _input_stage_label(text: str) -> str:
+    """Return a compact Claude-style active label for a shell input turn."""
+    stripped = " ".join(text.strip().split())
+    if not stripped:
+        return "Running input"
+    if len(stripped) > 64:
+        stripped = stripped[:61] + "..."
+    return f"Running {stripped}"

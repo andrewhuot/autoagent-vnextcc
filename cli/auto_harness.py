@@ -26,6 +26,17 @@ QueuePriority = Literal["now", "next", "later"]
 TaskState = Literal["pending", "active", "completed", "failed"]
 
 _QUEUE_PRIORITY_ORDER: dict[str, int] = {"now": 0, "next": 1, "later": 2}
+_CLAUDE_PROMPT = "›"
+_CLAUDE_PERMISSION_SYMBOL = "⏵"
+_CLAUDE_RULE = "─"
+_CLAUDE_SEPARATOR = " · "
+_PERMISSION_LABELS: dict[str, str] = {
+    "plan": "plan mode",
+    "default": "default permissions",
+    "acceptEdits": "accept edits",
+    "dontAsk": "don't ask",
+    "bypass": "bypass permissions",
+}
 
 
 @dataclass(slots=True)
@@ -105,7 +116,12 @@ class MessageQueue:
             sequence=self._sequence,
         )
         self._items.append(item)
-        self._items.sort(key=lambda queued: (_QUEUE_PRIORITY_ORDER[queued.priority], queued.sequence))
+        self._items.sort(
+            key=lambda queued: (
+                _QUEUE_PRIORITY_ORDER[queued.priority],
+                queued.sequence,
+            )
+        )
         return item
 
     def items(self) -> list[QueuedInput]:
@@ -125,7 +141,12 @@ class MessageQueue:
 
 @dataclass(slots=True)
 class PermissionFooter:
-    """Visible permission-mode footer plus Claude-style cycling behavior."""
+    """Visible permission-mode footer plus Claude-style cycling behavior.
+
+    This mirrors Claude Code's `PromptInputFooterLeftSide`: permission mode is
+    always first, live background work follows it, and the manage hint appears
+    when there is work to inspect.
+    """
 
     mode: str = DEFAULT_PERMISSION_MODE
 
@@ -141,7 +162,38 @@ class PermissionFooter:
 
     def render(self) -> str:
         """Render the footer text shown at the bottom of the live prompt."""
-        return f"{self.mode} permissions on (shift+tab to cycle)"
+        return self.render_status()
+
+    def render_status(
+        self,
+        background_status: str | None = None,
+        *,
+        show_manage_hint: bool | None = None,
+    ) -> str:
+        """Render the Claude-style permission and background activity footer."""
+        label = _PERMISSION_LABELS.get(self.mode, self.mode)
+        parts = [f"{_CLAUDE_PERMISSION_SYMBOL} {label} on"]
+        if background_status:
+            parts.append(background_status)
+        manage_hint = bool(background_status) if show_manage_hint is None else show_manage_hint
+        if manage_hint:
+            parts.append("↓ to manage")
+        elif not background_status:
+            parts[0] = f"{parts[0]} (shift+tab to cycle)"
+        return _CLAUDE_SEPARATOR.join(parts)
+
+    def render_toolbar(
+        self,
+        snapshot: HarnessSnapshot | None = None,
+        *,
+        width: int | None = None,
+    ) -> str:
+        """Render the two-line bottom toolbar used under the live prompt."""
+        terminal_width = max(40, width or _terminal_width())
+        status = self.render_status(
+            _background_status(snapshot) if snapshot is not None else None
+        )
+        return f"{_CLAUDE_RULE * terminal_width}\n{status}"
 
 
 class ToolOutputSummarizer:
@@ -162,9 +214,7 @@ class ToolOutputSummarizer:
         lines = output.splitlines()
         tail = lines[-self.max_tail_lines :]
         status = "running" if exit_code is None else f"exit {exit_code}"
-        header = (
-            f"Bash {command} ({elapsed_seconds:.1f}s, {len(lines)} lines, {status})"
-        )
+        header = f"● Bash {command} ({elapsed_seconds:.1f}s, {len(lines)} lines, {status})"
         if not tail:
             return header
         return "\n".join([header, *[f"  {line}" for line in tail]])
@@ -215,6 +265,7 @@ class HarnessSession:
             if event.message:
                 self._transcript.append(event.message)
         elif name == "stage.completed":
+            self._active_label = None
             if event.message:
                 self._transcript.append(event.message)
         elif name == "plan.ready":
@@ -337,10 +388,12 @@ class HarnessRenderer:
         *,
         width: int | None = None,
         max_tasks: int = 6,
+        include_footer: bool = True,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self.width = max(40, width or _terminal_width())
         self.max_tasks = max(1, max_tasks)
+        self.include_footer = include_footer
         self._now = now
 
     def render(self, snapshot: HarnessSnapshot) -> str:
@@ -359,16 +412,31 @@ class HarnessRenderer:
         lines.extend(task_lines)
 
         for agent_line in snapshot.agent_lines:
-            lines.append(self._fit(f"  - {agent_line}"))
+            lines.append(self._fit(f"  • {agent_line}"))
 
         if snapshot.queued_inputs:
             lines.append("")
-            for queued in snapshot.queued_inputs[-3:]:
-                lines.append(self._fit(f"> {queued.text}"))
+            lines.extend(self._render_queued_inputs(snapshot.queued_inputs))
 
-        lines.append("")
-        lines.append(self._fit(PermissionFooter(snapshot.permission_mode).render()))
+        if self.include_footer:
+            lines.append("")
+            lines.append(self.prompt_rule())
+            lines.append(
+                self._fit(
+                    PermissionFooter(snapshot.permission_mode).render_status(
+                        _background_status(snapshot)
+                    )
+                )
+            )
         return "\n".join(lines)
+
+    def prompt_message(self) -> str:
+        """Return the Claude-style prompt marker used by prompt_toolkit."""
+        return f"{_CLAUDE_PROMPT} "
+
+    def prompt_rule(self) -> str:
+        """Return the border line below the live prompt input region."""
+        return _CLAUDE_RULE * self.width
 
     def _active_line(self, snapshot: HarnessSnapshot) -> str | None:
         if not snapshot.active_label:
@@ -381,7 +449,7 @@ class HarnessRenderer:
             meta.append(f"${snapshot.cost_usd:.4f}")
         if snapshot.thinking:
             meta.append("thinking")
-        return f"* {snapshot.active_label} ({' | '.join(meta)})"
+        return f"✱ {snapshot.active_label} ({' · '.join(meta)})"
 
     def _render_tasks(self, tasks: list[HarnessTask]) -> Iterable[str]:
         visible = self._visible_tasks(tasks)
@@ -391,10 +459,19 @@ class HarnessRenderer:
                 yield f"  ... {collapsed_count} older completed {plural}"
             if task is None:
                 continue
-            marker = {"completed": "[x]", "active": "[>]", "failed": "[!]", "pending": "[ ]"}[
+            marker = {"completed": "✓", "active": "■", "failed": "✗", "pending": "□"}[
                 task.state
             ]
             yield self._fit(f"  {marker} {task.title}")
+
+    def _render_queued_inputs(self, queued_inputs: list[QueuedInput]) -> Iterable[str]:
+        visible = queued_inputs[-3:]
+        hidden = len(queued_inputs) - len(visible)
+        if hidden > 0:
+            plural = "commands" if hidden != 1 else "command"
+            yield self._fit(f"  ... {hidden} queued {plural}")
+        for queued in visible:
+            yield self._fit(f"{_CLAUDE_PROMPT} {queued.text}")
 
     def _visible_tasks(
         self, tasks: list[HarnessTask]
@@ -543,3 +620,33 @@ def _format_tokens(tokens: int) -> str:
     if tokens >= 1_000:
         return f"{tokens / 1_000:.1f}k tokens"
     return f"{tokens} tokens"
+
+
+def _background_status(snapshot: HarnessSnapshot | None) -> str | None:
+    """Summarize live work for the Claude-style footer activity segment."""
+    if snapshot is None:
+        return None
+
+    parts: list[str] = []
+    active_label = (snapshot.active_label or "").strip().lower()
+    has_active_work = bool(snapshot.active_label) and active_label != "waiting for input"
+    if has_active_work:
+        parts.append("1 shell")
+
+    monitored_tasks = [
+        task for task in snapshot.tasks if task.state in {"active", "pending", "failed"}
+    ]
+    if has_active_work and monitored_tasks:
+        parts.append("1 monitor")
+
+    if snapshot.agent_lines:
+        count = len(snapshot.agent_lines)
+        noun = "agent" if count == 1 else "agents"
+        parts.append(f"{count} {noun}")
+
+    if snapshot.queued_inputs:
+        count = len(snapshot.queued_inputs)
+        noun = "queued" if count == 1 else "queued"
+        parts.append(f"{count} {noun}")
+
+    return ", ".join(parts) if parts else None

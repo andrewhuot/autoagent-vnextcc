@@ -39,9 +39,21 @@ def test_harness_event_sequence_renders_active_status_tasks_queue_and_footer() -
             },
         )
     )
-    session.emit(HarnessEvent("task.started", task_id="model", task="Credential-aware model resolution"))
+    session.emit(
+        HarnessEvent(
+            "task.started",
+            task_id="model",
+            task="Credential-aware model resolution",
+        )
+    )
     session.emit(HarnessEvent("task.completed", task_id="model"))
-    session.emit(HarnessEvent("task.started", task_id="api", task="First-run mode + API key onboarding"))
+    session.emit(
+        HarnessEvent(
+            "task.started",
+            task_id="api",
+            task="First-run mode + API key onboarding",
+        )
+    )
     session.emit(HarnessEvent("metrics.updated", tokens=9900, thinking=True))
     session.emit(HarnessEvent("input.queued", message="Run the broader regression sweep"))
 
@@ -51,12 +63,13 @@ def test_harness_event_sequence_renders_active_status_tasks_queue_and_footer() -
     assert "Implementing first-run mode" in output
     assert "9.9k tokens" in output
     assert "thinking" in output
-    assert "[x] Credential-aware model resolution" in output
-    assert "[>] First-run mode + API key onboarding" in output
-    assert "[ ] PhaseSpinner for build/optimize" in output
-    assert "> Run the broader regression sweep" in output
-    assert "bypass permissions on" in output
-    assert "shift+tab to cycle" in output
+    assert "✓ Credential-aware model resolution" in output
+    assert "■ First-run mode + API key onboarding" in output
+    assert "□ PhaseSpinner for build/optimize" in output
+    assert "› Run the broader regression sweep" in output
+    assert "⏵ bypass permissions on" in output
+    assert "1 shell, 1 monitor, 1 queued" in output
+    assert "↓ to manage" in output
 
 
 def test_task_list_truncation_keeps_current_work_visible() -> None:
@@ -101,9 +114,39 @@ def test_permission_footer_cycles_modes() -> None:
     """The footer owns visible permission state and cycling behavior."""
     footer = PermissionFooter(mode="default")
 
-    assert footer.render() == "default permissions on (shift+tab to cycle)"
+    assert footer.render() == "⏵ default permissions on (shift+tab to cycle)"
+    assert (
+        footer.render_status("1 shell, 1 monitor")
+        == "⏵ default permissions on · 1 shell, 1 monitor · ↓ to manage"
+    )
     assert footer.cycle().mode == "acceptEdits"
     assert footer.cycle().mode == "dontAsk"
+
+
+def test_permission_footer_renders_prompt_toolbar_like_claude_code() -> None:
+    """The live prompt toolbar should have a border line and status footer."""
+    session = HarnessSession(permission_mode="bypass")
+    session.emit(HarnessEvent("stage.started", message="Running tests"))
+    session.emit(HarnessEvent("task.started", task_id="run", task="Run selected AgentLab workflow"))
+
+    toolbar = PermissionFooter(mode="bypass").render_toolbar(session.snapshot(), width=48)
+
+    assert toolbar.splitlines()[0] == "─" * 48
+    assert (
+        toolbar.splitlines()[1]
+        == "⏵ bypass permissions on · 1 shell, 1 monitor · ↓ to manage"
+    )
+
+
+def test_renderer_can_omit_footer_for_live_prompt_toolkit_shell() -> None:
+    """The live shell avoids printing a duplicate footer into the transcript."""
+    session = HarnessSession(permission_mode="default")
+    session.emit(HarnessEvent("message.delta", message="Ready."))
+
+    output = HarnessRenderer(width=80, include_footer=False).render(session.snapshot())
+
+    assert "Ready." in output
+    assert "default permissions" not in output
 
 
 def test_message_queue_orders_priorities_and_tracks_age() -> None:

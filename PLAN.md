@@ -1062,8 +1062,44 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       full slash family green too (`tests/test_workbench_slash.py`
       + `test_workbench_completer.py` + `test_workbench_slash_unit.py`
       + `test_workbench_commands.py` → 138 passed in 0.33s).*
-- [ ] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
-      renderer across started/progress/completed/error sequences.
+- [x] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
+      renderer across started/progress/completed/error sequences. *Landed
+      `tests/test_tool_call_block_unit.py` (flat-tests convention, matching
+      the sibling layout T21 adopted — the `tests/cli/` path in the plan was
+      notional). This is a focused sequence-oriented companion to the
+      T08-era `tests/test_tool_call_block.py` (single-event coverage, 32
+      tests). Where the T08 file tests individual `feed()` calls and their
+      return lines, this T22 module walks the renderer through full realistic
+      lifecycles the transcript will see during `/eval`, `/optimize`,
+      `/build`, and `/deploy` runs, asserting the whole emitted line list +
+      final `open_blocks` / `completed_blocks` state shape in one diff. 10
+      tests: (1) **full-lifecycle sequences** — started → progress → progress
+      → completed renders "⏺ / ⎿ / ⎿ / ✓" in order with `[source]` suffix;
+      started → progress → failed renders "⏺ / ⎿ / ✗ failed: <reason>";
+      completed-state assertion on a three-step happy path
+      (``status="completed"``, ``source="judge"``, ``progress_count==1``);
+      failed-state assertion captures ``failure_reason`` from the
+      ``failure_reason`` key (not just ``reason``) and correct
+      ``progress_count``. (2) **back-to-back sequences** — two independent
+      task_ids rendered sequentially (one ok, one failed) emit six lines in
+      order. (3) **interleaved sequences** — two concurrent task_ids
+      finishing in opposite order render emit-order-preserved lines and
+      `completed_blocks` in completion order (`[b, a]`). (4) **mixed
+      success/failure** — concurrent ok + bad tasks yield
+      ``{"ok": "completed", "bad": "failed"}`` with `open_blocks` empty
+      at the end. (5) **stream termination** — truncated sequence
+      (only started + progress) trailing footer reads
+      "  ✗ failed: stream ended" via `render_tool_call_block`'s
+      `close_unfinished=True` default; orphan progress-then-completed
+      stream synthesises header correctly. (6) **non-task interleaving**
+      — `turn.started` / `run.completed` pass through to
+      `format_workbench_event`, `harness.heartbeat` and `message.delta`
+      are silently suppressed, and the final line count accounts for
+      both passthrough and suppression. No changes to
+      `cli/workbench_render.py`; the existing renderer already satisfied
+      all ten sequences on the first run. Full subset green:
+      `tests/test_tool_call_block.py` + the new file +
+      `tests/test_workbench_transcript.py` → 65 passed in 0.09s.*
 - [ ] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
       `/eval` end-to-end using a mocked subprocess that emits stream-json events and
       asserts transcript output.
