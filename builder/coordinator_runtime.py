@@ -52,7 +52,9 @@ class CoordinatorWorkerRuntime:
         self._store = store
         self._orchestrator = orchestrator
         self._events = events
-        self._worker_adapters = normalize_worker_adapters(worker_adapters)
+        self._worker_adapters = _with_builtin_coordinator_adapters(
+            normalize_worker_adapters(worker_adapters)
+        )
         self._checkpoint_manager = checkpoint_manager
         requested_mode = worker_mode
         env_mode = str(os.environ.get("AGENTLAB_WORKER_MODE", "")).strip().lower()
@@ -309,6 +311,9 @@ class CoordinatorWorkerRuntime:
                 if dep in dependency_summaries
             },
             "provenance": dict(node.get("provenance", {})),
+            "deploy": dict(task.metadata.get("deploy") or {}),
+            "skills": dict(task.metadata.get("skills") or {}),
+            "command_intent": task.metadata.get("command_intent"),
         }
 
     def _worker_message(self, node: dict[str, Any], goal: str) -> str:
@@ -475,6 +480,27 @@ class CoordinatorWorkerRuntime:
                 **payload,
             },
         )
+
+
+def _with_builtin_coordinator_adapters(
+    adapters: dict[SpecialistRole, WorkerAdapter],
+) -> dict[SpecialistRole, WorkerAdapter]:
+    """Install the V4 + V5 default coordinator workers.
+
+    V4 ships :class:`GateRunnerWorker` / :class:`PlatformPublisherWorker`
+    for the deploy roles; V5 ships :class:`SkillAuthorWorker` for
+    ``/skills gap`` / ``/skills generate``. Explicit overrides in
+    ``worker_adapters`` still win, so tests and integrators can inject
+    stubs without touching this default.
+    """
+    from agent_skills.coordinator_worker import SkillAuthorWorker
+    from deployer.coordinator_workers import GateRunnerWorker, PlatformPublisherWorker
+
+    merged = dict(adapters)
+    merged.setdefault(SpecialistRole.GATE_RUNNER, GateRunnerWorker())
+    merged.setdefault(SpecialistRole.PLATFORM_PUBLISHER, PlatformPublisherWorker())
+    merged.setdefault(SpecialistRole.SKILL_AUTHOR, SkillAuthorWorker())
+    return merged
 
 
 def _build_default_adapter_for_mode(

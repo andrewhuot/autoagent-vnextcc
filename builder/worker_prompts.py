@@ -55,9 +55,14 @@ _ROLE_GUIDANCE: dict[SpecialistRole, str] = {
         "Call out external permissions or secrets needed for review."
     ),
     SpecialistRole.SKILL_AUTHOR: (
-        "Recommend build-time or runtime skills that would unblock the goal. "
-        "For each candidate, include rationale, expected impact, and a short "
-        "review note."
+        "Author or prioritise skills based on the skills.subcommand in the "
+        "worker context. For 'gap' turns, emit a skill_gap_report artifact: "
+        "a prioritised list of gaps with gap_type, impact_score, frequency, "
+        "and a one-line rationale per gap. For 'generate <slug>' turns, emit "
+        "a generated_skill artifact containing a manifest (YAML) + source "
+        "code for the requested slug, plus a skill_manifest artifact with "
+        "the manifest metadata. Include rationale, expected impact, and a "
+        "review note for every candidate."
     ),
     SpecialistRole.GUARDRAIL_AUTHOR: (
         "Draft guardrail policies with enforcement level and a failing "
@@ -77,12 +82,32 @@ _ROLE_GUIDANCE: dict[SpecialistRole, str] = {
         "root-cause hypothesis. Return evidence chains, not fixes."
     ),
     SpecialistRole.DEPLOYMENT_ENGINEER: (
-        "Prepare the canary plan, rollback steps, and health checks. "
-        "Call out required approvals explicitly."
+        "Prepare the canary plan, rollback steps, and health checks. Consume "
+        "the gate_runner's regression_summary and gate_report from "
+        "dependency_summaries — the rollout plan MUST cite the gate verdict "
+        "and every failure reason must either be resolved or explicitly "
+        "waived. Emit a deployment_plan artifact with rollout stages and a "
+        "rollback_plan artifact with concrete revert commands."
     ),
     SpecialistRole.RELEASE_MANAGER: (
-        "Package the release candidate, verify gate evidence, and state the "
-        "promotion recommendation with explicit approvals still required."
+        "Package the release candidate and verify gate evidence. Read the "
+        "gate_runner's regression_summary from dependency_summaries and do "
+        "NOT recommend promotion when gate_passed is false. The promotion "
+        "recommendation MUST list explicit approvals still required and the "
+        "exact RELEASE_TRANSITIONS target status."
+    ),
+    SpecialistRole.GATE_RUNNER: (
+        "Run the CI/CD gate against the candidate config. Return a "
+        "gate_report artifact with gate_passed, regression_detected, "
+        "failure_reasons, and candidate/baseline scores. A regression_summary "
+        "artifact restates the verdict for downstream workers."
+    ),
+    SpecialistRole.PLATFORM_PUBLISHER: (
+        "Write the release_candidate record for the target platform. Use the "
+        "gate_report from dependency_summaries to decide which RELEASE_TRANSITIONS "
+        "target status is allowed; when the gate fails, hold the candidate at "
+        "'draft'. Emit release_candidate + publish_record artifacts with "
+        "platform, status, and any transition_reason."
     ),
     SpecialistRole.ORCHESTRATOR: (
         "Synthesize the other workers' outputs into a coherent plan and "

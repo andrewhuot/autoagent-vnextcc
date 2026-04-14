@@ -93,6 +93,7 @@ class CoordinatorSession:
         command_intent: str | None = None,
         permission_mode: str | None = None,
         dry_run: bool = False,
+        context: Mapping[str, Any] | None = None,
     ) -> CoordinatorTurnResult:
         """Plan and optionally execute one Workbench coordinator turn."""
         cleaned = " ".join(str(message or "").split())
@@ -100,15 +101,15 @@ class CoordinatorSession:
             raise ValueError("Coordinator turn message cannot be empty")
         intent = command_intent or detect_command_intent(cleaned)
         self.bind_context(project_id=project_id, session_id=session_id)
-        plan = self.plan(
-            cleaned,
-            verb=intent,
-            context={
-                "permission_mode": permission_mode or "default",
-                "workbench_surface": "cli",
-                "dry_run": dry_run,
-            },
-        )
+        plan_context: dict[str, Any] = {
+            "permission_mode": permission_mode or "default",
+            "workbench_surface": "cli",
+            "dry_run": dry_run,
+        }
+        if context:
+            for key, value in dict(context).items():
+                plan_context.setdefault(key, value)
+        plan = self.plan(cleaned, verb=intent, context=plan_context)
         task = self._require_active_task()
         project = self._store.get_project(task.project_id)
         session = self._store.get_session(task.session_id)
@@ -167,12 +168,19 @@ class CoordinatorSession:
         project = self._get_or_create_project(message=cleaned)
         session = self._get_or_create_session(project=project, intent=intent)
         self._orchestrator.start_session(session)
+        extra_metadata: dict[str, Any] = {}
+        ctx_dict = dict(context or {})
+        for key in ("deploy", "skills"):
+            value = ctx_dict.get(key)
+            if isinstance(value, Mapping):
+                extra_metadata[key] = dict(value)
         task = self._create_task(
             project=project,
             session=session,
             message=cleaned,
             intent=intent,
-            permission_mode=str((context or {}).get("permission_mode") or "default"),
+            permission_mode=str(ctx_dict.get("permission_mode") or "default"),
+            extra_metadata=extra_metadata,
         )
         extra_context = {
             "command_intent": intent,
@@ -328,18 +336,22 @@ class CoordinatorSession:
         message: str,
         intent: str,
         permission_mode: str,
+        extra_metadata: Mapping[str, Any] | None = None,
     ) -> BuilderTask:
         """Persist the root task representing one coordinator turn."""
+        metadata: dict[str, Any] = {
+            "command_intent": intent,
+            "permission_mode": permission_mode,
+            "created_by": "workbench_coordinator_session",
+        }
+        if extra_metadata:
+            metadata.update({k: v for k, v in extra_metadata.items() if v is not None})
         task = BuilderTask(
             project_id=project.project_id,
             session_id=session.session_id,
             title=f"{intent.title()} agent",
             description=message,
-            metadata={
-                "command_intent": intent,
-                "permission_mode": permission_mode,
-                "created_by": "workbench_coordinator_session",
-            },
+            metadata=metadata,
         )
         self._store.save_task(task)
         session.task_ids.append(task.task_id)

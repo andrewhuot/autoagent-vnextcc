@@ -33,6 +33,34 @@ def build_coordinator_command(intent: str) -> LocalCommand:
     )
 
 
+def build_skills_coordinator_command() -> LocalCommand:
+    """Return the coordinator-backed ``/skills`` command with subcommands.
+
+    V5 splits ``/skills`` into three subcommands:
+
+    - ``/skills gap [notes]`` — route through the coordinator with a
+      ``SKILL_AUTHOR`` worker to produce a ``skill_gap_report`` artifact.
+    - ``/skills generate <slug>`` — route through the coordinator to emit a
+      ``generated_skill`` artifact (code + manifest).
+    - ``/skills list`` — render the local ``agent_skills/store`` contents
+      with no coordinator involvement.
+    """
+    return LocalCommand(
+        name="skills",
+        description="Find skill gaps, generate skills, or list the local store",
+        handler=_handle_skills,
+        source="builtin",
+        argument_hint="[gap|generate <slug>|list]",
+        when_to_use=(
+            "Use ``/skills gap`` to surface missing capabilities, ``/skills "
+            "generate <slug>`` to author a new skill, or ``/skills list`` "
+            "to inspect existing ones."
+        ),
+        effort="medium",
+        sensitive=True,
+    )
+
+
 def build_tasks_command() -> LocalCommand:
     """Return the `/tasks` command that renders latest coordinator state."""
     return LocalCommand(
@@ -75,6 +103,114 @@ def make_coordinator_handler(intent: str) -> Callable[..., OnDoneResult]:
         )
 
     return _handle
+
+
+def _handle_skills(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Parse ``/skills`` subcommand and dispatch gap/generate/list."""
+    remaining = [arg for arg in args if arg]
+    subcommand = (remaining[0].lower() if remaining else "list").strip()
+    rest = remaining[1:]
+
+    if subcommand == "list":
+        return _handle_skills_list(ctx)
+    if subcommand == "gap":
+        return _handle_skills_coordinator(
+            ctx,
+            subcommand="gap",
+            message=" ".join(rest).strip()
+            or "Analyze the latest traces and surface missing skill capabilities.",
+            skills_context={"subcommand": "gap", "notes": " ".join(rest).strip()},
+        )
+    if subcommand == "generate":
+        if not rest:
+            return on_done(
+                "  /skills generate requires a skill slug. Try: /skills generate <slug>",
+                display="system",
+            )
+        slug = rest[0].strip()
+        extra_notes = " ".join(rest[1:]).strip()
+        message = (
+            f"Generate a build-time skill for slug '{slug}'. "
+            f"{extra_notes}".strip()
+        )
+        return _handle_skills_coordinator(
+            ctx,
+            subcommand="generate",
+            message=message,
+            skills_context={
+                "subcommand": "generate",
+                "slug": slug,
+                "notes": extra_notes,
+            },
+        )
+    return on_done(
+        f"  Unknown /skills subcommand: {subcommand}. Use gap | generate <slug> | list.",
+        display="system",
+    )
+
+
+def _handle_skills_list(ctx: SlashContext) -> OnDoneResult:
+    """Render the local agent_skills store without touching the coordinator."""
+    try:
+        from agent_skills.store import AgentSkillStore
+    except Exception as exc:  # pragma: no cover - defensive import
+        return on_done(
+            f"  /skills list unavailable: {exc}",
+            display="system",
+        )
+    store_path = _meta_str(ctx, "agent_skills_db_path") or ".agentlab/agent_skills.db"
+    try:
+        store = AgentSkillStore(db_path=store_path)
+        skills = store.list()
+    except Exception as exc:
+        return on_done(
+            f"  /skills list failed: {exc}",
+            display="system",
+        )
+    lines = [theme.heading("\n  Local skills")]
+    if not skills:
+        lines.append("    (no skills stored yet — use /skills generate <slug> to add one)")
+    else:
+        for skill in skills:
+            lines.append(
+                f"    • {skill.name} [{skill.skill_type}] — {skill.status} "
+                f"(gap={skill.gap_id or 'n/a'})"
+            )
+    return on_done("\n".join(lines), display="user")
+
+
+def _handle_skills_coordinator(
+    ctx: SlashContext,
+    *,
+    subcommand: str,
+    message: str,
+    skills_context: dict[str, Any],
+) -> OnDoneResult:
+    """Route gap/generate through the coordinator with a SKILL_AUTHOR roster."""
+    runtime = ctx.meta.get("agent_runtime")
+    session = ctx.coordinator_session or getattr(runtime, "coordinator_session", None)
+    if session is None and runtime is None:
+        return on_done(
+            "  Coordinator runtime is not attached to this Workbench session.",
+            display="system",
+        )
+    if session is not None:
+        result = session.process_turn(
+            message,
+            project_id=_meta_str(ctx, "builder_project_id"),
+            session_id=_meta_str(ctx, "builder_session_id"),
+            command_intent="skills",
+            permission_mode=_meta_str(ctx, "permission_mode"),
+            context={"skills": skills_context},
+        )
+    else:
+        result = runtime.process_turn(message, ctx=ctx, command_intent="skills")
+    remember_turn_result(ctx, result)
+    return on_done(
+        "\n".join(result.transcript_lines),
+        display="user",
+        meta_messages=tuple(result.next_actions),
+    )
 
 
 def _handle_tasks(ctx: SlashContext, *_: str) -> OnDoneResult:
@@ -182,6 +318,7 @@ def _meta_str(ctx: SlashContext, key: str) -> str | None:
 
 __all__ = [
     "build_coordinator_command",
+    "build_skills_coordinator_command",
     "build_tasks_command",
     "make_coordinator_handler",
 ]

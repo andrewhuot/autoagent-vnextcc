@@ -379,8 +379,10 @@ def roles_for_intent(intent: str, message: str) -> list[SpecialistRole]:
             SpecialistRole.GUARDRAIL_AUTHOR,
         ],
         "deploy": [
+            SpecialistRole.GATE_RUNNER,
             SpecialistRole.DEPLOYMENT_ENGINEER,
             SpecialistRole.RELEASE_MANAGER,
+            SpecialistRole.PLATFORM_PUBLISHER,
         ],
         "skills": [
             SpecialistRole.SKILL_AUTHOR,

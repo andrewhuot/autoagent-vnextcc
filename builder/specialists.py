@@ -143,6 +143,28 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         permission_scope=["read", "deployment"],
         context_template="Verify release readiness from artifacts, eval bundles, and approvals.",
     ),
+    SpecialistRole.GATE_RUNNER: SpecialistDefinition(
+        role=SpecialistRole.GATE_RUNNER,
+        display_name="Gate Runner",
+        description="Runs CI/CD quality gates and surfaces regression verdicts before deploy.",
+        tools=["cicd_gate", "eval_runner", "gate_report"],
+        permission_scope=["read", "benchmark_spend"],
+        context_template=(
+            "Execute the deploy gate against the candidate config and return structured "
+            "pass/fail evidence for the release manager."
+        ),
+    ),
+    SpecialistRole.PLATFORM_PUBLISHER: SpecialistDefinition(
+        role=SpecialistRole.PLATFORM_PUBLISHER,
+        display_name="Platform Publisher",
+        description="Writes release candidates to the builder store and triggers platform publish.",
+        tools=["release_packager", "deploy_executor", "publish_recorder"],
+        permission_scope=["read", "deployment"],
+        context_template=(
+            "Package the approved candidate, write a ReleaseCandidate record, and "
+            "transition status per RELEASE_TRANSITIONS for the target platform."
+        ),
+    ),
 }
 
 
@@ -193,6 +215,20 @@ _INTENT_KEYWORDS: dict[SpecialistRole, tuple[str, ...]] = {
         "ship",
     ),
     SpecialistRole.RELEASE_MANAGER: ("release", "deploy", "rollback", "promote"),
+    SpecialistRole.GATE_RUNNER: (
+        "gate",
+        "cicd",
+        "quality gate",
+        "regression",
+        "safety gate",
+    ),
+    SpecialistRole.PLATFORM_PUBLISHER: (
+        "publish",
+        "release candidate",
+        "platform",
+        "ship",
+        "promote",
+    ),
 }
 
 
