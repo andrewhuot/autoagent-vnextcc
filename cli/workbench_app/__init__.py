@@ -29,6 +29,18 @@ from cli.workbench_app.slash import (
     dispatch,
     parse_slash_line,
 )
+from cli.workbench_app.status_bar import (
+    StatusBar,
+    StatusSnapshot,
+    render_snapshot,
+    snapshot_from_workspace,
+)
+from cli.workbench_app.transcript import (
+    Transcript,
+    TranscriptEntry,
+    TranscriptRole,
+    format_entry,
+)
 
 __all__ = [
     "CommandContext",
@@ -43,10 +55,18 @@ __all__ = [
     "SlashCommand",
     "SlashCommandKind",
     "SlashContext",
+    "StatusBar",
+    "StatusSnapshot",
     "StubAppResult",
+    "Transcript",
+    "TranscriptEntry",
+    "TranscriptRole",
     "build_builtin_registry",
     "build_status_line",
     "dispatch",
+    "format_entry",
     "parse_slash_line",
+    "render_snapshot",
     "run_workbench_app",
+    "snapshot_from_workspace",
 ]

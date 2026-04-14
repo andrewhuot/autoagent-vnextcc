@@ -65,17 +65,69 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       are recognised but deferred to T08b/T05b respectively. The full `onDone`
       display-routing protocol lands in T05b. Coverage:
       `tests/test_workbench_slash.py` (34 tests).*
-- [ ] **T05b** — Implement Claude Code's `onDone` return protocol in
+- [x] **T05b** — Implement Claude Code's `onDone` return protocol in
       `cli/workbench_app/slash.py`:
       `onDone(result: str | None, *, display: 'skip'|'system'|'user'='user',
       should_query: bool=False, meta_messages: list[str] | None=None)`. Every slash
       handler returns via this contract. Add unit tests for each display mode.
-- [ ] **T06** — Implement live status line in `cli/workbench_app/status_bar.py` showing
+      *Landed `OnDoneResult` + `on_done()` helper in
+      `cli/workbench_app/commands.py` and wired dispatch to route `display`
+      (`skip` → silent, `system` → dim, `user` → plain), echo `meta_messages`
+      as dim lines, and surface `should_query` / `raw_result` on
+      `DispatchResult`. Handlers still accept the legacy `str | None` sugar
+      (normalized to `display='user'` / `display='skip'`); `/help` is ported
+      to return `on_done(...)` explicitly as a reference. Errors from
+      handler execution or bad return types route through `display='system'`
+      so the loop keeps running. Coverage: 13 new tests in
+      `tests/test_workbench_slash.py` covering each display mode,
+      `should_query`, `meta_messages` ordering, bare-string/None sugar,
+      and unsupported-return-type rejection (47 tests total, all green).*
+- [x] **T06** — Implement live status line in `cli/workbench_app/status_bar.py` showing
       workspace label, active config version, model, pending reviews, best score. Update
-      on every event.
-- [ ] **T07** — Implement streaming transcript pane in `cli/workbench_app/transcript.py`
+      on every event. *Landed frozen `StatusSnapshot` + stateful `StatusBar` with
+      `refresh_from_workspace(workspace, session, model_override)` and `update(**fields)`
+      seams. The bar renders workspace label (cyan), `vNNN` config version, model,
+      pending-review count (yellow, singular/plural aware, hidden at zero), best score,
+      `extras` key:value pairs (for T07/T08 event overlays like cycle/phase), and a dim
+      `agentlab <version>` suffix. `render_snapshot(snap, color=False)` strips ANSI for
+      tests and downstream logging. `cli/workbench_app/app.py::build_status_line` now
+      delegates here so the T04 banner picks up the richer line for free. Coverage:
+      `tests/test_workbench_status_bar.py` (21 tests) — snapshot extraction (label,
+      version, model override, session title), tolerance for `resolve_active_config`
+      raising, pending-review counting against a real sqlite DB, graceful handling of
+      a missing and corrupt cards DB, best-score read + empty-file guard, render
+      ordering/color/ANSI round-trip, singular vs plural reviews, extras rendering, and
+      `StatusBar.update`'s unknown-field rejection. Full workbench surface green
+      (120 tests across slash/status/stub/repl/cli_workbench).*
+- [x] **T07** — Implement streaming transcript pane in `cli/workbench_app/transcript.py`
       that consumes `render_workbench_event` output and appends lines with role-based
-      coloring.
+      coloring. *Landed an append-only `Transcript` with a frozen `TranscriptEntry`
+      tagged by a `TranscriptRole` literal (`user` / `assistant` / `system` / `tool`
+      / `error` / `warning` / `meta`). Added a pure `format_workbench_event` helper
+      in `cli/workbench_render.py` so the transcript can capture event lines without
+      the implicit `click.echo` on the existing `render_workbench_event`; the latter
+      is now a thin wrapper that calls the pure formatter and echoes, preserving
+      every existing caller's behaviour. `Transcript.append_event(event_name, data)`
+      delegates to `format_workbench_event`, tags the stored entry with the event
+      name + payload for later compaction (T17), and returns `None` when the
+      renderer suppresses output (heartbeat / message delta / unknown events) so
+      callers don't have to special-case each. Role-based coloring is applied at
+      format time (not store time) via `format_entry(entry, *, color)` so the same
+      history re-renders with color on or off — used by `Transcript.render(color=…)`
+      for future `/resume` replay. Tool entries pass through unchanged because the
+      workbench event renderers already emit pre-styled strings; other roles get
+      the expected click styles (cyan-bold user `> `, dim system/meta, red-bold
+      `! ` errors, yellow `⚠ ` warnings). Extras: `replace_tail` for rolling
+      `task.progress` updates (T08 prep), `extend`, `clear`, `set_color`,
+      `copy_with(echo, color)` for nested screens (T08b), and a private
+      `_redact(entry)` helper that drops the raw event payload for session
+      compaction. All output goes through an injectable `echo` seam so tests
+      drive the loop without a TTY. Coverage: `tests/test_workbench_transcript.py`
+      (28 tests) — every role's formatting, ANSI round-trip, event pass-through,
+      suppressed-event branches, `replace_tail` / empty-transcript guard,
+      `copy_with` isolation, redaction idempotence, and colored `task.completed`
+      green styling. Full workbench surface green (179 tests across
+      transcript/status/slash/app stub/commands/cli_workbench/streaming).*
 - [ ] **T08** — Build the tool-call block renderer: a nested block (header, streaming
       body, footer) for `task.started`/`task.progress`/`task.completed` sequences. Add
       to `cli/workbench_render.py` as `render_tool_call_block(event_stream)` + unit tests.

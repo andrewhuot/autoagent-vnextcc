@@ -16,12 +16,23 @@ import click
 # ---------------------------------------------------------------------------
 
 
-def render_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
-    """Render a single streaming event as a terminal line. Returns None to suppress."""
+def format_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
+    """Format a streaming event as a single terminal line without any side effects.
+
+    Returns ``None`` when no renderer is registered for ``event_name`` or the
+    renderer suppressed output (e.g. heartbeat pings). The workbench transcript
+    pane (``cli/workbench_app/transcript.py``) uses this to capture event lines
+    without the implicit ``click.echo`` of :func:`render_workbench_event`.
+    """
     renderer = _EVENT_RENDERERS.get(event_name)
     if renderer is None:
         return None
-    line = renderer(data)
+    return renderer(data)
+
+
+def render_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
+    """Render a single streaming event as a terminal line. Returns None to suppress."""
+    line = format_workbench_event(event_name, data)
     if line is not None:
         click.echo(line)
     return line
