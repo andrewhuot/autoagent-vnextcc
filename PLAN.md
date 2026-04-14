@@ -1014,8 +1014,54 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       no workspace falls back to ``session.title == "ephemeral"`` and
       ``session_store=None``. Full workbench-related subset green (722
       tests across workbench / runner / repl / cli_integrations).*
-- [ ] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
-      unknown-command handling, and autocomplete matching.
+- [x] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
+      unknown-command handling, and autocomplete matching. *Landed
+      `tests/test_workbench_slash_unit.py` (flat-tests convention matches
+      the sibling files already in the tree — the `tests/cli/` path in
+      the plan was notional) as a consolidated regression checkpoint
+      for the three T21 bullets. The module is explicitly scoped to
+      the *integration* between the dispatcher, the unknown-command
+      path, and the autocomplete completer against the real built-in
+      registry — deeper per-handler coverage stays in
+      `tests/test_workbench_slash.py` (1200 lines, 96 tests covering
+      every ported handler + display modes + session persistence) and
+      completer-internals coverage stays in
+      `tests/test_workbench_completer.py` (265 lines, 20 tests).
+      Coverage split across three bullets: (1) **dispatch** — 7 tests
+      exercising `DispatchResult` shape on a slash line, noop on
+      free-text, bare-string return → `display="user"`, `None` return
+      → `display="skip"`, `OnDoneResult` with `display="system"` +
+      `meta_messages` echo ordering, handler `RuntimeError` caught
+      into `result.error` with "Error running /boom" echoed so the
+      loop stays alive, `/exit` flipping both `DispatchResult.exit`
+      and `ctx.exit_requested`; (2) **unknown-command handling** —
+      5 tests: `error == "unknown"` + `command is None`, the echoed
+      hint carries the offending token *and* a `/help` pointer
+      (all three substrings asserted in one joined line), case-
+      insensitive lookup echoes the canonical lower-case form
+      (`/NoPe` → `/nope`), registry is not mutated by a missed
+      lookup, `SlashContext()` without a registry returns
+      `error="no command registry bound"` rather than crashing;
+      (3) **autocomplete matching** — 9 tests against the real
+      `build_builtin_registry()`: bare `/` offers exactly
+      `set(registry.names())` (the core cross-module invariant —
+      catches drift between the two surfaces immediately),
+      `/ev` narrows to `["eval"]` with `start_position == -2`
+      so the popup replaces only the typed prefix, case-insensitive
+      `/HE` still matches `help`, no-match → empty iterator,
+      completion bails after the first whitespace token (
+      `/eval ` and `/eval --run-id abc` both empty — the arg-
+      completion hook point), non-slash buffers short-circuit,
+      every name the completer offers resolves via `registry.get(row.
+      name)` (the "no ghost suggestions" contract), completer shares
+      the registry by reference so a late `registry.register(...)`
+      is immediately visible in the completer's output,
+      `SlashCompletion` frozen invariant preserved. All 21 new tests
+      green (`.venv/bin/python -m pytest
+      tests/test_workbench_slash_unit.py -q` → 21 passed in 0.08s);
+      full slash family green too (`tests/test_workbench_slash.py`
+      + `test_workbench_completer.py` + `test_workbench_slash_unit.py`
+      + `test_workbench_commands.py` → 138 passed in 0.33s).*
 - [ ] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
       renderer across started/progress/completed/error sequences.
 - [ ] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
