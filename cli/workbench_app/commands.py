@@ -156,6 +156,11 @@ class _CommandMeta:
     effort: CommandEffort | None = None
     allowed_tools: tuple[str, ...] = ()
     aliases: tuple[str, ...] = ()
+    argument_hint: str | None = None
+    when_to_use: str | None = None
+    hidden: bool = False
+    immediate: bool = False
+    sensitive: bool = False
 
     def __post_init__(self) -> None:
         if not self.name or self.name.startswith("/"):
@@ -306,13 +311,22 @@ class CommandRegistry:
     def all(self) -> list[SlashCommand]:
         return list(self)
 
+    def visible(self) -> list[SlashCommand]:
+        """Return commands that should appear in broad discovery surfaces."""
+        return [c for c in self if not c.hidden]
+
     def by_source(self, source: CommandSource) -> list[SlashCommand]:
         return [c for c in self if c.source == source]
 
     def by_kind(self, kind: SlashCommandKind) -> list[SlashCommand]:
         return [c for c in self if c.kind == kind]
 
-    def match_prefix(self, prefix: str) -> list[SlashCommand]:
+    def match_prefix(
+        self,
+        prefix: str,
+        *,
+        include_hidden: bool = False,
+    ) -> list[SlashCommand]:
         """Return commands whose name or alias starts with ``prefix``.
 
         Used by the autocomplete popup in T19. Accepts an optional leading
@@ -321,18 +335,22 @@ class CommandRegistry:
         token = prefix.lstrip("/").lower()
         matches: dict[str, SlashCommand] = {}
         for name, command in self._commands.items():
+            if command.hidden and not include_hidden:
+                continue
             if name.startswith(token):
                 matches[name] = command
         for alias, target in self._aliases.items():
             if alias.startswith(token):
                 command = self._commands.get(target)
+                if command is not None and command.hidden and not include_hidden:
+                    continue
                 if command is not None:
                     matches.setdefault(target, command)
         return sorted(matches.values(), key=lambda c: c.name)
 
     def help_table(self) -> Mapping[str, str]:
         """Return a ``{/name: description}`` mapping for ``/help`` rendering."""
-        return {f"/{c.name}": c.description for c in self}
+        return {f"/{c.name}": c.description for c in self.visible()}
 
 
 def build_default_registry(

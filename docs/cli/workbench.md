@@ -36,11 +36,17 @@ predictably.
   `/build`, `/deploy`, `/skills`, and session utilities) available
   inline with live stream-json progress.
 - **Autocomplete** — typing `/` pops a list of matching commands with
-  one-line descriptions.
-- **Session persistence** — every transcript entry and slash command is
+  descriptions, argument hints, aliases, and command source. Matches
+  rank names, aliases, and descriptive text so discovery works even
+  when you remember intent instead of the exact token.
+- **Session persistence** — free-text user turns and slash commands are
   appended to the workspace `SessionStore`. `/resume` restores the
   latest (or a named) session; startup surfaces a dim hint when a
   recent prior session exists.
+- **Prompt shortcuts** — bare `?` or `/shortcuts` opens the shortcut
+  reference promised by the startup banner.
+- **Permission chrome** — mode labels use Claude-Code-style symbols:
+  `Default`, `⏵⏵ Accept edits`, `⏸ Plan Mode`, and `⏵⏵ Bypass`.
 - **Ctrl-C semantics** — first press cancels the active streaming tool
   call (subprocess is terminated cleanly, no orphans); second press
   exits the app.
@@ -58,7 +64,7 @@ registry ships the following commands:
 
 | Command | What it does |
 |---------|--------------|
-| `/help` | Show every registered slash command with its one-line description. |
+| `/help [command]` | Show source-grouped slash commands, or details for one command. |
 | `/status` | Print workspace status (wraps `agentlab status`). |
 | `/config` | Show the active config version and summary. |
 | `/memory` | Display `AGENTLAB.md` project memory. |
@@ -66,11 +72,14 @@ registry ships the following commands:
 | `/review` | List pending review cards. |
 | `/mcp` | Show MCP integration status. |
 | `/model [key\|reset]` | Without args: list configured models, marking the session-active one. With a provider/model key: switch the active model for the session (persisted to session state). `reset`/`clear` drops the override. |
+| `/cost` | Show recorded session cost totals when model calls have populated them; otherwise says no cost data is recorded yet. |
 | `/compact` | Summarize the current session into `.agentlab/memory/latest_session.md`. |
+| `/sessions [count]` | List recent persisted sessions with `/resume <session_id>` hints. |
+| `/shortcuts` | Show keyboard shortcuts and input affordances. Bare `?` opens the same view. |
 | `/clear` | Wipe the visible transcript while keeping the active session (on-disk session is preserved). |
 | `/new [title]` | Start a fresh session and clear the transcript. Optional positional `title` becomes the session label. |
-| `/resume [session_id]` | Restore the latest session's transcript (or the explicit `session_id`). |
-| `/exit` | Exit the Workbench. |
+| `/resume [session_id]` | Restore the latest session's transcript (or the explicit `session_id`). Alias: `/r`. |
+| `/exit` | Exit the Workbench. Aliases: `/quit`, `/q`. |
 
 ### Workflow (streaming)
 
@@ -113,6 +122,21 @@ rewriting the Click command layer.
    if a recent prior session exists (< 24h old).
 4. The status line paints and the prompt becomes interactive.
 
+The turn footer reports the current permission mode plus truthful
+activity state. When no shell or task counters are supplied by the
+running command context, it says `idle`; it does not print placeholder
+activity.
+
+`shift+tab` cycles visible modes in this order:
+`default -> acceptEdits -> plan -> bypass -> default`. Existing settings
+that contain `dontAsk` still load, then return to `default` on the next
+interactive cycle.
+
+Long-running operation footers can include an action verb such as
+`thinking...`, token/cost details when present, and a warning-colored
+stalled state when no progress has been recorded for the configured
+stall window.
+
 ---
 
 ## Cancellation and exit
@@ -137,14 +161,9 @@ runner registers its child on `CancellationToken` and unregisters in a
 
 The pre-Workbench `agentlab` shell is still available for one release
 via `agentlab --classic`. It emits a `DeprecationWarning` on entry and
-points at this doc. Two features still live only in the classic shell:
-
-- Queued input while the harness is busy.
-- Bottom-toolbar permission cycling (shift-tab).
-
-Both are slated for the Workbench before the classic shell is removed.
-Track the migration in the `refactor/workbench-claude-code-ux` branch
-and the top-level `PLAN.md`.
+points at this doc. Queued input while the harness is busy still lives
+only in the classic shell; Workbench now owns prompt permission cycling,
+slash discovery, shortcut help, and session visibility.
 
 ---
 

@@ -250,6 +250,8 @@ def build_model_command(*, lister: ModelLister | None = None) -> LocalCommand:
         description="List or switch the active session model",
         handler=_handler,
         source="builtin",
+        argument_hint="[provider/model | reset]",
+        when_to_use="Use when a session needs a different model without editing config.",
     )
 
 

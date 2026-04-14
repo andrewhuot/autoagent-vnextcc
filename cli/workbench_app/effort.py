@@ -34,6 +34,7 @@ from cli.workbench_app import theme
 
 __all__ = [
     "DEFAULT_SPINNER_FRAMES",
+    "DEFAULT_STALL_SECONDS",
     "DEFAULT_THRESHOLD_SECONDS",
     "EffortIndicator",
     "EffortSnapshot",
@@ -55,6 +56,9 @@ DEFAULT_SPINNER_FRAMES: tuple[str, ...] = (
 DEFAULT_THRESHOLD_SECONDS = 2.0
 """Default visibility threshold. Tool calls that finish faster stay silent."""
 
+DEFAULT_STALL_SECONDS = 3.0
+"""Seconds without recorded progress before a running indicator is stalled."""
+
 
 _FINISHED_GLYPH = "✓"
 
@@ -72,6 +76,8 @@ class EffortSnapshot:
     token_count: int | None = None
     cost_usd: float | None = None
     finished: bool = False
+    verb: str | None = None
+    stalled: bool = False
 
 
 class EffortIndicator:
@@ -89,14 +95,18 @@ class EffortIndicator:
         self,
         *,
         threshold_seconds: float = DEFAULT_THRESHOLD_SECONDS,
+        stall_seconds: float = DEFAULT_STALL_SECONDS,
         clock: Clock | None = None,
         frames: Sequence[str] = DEFAULT_SPINNER_FRAMES,
     ) -> None:
         if threshold_seconds < 0:
             raise ValueError("threshold_seconds must be non-negative")
+        if stall_seconds < 0:
+            raise ValueError("stall_seconds must be non-negative")
         if not frames:
             raise ValueError("frames must be non-empty")
         self._threshold = threshold_seconds
+        self._stall_threshold = stall_seconds
         self._clock: Clock = clock if clock is not None else time.monotonic
         self._frames: tuple[str, ...] = tuple(frames)
         self._frame_idx = 0
@@ -104,6 +114,8 @@ class EffortIndicator:
         self._stopped_at: float | None = None
         self._token_count: int | None = None
         self._cost_usd: float | None = None
+        self._verb: str | None = None
+        self._last_progress_at: float | None = None
 
     # ------------------------------------------------------------------ state
 
@@ -146,6 +158,23 @@ class EffortIndicator:
         self._token_count = None
         self._cost_usd = None
 
+    def set_verb(self, verb: str | None) -> None:
+        """Set the action verb rendered beside the spinner."""
+        self._verb = verb
+
+    def record_progress(self) -> None:
+        """Mark that output or tokens arrived and reset the stall timer."""
+        self._last_progress_at = self._clock()
+
+    @property
+    def stalled(self) -> bool:
+        """Return whether a running operation has stopped producing progress."""
+        if self._started_at is None or self._stopped_at is not None:
+            return False
+        if self._last_progress_at is None:
+            return False
+        return (self._clock() - self._last_progress_at) >= self._stall_threshold
+
     # ------------------------------------------------------------------ read
 
     def elapsed(self) -> float:
@@ -178,6 +207,8 @@ class EffortIndicator:
             token_count=self._token_count,
             cost_usd=self._cost_usd,
             finished=False,
+            verb=self._verb,
+            stalled=self.stalled,
         )
 
     def stop(self) -> EffortSnapshot:
@@ -201,6 +232,8 @@ class EffortIndicator:
             token_count=self._token_count,
             cost_usd=self._cost_usd,
             finished=True,
+            verb=self._verb,
+            stalled=False,
         )
 
 
@@ -243,9 +276,13 @@ def format_effort(snapshot: EffortSnapshot, *, color: bool = True) -> str:
     for plain text (used by tests asserting the raw content).
     """
     parts: list[str] = [snapshot.spinner_frame, format_elapsed(snapshot.elapsed_seconds)]
+    if snapshot.verb is not None:
+        parts.append(snapshot.verb)
     if snapshot.token_count is not None:
         parts.append(_format_tokens(snapshot.token_count))
     if snapshot.cost_usd is not None:
         parts.append(_format_cost(snapshot.cost_usd))
     line = "  " + " · ".join(parts)
+    if snapshot.stalled:
+        return theme.warning(line, color=color)
     return theme.meta(line, color=color)

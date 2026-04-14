@@ -18,8 +18,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from cli.permissions import DEFAULT_PERMISSION_MODE, PERMISSION_MODES
+from cli.permissions import DEFAULT_PERMISSION_MODE
 from cli.workbench_app.pt_prompt import (
+    PROMPT_PERMISSION_MODE_CYCLE,
     WorkbenchPromptState,
     cycle_permission_mode,
 )
@@ -27,12 +28,15 @@ from cli.workbench_app.pt_prompt import (
 
 def test_cycle_permission_mode_walks_canonical_order() -> None:
     seen = [DEFAULT_PERMISSION_MODE]
-    for _ in range(len(PERMISSION_MODES)):
+    for _ in range(len(PROMPT_PERMISSION_MODE_CYCLE)):
         seen.append(cycle_permission_mode(seen[-1]))
-    # Dropping the duplicate wraparound entry should give us every mode.
-    assert sorted(set(seen)) == sorted(set(PERMISSION_MODES))
-    # The cycle must return to the starting mode after |PERMISSION_MODES| steps.
-    assert seen[-1] == seen[0]
+
+    assert seen == ["default", "acceptEdits", "plan", "bypass", "default"]
+
+
+def test_cycle_permission_mode_keeps_dontask_as_loadable_compatibility() -> None:
+    """Persisted dontAsk settings should escape back into the visible cycle."""
+    assert cycle_permission_mode("dontAsk") == DEFAULT_PERMISSION_MODE
 
 
 def test_cycle_permission_mode_falls_back_on_unknown_input() -> None:
@@ -109,6 +113,8 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
 
     assert captured_kwargs.get("complete_while_typing") is True
     assert captured_kwargs.get("reserve_space_for_menu", 0) >= 6
+    assert captured_kwargs.get("history") is not None
+    assert captured_kwargs.get("enable_history_search") is True
 
 
 def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -110,6 +110,7 @@ def test_iter_completions_carries_metadata(registry: CommandRegistry) -> None:
     assert completions["help"].description == "Show available slash commands"
     assert completions["help"].source == "builtin"
     assert completions["expand"].source == "plugin"
+    assert "[builtin]" in completions["help"].display_meta
 
 
 def test_iter_completions_stops_once_user_types_argument(
@@ -150,6 +151,52 @@ def test_iter_completions_surfaces_alias_target_once() -> None:
     assert [c.name for c in completions] == ["resume"]
 
 
+def test_iter_completions_matches_alias_description_and_argument_hints() -> None:
+    """The palette should help users who remember intent, not exact tokens."""
+
+    registry = CommandRegistry()
+    registry.register(
+        LocalCommand(
+            name="resume",
+            description="Continue a previous session",
+            handler=_noop_handler,
+            aliases=("history",),
+            argument_hint="[session_id]",
+        )
+    )
+    registry.register(
+        LocalCommand(
+            name="doctor",
+            description="Run workspace diagnostics",
+            handler=_noop_handler,
+        )
+    )
+
+    assert [c.name for c in iter_completions(registry, "/hist")] == ["resume"]
+    assert [c.name for c in iter_completions(registry, "/diag")] == ["doctor"]
+    completion = next(iter_completions(registry, "/res"))
+    assert completion.argument_hint == "[session_id]"
+    assert "[session_id]" in completion.display_meta
+
+
+def test_iter_completions_hides_hidden_commands_from_broad_popup() -> None:
+    registry = CommandRegistry()
+    registry.register(
+        LocalCommand(name="status", description="Show status", handler=_noop_handler)
+    )
+    registry.register(
+        LocalCommand(
+            name="debug-internal",
+            description="Internal debug hook",
+            handler=_noop_handler,
+            hidden=True,
+        )
+    )
+
+    assert [c.name for c in iter_completions(registry, "/")] == ["status"]
+    assert list(iter_completions(registry, "/debug")) == []
+
+
 # ---------------------------------------------------------------------------
 # SlashCommandCompleter — prompt_toolkit integration.
 # ---------------------------------------------------------------------------
@@ -183,7 +230,8 @@ def test_completer_display_includes_slash_prefix(registry: CommandRegistry) -> N
 def test_completer_display_meta_shows_description(registry: CommandRegistry) -> None:
     completer = SlashCommandCompleter(registry)
     completions = _get_completions(completer, "/he")
-    assert completions[0].display_meta[0][1] == "Show available slash commands"
+    assert "Show available slash commands" in completions[0].display_meta[0][1]
+    assert "[builtin]" in completions[0].display_meta[0][1]
 
 
 def test_completer_start_position_matches_iter_completions(

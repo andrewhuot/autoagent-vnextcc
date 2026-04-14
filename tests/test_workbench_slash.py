@@ -179,6 +179,9 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "model",
         "clear",
         "new",
+        "shortcuts",
+        "sessions",
+        "cost",
     }
     assert set(registry.names()) == expected
 
@@ -195,6 +198,9 @@ def test_builtin_registry_without_streaming() -> None:
     assert "model" in registry.names()  # T14 /model is inline, not streaming
     assert "clear" in registry.names()  # T15 /clear is inline
     assert "new" in registry.names()  # T15 /new is inline
+    assert "shortcuts" in registry.names()
+    assert "sessions" in registry.names()
+    assert "cost" in registry.names()
 
 
 def test_builtin_registry_help_table_has_descriptions(
@@ -221,10 +227,8 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     )
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
-    # 11 ported built-ins (incl. /save T11) + /clear + /new (T15) + /model
-    # (T14) + /eval (T09) + /optimize (T10) + /build (T11) + /deploy (T12)
-    # + /skills (T13) + /custom (extra) = 20
-    assert len(registry) == 20
+    # Existing built-ins plus /shortcuts, /sessions, /cost, and /custom.
+    assert len(registry) == 23
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +248,16 @@ def test_dispatch_unknown_command_surfaces_error(
     assert result.handled is True
     assert result.error == "unknown"
     assert any("Unknown command" in line for line in echo.lines)
+
+
+def test_dispatch_unknown_command_suggests_close_match(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    result = dispatch(ctx, "/statsu")
+    assert result.handled is True
+    assert result.error == "unknown"
+    joined = click.unstyle("\n".join(echo.lines))
+    assert "Did you mean /status" in joined
 
 
 def test_dispatch_echoes_handler_output(
@@ -338,7 +352,24 @@ def test_help_handler_lists_all_commands(
     rendered = result.output
     for name in ("/help", "/status", "/exit", "/resume"):
         assert name in rendered
+    assert "Builtin Commands" in rendered
+    assert "Type /help <command>" in rendered
     assert echo.lines == [rendered]
+
+
+def test_help_handler_shows_command_detail(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    result = dispatch(ctx, "/help resume")
+    assert result.handled is True
+    assert result.raw_result is not None
+    plain = click.unstyle(result.raw_result)
+    assert "/resume" in plain
+    assert "Arguments:" in plain
+    assert "[session_id]" in plain
+    assert "Aliases:" in plain
+    assert "/r" in plain
+    assert echo.lines == [result.output]
 
 
 def test_exit_handler_requests_exit(ctx: SlashContext) -> None:
@@ -396,6 +427,97 @@ def test_save_handler_forwards_args(
 ) -> None:
     dispatch(ctx, "/save --project-id p1 --split train")
     assert invoker.calls == ["workbench save --project-id p1 --split train"]
+
+
+def test_cost_handler_is_honest_without_cost_data(ctx: SlashContext) -> None:
+    result = dispatch(ctx, "/cost")
+    assert result.output is not None
+    plain = click.unstyle(result.output)
+    assert "No cost data recorded" in plain
+
+
+def test_cost_handler_renders_recorded_session_totals(ctx: SlashContext) -> None:
+    ctx.meta["cost"] = {
+        "total_cost_usd": 0.12345,
+        "total_input_tokens": 1000,
+        "total_output_tokens": 250,
+        "total_duration_ms": 65_000,
+        "total_api_duration_ms": 12_000,
+    }
+
+    result = dispatch(ctx, "/cost")
+    assert result.output is not None
+    plain = click.unstyle(result.output)
+    assert "Session Cost Summary" in plain
+    assert "$0.1235" in plain
+    assert "1,000" in plain
+    assert "250" in plain
+    assert "1:05" in plain
+
+
+def test_cost_handler_accepts_numeric_strings(ctx: SlashContext) -> None:
+    """Future provider wiring may store JSON-decoded metrics as strings."""
+    ctx.meta["cost"] = {
+        "total_cost_usd": "0.5",
+        "total_input_tokens": "1200",
+        "total_output_tokens": "34",
+        "total_duration_ms": "2000",
+    }
+
+    result = dispatch(ctx, "/cost")
+
+    assert result.error is None
+    assert result.output is not None
+    plain = click.unstyle(result.output)
+    assert "$0.5000" in plain
+    assert "1,200" in plain
+    assert "34" in plain
+    assert "0:02" in plain
+
+
+def test_shortcuts_handler_uses_shared_shortcut_renderer(ctx: SlashContext) -> None:
+    result = dispatch(ctx, "/shortcuts")
+    assert result.output is not None
+    plain = click.unstyle(result.output)
+    assert "Workbench Shortcuts" in plain
+    assert "? for shortcuts" in plain
+    assert "shift+tab" in plain
+
+
+def test_sessions_handler_lists_recent_sessions(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    older = store.create(title="older")
+    newer = store.create(title="newer")
+    older.updated_at = newer.updated_at - 60
+    store.save(older)
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=newer,
+        session_store=store,
+    )
+
+    result = dispatch(ctx, "/sessions 2")
+    assert result.output is not None
+    plain = click.unstyle(result.output)
+    assert "Recent Sessions" in plain
+    assert newer.session_id in plain
+    assert older.session_id in plain
+    assert "(current)" in plain
+    assert "/resume <session_id>" in plain
+
+
+def test_sessions_handler_validates_count(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    result = dispatch(ctx, "/sessions lots")
+    assert result.output is not None
+    assert "Invalid session limit" in click.unstyle(result.output)
 
 
 def test_click_invoker_error_surfaces_as_transcript_line(

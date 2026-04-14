@@ -327,6 +327,10 @@ def build_eval_command(
         description=description,
         handler=make_eval_handler(runner),
         source="builtin",
+        argument_hint="[--config VERSION | --run-id ID]",
+        when_to_use="Use after changing prompts, configs, or evaluators.",
+        effort="medium",
+        allowed_tools=("subprocess",),
     )
 
 

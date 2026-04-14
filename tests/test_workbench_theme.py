@@ -35,6 +35,9 @@ def test_palette_default_role_colors() -> None:
     assert theme.PALETTE.error == "red"
     assert theme.PALETTE.command_name == "cyan"
     assert theme.PALETTE.assistant is None
+    assert theme.PALETTE.plan_mode == "cyan"
+    assert theme.PALETTE.accept_mode == "green"
+    assert theme.PALETTE.danger_mode == "red"
 
 
 # -------------------------------------------------------------------- meta
@@ -128,6 +131,35 @@ def test_warning_default_is_yellow() -> None:
 
 def test_warning_color_false_strips_ansi() -> None:
     assert theme.warning("watch out", color=False) == "watch out"
+
+
+# --------------------------------------------------------------- mode roles
+
+def test_format_mode_renders_permission_symbols_without_color() -> None:
+    assert theme.format_mode("default", color=False) == "Default"
+    assert theme.format_mode("plan", color=False) == "⏸ Plan Mode"
+    assert theme.format_mode("acceptEdits", color=False) == "⏵⏵ Accept edits"
+    assert theme.format_mode("bypass", color=False) == "⏵⏵ Bypass"
+
+
+def test_format_mode_applies_role_colors() -> None:
+    plan = theme.format_mode("plan")
+    accept = theme.format_mode("acceptEdits")
+    bypass = theme.format_mode("bypass")
+
+    assert click.unstyle(plan) == "⏸ Plan Mode"
+    assert CYAN_CODE in plan
+    assert click.unstyle(accept) == "⏵⏵ Accept edits"
+    assert GREEN_CODE in accept
+    assert click.unstyle(bypass) == "⏵⏵ Bypass"
+    assert RED_CODE in bypass
+    assert BOLD_CODE in bypass
+
+
+def test_mode_helpers_respect_color_false() -> None:
+    assert theme.plan_mode("x", color=False) == "x"
+    assert theme.accept_mode("x", color=False) == "x"
+    assert theme.danger_mode("x", color=False) == "x"
 
 
 # ----------------------------------------------------------------- error

@@ -60,13 +60,21 @@ def test_local_command_accepts_aliases_and_metadata() -> None:
         description="Run eval",
         handler=_noop_handler,
         aliases=("e",),
+        argument_hint="[--config VERSION]",
+        when_to_use="Run this after changing an evaluator or prompt.",
         source="project",
         effort="medium",
         allowed_tools=("bash",),
+        immediate=True,
+        sensitive=True,
     )
     assert cmd.aliases == ("e",)
+    assert cmd.argument_hint == "[--config VERSION]"
+    assert "changing an evaluator" in cmd.when_to_use
     assert cmd.effort == "medium"
     assert cmd.allowed_tools == ("bash",)
+    assert cmd.immediate is True
+    assert cmd.sensitive is True
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +260,20 @@ def test_registry_help_table_formats_slash_prefix() -> None:
     table = registry.help_table()
     assert table["/status"] == "status command"
     assert table["/skills"] == "Browse skills"
+
+
+def test_registry_visibility_filters_hidden_commands_from_discovery() -> None:
+    """Hidden commands still dispatch directly but stay out of help/popups."""
+
+    registry = CommandRegistry()
+    visible = registry.register(_make_local("status"))
+    hidden = registry.register(_make_local("debug-internal", hidden=True))
+
+    assert registry.get("/debug-internal") is hidden
+    assert registry.visible() == [visible]
+    assert registry.match_prefix("/debug") == []
+    assert registry.match_prefix("/debug", include_hidden=True) == [hidden]
+    assert "/debug-internal" not in registry.help_table()
 
 
 def test_registry_iter_sorted_by_name() -> None:

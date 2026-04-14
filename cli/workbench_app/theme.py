@@ -28,11 +28,15 @@ import click
 __all__ = [
     "PALETTE",
     "Palette",
+    "accept_mode",
     "assistant",
     "command_name",
+    "danger_mode",
     "error",
+    "format_mode",
     "heading",
     "meta",
+    "plan_mode",
     "stylize",
     "success",
     "user",
@@ -57,6 +61,9 @@ class Palette:
     user: str = "cyan"
     assistant: str | None = None
     command_name: str = "cyan"
+    plan_mode: str = "cyan"
+    accept_mode: str = "green"
+    danger_mode: str = "red"
 
 
 PALETTE = Palette()
@@ -155,3 +162,40 @@ def heading(text: str, *, color: bool = True) -> str:
     """Plain bold heading (e.g. help screen section titles)."""
 
     return stylize(text, bold=True, color=color)
+
+
+def plan_mode(text: str, *, color: bool = True) -> str:
+    """Color used for the plan-mode permission indicator."""
+
+    return stylize(text, fg=PALETTE.plan_mode, color=color)
+
+
+def accept_mode(text: str, *, color: bool = True) -> str:
+    """Color used for accept-edits permission indicators."""
+
+    return stylize(text, fg=PALETTE.accept_mode, color=color)
+
+
+def danger_mode(text: str, *, color: bool = True) -> str:
+    """Emphasized color used for bypass-style permission indicators."""
+
+    return stylize(text, fg=PALETTE.danger_mode, bold=True, color=color)
+
+
+def format_mode(mode: str, *, color: bool = True) -> str:
+    """Render a permission mode with a Claude-Code-style label.
+
+    Unknown modes fall back to the raw mode text, which keeps stale settings
+    readable without crashing startup.
+    """
+    from cli.permissions import MODE_DISPLAY
+
+    symbol, title, role = MODE_DISPLAY.get(mode, ("", mode, "default"))
+    text = f"{symbol} {title}".strip()
+    stylers = {
+        "plan": plan_mode,
+        "accept": accept_mode,
+        "danger": danger_mode,
+    }
+    styler = stylers.get(role)
+    return styler(text, color=color) if styler is not None else text

@@ -486,6 +486,8 @@ def build_skills_command(
         description="Browse, show, add, edit, or remove skills",
         screen_factory=_factory,
         source="builtin",
+        argument_hint="[list|show|add|edit|remove]",
+        when_to_use="Use when you need to inspect or maintain configured skills.",
     )
 
 

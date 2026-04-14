@@ -18,6 +18,15 @@ SETTINGS_FILENAME = "settings.json"
 PERMISSION_MODES = ("plan", "default", "acceptEdits", "dontAsk", "bypass")
 DEFAULT_PERMISSION_MODE = "default"
 
+MODE_DISPLAY: dict[str, tuple[str, str, str]] = {
+    "plan": ("⏸", "Plan Mode", "plan"),
+    "default": ("", "Default", "default"),
+    "acceptEdits": ("⏵⏵", "Accept edits", "accept"),
+    "dontAsk": ("⏵⏵", "Don't Ask", "danger"),
+    "bypass": ("⏵⏵", "Bypass", "danger"),
+}
+"""Maps each permission mode to ``(symbol, display_title, color_role)``."""
+
 _MODE_RULES: dict[str, dict[str, list[str]]] = {
     "plan": {
         "deny": [

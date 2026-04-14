@@ -7,7 +7,7 @@ chrome pieces the plain ``input()`` loop couldn't offer:
   :class:`cli.workbench_app.completer.SlashCommandCompleter`,
 - a Unicode ``╭─╮ / ╰─╯`` border rendered around the input line, and
 - a ``shift+tab`` key binding that cycles the active permission mode
-  (``default`` → ``acceptEdits`` → ``plan`` → ``dontAsk`` → ``bypass``),
+  (``default`` → ``acceptEdits`` → ``plan`` → ``bypass``),
   persisting the choice to ``.agentlab/settings.json`` when a workspace
   is present.
 
@@ -25,7 +25,6 @@ from typing import Any, Callable
 
 from cli.permissions import (
     DEFAULT_PERMISSION_MODE,
-    PERMISSION_MODES,
     update_workspace_settings,
 )
 from cli.workbench_app import theme
@@ -36,10 +35,14 @@ InputProvider = Callable[[str], str]
 EchoFn = Callable[[str], None]
 
 __all__ = [
+    "PROMPT_PERMISSION_MODE_CYCLE",
     "WorkbenchPromptState",
     "build_prompt_input_provider",
     "cycle_permission_mode",
 ]
+
+PROMPT_PERMISSION_MODE_CYCLE = ("default", "acceptEdits", "plan", "bypass")
+"""Visible shift-tab cycle; ``dontAsk`` remains accepted from settings."""
 
 
 @dataclass
@@ -78,11 +81,15 @@ def cycle_permission_mode(current: str) -> str:
     Unknown modes collapse to the default so users can always escape a
     stale settings value.
     """
+    if current == "dontAsk":
+        return DEFAULT_PERMISSION_MODE
     try:
-        idx = PERMISSION_MODES.index(current)
+        idx = PROMPT_PERMISSION_MODE_CYCLE.index(current)
     except ValueError:
         return DEFAULT_PERMISSION_MODE
-    return PERMISSION_MODES[(idx + 1) % len(PERMISSION_MODES)]
+    return PROMPT_PERMISSION_MODE_CYCLE[
+        (idx + 1) % len(PROMPT_PERMISSION_MODE_CYCLE)
+    ]
 
 
 def _terminal_width(default: int = 80) -> int:
@@ -118,12 +125,14 @@ def build_prompt_input_provider(
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
+        from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.shortcuts import CompleteStyle
     except ImportError as exc:  # pragma: no cover — prompt_toolkit is a hard dep
         raise RuntimeError("prompt_toolkit is required for the interactive prompt") from exc
 
     completer = SlashCommandCompleter(registry)
+    history = InMemoryHistory()
     bindings = KeyBindings()
 
     @bindings.add("s-tab")
@@ -149,7 +158,10 @@ def build_prompt_input_provider(
             buf.start_completion(select_first=False)
 
     def _bottom_toolbar() -> Any:
-        return FormattedText([("class:toolbar", f"⏵ {state.mode} permissions on · shift+tab to cycle")])
+        label = theme.format_mode(state.mode, color=False)
+        return FormattedText(
+            [("class:toolbar", f"{label} permissions on · shift+tab to cycle")]
+        )
 
     session: Any = PromptSession(
         completer=completer,
@@ -159,6 +171,8 @@ def build_prompt_input_provider(
         key_bindings=bindings,
         bottom_toolbar=_bottom_toolbar,
         mouse_support=False,
+        history=history,
+        enable_history_search=True,
     )
 
     def provider(prompt_text: str) -> str:

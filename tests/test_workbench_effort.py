@@ -7,6 +7,7 @@ import click
 
 from cli.workbench_app.effort import (
     DEFAULT_SPINNER_FRAMES,
+    DEFAULT_STALL_SECONDS,
     DEFAULT_THRESHOLD_SECONDS,
     EffortIndicator,
     EffortSnapshot,
@@ -32,6 +33,7 @@ class _FakeClock:
 
 def test_indicator_defaults_are_sensible() -> None:
     assert DEFAULT_THRESHOLD_SECONDS == 2.0
+    assert DEFAULT_STALL_SECONDS == 3.0
     assert len(DEFAULT_SPINNER_FRAMES) == 10
 
 
@@ -181,7 +183,47 @@ def test_indicator_constructor_rejects_bad_args() -> None:
     with pytest.raises(ValueError):
         EffortIndicator(threshold_seconds=-1)
     with pytest.raises(ValueError):
+        EffortIndicator(stall_seconds=-1)
+    with pytest.raises(ValueError):
         EffortIndicator(frames=())
+
+
+def test_indicator_records_verb_and_stall_state() -> None:
+    clock = _FakeClock()
+    indicator = EffortIndicator(
+        threshold_seconds=0.0,
+        stall_seconds=3.0,
+        clock=clock,
+    )
+    indicator.start()
+    indicator.set_verb("thinking...")
+    indicator.record_progress()
+
+    clock.now = 2.9
+    active = indicator.tick()
+    assert active is not None
+    assert active.verb == "thinking..."
+    assert active.stalled is False
+
+    clock.now = 3.0
+    stalled = indicator.tick()
+    assert stalled is not None
+    assert stalled.stalled is True
+
+
+def test_indicator_stall_resets_when_progress_arrives() -> None:
+    clock = _FakeClock()
+    indicator = EffortIndicator(
+        threshold_seconds=0.0,
+        stall_seconds=3.0,
+        clock=clock,
+    )
+    indicator.start()
+    indicator.record_progress()
+    clock.now = 3.1
+    assert indicator.stalled is True
+    indicator.record_progress()
+    assert indicator.stalled is False
 
 
 def test_indicator_snapshot_is_frozen() -> None:
@@ -212,6 +254,20 @@ def test_format_effort_bare_snapshot_shows_frame_and_time() -> None:
     snap = EffortSnapshot(spinner_frame="⠋", elapsed_seconds=3.0)
     out = format_effort(snap, color=False)
     assert out == "  ⠋ · 0:03"
+
+
+def test_format_effort_includes_verb_and_uses_warning_for_stalled() -> None:
+    snap = EffortSnapshot(
+        spinner_frame="⠋",
+        elapsed_seconds=3.0,
+        verb="thinking...",
+        stalled=True,
+    )
+    out = format_effort(snap, color=False)
+    assert out == "  ⠋ · 0:03 · thinking..."
+    styled = format_effort(snap, color=True)
+    assert click.unstyle(styled) == out
+    assert "\x1b[" in styled
 
 
 def test_format_effort_finished_snapshot_uses_its_frame() -> None:

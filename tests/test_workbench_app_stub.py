@@ -203,6 +203,100 @@ def test_stub_loop_dispatches_slash_commands_instead_of_echoing() -> None:
     assert "echo: /help" not in joined
 
 
+def test_stub_loop_question_mark_shows_shortcuts_help() -> None:
+    """The banner promises `? for shortcuts`; bare `?` should honor it."""
+    lines, echo = _capture_echo()
+    result = run_workbench_app(
+        workspace=None,
+        input_provider=iter(["?", "/exit"]),
+        echo=echo,
+        show_banner=False,
+    )
+
+    joined = click.unstyle("\n".join(lines))
+    assert result.exited_via == "/exit"
+    assert "Workbench Shortcuts" in joined
+    assert "/ for commands" in joined
+    assert "shift+tab" in joined
+    assert "AgentLab received: ?" not in joined
+
+
+def test_stub_loop_persists_free_text_to_bound_session(tmp_path: Path) -> None:
+    """Free-text turns should survive `/resume`, not only slash history."""
+    store = SessionStore(tmp_path)
+    session = store.create(title="conversation")
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello agent", "/exit"]),
+        echo=lambda _line: None,
+        show_banner=False,
+        session_store=store,
+        session=session,
+    )
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert [entry.content for entry in reloaded.transcript] == ["hello agent"]
+    assert reloaded.transcript[0].role == "user"
+
+
+def test_stub_loop_persists_free_text_with_partial_slash_context(
+    tmp_path: Path,
+) -> None:
+    """Partial embedders should not lose session persistence fallbacks."""
+    from cli.workbench_app.slash import SlashContext
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="partial")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    ctx = SlashContext(transcript=transcript)
+
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["keep me", "/exit"]),
+        echo=lambda _line: None,
+        show_banner=False,
+        session_store=store,
+        session=session,
+        slash_context=ctx,
+    )
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert [entry.content for entry in reloaded.transcript] == ["keep me"]
+
+
+def test_stub_loop_binds_missing_fields_on_partial_slash_context(
+    tmp_path: Path,
+) -> None:
+    """Partial slash contexts should inherit loop session bindings for commands."""
+    from cli.workbench_app.slash import SlashContext
+
+    store = SessionStore(tmp_path)
+    store.create(title="previous")
+    session = store.create(title="current")
+    ctx = SlashContext()
+    lines, echo = _capture_echo()
+
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["/sessions", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        session_store=store,
+        session=session,
+        slash_context=ctx,
+    )
+
+    joined = click.unstyle("\n".join(lines))
+    assert "Recent Sessions" in joined
+    assert "current" in joined
+    assert ctx.session_store is store
+    assert ctx.session is session
+    assert ctx.registry is not None
+
+
 def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
     """Each turn leaves a compact Claude-style status/footer near the prompt."""
     lines, echo = _capture_echo()
@@ -216,8 +310,25 @@ def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
     plain = [click.unstyle(line) for line in lines]
     assert any(set(line) == {"─"} for line in plain if line)
     assert any(line.startswith("⏵ ") for line in plain)
-    assert any("default permissions on" in line for line in plain)
-    assert any("0 shells, 0 tasks" in line for line in plain)
+    assert any("Default permissions on" in line for line in plain)
+    assert any("idle" in line for line in plain)
+
+
+def test_stub_loop_footer_uses_real_activity_counters() -> None:
+    from cli.workbench_app.slash import SlashContext
+
+    lines, echo = _capture_echo()
+    ctx = SlashContext(meta={"active_shells": 1, "active_tasks": 2})
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        slash_context=ctx,
+    )
+
+    plain = [click.unstyle(line) for line in lines]
+    assert any("1 shell, 2 tasks" in line for line in plain)
 
 
 def test_stub_loop_footer_reflects_live_prompt_state_mode() -> None:
@@ -235,8 +346,8 @@ def test_stub_loop_footer_reflects_live_prompt_state_mode() -> None:
     )
 
     plain = [click.unstyle(line) for line in lines]
-    assert any("plan permissions on" in line for line in plain)
-    assert not any("default permissions on" in line for line in plain)
+    assert any("Plan Mode permissions on" in line for line in plain)
+    assert not any("Default permissions on" in line for line in plain)
 
 
 # ---------------------------------------------------------------------------

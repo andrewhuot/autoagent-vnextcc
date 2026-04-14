@@ -1,5 +1,78 @@
 # Findings & Decisions
 
+## Claude-Code Parity Deeper Integration - Codex Ralph
+
+### Mission
+
+- Work on `/Users/andrew/Desktop/agentlab-claude-code-parity-deeper-integration-codex-ralph`.
+- Stay on branch `feat/claude-code-parity-deeper-integration-codex-ralph`.
+- Inspect the Claude Opus parity branch report and diffs at `feat/claude-code-source-parity-claude-opus` / `9c8fca2dee40895a84ad9f27107c9317665478b7`.
+- Inspect the Codex Ralph parity branch report and diffs at `feat/claude-code-source-parity-codex-ralph` / `fbdb84b5ef11dc6c8e4ba2d0836d3e05e71450c6`.
+- Synthesize the two campaigns, select a coherent deeper integration subset, implement it with tests, write the required report, commit locally, and run the requested completion event.
+
+### Initial Findings
+
+- Initial worktree was clean on the requested feature branch.
+- No project-local `AGENTS.md` was found by `rg --files`; the user-supplied AGENTS instructions are the active project instructions.
+- Existing `findings.md` already contains useful prior AgentLab harness/workbench notes, including durable workbench run envelopes, handoff/progress manifests, and Workbench-Eval-Optimize bridge context.
+- No matching prior memory hit was found for AgentLab Claude-Code parity branches in `/Users/andrew/.codex/memories/MEMORY.md`.
+
+### Claude Opus Branch Audit Findings
+
+- Claude branch commit `9c8fca2dee40895a84ad9f27107c9317665478b7` is a focused UX parity pass titled `feat(workbench): Claude Code source parity - mode symbols, ? help, goodbye messages, stall detection, /cost, history search`.
+- Touched areas: `cli/permissions.py`, `cli/workbench_app/app.py`, `cli/workbench_app/effort.py`, `cli/workbench_app/pt_prompt.py`, `cli/workbench_app/slash.py`, `cli/workbench_app/theme.py`, `tests/test_claude_code_parity.py`, `tests/test_workbench_app_stub.py`, `tests/test_workbench_slash.py`, and the required report.
+- Claude's strongest useful slice is terminal-state legibility:
+  - Permission mode display metadata and symbols.
+  - Empty-input `?` help.
+  - Transparent `/cost`.
+  - Thinking/stall state in the effort indicator.
+  - Prompt-toolkit Ctrl-R history search where easy to wire safely.
+  - Random goodbye messages as harmless polish if deterministic enough for tests.
+- Claude's larger deferred items should remain deferred for this integration: transcript mode/search, prompt stash, multiple themes, token/context warning display, markdown rendering, message rewind, background sessions, custom Ink/Rust diff machinery.
+- Integration cautions:
+  - Mine focused assertions from `tests/test_claude_code_parity.py` instead of copying a broad 481-line omnibus test.
+  - Avoid fake cost precision if no real data exists.
+  - Avoid stall detection that marks active long-running work as stale without a `last_progress` signal.
+
+### Codex Ralph Branch Audit Findings
+
+- Codex branch commit `fbdb84b5ef11dc6c8e4ba2d0836d3e05e71450c6` is a command-discovery parity pass titled `feat(workbench): improve Claude-style command discovery`.
+- Touched areas: `cli/workbench_app/commands.py`, `cli/workbench_app/slash.py`, `cli/workbench_app/completer.py`, `cli/workbench_app/app.py`, `cli/workbench_app/help_text.py`, `cli/workbench_app/pt_prompt.py`, streaming slash factories, `docs/cli/workbench.md`, and focused tests.
+- Codex's strongest useful slice is the command metadata/discovery spine:
+  - Add metadata fields: `argument_hint`, `when_to_use`, `hidden`, `immediate`, `sensitive`.
+  - Use visible commands for help/completion while preserving exact dispatch of hidden commands.
+  - Source-group `/help` and add `/help <command>` detail cards.
+  - Rank slash completion by name, aliases, descriptions, hints, usage text, source, and fuzzy matches.
+  - Add unknown-command suggestions.
+  - Add `/shortcuts`/`?` and `/sessions [count]`.
+  - Persist non-slash user turns so `/resume` has actual user transcript, not only slash history.
+  - Replace hardcoded `0 shells, 0 tasks` with truthful `idle` unless real counters are present.
+  - Tighten the interactive permission cycle to `default -> acceptEdits -> plan -> bypass -> default`, while retaining persisted `dontAsk` compatibility.
+- Integration cautions:
+  - Metadata flags are descriptive in this slice; they must not be documented as enforcement.
+  - `/sessions` and free-text persistence deliberately make session contents more visible; future export/redaction policy should build on this.
+  - Do not ship fake `/tasks`, command queue, `!`, `@`, `&`, statusline hooks, or argument completers without real execution semantics.
+
+### Combined Selection Decision
+
+- Implement now:
+  - Codex command metadata, grouped/detail help, ranked completion, unknown suggestions, `/shortcuts`, bare `?`, `/sessions`, user-turn persistence, truthful footer activity, and documented prompt cycle.
+  - Claude mode display symbols/color helpers, `/cost` with transparent no-data behavior, effort verb/stall state, and prompt-toolkit history search.
+- Defer now:
+  - Random goodbye messages, because the engineering value is low compared with the discovery/trust slice.
+  - Transcript mode/search, prompt stash, multiple themes, token warnings, markdown rendering, message rewind, `/tasks`, command queue, shell/file/background modes, statusline hooks, and argument-level completion.
+- Final implementation notes:
+  - Combined Codex's command-discovery spine with Claude's trust-state affordances.
+  - Added a defensive `/cost` formatter that accepts JSON-ish numeric strings.
+  - Bound missing session/store/registry fields onto partial slash contexts so embedded callers keep slash-command session behavior.
+  - Skeptic review found no blocking issues.
+- Final verification evidence:
+  - `uv run --extra dev python -m compileall cli/workbench_app cli/permissions.py`: passed.
+  - `git diff --check`: passed.
+  - Touched-file tests: 219 passed.
+  - Related Workbench/CLI suite: 736 passed, 2 expected classic-mode deprecation warnings.
+  - Broader CLI/Workbench/cost suite: 920 passed, 2 expected classic-mode deprecation warnings.
+
 ## Live UI Integration Merge - Codex
 
 ### Mission

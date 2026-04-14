@@ -367,6 +367,11 @@ def build_deploy_command(
         description=description,
         handler=make_deploy_handler(runner, prompter),
         source="builtin",
+        argument_hint="[canary|immediate] [--dry-run] [-y]",
+        when_to_use="Use when you are ready to ship the active config.",
+        effort="medium",
+        allowed_tools=("subprocess",),
+        sensitive=True,
     )
 
 

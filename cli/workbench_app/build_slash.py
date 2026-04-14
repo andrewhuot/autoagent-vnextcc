@@ -385,6 +385,10 @@ def build_build_command(
         description=description,
         handler=make_build_handler(runner),
         source="builtin",
+        argument_hint="<brief> [--target NAME] [--auto-iterate]",
+        when_to_use="Use when you want the Workbench to generate or refine a candidate.",
+        effort="high",
+        allowed_tools=("subprocess",),
     )
 
 

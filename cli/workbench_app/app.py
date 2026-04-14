@@ -24,8 +24,9 @@ from cli.branding import get_agentlab_version, render_startup_banner
 from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
+from cli.workbench_app.help_text import render_shortcuts_help
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
-from cli.terminal_renderer import render_pane, render_status_footer
+
 
 if TYPE_CHECKING:
     from cli.sessions import Session, SessionStore
@@ -102,6 +103,8 @@ def _render_turn_footer(
     workspace: Any | None = None,
     *,
     mode_override: str | None = None,
+    active_shells: int = 0,
+    active_tasks: int = 0,
 ) -> None:
     """Emit a compact Claude Code-style footer line after each user turn.
 
@@ -115,8 +118,25 @@ def _render_turn_footer(
     current choice before the settings file has been reloaded.
     """
     mode = mode_override or _permission_mode_for_workspace(workspace)
-    for line in render_status_footer(mode=mode, shells=0, tasks=0):
-        echo(line)
+    activity = _format_activity(
+        active_shells=active_shells,
+        active_tasks=active_tasks,
+    )
+    echo(theme.meta("─" * 72))
+    mode_label = theme.format_mode(mode, color=False)
+    echo(theme.warning(f"⏵ {mode_label} permissions on · {activity}"))
+
+
+def _format_activity(*, active_shells: int = 0, active_tasks: int = 0) -> str:
+    """Render truthful footer activity instead of placeholder counters."""
+    parts: list[str] = []
+    if active_shells > 0:
+        noun = "shell" if active_shells == 1 else "shells"
+        parts.append(f"{active_shells} {noun}")
+    if active_tasks > 0:
+        noun = "task" if active_tasks == 1 else "tasks"
+        parts.append(f"{active_tasks} {noun}")
+    return ", ".join(parts) if parts else "idle"
 
 
 def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
@@ -148,15 +168,10 @@ def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     echo("")
     echo(theme.workspace(f"  ✻ Welcome to AgentLab Workbench  v{version}"))
     echo("")
-    for line in render_pane(
-        "Session",
-        [
-            f"cwd: {cwd}",
-            f"status: {build_status_line(workspace, color=False)}",
-            f"mode: {_permission_mode_for_workspace(workspace)} permissions on · ? for shortcuts",
-        ],
-    ):
-        echo(line)
+    echo(theme.meta(f"    cwd: {cwd}"))
+    echo(f"    [{build_status_line(workspace)}]")
+    mode = theme.format_mode(_permission_mode_for_workspace(workspace), color=False)
+    echo(theme.meta(f"    {mode} permissions on · ? for shortcuts"))
     echo("")
     echo("  Type /help for commands, /exit to leave.")
     echo("")
@@ -267,7 +282,9 @@ def run_workbench_app(
     # default REPL still reacts to ``/help``, ``/status``, and friends.
     ctx = slash_context
     active_registry = registry
-    if ctx is None and active_registry is None:
+    if active_registry is None and ctx is not None:
+        active_registry = ctx.registry
+    if active_registry is None:
         from cli.workbench_app.slash import build_builtin_registry
 
         try:
@@ -288,7 +305,16 @@ def run_workbench_app(
     elif ctx is not None:
         # Keep the caller-supplied context in sync with the loop's echo /
         # cancellation so transcript output and ctrl-c both route correctly.
+        # Fill only missing bindings so explicit context fields still win.
         ctx.echo = out
+        if ctx.workspace is None:
+            ctx.workspace = workspace
+        if ctx.session is None:
+            ctx.session = session
+        if ctx.session_store is None:
+            ctx.session_store = session_store
+        if ctx.registry is None:
+            ctx.registry = active_registry
         if ctx.cancellation is None:
             ctx.cancellation = token
 
@@ -341,6 +367,17 @@ def run_workbench_app(
             out(theme.meta("  Goodbye."))
             break
 
+        if line == "?":
+            out(render_shortcuts_help())
+            _render_turn_footer(
+                out,
+                workspace,
+                mode_override=getattr(prompt_state, "mode", None),
+                active_shells=_meta_int(ctx, "active_shells"),
+                active_tasks=_meta_int(ctx, "active_tasks"),
+            )
+            continue
+
         # Route ``/command`` input through the slash registry when one is
         # bound. Non-slash input has no model integration yet, so we echo
         # it as a received-turn acknowledgement until the model layer lands.
@@ -356,12 +393,20 @@ def run_workbench_app(
                 handled_as_slash = True
 
         if not handled_as_slash:
+            _persist_user_turn(
+                ctx=ctx,
+                session_store=session_store,
+                session=session,
+                line=line,
+            )
             out(theme.user(f"  AgentLab received: {line}", bold=False))
 
         _render_turn_footer(
             out,
             workspace,
             mode_override=getattr(prompt_state, "mode", None),
+            active_shells=_meta_int(ctx, "active_shells"),
+            active_tasks=_meta_int(ctx, "active_tasks"),
         )
 
     return StubAppResult(
@@ -369,6 +414,51 @@ def run_workbench_app(
         exited_via=exited_via,
         interrupts=interrupts,
     )
+
+
+def _meta_int(ctx: "SlashContext | None", key: str) -> int:
+    """Read an integer activity counter from slash context metadata."""
+    if ctx is None:
+        return 0
+    value = ctx.meta.get(key, 0)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _persist_user_turn(
+    *,
+    ctx: "SlashContext | None",
+    session_store: "SessionStore | None",
+    session: "Session | None",
+    line: str,
+) -> None:
+    """Best-effort persistence for non-slash user turns.
+
+    Slash commands already write command history during dispatch. Free text
+    needs a separate path so `/resume` can reconstruct the operator's side of
+    the session before full model integration lands.
+    """
+    if ctx is not None and ctx.transcript is not None:
+        ctx.transcript.append_user(line, emit=False)
+        if ctx.transcript.bound_session is not None:
+            return
+
+    store = (
+        ctx.session_store
+        if ctx is not None and ctx.session_store is not None
+        else session_store
+    )
+    active_session = (
+        ctx.session if ctx is not None and ctx.session is not None else session
+    )
+    if store is None or active_session is None:
+        return
+    try:
+        store.append_entry(active_session, "user", line)
+    except Exception:  # pragma: no cover - defensive persistence path
+        pass
 
 
 def launch_workbench(

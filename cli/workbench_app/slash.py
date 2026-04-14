@@ -23,6 +23,7 @@ value so that handler return types stay aligned with
 
 from __future__ import annotations
 
+import difflib
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -45,7 +46,7 @@ from cli.workbench_app.commands import (
 )
 
 from cli.workbench_app.cancellation import CancellationToken
-from cli.terminal_renderer import render_pane
+from cli.workbench_app.help_text import render_shortcuts_help
 
 if TYPE_CHECKING:
     from cli.workbench_app.transcript import Transcript
@@ -190,19 +191,75 @@ def _run_click(ctx: SlashContext, command_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _handle_help(ctx: SlashContext, *_: str) -> OnDoneResult:
-    # Reference port illustrating the ``onDone`` contract: we build the
-    # result and return via :func:`on_done` so ``display`` / ``should_query``
-    # routing is visible at the call site rather than implicit in a bare
-    # string return.
+def _handle_help(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Render source-grouped help or a detailed command card."""
     registry = ctx.registry
     if registry is None:
         return on_done("  /help unavailable: no command registry bound.")
-    lines: list[str] = []
-    for name, description in registry.help_table().items():
-        lines.append(f"{name:<12} {description}")
-    rendered = render_pane("Slash Commands", lines)
-    return on_done("\n".join(rendered), display="user")
+    if args:
+        target_name = args[0]
+        command = registry.get(target_name)
+        if command is None:
+            return on_done(
+                f"  No command named /{target_name.lstrip('/').lower()}.",
+                display="system",
+            )
+        return on_done(_render_command_detail(command), display="user")
+
+    lines = [theme.heading("\n  Slash Commands")]
+    for source, label in _SOURCE_LABELS:
+        commands = [
+            command for command in registry.by_source(source) if not command.hidden
+        ]
+        if not commands:
+            continue
+        lines.append(theme.meta(f"  {label}"))
+        for command in commands:
+            hint = f" {command.argument_hint}" if command.argument_hint else ""
+            aliases = _format_aliases(command.aliases)
+            lines.append(
+                f"    /{command.name:<12} {command.description}{hint}{aliases}"
+            )
+    lines.append("")
+    lines.append("  Type /help <command> for details. Type ? for shortcuts.")
+    return on_done("\n".join(lines), display="user")
+
+
+def _render_command_detail(command: SlashCommand) -> str:
+    """Render one command's metadata for `/help <command>`."""
+    lines = [theme.heading(f"\n  /{command.name}")]
+    lines.append(f"  {command.description}")
+    if command.argument_hint:
+        lines.append(f"  Arguments: {command.argument_hint}")
+    if command.aliases:
+        aliases = ", ".join("/" + alias for alias in command.aliases)
+        lines.append(f"  Aliases: {aliases}")
+    lines.append(f"  Kind: {command.kind}")
+    lines.append(f"  Source: {command.source}")
+    if command.when_to_use:
+        lines.append(f"  When to use: {command.when_to_use}")
+    if command.context != "inline":
+        lines.append(f"  Context: {command.context}")
+    if command.effort:
+        lines.append(f"  Effort: {command.effort}")
+    if command.allowed_tools:
+        lines.append(f"  Allowed tools: {', '.join(command.allowed_tools)}")
+    if command.paths:
+        lines.append(f"  Paths: {', '.join(command.paths)}")
+    if command.immediate:
+        lines.append("  Runs immediately.")
+    if command.sensitive:
+        lines.append("  May touch sensitive workspace state.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _format_aliases(aliases: Sequence[str]) -> str:
+    """Return a compact alias suffix for broad help rows."""
+    if not aliases:
+        return ""
+    alias_text = ", ".join("/" + alias for alias in aliases)
+    return "  " + theme.meta(f"(aliases: {alias_text})")
 
 
 def _handle_exit(ctx: SlashContext, *_: str) -> str:
@@ -302,6 +359,66 @@ def _handle_resume(ctx: SlashContext, *args: str) -> OnDoneResult:
     )
 
 
+def _handle_shortcuts(ctx: SlashContext, *_: str) -> OnDoneResult:
+    """Show prompt/input shortcuts from the shared renderer used by bare `?`."""
+    del ctx
+    return on_done(render_shortcuts_help(), display="user")
+
+
+def _handle_sessions(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """List recent persisted sessions with direct `/resume` hints."""
+    store = ctx.session_store
+    if store is None:
+        return on_done(
+            "  Sessions are not persisted in this Workbench launch.",
+            display="system",
+        )
+
+    limit = 5
+    if args:
+        try:
+            limit = int(args[0])
+        except ValueError:
+            return on_done(
+                f"  Invalid session limit {args[0]!r}; use /sessions [count].",
+                display="system",
+            )
+    limit = min(max(limit, 1), 20)
+
+    try:
+        sessions = store.list_sessions(limit=limit)
+    except Exception as exc:
+        return on_done(f"  Failed to list sessions: {exc}", display="system")
+    if not sessions:
+        return on_done("  No saved sessions.", display="system")
+
+    now = time.time()
+    current_id = ctx.session.session_id if ctx.session is not None else None
+    lines = [theme.heading("\n  Recent Sessions")]
+    for session in sessions:
+        title = session.title or session.session_id
+        age = _format_session_age(now - (session.updated_at or 0.0))
+        marker = " (current)" if session.session_id == current_id else ""
+        lines.append(
+            f"    {session.session_id}  {title}  {theme.meta(age)}{marker}"
+        )
+    lines.append("")
+    lines.append("  Use /resume <session_id> to restore a session.")
+    return on_done("\n".join(lines), display="user")
+
+
+def _format_session_age(seconds: float) -> str:
+    """Render a compact age string for the `/sessions` listing."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)}m ago"
+    if seconds < 86400:
+        return f"{int(seconds // 3600)}h ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
 def _handle_compact(ctx: SlashContext, *_: str) -> str:
     workspace = ctx.workspace
     session = ctx.session
@@ -339,6 +456,56 @@ def _handle_compact(ctx: SlashContext, *_: str) -> str:
 
     summary_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return f"  Session summary saved to {summary_path}"
+
+
+def _handle_cost(ctx: SlashContext, *_: str) -> OnDoneResult:
+    """Show session cost summary when model/tool runners have recorded it."""
+    cost = ctx.meta.get("cost", {})
+    if not isinstance(cost, dict) or not cost:
+        return on_done(
+            "  No cost data recorded for this session.\n"
+            "  (Cost tracking populates as model calls execute.)",
+            display="user",
+        )
+
+    from cli.workbench_app.effort import format_elapsed
+
+    parts: list[str] = [theme.heading("\n  Session Cost Summary")]
+    if "total_cost_usd" in cost:
+        parts.append(f"    Total cost:      {_format_cost_value(cost['total_cost_usd'])}")
+    if "total_input_tokens" in cost:
+        parts.append(f"    Input tokens:    {_format_count_value(cost['total_input_tokens'])}")
+    if "total_output_tokens" in cost:
+        parts.append(f"    Output tokens:   {_format_count_value(cost['total_output_tokens'])}")
+    if "total_duration_ms" in cost:
+        secs = _coerce_float(cost["total_duration_ms"]) / 1000.0
+        parts.append(f"    Total duration:  {format_elapsed(secs)}")
+    if "total_api_duration_ms" in cost:
+        secs = _coerce_float(cost["total_api_duration_ms"]) / 1000.0
+        parts.append(f"    API duration:    {format_elapsed(secs)}")
+    parts.append("")
+    return on_done("\n".join(parts), display="user")
+
+
+def _coerce_float(value: Any) -> float:
+    """Return a numeric metric value or raise a helpful error."""
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid cost metric {value!r}") from exc
+
+
+def _format_cost_value(value: Any) -> str:
+    """Format a USD value supplied by a model/cost runner."""
+    return f"${_coerce_float(value):.4f}"
+
+
+def _format_count_value(value: Any) -> str:
+    """Format a token count supplied by a model/cost runner."""
+    try:
+        return f"{int(value):,}"
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"invalid token count {value!r}") from exc
 
 
 def _handle_clear(ctx: SlashContext, *_: str) -> OnDoneResult:
@@ -403,20 +570,85 @@ def _handle_new(ctx: SlashContext, *args: str) -> OnDoneResult:
 # ---------------------------------------------------------------------------
 
 
-_BUILTIN_SPECS: tuple[tuple[str, str, Callable[..., str | None]], ...] = (
-    ("help", "Show available slash commands", _handle_help),
-    ("status", "Show workspace status", _handle_status),
-    ("config", "Show active config info", _handle_config),
-    ("memory", "Show AGENTLAB.md contents", _handle_memory),
-    ("doctor", "Run workspace diagnostics", _handle_doctor),
-    ("review", "Show pending review cards", _handle_review),
-    ("mcp", "Show MCP integration status", _handle_mcp),
-    ("save", "Materialize the active Workbench candidate", _handle_save),
-    ("compact", "Summarize session to .agentlab/memory/latest_session.md", _handle_compact),
-    ("resume", "Resume the most recent session", _handle_resume),
-    ("clear", "Wipe the transcript but keep the active session", _handle_clear),
-    ("new", "Start a fresh session (and clear the transcript)", _handle_new),
-    ("exit", "Exit the shell", _handle_exit),
+@dataclass(frozen=True)
+class _BuiltinSpec:
+    """Registration metadata for a built-in Workbench slash command."""
+
+    name: str
+    description: str
+    handler: Callable[..., LocalHandlerReturn]
+    argument_hint: str | None = None
+    when_to_use: str | None = None
+    aliases: tuple[str, ...] = ()
+    immediate: bool = False
+    sensitive: bool = False
+
+
+_SOURCE_LABELS: tuple[tuple[str, str], ...] = (
+    ("builtin", "Builtin Commands"),
+    ("project", "Project Commands"),
+    ("user", "User Commands"),
+    ("plugin", "Plugin Commands"),
+)
+
+
+_BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
+    _BuiltinSpec(
+        "help",
+        "Show available slash commands",
+        _handle_help,
+        argument_hint="[command]",
+        when_to_use="Use when you need command syntax, aliases, or source details.",
+    ),
+    _BuiltinSpec("status", "Show workspace status", _handle_status),
+    _BuiltinSpec("config", "Show active config info", _handle_config),
+    _BuiltinSpec("memory", "Show AGENTLAB.md contents", _handle_memory),
+    _BuiltinSpec("doctor", "Run workspace diagnostics", _handle_doctor),
+    _BuiltinSpec("review", "Show pending review cards", _handle_review),
+    _BuiltinSpec("mcp", "Show MCP integration status", _handle_mcp),
+    _BuiltinSpec(
+        "save",
+        "Materialize the active Workbench candidate",
+        _handle_save,
+        argument_hint="[--project-id ID] [--split NAME]",
+        sensitive=True,
+    ),
+    _BuiltinSpec("cost", "Show session cost summary", _handle_cost),
+    _BuiltinSpec(
+        "compact",
+        "Summarize session to .agentlab/memory/latest_session.md",
+        _handle_compact,
+        sensitive=True,
+    ),
+    _BuiltinSpec(
+        "resume",
+        "Resume the most recent session",
+        _handle_resume,
+        argument_hint="[session_id]",
+        aliases=("r",),
+        when_to_use="Use after restarting Workbench or switching back to prior work.",
+    ),
+    _BuiltinSpec(
+        "sessions",
+        "List recent Workbench sessions",
+        _handle_sessions,
+        argument_hint="[count]",
+        aliases=("session", "history"),
+    ),
+    _BuiltinSpec(
+        "shortcuts",
+        "Show keyboard shortcuts",
+        _handle_shortcuts,
+        aliases=("?",),
+    ),
+    _BuiltinSpec("clear", "Wipe the transcript but keep the active session", _handle_clear),
+    _BuiltinSpec(
+        "new",
+        "Start a fresh session (and clear the transcript)",
+        _handle_new,
+        argument_hint="[title]",
+    ),
+    _BuiltinSpec("exit", "Exit the shell", _handle_exit, aliases=("quit", "q")),
 )
 
 
@@ -432,13 +664,18 @@ def build_builtin_registry(
     in-process registry can disable it; production callers keep the default.
     """
     registry = CommandRegistry()
-    for name, description, handler in _BUILTIN_SPECS:
+    for spec in _BUILTIN_SPECS:
         registry.register(
             LocalCommand(
-                name=name,
-                description=description,
-                handler=handler,
+                name=spec.name,
+                description=spec.description,
+                handler=spec.handler,
                 source="builtin",
+                aliases=spec.aliases,
+                argument_hint=spec.argument_hint,
+                when_to_use=spec.when_to_use,
+                immediate=spec.immediate,
+                sensitive=spec.sensitive,
             )
         )
     # ``/model`` is an inline built-in with a factory (injectable model
@@ -540,9 +777,7 @@ def dispatch(
     try:
         command = active_registry.get(name)
         if command is None:
-            message = (
-                f"  Unknown command: /{name}.  Type /help for available commands."
-            )
+            message = _unknown_command_message(active_registry, name)
             ctx.echo(message)
             return DispatchResult(handled=True, output=message, error="unknown")
 
@@ -589,6 +824,49 @@ def dispatch(
         )
     finally:
         ctx.registry = previous_registry
+
+
+def _unknown_command_message(registry: CommandRegistry, name: str) -> str:
+    """Build an unknown-command message with a close-match suggestion."""
+    suggestions = _suggest_commands(registry, name)
+    if not suggestions:
+        return f"  Unknown command: /{name}.  Type /help for available commands."
+    if len(suggestions) == 1:
+        hint = f" Did you mean {suggestions[0]}?"
+    else:
+        hint = f" Did you mean {', '.join(suggestions[:-1])}, or {suggestions[-1]}?"
+    return f"  Unknown command: /{name}.{hint} Type /help for available commands."
+
+
+def _suggest_commands(registry: CommandRegistry, name: str) -> tuple[str, ...]:
+    """Return up to three visible slash command suggestions for ``name``."""
+    token = name.lstrip("/").lower()
+    commands_by_token: dict[str, SlashCommand] = {}
+    for command in registry.visible():
+        commands_by_token[command.name] = command
+        for alias in command.aliases:
+            commands_by_token[alias] = command
+
+    close_tokens = difflib.get_close_matches(
+        token,
+        list(commands_by_token),
+        n=6,
+        cutoff=0.55,
+    )
+    prefix = token[: max(1, min(3, len(token)))]
+    prefix_matches = [
+        command for command in registry.visible() if command.name.startswith(prefix)
+    ]
+    seen: set[str] = set()
+    suggestions: list[str] = []
+    for command in [*(commands_by_token[t] for t in close_tokens), *prefix_matches]:
+        if command.name in seen:
+            continue
+        seen.add(command.name)
+        suggestions.append(f"/{command.name}")
+        if len(suggestions) >= 3:
+            break
+    return tuple(suggestions)
 
 
 # ---------------------------------------------------------------------------

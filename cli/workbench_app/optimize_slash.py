@@ -307,6 +307,10 @@ def build_optimize_command(
         description=description,
         handler=make_optimize_handler(runner),
         source="builtin",
+        argument_hint="[--cycles N] [--mode MODE]",
+        when_to_use="Use when a config needs automated improvement cycles.",
+        effort="high",
+        allowed_tools=("subprocess",),
     )
 
 
