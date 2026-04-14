@@ -27,11 +27,12 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import click
 
 from cli.sessions import Session, SessionStore
+from cli.workbench_app import theme
 from cli.workbench_app.commands import (
     CommandRegistry,
     DisplayMode,
@@ -42,6 +43,11 @@ from cli.workbench_app.commands import (
     SlashCommand,
     on_done,
 )
+
+from cli.workbench_app.cancellation import CancellationToken
+
+if TYPE_CHECKING:
+    from cli.workbench_app.transcript import Transcript
 
 EchoFn = Callable[[str], None]
 """Writes one line to the transcript — defaults to :func:`click.echo`."""
@@ -65,6 +71,8 @@ class SlashContext:
     echo: EchoFn = click.echo
     click_invoker: ClickInvoker | None = None
     registry: CommandRegistry | None = None
+    transcript: "Transcript | None" = None
+    cancellation: CancellationToken | None = None
     exit_requested: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -132,13 +140,48 @@ def _default_click_invoker(command_path: str) -> str:
     return result.output.rstrip() if result.output else ""
 
 
+def _record_command(ctx: SlashContext, raw_line: str) -> None:
+    """Best-effort append of ``raw_line`` to the session command history.
+
+    No-op when either the session or the store is unbound. Failures from the
+    store are swallowed so a flaky filesystem can't take down the loop.
+    """
+    store = ctx.session_store
+    session = ctx.session
+    if store is None or session is None:
+        return
+    command = raw_line.strip()
+    if not command:
+        return
+    try:
+        store.append_command(session, command)
+    except Exception:  # pragma: no cover — defensive; best-effort persistence
+        pass
+
+
 def _run_click(ctx: SlashContext, command_path: str) -> str:
-    """Run a click subcommand via the configured invoker, surfacing errors inline."""
+    """Run a click subcommand via the configured invoker, surfacing errors inline.
+
+    Exceptions are surfaced as transcript text (not a crash) but tagged with
+    their type so CI scripts parsing output can distinguish "command not
+    found" / "usage error" / internal crash instead of one generic string.
+    A debug-level log captures the full traceback for local diagnosis.
+    """
+    import logging
+
     invoker = ctx.click_invoker or _default_click_invoker
     try:
         return invoker(command_path)
-    except Exception as exc:  # Surfaced as transcript text, not a crash.
-        return f"  Error running '{command_path}': {exc}"
+    except SystemExit:
+        # Click raises SystemExit on --help/ExitError; propagate so the
+        # harness can honor the exit request rather than masquerading it
+        # as a runtime error.
+        raise
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            "slash _run_click failed", exc_info=exc, extra={"command_path": command_path},
+        )
+        return f"  Error running '{command_path}': {type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +197,7 @@ def _handle_help(ctx: SlashContext, *_: str) -> OnDoneResult:
     registry = ctx.registry
     if registry is None:
         return on_done("  /help unavailable: no command registry bound.")
-    lines = [click.style("\n  Slash Commands", bold=True)]
+    lines = [theme.heading("\n  Slash Commands")]
     for name, description in registry.help_table().items():
         lines.append(f"    {name:<12} {description}")
     lines.append("")
@@ -212,18 +255,49 @@ def _handle_config(ctx: SlashContext, *_: str) -> str:
     )
 
 
-def _handle_resume(ctx: SlashContext, *_: str) -> str:
+def _handle_resume(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Resume a prior session — swap ctx.session and rehydrate the transcript.
+
+    Default: resume the most recently updated session on disk. An explicit
+    ``<session_id>`` argument loads that specific session instead. The
+    transcript (when bound) is cleared and repopulated from the loaded
+    session's persisted entries; the store binding rolls over so new
+    appends continue to write to the resumed session.
+    """
     store = ctx.session_store
     current = ctx.session
     if store is None:
-        return "  Sessions are not persisted — nothing to resume."
-    latest = store.latest()
-    if latest is None or (current is not None and latest.session_id == current.session_id):
-        return "  No previous session to resume."
-    return (
-        f"  Loaded session: {latest.title} ({latest.session_id})\n"
-        f"  Goal: {latest.active_goal or '(none)'}\n"
-        f"  Entries: {len(latest.transcript)}"
+        return on_done(
+            "  Sessions are not persisted — nothing to resume.", display="system"
+        )
+
+    requested_id = args[0] if args else None
+    target: Session | None
+    if requested_id is not None:
+        target = store.get(requested_id)
+        if target is None:
+            return on_done(
+                f"  No session with id {requested_id!r}.", display="system"
+            )
+    else:
+        target = store.latest()
+
+    if target is None or (current is not None and target.session_id == current.session_id):
+        return on_done("  No previous session to resume.", display="system")
+
+    ctx.session = target
+    if ctx.transcript is not None:
+        ctx.transcript.clear()
+        ctx.transcript.restore_from_session(target)
+        ctx.transcript.bind_session(target, store)
+
+    meta: list[str] = [
+        f"Session: {target.title or target.session_id} ({target.session_id})",
+        f"Goal: {target.active_goal or '(none)'}",
+        f"Entries restored: {len(target.transcript)}",
+    ]
+    return on_done(
+        "  Resumed previous session.", display="system", meta_messages=meta
     )
 
 
@@ -266,6 +340,63 @@ def _handle_compact(ctx: SlashContext, *_: str) -> str:
     return f"  Session summary saved to {summary_path}"
 
 
+def _handle_clear(ctx: SlashContext, *_: str) -> OnDoneResult:
+    """Wipe the in-memory transcript without touching the active session.
+
+    Mirrors Claude Code's ``/clear`` (reset the visible context while keeping
+    the conversation file intact). Persisted session state is untouched — the
+    caller can still ``/resume`` it or ``/compact`` it on demand.
+    """
+    transcript = ctx.transcript
+    if transcript is None:
+        return on_done(
+            "  No transcript bound — nothing to clear.",
+            display="system",
+        )
+    count = len(transcript)
+    transcript.clear()
+    noun = "entry" if count == 1 else "entries"
+    meta = (f"Removed {count} {noun}; session kept.",)
+    return on_done("  Transcript cleared.", display="system", meta_messages=meta)
+
+
+def _handle_new(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Start a fresh session, swap it onto the context, and clear the transcript.
+
+    Optional positional args are joined as the new session title, matching the
+    ``SessionStore.create(title=…)`` contract. The previous session is left on
+    disk (not deleted); we only move the pointer on ``ctx.session``.
+    """
+    store = ctx.session_store
+    if store is None:
+        return on_done(
+            "  Sessions are not persisted — cannot start a new one.",
+            display="system",
+        )
+    title = " ".join(args).strip()
+    try:
+        session = store.create(title=title)
+    except Exception as exc:  # Store failures shouldn't crash the loop.
+        return on_done(f"  Failed to start new session: {exc}", display="system")
+
+    previous = ctx.session
+    ctx.session = session
+    if ctx.transcript is not None:
+        ctx.transcript.clear()
+
+    meta: list[str] = []
+    if previous is not None and previous.session_id != session.session_id:
+        meta.append(f"Previous session: {previous.session_id}")
+    meta.append(f"New session: {session.session_id}")
+    if session.title:
+        meta.append(f"Title: {session.title}")
+    return on_done(
+        "  Started new session.",
+        display="system",
+        meta_messages=meta,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry construction.
 # ---------------------------------------------------------------------------
@@ -282,6 +413,8 @@ _BUILTIN_SPECS: tuple[tuple[str, str, Callable[..., str | None]], ...] = (
     ("save", "Materialize the active Workbench candidate", _handle_save),
     ("compact", "Summarize session to .agentlab/memory/latest_session.md", _handle_compact),
     ("resume", "Resume the most recent session", _handle_resume),
+    ("clear", "Wipe the transcript but keep the active session", _handle_clear),
+    ("new", "Start a fresh session (and clear the transcript)", _handle_new),
     ("exit", "Exit the shell", _handle_exit),
 )
 
@@ -307,6 +440,12 @@ def build_builtin_registry(
                 source="builtin",
             )
         )
+    # ``/model`` is an inline built-in with a factory (injectable model
+    # lister) — registered outside ``_BUILTIN_SPECS`` so tests that need a
+    # stub lister can re-register via ``extra=``.
+    from cli.workbench_app.model_slash import build_model_command
+
+    registry.register(build_model_command())
     if include_streaming:
         # Imported lazily to avoid pulling subprocess machinery into the
         # import path of callers that only want the basic registry.
@@ -332,19 +471,35 @@ def build_builtin_registry(
 
 
 def parse_slash_line(line: str) -> tuple[str, list[str]] | None:
-    """Split ``"/cmd a b"`` → ``("cmd", ["a", "b"])``; return ``None`` otherwise."""
+    """Split ``"/cmd a b"`` → ``("cmd", ["a", "b"])``; return ``None`` otherwise.
+
+    Unbalanced quotes fall back to a whitespace split so the caller still
+    sees a command name and can surface a useful error. Callers that want
+    to warn the user should use :func:`_parse_slash_line_with_warning`.
+    """
+    parsed = _parse_slash_line_with_warning(line)
+    if parsed is None:
+        return None
+    name, args, _warning = parsed
+    return name, args
+
+
+def _parse_slash_line_with_warning(
+    line: str,
+) -> tuple[str, list[str], str] | None:
+    """Parser variant that also returns a quote-warning string (empty when OK)."""
     stripped = line.strip()
     if not stripped.startswith("/"):
         return None
+    warning = ""
     try:
         tokens = shlex.split(stripped[1:])
-    except ValueError:
-        # Unbalanced quotes — fall back to whitespace split so the caller
-        # still sees a command name and can render a useful error.
+    except ValueError as exc:
         tokens = stripped[1:].split()
+        warning = f"unbalanced quotes ({exc}); falling back to whitespace split"
     if not tokens:
         return None
-    return tokens[0].lower(), tokens[1:]
+    return tokens[0].lower(), tokens[1:], warning
 
 
 def dispatch(
@@ -360,9 +515,15 @@ def dispatch(
     scoped registry (e.g. tests or nested screens).
     """
     active_registry = registry or ctx.registry
-    parsed = parse_slash_line(line)
+    parsed = _parse_slash_line_with_warning(line)
     if parsed is None:
         return DispatchResult(handled=False)
+    name, args, quote_warning = parsed
+
+    _record_command(ctx, line)
+
+    if quote_warning:
+        ctx.echo(f"  Warning: {quote_warning}")
 
     if active_registry is None:
         return DispatchResult(
@@ -376,7 +537,6 @@ def dispatch(
     previous_registry = ctx.registry
     ctx.registry = active_registry
     try:
-        name, args = parsed
         command = active_registry.get(name)
         if command is None:
             message = (
@@ -470,7 +630,7 @@ def _dispatch_local_jsx(
 
     meta = tuple(getattr(screen_result, "meta_messages", ()) or ())
     for line in meta:
-        ctx.echo(click.style(line, dim=True))
+        ctx.echo(theme.meta(line))
 
     value = getattr(screen_result, "value", None)
     raw = value if isinstance(value, str) else None
@@ -522,14 +682,14 @@ def _render_and_echo(ctx: SlashContext, result: OnDoneResult) -> str | None:
     if result.display == "skip" or text is None:
         rendered = None
     elif result.display == "system":
-        rendered = click.style(text, dim=True)
+        rendered = theme.meta(text)
         ctx.echo(rendered)
     else:  # "user"
         rendered = text
         ctx.echo(rendered)
 
     for meta in result.meta_messages:
-        ctx.echo(click.style(meta, dim=True))
+        ctx.echo(theme.meta(meta))
 
     return rendered
 

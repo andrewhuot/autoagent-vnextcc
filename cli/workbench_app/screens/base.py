@@ -156,7 +156,8 @@ class Screen(ABC):
     def header_lines(self) -> list[str]:
         """Optional header painted before :meth:`render_lines`. Default is empty."""
         if self.title:
-            return [click.style(self.title, fg="cyan", bold=True), ""]
+            from cli.workbench_app import theme  # local — screens imported early
+            return [theme.workspace(self.title), ""]
         return []
 
     def footer_lines(self) -> list[str]:

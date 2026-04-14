@@ -24,7 +24,6 @@ import sqlite3
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 
-import click
 
 from cli.branding import get_agentlab_version
 from cli.sessions import Session
@@ -159,14 +158,13 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
     and by contexts that want to log the bar without terminal markup.
     """
 
-    def style(text: str, **kwargs: Any) -> str:
-        return click.style(text, **kwargs) if color else text
+    from cli.workbench_app import theme  # local import — avoids cycle w/ app.py
 
     parts: list[str] = []
     if snapshot.workspace_label:
-        parts.append(style(snapshot.workspace_label, fg="cyan", bold=True))
+        parts.append(theme.workspace(snapshot.workspace_label, color=color))
     else:
-        parts.append(style("no workspace", fg="yellow"))
+        parts.append(theme.warning("no workspace", color=color))
 
     if snapshot.config_version is not None:
         parts.append(f"v{snapshot.config_version:03d}")
@@ -177,7 +175,7 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
     if snapshot.pending_reviews > 0:
         label = "review" if snapshot.pending_reviews == 1 else "reviews"
         parts.append(
-            style(f"{snapshot.pending_reviews} {label}", fg="yellow")
+            theme.warning(f"{snapshot.pending_reviews} {label}", color=color)
         )
 
     if snapshot.best_score:
@@ -187,7 +185,7 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
         parts.append(f"{label}:{value}")
 
     if snapshot.agentlab_version:
-        parts.append(style(f"agentlab {snapshot.agentlab_version}", dim=True))
+        parts.append(theme.meta(f"agentlab {snapshot.agentlab_version}", color=color))
 
     return " | ".join(parts)
 

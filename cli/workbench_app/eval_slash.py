@@ -21,8 +21,8 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
-import click
-
+from cli.workbench_app import theme
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
@@ -31,7 +31,7 @@ from cli.workbench_render import format_workbench_event
 StreamEvent = dict[str, Any]
 """One JSON event emitted by a stream-json subprocess."""
 
-StreamRunner = Callable[[Sequence[str]], Iterator[StreamEvent]]
+StreamRunner = Callable[..., Iterator[StreamEvent]]
 """Given ``(args,)`` yield parsed JSON events until the process exits.
 
 Raise :class:`EvalCommandError` for non-zero exits or parse failures. Tests
@@ -61,12 +61,21 @@ class EvalSummary:
 # ---------------------------------------------------------------------------
 
 
-def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
+def _default_stream_runner(
+    args: Sequence[str],
+    *,
+    cancellation: CancellationToken | None = None,
+) -> Iterator[StreamEvent]:
     """Spawn ``agentlab eval run`` and yield stream-json events line by line.
 
     ``args`` are the extra CLI args after ``eval run`` (e.g. ``["--config",
     "configs/v003.yaml"]``). ``--output-format stream-json`` is appended
     automatically so callers don't need to remember the flag.
+
+    When ``cancellation`` is supplied, the subprocess is registered so a
+    ctrl-c at the app level terminates it, and the reader breaks out as
+    soon as ``cancellation.cancelled`` flips. The process is always killed
+    in the ``finally`` block so we never leak orphans.
     """
     cmd: list[str] = [
         sys.executable,
@@ -87,9 +96,16 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         text=True,
         bufsize=1,
     )
+    # Register immediately so any exception before the try-block still
+    # sees the process cleaned up on ctrl-c.
+    if cancellation is not None:
+        cancellation.register_process(proc)
     assert proc.stdout is not None  # subprocess.PIPE guarantees a stream.
+    exit_code = 0
     try:
         for raw in proc.stdout:
+            if cancellation is not None and cancellation.cancelled:
+                break
             line = raw.strip()
             if not line:
                 continue
@@ -105,7 +121,9 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    if exit_code != 0:
+        if cancellation is not None:
+            cancellation.unregister_process(proc)
+    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
         raise EvalCommandError(
             f"eval run exited with status {exit_code}"
         )
@@ -178,11 +196,10 @@ def _format_summary(summary: EvalSummary) -> str:
     if summary.warnings:
         parts.append(f"{summary.warnings} warnings")
     if summary.errors:
-        parts.append(click.style(f"{summary.errors} errors", fg="red"))
+        parts.append(theme.error(f"{summary.errors} errors", bold=False))
     status = "failed" if summary.errors else "complete"
-    return click.style(f"  /eval {status} — {', '.join(parts)}", fg=(
-        "red" if summary.errors else "green"
-    ), bold=True)
+    line = f"  /eval {status} — {', '.join(parts)}"
+    return theme.error(line) if summary.errors else theme.success(line, bold=True)
 
 
 # ---------------------------------------------------------------------------
@@ -199,28 +216,45 @@ def make_eval_handler(
     def _handle_eval(ctx: SlashContext, *args: str) -> OnDoneResult:
         stream_args = _parse_args(args)
         echo = ctx.echo
-        echo(click.style(
+        echo(theme.command_name(
             f"  /eval starting — agentlab eval run {shlex.join(stream_args)}".rstrip(),
-            fg="cyan",
         ))
 
+        cancellation = ctx.cancellation
+        cancelled = False
         try:
             final_summary = EvalSummary()
-            for event, summary in _summarise(active_runner(stream_args)):
+            stream = _invoke_runner(active_runner, stream_args, cancellation)
+            for event, summary in _summarise(stream):
                 final_summary = summary
                 line = _render_event(event)
                 if line is not None:
                     echo(line)
+                if cancellation is not None and cancellation.cancelled:
+                    cancelled = True
+                    break
+        except KeyboardInterrupt:
+            cancelled = True
+            if cancellation is not None:
+                cancellation.cancel()
         except EvalCommandError as exc:
-            echo(click.style(f"  /eval failed: {exc}", fg="red", bold=True))
-            return on_done(
-                result=f"  /eval failed: {exc}",
-                display="skip",
-                meta_messages=(str(exc),),
-            )
+            if cancellation is not None and cancellation.cancelled:
+                cancelled = True  # subprocess exit is a consequence of cancel.
+            else:
+                echo(theme.error(f"  /eval failed: {exc}"))
+                return on_done(
+                    result=f"  /eval failed: {exc}",
+                    display="skip",
+                    meta_messages=(str(exc),),
+                )
         except FileNotFoundError as exc:  # missing binary / wrong cwd
-            echo(click.style(f"  /eval failed: {exc}", fg="red", bold=True))
+            echo(theme.error(f"  /eval failed: {exc}"))
             return on_done(result=None, display="skip")
+
+        if cancelled:
+            message = "  /eval cancelled — ctrl-c; no changes persisted."
+            echo(theme.warning(message))
+            return on_done(result=message, display="skip")
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -235,6 +269,26 @@ def make_eval_handler(
         )
 
     return _handle_eval
+
+
+def _invoke_runner(
+    runner: StreamRunner,
+    args: Sequence[str],
+    cancellation: CancellationToken | None,
+) -> Iterator[StreamEvent]:
+    """Call ``runner`` with or without the cancellation kwarg.
+
+    Legacy runners (and the test fixtures in this repo) accept a single
+    positional ``args`` parameter. The default runner gained a keyword-only
+    ``cancellation`` parameter in T16. Probe at call time so both shapes
+    work without forcing every test to accept the new seam.
+    """
+    if cancellation is None:
+        return iter(runner(args))
+    try:
+        return iter(runner(args, cancellation=cancellation))
+    except TypeError:
+        return iter(runner(args))
 
 
 def _parse_args(args: Sequence[str]) -> list[str]:

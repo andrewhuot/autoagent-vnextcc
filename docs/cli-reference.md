@@ -243,11 +243,20 @@ Key options:
 
 ### `agentlab shell`
 
-Launch the interactive shell.
+Launch the legacy interactive shell. Also invoked by `agentlab --classic`. Deprecated in favor of the interactive Workbench; retained for one release.
 
 ```bash
 agentlab shell
 agentlab continue
+```
+
+### `agentlab` (no args) — interactive Workbench
+
+Running `agentlab` with no subcommand launches the interactive Workbench: a Claude-Code-style REPL with a streaming transcript, slash-command surface, and session persistence. See [CLI Workbench](cli/workbench.md) for the full slash-command catalog. Falls back to `agentlab status` when stdin is not a TTY.
+
+```bash
+agentlab            # interactive Workbench
+agentlab --classic  # fall back to the legacy shell
 ```
 
 ---

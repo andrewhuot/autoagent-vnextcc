@@ -14,7 +14,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, Literal
+from typing import Any, Callable, Iterable, Literal, TypeAlias
 
 import click
 
@@ -24,8 +24,20 @@ from cli.permissions import DEFAULT_PERMISSION_MODE, PERMISSION_MODES
 CliUiMode = Literal["auto", "claude", "classic"]
 QueuePriority = Literal["now", "next", "later"]
 TaskState = Literal["pending", "active", "completed", "failed"]
+FormattedText: TypeAlias = list[tuple[str, str]]
 
 _QUEUE_PRIORITY_ORDER: dict[str, int] = {"now": 0, "next": 1, "later": 2}
+_CLAUDE_PROMPT = "›"
+_CLAUDE_PERMISSION_SYMBOL = "⏵"
+_CLAUDE_RULE = "─"
+_CLAUDE_SEPARATOR = " · "
+_PERMISSION_LABELS: dict[str, str] = {
+    "plan": "plan mode",
+    "default": "default permissions",
+    "acceptEdits": "accept edits",
+    "dontAsk": "don't ask",
+    "bypass": "bypass permissions",
+}
 
 
 @dataclass(slots=True)
@@ -82,6 +94,7 @@ class HarnessSnapshot:
     thinking: bool = False
     permission_mode: str = DEFAULT_PERMISSION_MODE
     agent_lines: list[str] = field(default_factory=list)
+    show_manage_panel: bool = False
 
 
 class MessageQueue:
@@ -105,7 +118,12 @@ class MessageQueue:
             sequence=self._sequence,
         )
         self._items.append(item)
-        self._items.sort(key=lambda queued: (_QUEUE_PRIORITY_ORDER[queued.priority], queued.sequence))
+        self._items.sort(
+            key=lambda queued: (
+                _QUEUE_PRIORITY_ORDER[queued.priority],
+                queued.sequence,
+            )
+        )
         return item
 
     def items(self) -> list[QueuedInput]:
@@ -125,7 +143,12 @@ class MessageQueue:
 
 @dataclass(slots=True)
 class PermissionFooter:
-    """Visible permission-mode footer plus Claude-style cycling behavior."""
+    """Visible permission-mode footer plus Claude-style cycling behavior.
+
+    This mirrors Claude Code's `PromptInputFooterLeftSide`: permission mode is
+    always first, live background work follows it, and the manage hint appears
+    when there is work to inspect.
+    """
 
     mode: str = DEFAULT_PERMISSION_MODE
 
@@ -141,7 +164,70 @@ class PermissionFooter:
 
     def render(self) -> str:
         """Render the footer text shown at the bottom of the live prompt."""
-        return f"{self.mode} permissions on (shift+tab to cycle)"
+        return self.render_status()
+
+    def render_status(
+        self,
+        background_status: str | None = None,
+        *,
+        show_manage_hint: bool | None = None,
+    ) -> str:
+        """Render the Claude-style permission and background activity footer."""
+        label = _PERMISSION_LABELS.get(self.mode, self.mode)
+        parts = [f"{_CLAUDE_PERMISSION_SYMBOL} {label} on"]
+        if background_status:
+            parts.append(background_status)
+        manage_hint = bool(background_status) if show_manage_hint is None else show_manage_hint
+        if manage_hint:
+            parts.append("↓ to manage")
+        elif not background_status:
+            parts[0] = f"{parts[0]} (shift+tab to cycle)"
+        return _CLAUDE_SEPARATOR.join(parts)
+
+    def render_toolbar(
+        self,
+        snapshot: HarnessSnapshot | None = None,
+        *,
+        width: int | None = None,
+    ) -> str:
+        """Render the two-line bottom toolbar used under the live prompt."""
+        fragments = self.render_toolbar_fragments(snapshot, width=width)
+        return "".join(text for _style, text in fragments)
+
+    def render_toolbar_fragments(
+        self,
+        snapshot: HarnessSnapshot | None = None,
+        *,
+        width: int | None = None,
+    ) -> FormattedText:
+        """Render styled prompt_toolkit fragments for the live footer."""
+        terminal_width = max(1, width or _terminal_width())
+        background = _background_status(snapshot) if snapshot is not None else None
+        permission_style = (
+            "class:permission.danger"
+            if self.mode in {"bypass", "dontAsk"}
+            else "class:permission.normal"
+        )
+        label = _PERMISSION_LABELS.get(self.mode, self.mode)
+        fragments: FormattedText = [
+            ("class:prompt.border", _CLAUDE_RULE * terminal_width),
+            ("", "\n"),
+            (permission_style, f"{_CLAUDE_PERMISSION_SYMBOL} {label} on"),
+        ]
+        if background:
+            fragments.extend(
+                [
+                    ("class:separator", _CLAUDE_SEPARATOR),
+                    ("class:activity", background),
+                    ("class:separator", _CLAUDE_SEPARATOR),
+                    ("class:hint", "↓ to manage"),
+                ]
+            )
+        else:
+            fragments.append(("class:hint", " (shift+tab to cycle)"))
+        if snapshot is not None and snapshot.show_manage_panel:
+            fragments.extend(_manage_panel_fragments(snapshot))
+        return fragments
 
 
 class ToolOutputSummarizer:
@@ -157,17 +243,24 @@ class ToolOutputSummarizer:
         output: str,
         exit_code: int | None,
         elapsed_seconds: float,
+        expanded: bool = False,
     ) -> str:
         """Return command, duration, output count, status, and the latest tail."""
         lines = output.splitlines()
-        tail = lines[-self.max_tail_lines :]
         status = "running" if exit_code is None else f"exit {exit_code}"
+        if expanded or len(lines) <= self.max_tail_lines:
+            visible = lines
+            scope = f"showing all {len(lines)} lines"
+        else:
+            visible = lines[-self.max_tail_lines :]
+            scope = f"showing last {len(visible)} of {len(lines)} lines"
         header = (
-            f"Bash {command} ({elapsed_seconds:.1f}s, {len(lines)} lines, {status})"
+            f"● Bash {command} "
+            f"({elapsed_seconds:.1f}s, {len(lines)} lines, {status}; {scope})"
         )
-        if not tail:
+        if not visible:
             return header
-        return "\n".join([header, *[f"  {line}" for line in tail]])
+        return "\n".join([header, *[f"  {line}" for line in visible]])
 
 
 class HarnessSession:
@@ -191,6 +284,7 @@ class HarnessSession:
         self._cost_usd: float | None = None
         self._thinking = False
         self._agent_lines: list[str] = []
+        self._show_manage_panel = False
         self.events: list[HarnessEvent] = []
 
     @property
@@ -215,6 +309,7 @@ class HarnessSession:
             if event.message:
                 self._transcript.append(event.message)
         elif name == "stage.completed":
+            self._active_label = None
             if event.message:
                 self._transcript.append(event.message)
         elif name == "plan.ready":
@@ -229,7 +324,11 @@ class HarnessSession:
             label = event.message or event.tool or "Running tool"
             self._active_label = label
             self._transcript.append(label)
-        elif name in {"tool.completed", "artifact.updated"} and event.message:
+        elif name == "tool.completed":
+            rendered = event.message or self._tool_summary_from_payload(event.payload)
+            if rendered:
+                self._transcript.append(rendered)
+        elif name == "artifact.updated" and event.message:
             self._transcript.append(event.message)
         elif name == "metrics.updated":
             self._apply_metrics(event)
@@ -245,6 +344,11 @@ class HarnessSession:
             if line:
                 self._agent_lines.append(line)
                 self._agent_lines = self._agent_lines[-5:]
+        elif name == "manage.toggled":
+            if "visible" in event.payload:
+                self._show_manage_panel = bool(event.payload["visible"])
+            else:
+                self._show_manage_panel = not self._show_manage_panel
         elif name in {"warning", "error"} and event.message:
             prefix = "Warning" if name == "warning" else "Error"
             self._transcript.append(f"{prefix}: {event.message}")
@@ -265,6 +369,7 @@ class HarnessSession:
             thinking=self._thinking,
             permission_mode=self._footer.mode,
             agent_lines=list(self._agent_lines),
+            show_manage_panel=self._show_manage_panel,
         )
 
     def _upsert_task(self, event: HarnessEvent, *, state: TaskState | None) -> None:
@@ -328,6 +433,23 @@ class HarnessSession:
             pieces.append(str(last_action))
         return " | ".join(pieces)
 
+    @staticmethod
+    def _tool_summary_from_payload(payload: dict[str, Any]) -> str | None:
+        command = payload.get("command") or payload.get("label") or payload.get("tool")
+        if not command:
+            return None
+        return ToolOutputSummarizer(
+            max_tail_lines=int(payload.get("max_tail_lines") or 5)
+        ).summarize(
+            command=str(command),
+            output=str(payload.get("output") or ""),
+            exit_code=(
+                int(payload["exit_code"]) if payload.get("exit_code") is not None else None
+            ),
+            elapsed_seconds=float(payload.get("elapsed_seconds") or 0.0),
+            expanded=bool(payload.get("expanded")),
+        )
+
 
 class HarnessRenderer:
     """Render a harness snapshot into compact terminal text."""
@@ -337,17 +459,24 @@ class HarnessRenderer:
         *,
         width: int | None = None,
         max_tasks: int = 6,
+        include_footer: bool = True,
+        styled: bool = False,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         self.width = max(40, width or _terminal_width())
         self.max_tasks = max(1, max_tasks)
+        self.include_footer = include_footer
+        self.styled = styled
         self._now = now
 
     def render(self, snapshot: HarnessSnapshot) -> str:
         """Render the visible Claude-style frame for tests or classic printing."""
         lines: list[str] = []
         if snapshot.transcript:
-            lines.extend(self._fit(line) for line in snapshot.transcript[-6:])
+            for entry in snapshot.transcript[-6:]:
+                lines.extend(
+                    self._transcript_line(line) for line in entry.splitlines()
+                )
 
         active = self._active_line(snapshot)
         if active:
@@ -359,16 +488,36 @@ class HarnessRenderer:
         lines.extend(task_lines)
 
         for agent_line in snapshot.agent_lines:
-            lines.append(self._fit(f"  - {agent_line}"))
+            lines.append(self._fit(f"  • {agent_line}"))
 
         if snapshot.queued_inputs:
             lines.append("")
-            for queued in snapshot.queued_inputs[-3:]:
-                lines.append(self._fit(f"> {queued.text}"))
+            lines.extend(self._render_queued_inputs(snapshot.queued_inputs))
 
-        lines.append("")
-        lines.append(self._fit(PermissionFooter(snapshot.permission_mode).render()))
+        if snapshot.show_manage_panel:
+            if lines:
+                lines.append("")
+            lines.extend(self._render_manage_panel(snapshot))
+
+        if self.include_footer:
+            lines.append("")
+            lines.append(self.prompt_rule())
+            lines.append(
+                self._fit(
+                    PermissionFooter(snapshot.permission_mode).render_status(
+                        _background_status(snapshot)
+                    )
+                )
+            )
         return "\n".join(lines)
+
+    def prompt_message(self) -> str:
+        """Return the Claude-style prompt marker used by prompt_toolkit."""
+        return f"{_CLAUDE_PROMPT} "
+
+    def prompt_rule(self) -> str:
+        """Return the border line below the live prompt input region."""
+        return _CLAUDE_RULE * self.width
 
     def _active_line(self, snapshot: HarnessSnapshot) -> str | None:
         if not snapshot.active_label:
@@ -381,7 +530,7 @@ class HarnessRenderer:
             meta.append(f"${snapshot.cost_usd:.4f}")
         if snapshot.thinking:
             meta.append("thinking")
-        return f"* {snapshot.active_label} ({' | '.join(meta)})"
+        return f"✱ {snapshot.active_label} ({' · '.join(meta)})"
 
     def _render_tasks(self, tasks: list[HarnessTask]) -> Iterable[str]:
         visible = self._visible_tasks(tasks)
@@ -391,10 +540,31 @@ class HarnessRenderer:
                 yield f"  ... {collapsed_count} older completed {plural}"
             if task is None:
                 continue
-            marker = {"completed": "[x]", "active": "[>]", "failed": "[!]", "pending": "[ ]"}[
+            marker = {"completed": "✓", "active": "■", "failed": "✗", "pending": "□"}[
                 task.state
             ]
             yield self._fit(f"  {marker} {task.title}")
+
+    def _render_queued_inputs(self, queued_inputs: list[QueuedInput]) -> Iterable[str]:
+        visible = queued_inputs[-3:]
+        hidden = len(queued_inputs) - len(visible)
+        if hidden > 0:
+            plural = "commands" if hidden != 1 else "command"
+            yield self._fit(f"  ... {hidden} queued {plural}")
+        for queued in visible:
+            yield self._fit(self._maybe_style(f"{_CLAUDE_PROMPT} {queued.text}", "user"))
+
+    def _render_manage_panel(self, snapshot: HarnessSnapshot) -> Iterable[str]:
+        yield self._fit(self._maybe_style("Shells and tasks", "panel_title"))
+        if snapshot.active_label:
+            yield self._fit(f"  Active: {snapshot.active_label}")
+        for task in snapshot.tasks:
+            if task.state in {"active", "failed"}:
+                yield self._fit(f"  Task: {task.title} [{task.state}]")
+        for agent_line in snapshot.agent_lines:
+            yield self._fit(f"  Agent: {agent_line}")
+        for queued in snapshot.queued_inputs[:3]:
+            yield self._fit(f"  Queued: {queued.text}")
 
     def _visible_tasks(
         self, tasks: list[HarnessTask]
@@ -423,6 +593,25 @@ class HarnessRenderer:
         if self.width <= 1:
             return text[: self.width]
         return text[: self.width - 3] + "..."
+
+    def _transcript_line(self, text: str) -> str:
+        fitted = self._fit(text)
+        if text.startswith(_CLAUDE_PROMPT):
+            return self._maybe_style(fitted, "user")
+        if text.startswith("● Bash"):
+            return self._maybe_style(fitted, "tool")
+        return self._maybe_style(fitted, "transcript")
+
+    def _maybe_style(self, text: str, role: str) -> str:
+        if not self.styled:
+            return text
+        if role == "user":
+            return click.style(text, fg="white", bg="bright_black")
+        if role == "tool":
+            return click.style(text, fg="green")
+        if role == "panel_title":
+            return click.style(text, fg="cyan", bold=True)
+        return click.style(text, fg="bright_black")
 
 
 def resolve_cli_ui(
@@ -490,6 +679,14 @@ def workbench_event_to_harness_event(
         artifact_name = str(artifact.get("name") or "artifact")
         return HarnessEvent("artifact.updated", message=f"{artifact_name} updated")
 
+    if event_name in {"tool.started", "tool.completed"}:
+        return HarnessEvent(
+            event_name,
+            message=str(data.get("message")) if data.get("message") else None,
+            tool=str(data.get("tool") or data.get("command") or ""),
+            payload=dict(data),
+        )
+
     if event_name == "harness.metrics":
         tokens = data.get("tokens") or data.get("token_count")
         cost = data.get("cost_usd")
@@ -543,3 +740,62 @@ def _format_tokens(tokens: int) -> str:
     if tokens >= 1_000:
         return f"{tokens / 1_000:.1f}k tokens"
     return f"{tokens} tokens"
+
+
+def _background_status(snapshot: HarnessSnapshot | None) -> str | None:
+    """Summarize live work for the Claude-style footer activity segment."""
+    if snapshot is None:
+        return None
+
+    parts: list[str] = []
+    active_label = (snapshot.active_label or "").strip().lower()
+    has_active_work = bool(snapshot.active_label) and active_label != "waiting for input"
+    if has_active_work:
+        parts.append("1 shell")
+
+    monitored_tasks = [
+        task for task in snapshot.tasks if task.state in {"active", "pending", "failed"}
+    ]
+    if has_active_work and monitored_tasks:
+        parts.append("1 monitor")
+
+    if snapshot.agent_lines:
+        count = len(snapshot.agent_lines)
+        noun = "agent" if count == 1 else "agents"
+        parts.append(f"{count} {noun}")
+
+    if snapshot.queued_inputs:
+        count = len(snapshot.queued_inputs)
+        noun = "queued" if count == 1 else "queued"
+        parts.append(f"{count} {noun}")
+
+    return ", ".join(parts) if parts else None
+
+
+def _manage_panel_fragments(snapshot: HarnessSnapshot) -> FormattedText:
+    """Return formatted rows for the bottom manage panel."""
+    fragments: FormattedText = [
+        ("", "\n"),
+        ("class:panel.title", "Shells and tasks"),
+    ]
+    if snapshot.active_label:
+        fragments.extend(
+            [("", "\n"), ("class:panel.row", f"  Active: {snapshot.active_label}")]
+        )
+    for task in snapshot.tasks:
+        if task.state in {"active", "failed"}:
+            fragments.extend(
+                [
+                    ("", "\n"),
+                    ("class:panel.row", f"  Task: {task.title} [{task.state}]"),
+                ]
+            )
+    for agent_line in snapshot.agent_lines:
+        fragments.extend(
+            [("", "\n"), ("class:panel.row", f"  Agent: {agent_line}")]
+        )
+    for queued in snapshot.queued_inputs[:3]:
+        fragments.extend(
+            [("", "\n"), ("class:panel.row", f"  Queued: {queued.text}")]
+        )
+    return fragments

@@ -12,13 +12,19 @@ into ``cli/workbench.py``.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
+from cli.workbench_app import theme
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
+
+if TYPE_CHECKING:
+    from cli.sessions import Session, SessionStore
 
 
 InputProvider = Callable[[str], str]
@@ -33,6 +39,8 @@ EchoFn = Callable[[str], None]
 
 DEFAULT_PROMPT = "agentlab> "
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q"})
+RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
+"""Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
 
 
 @dataclass(frozen=True)
@@ -41,6 +49,7 @@ class StubAppResult:
 
     lines_read: int
     exited_via: str  # "/exit", "eof", "interrupt"
+    interrupts: int = 0
 
 
 def build_status_line(workspace: Any | None, *, color: bool = True) -> str:
@@ -75,10 +84,57 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
 def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     echo(render_startup_banner(get_agentlab_version()))
     echo("")
-    echo(click.style("  AgentLab Workbench", fg="cyan", bold=True))
+    echo(theme.workspace("  AgentLab Workbench"))
     echo(f"  [{build_status_line(workspace)}]")
     echo("  Type /help for commands, /exit to leave. (stub)")
     echo("")
+
+
+def _format_age(seconds: float) -> str:
+    """Turn a delta in seconds into a compact "3h ago" style string."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        minutes = int(seconds // 60)
+        return f"{minutes}m ago"
+    if seconds < RESUME_HINT_MAX_AGE_SECONDS:
+        hours = int(seconds // 3600)
+        return f"{hours}h ago"
+    days = int(seconds // 86400)
+    return f"{days}d ago"
+
+
+def resume_hint(
+    store: "SessionStore | None",
+    *,
+    current: "Session | None" = None,
+    max_age_seconds: float = RESUME_HINT_MAX_AGE_SECONDS,
+    now: float | None = None,
+) -> str | None:
+    """Return a one-line ``/resume`` tip when a recent previous session exists.
+
+    ``None`` when there's no store, no prior session, or the latest session
+    is older than ``max_age_seconds`` / is the current one. Used by the
+    startup banner; extracted as a pure helper so tests don't need to stand
+    up the full loop.
+    """
+    if store is None:
+        return None
+    try:
+        latest = store.latest()
+    except Exception:  # pragma: no cover — defensive
+        return None
+    if latest is None:
+        return None
+    if current is not None and latest.session_id == current.session_id:
+        return None
+    now_ts = time.time() if now is None else now
+    age = now_ts - (latest.updated_at or 0.0)
+    if age > max_age_seconds:
+        return None
+    title = latest.title or latest.session_id
+    return f"  Tip: /resume to continue \"{title}\" ({_format_age(age)})"
 
 
 def run_workbench_app(
@@ -88,6 +144,9 @@ def run_workbench_app(
     echo: EchoFn | None = None,
     prompt: str = DEFAULT_PROMPT,
     show_banner: bool = True,
+    cancellation: CancellationToken | None = None,
+    session_store: "SessionStore | None" = None,
+    session: "Session | None" = None,
 ) -> StubAppResult:
     """Run the echo-only workbench stub loop.
 
@@ -118,8 +177,14 @@ def run_workbench_app(
 
     if show_banner:
         _render_banner(out, workspace)
+        hint = resume_hint(session_store, current=session)
+        if hint is not None:
+            out(theme.meta(hint))
+            out("")
 
+    token = cancellation if cancellation is not None else CancellationToken()
     lines_read = 0
+    interrupts = 0
     exited_via = "eof"
     while True:
         try:
@@ -129,10 +194,32 @@ def run_workbench_app(
             out("")
             break
         except KeyboardInterrupt:
-            exited_via = "interrupt"
+            # T16 double-ctrl-c semantics:
+            #   1st press with an active tool call → cancel it.
+            #   1st press at idle → warn the user to press again.
+            #   2nd consecutive press (no successful input between) → exit.
+            if token.active:
+                token.cancel()
+                interrupts += 1
+                out("")
+                out(theme.warning(
+                    "  (cancelled active tool call — press ctrl-c again to exit)"
+                ))
+                continue
+            interrupts += 1
+            if interrupts >= 2:
+                exited_via = "interrupt"
+                out("")
+                out(theme.warning("  (interrupted)"))
+                break
             out("")
-            out(click.style("  (interrupted)", fg="yellow"))
-            break
+            out(theme.warning("  (press ctrl-c again to exit, or /exit)"))
+            continue
+
+        # A successful read resets the interrupt streak so the user can
+        # recover from a stray ctrl-c without getting forced out.
+        interrupts = 0
+        token.reset()
 
         line = raw.strip()
         if not line:
@@ -142,21 +229,78 @@ def run_workbench_app(
 
         if line.lower() in EXIT_TOKENS:
             exited_via = "/exit"
-            out(click.style("  Goodbye.", dim=True))
+            out(theme.meta("  Goodbye."))
             break
 
         # Echo-only stub: future tasks dispatch into the slash registry.
         out(f"  echo: {line}")
 
-    return StubAppResult(lines_read=lines_read, exited_via=exited_via)
+    return StubAppResult(
+        lines_read=lines_read,
+        exited_via=exited_via,
+        interrupts=interrupts,
+    )
+
+
+def launch_workbench(
+    workspace: Any | None,
+    *,
+    show_banner: bool = True,
+    input_provider: InputProvider | None = None,
+    echo: EchoFn | None = None,
+) -> StubAppResult:
+    """Create a persisted session and run the workbench app.
+
+    Thin wrapper used by both ``agentlab`` (default entry) and
+    ``agentlab workbench interactive`` so session wiring stays in one
+    place. When no workspace is active we still run the loop with an
+    ephemeral in-memory session — persistence is a best-effort feature,
+    not a precondition for launching.
+    """
+    from cli.sessions import Session, SessionStore
+
+    store: SessionStore | None = None
+    session: Session | None = None
+    if workspace is not None:
+        try:
+            store = SessionStore(workspace.root)
+            session = store.create()
+        except Exception:  # pragma: no cover — defensive
+            store = None
+            session = None
+    if session is None:
+        session = Session(
+            session_id=uuid_hex(),
+            title="ephemeral",
+            started_at=time.time(),
+            updated_at=time.time(),
+        )
+    return run_workbench_app(
+        workspace,
+        show_banner=show_banner,
+        input_provider=input_provider,
+        echo=echo,
+        session_store=store,
+        session=session,
+    )
+
+
+def uuid_hex() -> str:
+    """Generate a short id for ephemeral sessions."""
+    import uuid
+
+    return uuid.uuid4().hex[:12]
 
 
 __all__ = [
     "DEFAULT_PROMPT",
     "EXIT_TOKENS",
+    "RESUME_HINT_MAX_AGE_SECONDS",
     "EchoFn",
     "InputProvider",
     "StubAppResult",
     "build_status_line",
+    "launch_workbench",
+    "resume_hint",
     "run_workbench_app",
 ]

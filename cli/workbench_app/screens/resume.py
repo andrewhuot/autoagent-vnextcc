@@ -15,9 +15,10 @@ from __future__ import annotations
 import time
 from typing import Iterable, Sequence
 
-import click
+import click  # noqa: F401
 
 from cli.sessions import Session, SessionStore
+from cli.workbench_app import theme
 from cli.workbench_app.screens.base import (
     ACTION_CANCEL,
     EchoFn,
@@ -51,7 +52,7 @@ def _format_session_row(session: Session, *, selected: bool) -> str:
     prefix = "▶ " if selected else "  "
     line = f"{prefix}{stamp}  {title}{suffix}"
     if selected:
-        return click.style(line, fg="cyan", bold=True)
+        return theme.workspace(line)
     return line
 
 
@@ -92,7 +93,7 @@ class ResumeScreen(Screen):
 
     def render_lines(self) -> list[str]:
         if not self._sessions:
-            return [click.style("  (no sessions found)", dim=True)]
+            return [theme.meta("  (no sessions found)")]
         return [
             _format_session_row(session, selected=(i == self._cursor))
             for i, session in enumerate(self._sessions)
@@ -100,7 +101,7 @@ class ResumeScreen(Screen):
 
     def footer_lines(self) -> list[str]:
         hint = "  [j/k navigate · enter resume · f fork · q cancel]"
-        return ["", click.style(hint, dim=True)]
+        return ["", theme.meta(hint)]
 
     def handle_key(self, key: str) -> ScreenResult | None:
         if not self._sessions:

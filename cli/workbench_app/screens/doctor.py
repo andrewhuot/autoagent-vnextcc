@@ -15,8 +15,9 @@ from __future__ import annotations
 
 from typing import Callable, Iterable
 
-import click
+import click  # noqa: F401
 
+from cli.workbench_app import theme
 from cli.workbench_app.screens.base import (
     ACTION_EXIT,
     EchoFn,
@@ -68,20 +69,15 @@ class DoctorScreen(Screen):
                 self._error = str(exc)
 
         if self._error is not None:
-            return [
-                click.style(f"  Error running doctor: {self._error}", fg="red", bold=True)
-            ]
+            return [theme.error(f"  Error running doctor: {self._error}")]
 
         assert self._output is not None
         if not self._output.strip():
-            return [click.style("  (doctor produced no output)", dim=True)]
+            return [theme.meta("  (doctor produced no output)")]
         return self._output.splitlines()
 
     def footer_lines(self) -> list[str]:
-        return [
-            "",
-            click.style("  [q/esc/enter to close]", dim=True),
-        ]
+        return ["", theme.meta("  [q/esc/enter to close]")]
 
     def handle_key(self, key: str) -> ScreenResult | None:
         if key in _EXIT_KEYS:

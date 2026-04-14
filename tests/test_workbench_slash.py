@@ -136,6 +136,18 @@ def test_parse_slash_line_falls_back_on_unbalanced_quotes() -> None:
     assert args == ['"open']
 
 
+def test_dispatch_emits_warning_on_unbalanced_quotes(
+    ctx: SlashContext, registry: CommandRegistry
+) -> None:
+    """Unbalanced quotes should surface a 'Warning:' line so users aren't
+    silently handed mangled args. Regression guard for reviewer concern #5."""
+    echoed: list[str] = []
+    ctx.echo = echoed.append
+    ctx.registry = registry
+    dispatch(ctx, '/help "dangling')
+    assert any("Warning: unbalanced quotes" in line for line in echoed), echoed
+
+
 # ---------------------------------------------------------------------------
 # build_builtin_registry — the ten ported commands
 # ---------------------------------------------------------------------------
@@ -163,6 +175,10 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "optimize",
         "build",
         "deploy",
+        "skills",
+        "model",
+        "clear",
+        "new",
     }
     assert set(registry.names()) == expected
 
@@ -173,8 +189,12 @@ def test_builtin_registry_without_streaming() -> None:
     assert "optimize" not in registry.names()
     assert "build" not in registry.names()
     assert "deploy" not in registry.names()
+    assert "skills" not in registry.names()
     assert "save" in registry.names()  # /save is ported, not streaming
     assert "help" in registry.names()
+    assert "model" in registry.names()  # T14 /model is inline, not streaming
+    assert "clear" in registry.names()  # T15 /clear is inline
+    assert "new" in registry.names()  # T15 /new is inline
 
 
 def test_builtin_registry_help_table_has_descriptions(
@@ -193,9 +213,10 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     )
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
-    # 11 ported built-ins (incl. /save T11) + /eval (T09) + /optimize (T10)
-    # + /build (T11) + /deploy (T12) + /custom (extra) = 16
-    assert len(registry) == 16
+    # 11 ported built-ins (incl. /save T11) + /clear + /new (T15) + /model
+    # (T14) + /eval (T09) + /optimize (T10) + /build (T11) + /deploy (T12)
+    # + /skills (T13) + /custom (extra) = 20
+    assert len(registry) == 20
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +399,27 @@ def test_click_invoker_error_surfaces_as_transcript_line(
     ctx = SlashContext(echo=echo, click_invoker=_boom, registry=registry)
     result = dispatch(ctx, "/status")
     assert result.output is not None
+    # Regression: reviewer concern #6 — tag the exception type so CI can
+    # tell "command not found" apart from "command crashed".
     assert "Error running 'status'" in result.output
+    assert "RuntimeError" in result.output
+
+
+def test_click_invoker_propagates_systemexit(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    """SystemExit (raised by Click on --help / ExitError) must propagate.
+
+    Regression guard for reviewer concern #6: swallowing SystemExit would
+    turn a legitimate harness exit request into a silent no-op.
+    """
+
+    def _exiter(_cmd: str) -> str:
+        raise SystemExit(2)
+
+    ctx = SlashContext(echo=echo, click_invoker=_exiter, registry=registry)
+    with pytest.raises(SystemExit):
+        dispatch(ctx, "/status")
 
 
 def test_config_handler_with_no_workspace(ctx: SlashContext) -> None:
@@ -411,7 +452,7 @@ def test_resume_handler_without_store(
 ) -> None:
     ctx = SlashContext(echo=echo, registry=registry)
     result = dispatch(ctx, "/resume")
-    assert "not persisted" in (result.output or "")
+    assert "not persisted" in click.unstyle(result.output or "")
 
 
 def test_resume_handler_with_only_current_session(
@@ -423,7 +464,7 @@ def test_resume_handler_with_only_current_session(
         echo=echo, registry=registry, session=session, session_store=store
     )
     result = dispatch(ctx, "/resume")
-    assert result.output == "  No previous session to resume."
+    assert click.unstyle(result.output or "") == "  No previous session to resume."
 
 
 def test_resume_handler_loads_older_session(
@@ -445,10 +486,16 @@ def test_resume_handler_loads_older_session(
         echo=echo, registry=registry, session=current, session_store=store
     )
     result = dispatch(ctx, "/resume")
-    assert result.output is not None
-    assert "older" in result.output
-    assert "ship it" in result.output
-    assert "Entries: 1" in result.output
+    assert result.raw_result is not None
+    assert "Resumed previous session" in click.unstyle(result.raw_result)
+    plain_meta = [click.unstyle(m) for m in result.meta_messages]
+    assert any("older" in m for m in plain_meta)
+    assert any("ship it" in m for m in plain_meta)
+    assert any("Entries restored: 1" in m for m in plain_meta)
+    # Session pointer swapped to the resumed session.
+    assert ctx.session is not current
+    assert ctx.session is not None
+    assert ctx.session.session_id == older.session_id
 
 
 def test_compact_handler_without_workspace(ctx: SlashContext) -> None:
@@ -499,26 +546,66 @@ def test_dispatch_exit_flag_mirrors_ctx_exit(ctx: SlashContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalJSXCommand kind is rejected but recognized
+# LocalJSXCommand dispatch — T13 wires screens into dispatch
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_localjsx_command_reports_unsupported_kind(
+def test_dispatch_localjsx_command_runs_screen(
     echo: _EchoCapture,
 ) -> None:
+    from cli.workbench_app.screens.base import ScreenResult as _ScreenResult
+
     class _Screen:
-        def run(self) -> int:
-            return 0
+        calls: list[tuple] = []
+
+        def __init__(self, ctx, *args):
+            type(self).calls.append((ctx, args))
+
+        def run(self) -> _ScreenResult:
+            return _ScreenResult(
+                action="done",
+                value="payload",
+                meta_messages=("one.", "two."),
+            )
 
     jsx = LocalJSXCommand(
-        name="skills", description="Browse", screen_factory=_Screen
+        name="showcase", description="Demo screen", screen_factory=_Screen
     )
     registry = build_builtin_registry(extra=[jsx])
     ctx = SlashContext(echo=echo, registry=registry)
-    result = dispatch(ctx, "/skills")
+    result = dispatch(ctx, "/showcase arg1")
     assert result.handled is True
-    assert result.error == "unsupported-kind"
+    assert result.error is None
     assert result.command is jsx
+    assert result.display == "system"
+    assert result.meta_messages == ("one.", "two.")
+    assert result.raw_result == "payload"
+    # Factory received the SlashContext + remaining args.
+    assert len(_Screen.calls) == 1
+    assert _Screen.calls[0][1] == ("arg1",)
+    # Meta messages echoed as dim lines (styling intact).
+    plain_lines = [click.unstyle(line) for line in echo.lines]
+    assert "one." in plain_lines
+    assert "two." in plain_lines
+
+
+def test_dispatch_localjsx_command_handles_factory_errors(
+    echo: _EchoCapture,
+) -> None:
+    def _boom(ctx, *args):
+        raise RuntimeError("screen exploded")
+
+    jsx = LocalJSXCommand(
+        name="broken", description="x", screen_factory=_boom
+    )
+    registry = build_builtin_registry(extra=[jsx])
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/broken")
+    assert result.handled is True
+    assert result.error == "screen exploded"
+    assert any("Error running /broken" in line for line in echo.lines)
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -736,3 +823,410 @@ def test_help_handler_goes_through_on_done(
     assert result.meta_messages == ()
     assert result.raw_result is not None
     assert "/help" in result.raw_result
+
+
+# ---------------------------------------------------------------------------
+# T15 — /clear and /new
+# ---------------------------------------------------------------------------
+
+
+def test_clear_handler_without_transcript_is_a_noop(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    result = dispatch(ctx, "/clear")
+    assert result.handled is True
+    assert result.display == "system"
+    assert result.raw_result is not None
+    assert "No transcript bound" in result.raw_result
+    # System display → dim-styled line; only the main line, no meta.
+    assert echo.lines == [click.style(result.raw_result, dim=True)]
+
+
+def test_clear_handler_wipes_transcript_entries(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("hello")
+    transcript.append_assistant("hi there")
+    transcript.append_system("note")
+    assert len(transcript) == 3
+
+    ctx = SlashContext(echo=echo, registry=registry, transcript=transcript)
+    result = dispatch(ctx, "/clear")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert len(transcript) == 0
+    assert "Transcript cleared" in (result.raw_result or "")
+    assert result.meta_messages == ("Removed 3 entries; session kept.",)
+    # Main line + one meta line, both dim-styled.
+    assert echo.lines[0] == click.style(result.raw_result, dim=True)
+    assert click.unstyle(echo.lines[1]) == "Removed 3 entries; session kept."
+
+
+def test_clear_handler_uses_singular_noun_for_one_entry(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("only line")
+
+    ctx = SlashContext(echo=echo, registry=registry, transcript=transcript)
+    result = dispatch(ctx, "/clear")
+
+    assert result.meta_messages == ("Removed 1 entry; session kept.",)
+
+
+def test_clear_handler_keeps_session_intact(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="keep-me")
+    store.append_entry(session, "user", "persisted line")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("in-memory line")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=session,
+        session_store=store,
+        transcript=transcript,
+    )
+    dispatch(ctx, "/clear")
+
+    # Session pointer unchanged and on-disk transcript untouched.
+    assert ctx.session is session
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 1
+    assert reloaded.transcript[0].content == "persisted line"
+    # In-memory transcript wiped.
+    assert len(transcript) == 0
+
+
+def test_new_handler_without_store_reports_and_keeps_session(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    prior = Session(session_id="abc", title="before")
+    ctx = SlashContext(echo=echo, registry=registry, session=prior)
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert "not persisted" in (result.raw_result or "")
+    # Session pointer untouched.
+    assert ctx.session is prior
+
+
+def test_new_handler_creates_session_and_swaps_on_context(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    previous = store.create(title="old")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=previous,
+        session_store=store,
+    )
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert ctx.session is not previous
+    assert ctx.session is not None
+    assert ctx.session.session_id != previous.session_id
+    # New session persisted to disk.
+    assert store.get(ctx.session.session_id) is not None
+    # Default-title session still surfaces the auto-generated title meta.
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    assert any(f"Previous session: {previous.session_id}" == m for m in plain_meta)
+    assert any(f"New session: {ctx.session.session_id}" == m for m in plain_meta)
+
+
+def test_new_handler_accepts_title_from_positional_args(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    dispatch(ctx, "/new regression sweep")
+
+    assert ctx.session is not None
+    assert ctx.session.title == "regression sweep"
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    assert any("Title: regression sweep" == m for m in plain_meta)
+
+
+def test_new_handler_clears_transcript_when_bound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    previous = store.create(title="keep-on-disk")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("line one")
+    transcript.append_user("line two")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=previous,
+        session_store=store,
+        transcript=transcript,
+    )
+    dispatch(ctx, "/new")
+
+    assert len(transcript) == 0
+    # Prior session file still exists on disk.
+    assert store.get(previous.session_id) is not None
+
+
+def test_new_handler_surfaces_store_failure_as_system_line(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    class _BrokenStore:
+        def create(self, title: str = "") -> Session:
+            raise RuntimeError("disk full")
+
+    ctx = SlashContext(
+        echo=echo, registry=registry, session_store=_BrokenStore()  # type: ignore[arg-type]
+    )
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert "disk full" in (result.raw_result or "")
+    assert ctx.session is None
+
+
+def test_new_handler_omits_previous_meta_when_no_session_bound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    dispatch(ctx, "/new")
+
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    # No "Previous session" line when ctx.session started as None.
+    assert not any(line.startswith("Previous session:") for line in plain_meta)
+    assert any(line.startswith("New session:") for line in plain_meta)
+
+
+# ---------------------------------------------------------------------------
+# T17 — session persistence + /resume restoration
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_persists_slash_command_to_history(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="persist-me")
+    ctx = SlashContext(
+        echo=echo, registry=registry, session=session, session_store=store
+    )
+
+    dispatch(ctx, "/help")
+    dispatch(ctx, "/status extra arg")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert reloaded.command_history[-2:] == ["/help", "/status extra arg"]
+
+
+def test_dispatch_skips_history_when_store_or_session_unbound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    # No store bound → no crash, no mutation on the in-memory session.
+    session = Session(session_id="x", title="")
+    ctx = SlashContext(echo=echo, registry=registry, session=session)
+    dispatch(ctx, "/help")
+    assert session.command_history == []
+
+
+def test_dispatch_does_not_record_non_slash_lines(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="quiet")
+    ctx = SlashContext(
+        echo=echo, registry=registry, session=session, session_store=store
+    )
+    result = dispatch(ctx, "just some free text")
+    assert result.handled is False
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert reloaded.command_history == []
+
+
+def test_dispatch_swallows_store_failure_on_command_append(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    class _BadStore:
+        def append_command(self, session: Session, command: str) -> None:
+            raise RuntimeError("disk full")
+
+    session = Session(session_id="abc", title="")
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=session,
+        session_store=_BadStore(),  # type: ignore[arg-type]
+    )
+    # Must not raise — persistence is best-effort.
+    result = dispatch(ctx, "/help")
+    assert result.handled is True
+
+
+def test_resume_handler_swaps_session_and_restores_transcript(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    older = store.create(title="older")
+    older.active_goal = "finish T17"
+    older.transcript.extend(
+        [
+            SessionEntry(role="user", content="hello", timestamp=1.0),
+            SessionEntry(role="assistant", content="hi", timestamp=2.0),
+            SessionEntry(role="tool", content="  running…", timestamp=3.0),
+        ]
+    )
+    store.save(older)
+    current = store.create(title="current")
+    older.updated_at = current.updated_at + 1
+    store.save(older)
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("throwaway line")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=current,
+        session_store=store,
+        transcript=transcript,
+    )
+
+    result = dispatch(ctx, "/resume")
+    assert result.display == "system"
+    # Session pointer swapped.
+    assert ctx.session is not None
+    assert ctx.session.session_id == older.session_id
+    # Transcript restored (throwaway line was wiped, 3 entries restored).
+    assert len(transcript) == 3
+    assert transcript.entries[0].role == "user"
+    assert transcript.entries[0].content == "hello"
+    assert transcript.entries[2].role == "tool"
+    # Transcript rebound to resumed session so future appends persist to it.
+    assert transcript.bound_session is ctx.session
+
+
+def test_resume_handler_accepts_explicit_session_id(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    first = store.create(title="first")
+    second = store.create(title="second")
+    # second is latest; resuming "first" by id should win.
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    result = dispatch(ctx, f"/resume {first.session_id}")
+    assert result.display == "system"
+    assert ctx.session is not None
+    assert ctx.session.session_id == first.session_id
+    # Sanity: default /resume would have picked second.
+    assert second.session_id != first.session_id
+
+
+def test_resume_handler_reports_unknown_session_id(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    store.create(title="existing")
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    result = dispatch(ctx, "/resume nope-missing")
+    assert result.display == "system"
+    assert "nope-missing" in click.unstyle(result.raw_result or "")
+
+
+def test_transcript_bind_session_persists_appends(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="wired")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+
+    transcript.append_user("line one")
+    transcript.append_assistant("line two")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 2
+    assert reloaded.transcript[0].role == "user"
+    assert reloaded.transcript[0].content == "line one"
+    assert reloaded.transcript[1].role == "assistant"
+
+
+def test_transcript_bind_session_detach_stops_persisting(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="detach")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+    transcript.append_user("first")
+    transcript.bind_session(None, None)
+    transcript.append_user("after-detach")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    contents = [entry.content for entry in reloaded.transcript]
+    assert "first" in contents
+    assert "after-detach" not in contents
+
+
+def test_transcript_clear_keeps_on_disk_session(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="kept")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+    transcript.append_user("keep me")
+    transcript.clear()
+    assert len(transcript) == 0
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 1
+
+
+def test_transcript_restore_normalizes_unknown_roles(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="legacy")
+    session.transcript.append(
+        SessionEntry(role="weird-role", content="what", timestamp=1.0)
+    )
+    store.save(session)
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.restore_from_session(session)
+    assert len(transcript) == 1
+    # Fallback role is "system" for unknown legacy tags.
+    assert transcript.entries[0].role == "system"

@@ -127,7 +127,7 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 | `deploy` | Canary, release, rollback, or auto-review-and-deploy |
 | `status` | Show workspace health, versions, and recommended next steps |
 | `doctor` | Check configuration, providers, data stores, and readiness |
-| `shell` | Launch the interactive AgentLab shell |
+| `shell` | Launch the interactive AgentLab shell (legacy; also invoked by `agentlab --classic`) |
 
 ### Secondary commands
 
@@ -144,6 +144,17 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 | `template` | List and apply bundled starter templates |
 
 All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md) for the full reference, including the advanced surface.
+
+### Interactive Workbench (default)
+
+Running `agentlab` with no subcommand launches the **Workbench**, a Claude-Code-style interactive REPL with a live status line, streaming transcript, slash-command surface (`/eval`, `/optimize`, `/build`, `/deploy`, `/skills`, `/help`, `/status`, `/model`, `/resume`, `/clear`, …), autocomplete popup, and session persistence. Ctrl-C cancels the active tool call; a second press exits cleanly.
+
+```bash
+agentlab            # interactive Workbench (default)
+agentlab --classic  # opt out: run the legacy shell REPL (deprecated, one more release)
+```
+
+See [docs/cli/workbench.md](docs/cli/workbench.md) for the full slash-command catalog and keyboard reference. The non-interactive `agentlab status` path is still used automatically when stdin is not a TTY (CI, pipes, redirects).
 
 ### Claude-style auto mode
 
@@ -257,6 +268,7 @@ See [docs/deployment.md](docs/deployment.md) for local, container, and Cloud Run
 **Guides:**
 
 - [Detailed Guide](docs/DETAILED_GUIDE.md) — Full CLI walkthrough
+- [CLI Workbench](docs/cli/workbench.md) — Interactive Workbench (default `agentlab` entry), slash-command catalog, and keyboard reference
 - [Claude-Style Auto Mode](docs/guides/claude-style-auto-mode.md) — Live terminal harness, queued input, permissions, and full-auto workflows
 - [UI Quick Start](docs/UI_QUICKSTART_GUIDE.md) — Browser walkthrough
 - [Agentic Coding Tools](docs/guides/agentic-coding-tools.md) — MCP and coding agent setup

@@ -402,8 +402,17 @@ def _enter_discovered_workspace(command_name: str | None) -> AgentLabWorkspace |
 
 
 def _is_tty() -> bool:
-    """Return True when stdin is connected to an interactive terminal."""
-    return hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    """Return True only when both stdin and stdout are interactive terminals.
+
+    Checking both is required because `agentlab | tee log.txt` leaves stdin a
+    TTY while stdout is a pipe — launching the interactive Workbench in that
+    shape would render ANSI to the pipe and hang on an `input()` call that
+    never surfaces a prompt the user can see.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            return False
+    return True
 
 
 def _require_workspace(command_name: str | None = None) -> AgentLabWorkspace:
@@ -2163,9 +2172,15 @@ def _load_versioned_config(configs_dir: str, config_version: int | None) -> tupl
 
 @click.group(cls=AgentLabGroup, invoke_without_command=True)
 @click.version_option(version=AGENTLAB_VERSION, prog_name="agentlab")
+@click.option(
+    "--classic",
+    is_flag=True,
+    default=False,
+    help="Launch the classic REPL shell instead of the new Workbench UI.",
+)
 @_banner_flag_options
 @click.pass_context
-def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
+def cli(ctx: click.Context, classic: bool, quiet: bool, no_banner: bool) -> None:
     """AgentLab VNextCC — agent optimization platform.
 
     A product-grade platform for iterating ADK agent quality.
@@ -2173,14 +2188,20 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
     """
     del quiet, no_banner
     ctx.obj = ctx.obj or {}
+    ctx.obj["classic"] = classic
     ctx.obj["workspace"] = _enter_discovered_workspace(ctx.invoked_subcommand)
     if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
         workspace = ctx.obj.get("workspace")
         if _is_tty():
             if workspace is not None:
-                from cli.repl import run_shell
+                if classic:
+                    from cli.repl import run_shell
 
-                run_shell(workspace)
+                    run_shell(workspace)
+                else:
+                    from cli.workbench_app.app import launch_workbench
+
+                    launch_workbench(workspace)
             else:
                 from cli.onboarding import run_onboarding
 
@@ -3890,9 +3911,46 @@ def _run_optimize_cycle(
             HarnessEvent(event, task_id=task_id, task=task, payload=payload),
         )
 
+    def _tool_started(label: str) -> float:
+        started = time.monotonic()
+        if harness is not None:
+            from cli.auto_harness import HarnessEvent
+
+            _emit_harness_event(
+                harness,
+                HarnessEvent("tool.started", tool=label, message=label),
+            )
+        return started
+
+    def _tool_completed(
+        label: str,
+        started: float,
+        *,
+        output: str = "",
+        exit_code: int = 0,
+    ) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(
+                "tool.completed",
+                tool=label,
+                payload={
+                    "command": label,
+                    "output": output,
+                    "exit_code": exit_code,
+                    "elapsed_seconds": time.monotonic() - started,
+                },
+            ),
+        )
+
     try:
         _phase(f"Cycle {display_cycle} — loading eval evidence")
         _task("task.started", "load-evidence", "Load eval evidence")
+        evidence_started = _tool_started("load eval evidence")
         workspace = discover_workspace()
         active_config = workspace.resolve_active_config() if workspace is not None and config_path is None else None
         scoped_config_path = config_path or (active_config.path if active_config is not None else None)
@@ -3903,6 +3961,11 @@ def _run_optimize_cycle(
             )
         else:
             latest_eval_path, latest_eval_data = _latest_eval_payload_for_active_config(scoped_config_path)
+        _tool_completed(
+            "load eval evidence",
+            evidence_started,
+            output=str(latest_eval_path or "no eval evidence"),
+        )
         if latest_eval_path is None or latest_eval_data is None:
             if eval_run_id:
                 description = f"Eval results not found for run id {eval_run_id}."
@@ -3976,11 +4039,13 @@ def _run_optimize_cycle(
         current_config = _load_optimize_current_config(deployer=deployer, config_path=config_path)
         _phase(f"Cycle {display_cycle} — proposing candidate config")
         _task("task.started", "propose", "Propose candidate config")
+        optimize_started = _tool_started("optimizer.optimize")
         new_config, opt_status = optimizer.optimize(
             report,
             current_config,
             failure_samples=failure_samples,
         )
+        _tool_completed("optimizer.optimize", optimize_started, output=opt_status)
         _task("task.completed", "propose", "Propose candidate config", detail=opt_status)
 
         latest_attempts = memory.recent(limit=1)
@@ -4030,16 +4095,38 @@ def _run_optimize_cycle(
 
             _phase(f"Cycle {display_cycle} — evaluating candidate")
             _task("task.started", "evaluate", "Evaluate candidate config")
+            eval_started = _tool_started("eval_runner.run")
             score = eval_runner.run(config=new_config)
+            _tool_completed(
+                "eval_runner.run",
+                eval_started,
+                output=f"composite={score.composite:.4f}",
+            )
             _task("task.completed", "evaluate", "Evaluate candidate config")
             _phase(f"Cycle {display_cycle} — deciding outcome")
             _task("task.started", "decide", "Decide outcome")
             candidate_scores = _score_to_dict(score)
+            persist_started = _tool_started("persist candidate config")
             candidate_version, candidate_path = _persist_candidate_config(
                 deployer,
                 candidate_config=new_config,
                 candidate_scores=candidate_scores,
             )
+            _tool_completed(
+                "persist candidate config",
+                persist_started,
+                output=str(candidate_path),
+            )
+            if harness is not None:
+                from cli.auto_harness import HarnessEvent
+
+                _emit_harness_event(
+                    harness,
+                    HarnessEvent(
+                        "artifact.updated",
+                        message=f"candidate v{candidate_version:03d} updated",
+                    ),
+                )
             latest = memory.recent(limit=1)[0]
             entry_timestamp = experiment_log_utc_timestamp()
             preview_entry = make_experiment_log_entry(
@@ -6009,6 +6096,42 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
 
         _emit_harness_event(harness, HarnessEvent("stage.started", message=message))
 
+    def _loop_tool_started(label: str) -> float:
+        started = time.monotonic()
+        if harness is not None:
+            from cli.auto_harness import HarnessEvent
+
+            _emit_harness_event(
+                harness,
+                HarnessEvent("tool.started", tool=label, message=label),
+            )
+        return started
+
+    def _loop_tool_completed(
+        label: str,
+        started: float,
+        *,
+        output: str = "",
+        exit_code: int = 0,
+    ) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(
+                "tool.completed",
+                tool=label,
+                payload={
+                    "command": label,
+                    "output": output,
+                    "exit_code": exit_code,
+                    "elapsed_seconds": time.monotonic() - started,
+                },
+            ),
+        )
+
     budget_ok, budget_message, _ = enforce_workspace_budget(max_budget_usd)
     if not budget_ok:
         progress.warning(message=budget_message or "Budget reached")
@@ -6117,7 +6240,16 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             improved = False
             try:
                 _loop_task("task.started", "observe", "Observe agent health")
+                observe_started = _loop_tool_started("observer.observe")
                 report = observer.observe()
+                _loop_tool_completed(
+                    "observer.observe",
+                    observe_started,
+                    output=(
+                        f"success={report.metrics.success_rate:.2%}\n"
+                        f"errors={report.metrics.error_rate:.2%}"
+                    ),
+                )
                 _loop_task("task.completed", "observe", "Observe agent health")
                 if resolved_output_format == "text" and harness is None:
                     click.echo(
@@ -6129,10 +6261,16 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     current_config = _ensure_active_config(deployer)
                     failure_samples = _build_failure_samples(store)
                     _loop_task("task.started", "propose", "Propose improvement")
+                    optimize_started = _loop_tool_started("optimizer.optimize")
                     new_config, status = optimizer.optimize(
                         report,
                         current_config,
                         failure_samples=failure_samples,
+                    )
+                    _loop_tool_completed(
+                        "optimizer.optimize",
+                        optimize_started,
+                        output=status,
                     )
                     _loop_task("task.completed", "propose", "Propose improvement", detail=status)
                     if resolved_output_format == "text" and harness is None:
@@ -6140,10 +6278,22 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     if new_config is not None:
                         improved = True
                         _loop_task("task.started", "evaluate", "Evaluate candidate")
+                        eval_started = _loop_tool_started("eval_runner.run")
                         score = eval_runner.run(config=new_config)
+                        _loop_tool_completed(
+                            "eval_runner.run",
+                            eval_started,
+                            output=f"composite={score.composite:.4f}",
+                        )
                         _loop_task("task.completed", "evaluate", "Evaluate candidate")
                         _loop_task("task.started", "deploy", "Deploy or skip")
+                        deploy_started = _loop_tool_started("deployer.deploy")
                         deploy_result = deployer.deploy(new_config, _score_to_dict(score))
+                        _loop_tool_completed(
+                            "deployer.deploy",
+                            deploy_started,
+                            output=str(deploy_result),
+                        )
                         _loop_task("task.completed", "deploy", "Deploy or skip", detail=str(deploy_result))
                         if resolved_output_format == "text" and harness is None:
                             click.echo(f"  Deploy: {deploy_result}")
@@ -6165,7 +6315,13 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                         click.echo("  Healthy; skipping optimization.")
 
                 _loop_task("task.started", "canary", "Check canary and resources")
+                canary_started = _loop_tool_started("deployer.check_and_act")
                 canary_result = deployer.check_and_act()
+                _loop_tool_completed(
+                    "deployer.check_and_act",
+                    canary_started,
+                    output=str(canary_result),
+                )
                 _loop_task("task.completed", "canary", "Check canary and resources", detail=str(canary_result))
                 if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Canary: {canary_result}")

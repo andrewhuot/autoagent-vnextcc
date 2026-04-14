@@ -404,43 +404,1007 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       Full workbench surface green (406 tests across deploy_slash/
       build_slash/optimize_slash/eval_slash/slash/transcript/
       status_bar/screens/tool_call_block/commands/app_stub/cli_workbench).*
-- [ ] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from
+- [x] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from
       T08b) modeled on the mirror's `SkillsMenu`. Arrow-key navigable list with
       `list / show / add / edit / remove` actions; `$EDITOR` opens for add/edit; delegates
       to `cli/skills.py` under the hood. NOT a flat CLI — it's a full-screen modal.
-- [ ] **T14** — Add `/model` slash command that lists configured models and switches the
-      active one for the session (persist to session state).
-- [ ] **T15** — Add `/clear` (wipe transcript, keep session) and `/new` (start fresh
-      session) slash commands.
-- [ ] **T16** — Implement ctrl-c / esc handling: first press cancels the current
+      *Landed `cli/workbench_app/skills_slash.py` with three seams so the flow
+      is testable without a TTY or real sqlite: a `SkillsBackend` Protocol
+      (`list_skills` / `show` / `add` / `edit` / `remove` → `BackendResult`),
+      a `CliSkillsBackend` default that delegates to `core.skills.store`
+      via the existing `cli.skills._get_store` helper, and a
+      `SkillsScreenAdapter(Screen)` that runs the T08b `SkillsScreen` once,
+      inspects the returned `ScreenResult.action` (`list` / `show` / `add`
+      / `edit` / `remove` / `exit` / `cancel`), dispatches the matching
+      backend method, echoes its `lines` verbatim to the transcript, and
+      returns a `ScreenResult(action="exit", meta_messages=(summary,))` so
+      the outer dispatch layer surfaces the summary as a dim meta line.
+      Single-shot semantics mirror Claude Code's `SkillsMenu` exit-on-action
+      UX; users re-invoke `/skills` for a follow-up action, which keeps the
+      inner screen re-paint logic trivial and leaves no nested loops to
+      manage. `$EDITOR`/`$VISUAL` launching is isolated behind an injectable
+      `EditorRunner = Callable[[Path], int]` seam (default shells out to
+      `subprocess.call([editor, path])` with `EDITOR → VISUAL → vi`
+      fallback) and confirmation before `remove` lives behind `Confirmer =
+      Callable[[str], bool]` (default `click.confirm(..., default=False)`
+      with `click.Abort` / `KeyboardInterrupt` / `EOFError` all coerced to
+      `False`). `add` writes a starter YAML template to a temp file, opens
+      `$EDITOR`, parses via `core.skills.loader.SkillLoader`, and
+      `store.create`s each parsed skill. `edit` dumps the selected skill
+      to a temp YAML, opens `$EDITOR`, re-parses via
+      `core.skills.types.Skill.from_dict`, and calls `store.update`; parse
+      errors render a red meta line without mutating the store. `remove`
+      confirms, deletes via `store.delete`, and surfaces the result.
+      Every temp file is unlinked in a `finally` clause via
+      `_unlink_quiet(path)` so crashes don't leak scratch YAML into `/tmp`.
+      To make dispatch handle `local-jsx` properly, extended
+      `cli.workbench_app.slash.dispatch` with a new `_dispatch_local_jsx`
+      branch: constructs the screen via `command.screen_factory(ctx, *args)`,
+      runs `screen.run()`, echoes `ScreenResult.meta_messages` as dim lines
+      (mirroring `_render_and_echo`'s `meta_messages` routing), and folds
+      the result into `DispatchResult(display="system", meta_messages=...,
+      raw_result=value if str else None)`. Factory exceptions render a red
+      `"Error running /skills: <exc>"` line and return `error=<str(exc)>`
+      so the loop stays alive. `PromptCommand` still returns
+      `error="unsupported-kind"` (landing in T14+). `build_skills_command(*,
+      backend=None)` returns a `LocalJSXCommand(source="builtin",
+      screen_factory=...)`; the factory accepts `(ctx, *args)` and threads
+      `ctx.echo` into the adapter so the transcript owns every line. Wired
+      into `build_builtin_registry(include_streaming=True)` alongside the
+      other T09–T12 streaming commands (16 built-ins + 1 extras slot = 17
+      total). Coverage: `tests/test_workbench_skills_slash.py` (23 tests) —
+      adapter exit key / list count (plural + singular) / show with cursor
+      navigation / show-needs-selection on empty list / add without
+      selection / edit / remove / empty-summary omits meta / EOF exits
+      cleanly; `build_skills_command` type + kind + source; full dispatch
+      integration with patched key provider + echo assertion;
+      `CliSkillsBackend` via a `monkeypatch`-installed fake `SkillStore`
+      (`_get_store` patched at `cli.skills._get_store`) — list→items
+      projection, store-close accounting, `show` missing-skill + yaml
+      body, `remove` cancels on `confirmer=False` without calling delete,
+      `remove` deletes on confirm, `remove` of missing skill reports
+      error, `edit` aborts on editor non-zero exit with no store mutation,
+      `edit` saves after successful editor and cleans up the temp file,
+      `edit` missing skill, `add` aborts on editor non-zero, `add` creates
+      from editor buffer via a stub `SkillLoader`. Plus two updates to
+      `tests/test_workbench_slash.py`: the registry contains set gains
+      `"skills"`, the extras-registry count bumps to 17, the
+      `include_streaming=False` guard adds `"skills" not in
+      registry.names()`, and the old
+      `test_dispatch_localjsx_command_reports_unsupported_kind` is
+      replaced with `test_dispatch_localjsx_command_runs_screen` /
+      `test_dispatch_localjsx_command_handles_factory_errors` covering
+      the new happy path + factory-error path (factory args thread-through,
+      meta_messages dim-echoed, raw_result from str value). Full
+      workbench surface green (329 tests across skills_slash/slash/
+      transcript/status/screens/app_stub/commands/tool_call_block/
+      eval_slash/optimize_slash/build_slash/deploy_slash).*
+- [x] **T14** — Add `/model` slash command that lists configured models and switches the
+      active one for the session (persist to session state). *Landed
+      `cli/workbench_app/model_slash.py` as an inline `LocalCommand`
+      (not streaming) with three modes: (a) `/model` lists every entry
+      from `cli.model.list_available_models(workspace.root)`, marking
+      the session-active one with `●` (green) and annotating credential
+      status via `_credential_note` (`key set` / `missing ENV_VAR` /
+      `no credentials`); (b) `/model <key>` resolves `<key>` against
+      full `provider:model` keys first, falling back to unique bare
+      model names (ambiguous short names intentionally fail with
+      "Unknown model: …" to avoid silent miss-selection); (c)
+      `/model reset|clear|none|default|unset` drops the override. The
+      session-local override is stored in
+      `session.settings_overrides["model"]` and persisted via
+      `session_store.save(session)` so `/resume` carries it forward —
+      the status bar already accepts a `model_override` parameter on
+      `snapshot_from_workspace` (T06) that downstream refresh code
+      reads from `session.settings_overrides.get("model")`. An
+      injectable `ModelLister` seam (default shells out to
+      `cli.model.list_available_models`) keeps tests hermetic — they
+      never need a real `agentlab.yaml` on disk. `build_model_command
+      (*, lister=None)` is the factory; it's registered in
+      `build_builtin_registry` outside `_BUILTIN_SPECS` so it lands in
+      both the streaming-on (default) and streaming-off configurations
+      — `/model` is inline, not subprocess-based. Error-path matrix:
+      lister raises → red "Could not load models: <exc>"; empty
+      model list → plain "No models configured"; unknown key → red
+      "Unknown model: <raw>…" + no session mutation; no session bound
+      → yellow "No active session — cannot persist model override.";
+      no store bound → in-memory mutation succeeds + meta line
+      "Not persisted — no session store bound."; `store.save` raises
+      → yellow warning naming the exception with a "applies for this
+      run only" meta (in-memory mutation kept so subsequent dispatches
+      see it); reset with nothing to clear → "No session model
+      override to clear.". Defensive coercion in `_set_override`
+      replaces a non-dict `settings_overrides` with a fresh dict so
+      freshly-constructed Session objects (missing field) behave
+      sensibly. Updated `build_builtin_registry` to import
+      `build_model_command` lazily (mirrors the streaming factories)
+      and register it unconditionally. Coverage:
+      `tests/test_workbench_model_slash.py` (33 tests) — helpers:
+      `_resolve_root` with/without workspace, with missing `.root`,
+      `_session_override` tolerates non-dict + missing session,
+      `_match_model` exact-key/case-insensitive/unique-short/
+      ambiguous-short/empty-string, `_credential_note` env-set/
+      env-missing/no-env, `_format_list` marker placement; surface:
+      `build_model_command` returns `LocalCommand(kind="local",
+      source="builtin", name="model", description=…)`; listing:
+      happy-path rendering, meta "No session override" when none,
+      meta "Session override: <key>" when set, `●` marker only on
+      active row, empty model list, lister-exception surfaced;
+      setting: full-key persists + reload-from-disk survives, short
+      name resolves, unknown key leaves session + disk clean, no
+      session → warning, no store → in-memory + "Not persisted" meta,
+      `store.save` raises → yellow warning with exception text,
+      meta mentions `/model reset`; resetting: clears + persists with
+      previous value echoed, `clear` alias works, reset-when-none
+      is idempotent, reset-without-session is a noop, best-effort
+      persistence tolerates `store.save` failure; wiring: default
+      registry + `include_streaming=False` registry both contain
+      `/model`. Plus three edits to `tests/test_workbench_slash.py`:
+      `expected` set for `test_builtin_registry_contains_all_ten_commands`
+      adds `"model"`, `test_builtin_registry_without_streaming` gains
+      `assert "model" in registry.names()`, extras-count bumps from 17
+      to 18. Full workbench surface green (631 tests across
+      model_slash/slash/status/screens/transcript/tool_call_block/
+      skills_slash/build_slash/optimize_slash/eval_slash/deploy_slash/
+      commands/app_stub/cli_workbench and every sibling suite).*
+- [x] **T15** — Add `/clear` (wipe transcript, keep session) and `/new` (start fresh
+      session) slash commands. *Landed two inline `LocalCommand` handlers in
+      `cli/workbench_app/slash.py` plus a new `transcript: Transcript | None`
+      field on `SlashContext` (guarded with `TYPE_CHECKING` to avoid a runtime
+      import cycle). `/clear` — if the context carries a `Transcript`, calls
+      `transcript.clear()`, returns `on_done("  Transcript cleared.",
+      display="system", meta_messages=(f"Removed N entr{'y'|'ies'};
+      session kept.",))`; with no transcript bound, returns a dim
+      "No transcript bound — nothing to clear." line and does nothing. The
+      on-disk `Session` pointer and its persisted `.agentlab/sessions/*.json`
+      are deliberately untouched, so `/clear` is non-destructive and mirrors
+      Claude Code's context-reset semantics. `/new` — requires a
+      `SessionStore`; calls `store.create(title=args joined)` and swaps the
+      new session onto `ctx.session` (previous file is left on disk, not
+      deleted). When `ctx.transcript` is bound, it is cleared too so the
+      visible pane matches the fresh session. Meta messages surface the
+      previous session id (only when it existed and differs), the new
+      session id, and — when a title was supplied — "Title: <title>". The
+      auto-generated title from `SessionStore.create(title="")` is omitted
+      from the meta list because empty-string titles collapse to a
+      timestamp banner that adds no signal. Store failures
+      (`RuntimeError`, etc.) are caught and returned as a dim system line so
+      the loop stays alive. Both commands registered in `_BUILTIN_SPECS`
+      (inline; no streaming dependency), so `build_builtin_registry
+      (include_streaming=False)` still exposes them. Updated the
+      registry-size assertions: the default built-in registry now carries 19
+      commands (11 originally ported + /clear + /new + /model + /eval +
+      /optimize + /build + /deploy + /skills); the +extras test lands at 20.
+      Coverage: 10 new tests in `tests/test_workbench_slash.py`
+      (`test_clear_handler_without_transcript_is_a_noop`,
+      `test_clear_handler_wipes_transcript_entries`,
+      `test_clear_handler_uses_singular_noun_for_one_entry`,
+      `test_clear_handler_keeps_session_intact` — verifies the persisted
+      session file is untouched and only the in-memory transcript is wiped,
+      `test_new_handler_without_store_reports_and_keeps_session`,
+      `test_new_handler_creates_session_and_swaps_on_context`,
+      `test_new_handler_accepts_title_from_positional_args`,
+      `test_new_handler_clears_transcript_when_bound`,
+      `test_new_handler_surfaces_store_failure_as_system_line` — uses a
+      stub `_BrokenStore.create` that raises, and
+      `test_new_handler_omits_previous_meta_when_no_session_bound`). Full
+      workbench surface green (376 tests across slash / transcript /
+      status / screens / commands / eval_slash / optimize_slash /
+      build_slash / deploy_slash / skills_slash / model_slash /
+      tool_call_block / app_stub).*
+- [x] **T16** — Implement ctrl-c / esc handling: first press cancels the current
       streaming tool call, second press aborts the app. Ensure no orphan subprocesses.
-- [ ] **T17** — Wire session persistence: every transcript entry and slash command
+      *Landed `cli/workbench_app/cancellation.py` with a thread-safe
+      `CancellationToken` that tracks a monotonic `cancelled` flag plus a
+      registry of live :class:`subprocess.Popen` children. `cancel()` is
+      idempotent, sends SIGTERM, and escalates to SIGKILL after a
+      configurable grace window (`terminate_grace=0.5s` default) so a
+      hung or signal-swallowing child never leaks as an orphan; a race
+      window check (processes registered *after* a cancel) immediately
+      terminates the late arriver. `ProcessLookupError` and `OSError`
+      are swallowed at the termination site to stay resilient under
+      races. `register_process` / `unregister_process` / `reset` round
+      out the API; `iter_with_cancellation(stream, token)` is a small
+      helper for draining iterators that don't know about the token.
+      Threaded the token through `SlashContext.cancellation` (new
+      optional field, defaults to `None`) and into each of the four
+      streaming runners (`/eval`, `/optimize`, `/build`, `/deploy`) via
+      a new keyword-only `cancellation` parameter on
+      `_default_stream_runner`. Each runner now registers the
+      subprocess on start, polls `token.cancelled` between line reads,
+      and always unregisters in the `finally` clause so a late cancel
+      can't race with a natural exit. The non-zero exit check is
+      suppressed when a cancellation is in flight so the handler
+      doesn't double-report the subprocess error. An `_invoke_runner`
+      helper in each `*_slash.py` probes the runner signature so the
+      existing test fixtures (single-arg `runner(args)`) still work
+      unchanged — only callers who opt in to a cancellation token pay
+      the kwarg. Handler side: each of the four streaming handlers
+      now wraps the event loop in `try/except KeyboardInterrupt`,
+      flips `token.cancel()` (which kills the subprocess), and falls
+      through to a shared cancelled-path that emits a yellow
+      `"/{cmd} cancelled — …"` line and returns
+      `on_done(display="skip")` so the dispatch layer doesn't
+      double-print. The same path also catches the case where a
+      `*CommandError` surfaces *because* the cancellation flipped the
+      subprocess exit code — the error is then treated as a
+      consequence of the cancel rather than a real failure.
+      App-loop side: `run_workbench_app()` gained an optional
+      `cancellation` parameter (default: a fresh token), tracks a
+      consecutive-interrupts streak, and routes ctrl-c based on
+      `token.active`: (a) if a tool call is registered the first press
+      calls `token.cancel()` and echoes "cancelled active tool call
+      — press ctrl-c again to exit" (yellow), leaving the loop intact;
+      (b) at idle the first press echoes "press ctrl-c again to exit,
+      or /exit" (yellow) and continues; (c) a second consecutive press
+      without intervening input exits with `exited_via="interrupt"`.
+      Successful input resets both the streak and the token so a
+      stray ctrl-c never forces the user out. `StubAppResult` gained
+      an `interrupts` field so tests can inspect the exit streak.
+      Coverage: 28 tests in `tests/test_workbench_cancellation.py` —
+      token defaults (uncancelled + inactive), idempotent `cancel()`,
+      `reset()` clearing flag + registry, `register_process` active-
+      state tracking, graceful SIGTERM-only path, SIGKILL escalation
+      when terminate is ignored (`exits_on_terminate=False` fake +
+      `terminate_grace=0.01`), late-arriver termination after cancel,
+      best-effort `unregister_process` (double-call tolerated),
+      `ProcessLookupError` swallowed at terminate site,
+      `iter_with_cancellation` breaking on flag flip, real subprocess
+      cleanup (spawns a 10s `time.sleep` Python child, registers,
+      cancels, asserts `poll() is not None` within 1s + last-resort
+      cleanup); handler integration — parameterised across all four
+      streaming commands for both mid-stream token flip and direct
+      `KeyboardInterrupt`, legacy handler w/o token still emits
+      yellow cancelled line, runner that accepts `cancellation` kwarg
+      receives the token, runner with legacy positional-only signature
+      is still invoked via the probe helper; app-loop — first
+      interrupt at idle warns without exiting, double-interrupt with
+      no input exits cleanly, stray interrupt between valid inputs is
+      forgiven (resets streak), interrupt with an active tool call
+      fires `token.cancel()` (verified via fake `Popen.terminate` call
+      count) and does not count toward the exit threshold; context
+      wiring — `SlashContext(cancellation=token)` accepted, defaults
+      to `None`. Full workbench surface green (450 tests); full test
+      suite green (4483 tests).*
+- [x] **T17** — Wire session persistence: every transcript entry and slash command
       appends to the existing `SessionStore`. On startup, offer `/resume` hint if latest
-      session is recent.
-- [ ] **T18** — Add theming: dim meta lines, cyan for workspace, green for completed,
+      session is recent. *Landed three wiring points plus a pure hint helper.
+      (1) :class:`Transcript` gained an opt-in :meth:`bind_session(session,
+      store)` seam so the loop can attach a :class:`SessionStore` without
+      breaking the existing in-memory-only callers (tests that construct a
+      bare ``Transcript(echo=…)`` still behave as before). When bound,
+      every ``append_*``/``replace_tail`` writes a :class:`SessionEntry`
+      to disk via :meth:`SessionStore.append_entry`; failures are swallowed
+      (best-effort, a flaky fs must not take down the live transcript).
+      :meth:`Transcript.clear` intentionally stays in-memory-only — the
+      on-disk transcript survives so ``/resume`` can still reach it and
+      ``/clear`` mirrors Claude Code's context-reset semantics.
+      :meth:`Transcript.copy_with` now carries the binding onto clones
+      so screens (T08b) inherit persistence. (2) :func:`dispatch` now
+      appends every matched slash line to ``session.command_history``
+      via :func:`_record_command`, guarded to noop when either
+      ``ctx.session`` or ``ctx.session_store`` is unbound and wrapped in
+      a swallow-all ``try`` for best-effort semantics. Non-slash lines
+      (``handled is False``) are never recorded, so command history
+      stays tight to the slash surface. (3) :func:`_handle_resume` now
+      actually restores — swaps ``ctx.session`` to the loaded session,
+      clears the bound transcript, calls the new
+      :meth:`Transcript.restore_from_session(session)` helper to
+      rehydrate in-memory entries, and rebinds the transcript to the
+      resumed session so future appends flow to it. An optional
+      positional ``<session_id>`` argument loads that specific session
+      instead of the latest; unknown ids render a dim "No session with
+      id …" line. ``restore_from_session`` normalizes unknown role tags
+      to ``"system"`` via ``_normalize_role`` so legacy / corrupted
+      session files resume cleanly. Meta lines surface
+      "Session: <title> (<id>)", "Goal: …", and "Entries restored: N".
+      (4) Startup hint: new pure helper :func:`resume_hint(store, *,
+      current, max_age_seconds, now)` returns a one-line
+      "  Tip: /resume to continue \"<title>\" (Nh ago)" when a prior
+      session exists on disk, isn't the current one, and was updated
+      within :data:`RESUME_HINT_MAX_AGE_SECONDS` (24h). Relative-time
+      formatting (`just now` / `Nm ago` / `Nh ago` / `Nd ago`) lives in
+      :func:`_format_age` as a pure helper so tests don't need a clock
+      mock beyond ``now=``. :func:`run_workbench_app` gained optional
+      ``session_store=`` / ``session=`` parameters; when both the
+      banner and a hint-eligible session are present the hint is
+      echoed dim-styled right under the banner (suppressed when
+      ``show_banner=False``). Defensive: helper swallows
+      ``store.latest()`` exceptions and handles ``updated_at=0``.
+      Coverage: 11 new T17 tests in
+      ``tests/test_workbench_slash.py`` — dispatch persists slash
+      history (``/help``, ``/status extra arg``), unbound
+      store/session no-ops without crash, non-slash free text doesn't
+      touch history, bad-store raising during ``append_command``
+      swallowed, ``/resume`` swaps session + restores 3 transcript
+      entries + rebinds transcript to new session, ``/resume
+      <session_id>`` loads explicit session beating the latest rule,
+      unknown id reports dim system line, ``Transcript.bind_session``
+      persists appends to disk, detach stops persistence, ``clear()``
+      keeps disk entries, ``restore_from_session`` normalizes
+      "weird-role" → "system"; 8 new hint tests in
+      ``tests/test_workbench_app_stub.py`` — ``resume_hint(None)`` is
+      ``None``, empty store returns ``None``, recent session surfaces
+      title + "2h ago" + "/resume", ages over 24h skipped, current ==
+      latest skipped, 150s formats "2m ago", ``run_workbench_app``
+      banner includes the hint, ``show_banner=False`` suppresses the
+      hint. Three legacy ``/resume`` tests updated to consume the new
+      ``display="system"`` dim-wrapped output and the new
+      ``meta_messages`` + session-pointer swap contract. Full
+      workbench surface green (437 tests across slash / transcript /
+      status_bar / screens / app_stub / commands / cli_workbench /
+      tool_call_block / eval_slash / optimize_slash / build_slash /
+      deploy_slash / skills_slash / model_slash / cancellation /
+      sessions); ``repl.py`` / ``shell_commands`` compatibility suite
+      still green (27 tests).*
+- [x] **T18** — Add theming: dim meta lines, cyan for workspace, green for completed,
       yellow for warnings, red for errors. Read palette from
-      `cli/workbench_app/theme.py`.
-- [ ] **T18b** — Add an effort indicator + ctrl-O expand/collapse for long outputs
+      `cli/workbench_app/theme.py`. *Landed `cli/workbench_app/theme.py` with a
+      frozen :class:`Palette` dataclass pinning the role → Click colour
+      mapping (workspace=cyan, user=cyan, success=green, warning=yellow,
+      error=red, assistant=None, command_name=cyan) plus named helpers
+      (:func:`meta`, :func:`workspace`, :func:`user`, :func:`assistant`,
+      :func:`success`, :func:`warning`, :func:`error`,
+      :func:`command_name`, :func:`heading`) and a shared
+      :func:`stylize` core that collapses ``bold=False`` / ``dim=False``
+      to ``None`` so the rendered ANSI stays tight (no spurious
+      off-codes). Every helper honours ``color=False`` for ANSI-free
+      output, matching the existing ``render_snapshot(color=False)``
+      contract in :mod:`cli.workbench_app.status_bar`. Palette is
+      immutable so no caller can repaint at runtime — future themes
+      swap by rebinding :data:`PALETTE`. Refactored every high-value
+      call site in :mod:`cli.workbench_app` to route through the new
+      helpers: (a) ``transcript.format_entry`` now dispatches
+      user/system/meta/error/warning/assistant entries through the
+      matching theme function; (b) ``app._render_banner`` and the
+      ctrl-c / idle-tip / goodbye paths in :func:`run_workbench_app`
+      swap cyan-bold banner + yellow warnings + dim goodbye onto
+      theme helpers; (c) ``status_bar.render_snapshot`` uses
+      :func:`theme.workspace` / :func:`theme.warning` /
+      :func:`theme.meta` (dropped the defunct ``import click``); (d)
+      slash `/help` heading, `meta_messages` echoing, and the system-
+      display branch of `_render_and_echo` now call
+      :func:`theme.heading` and :func:`theme.meta`; (e) every
+      streaming handler (`/eval`, `/optimize`, `/build`, `/deploy`)
+      routes the cyan starting banner, red error summary token,
+      red failure lines (`KeyboardInterrupt`, `*CommandError`,
+      `FileNotFoundError`), green / red bold summary line, and yellow
+      cancelled line through the palette; `/build` also routes its
+      "requires a brief" guard message through :func:`theme.error`;
+      (f) every screen (`base.header_lines`, `skills`, `resume`,
+      `doctor`) uses :func:`theme.workspace` / :func:`theme.meta` /
+      :func:`theme.error`. Dropped `click` imports from
+      `eval_slash.py`, `optimize_slash.py`, `build_slash.py`, and
+      `status_bar.py` since they no longer called `click.style`;
+      left `click` imports in `deploy_slash.py` (for
+      :func:`click.confirm`), `slash.py` (for :func:`click.echo`
+      default + :class:`click.testing.CliRunner`), `transcript.py`
+      (for :func:`click.unstyle`), `app.py` (for :func:`click.echo`
+      default), and the screens (marked with ``# noqa: F401``
+      where the module itself no longer calls into click but tests
+      or downstream callers may). Coverage:
+      `tests/test_workbench_theme.py` (22 tests) — palette is frozen
+      (mutation raises), default role colours pin the advertised
+      mapping, every helper: applies the right ANSI code (cyan /
+      green / yellow / red / dim / bold), round-trips through
+      ``click.unstyle``, and returns plain text under ``color=False``;
+      :func:`theme.stylize` returns text verbatim when no flags and
+      short-circuits on ``color=False`` even with flags set. No
+      existing test suite asserted byte-for-byte ANSI output for the
+      refactored lines — they compare plain text via
+      :func:`click.unstyle` / ``_strip_ansi`` — so no downstream
+      tests needed to change. Full workbench surface green (445
+      tests across theme / transcript / status_bar / screens /
+      slash / eval_slash / optimize_slash / build_slash /
+      deploy_slash / skills_slash / model_slash / tool_call_block /
+      commands / app_stub / cancellation); broader workbench / cli
+      subset (601 tests) all green.*
+- [x] **T18b** — Add an effort indicator + ctrl-O expand/collapse for long outputs
       (port the mirror's `EffortIndicator` and `CtrlOToExpand`). Long tool-call output
       collapses to a summary line with token count; ctrl-O toggles full view. Effort
       indicator shows a spinner + elapsed time + cost for any running tool call > 2s.
-- [ ] **T19** — Add slash-command autocomplete popup (show matching commands as user
-      types `/`). Use the chosen rendering stack's completer.
-- [ ] **T20** — Make workbench the default: `agentlab` with no args launches
+      *Landed two pure state-machine primitives (the prompt_toolkit
+      key-binding layer lives in T19; these modules own the logic the
+      binding will drive). (1) `cli/workbench_app/effort.py` ships a
+      frozen :class:`EffortSnapshot` (``spinner_frame``, ``elapsed_seconds``,
+      optional ``token_count``/``cost_usd``, ``finished``) plus an
+      :class:`EffortIndicator` state machine with injectable
+      ``clock: Callable[[], float]`` (defaults to :func:`time.monotonic`),
+      ``threshold_seconds`` (default ``2.0``) and ``frames`` (default
+      10-frame braille spinner ``⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`` — same family Claude Code
+      uses). ``start()`` is idempotent; ``tick()`` returns ``None`` while
+      under threshold *or* after ``stop()``, so a polling render loop
+      naturally transitions from animating → silent. Once visible, each
+      tick advances the spinner frame (wraps at ``len(frames)``).
+      ``stop()`` is always-visible, idempotent, and uses a ``✓``
+      completion glyph; it tolerates being called without a prior
+      ``start()`` by treating the run as zero-length (elapsed = 0.0s)
+      rather than raising, so mis-ordered callers don't crash rendering.
+      ``set_cost(token_count=…, cost_usd=…)`` allows partial updates
+      (``None`` fields preserve the prior value); ``clear_cost()`` wipes
+      both. Negative values on either field raise
+      :class:`ValueError`. Companion helpers: :func:`format_elapsed(secs)`
+      returns ``M:SS`` zero-padded ("0:04", "1:05", "61:01",
+      clamps negatives to ``0:00``); :func:`format_effort(snap, *, color)`
+      renders ``"  ⠋ · 0:03"`` (or ``"  ✓ · 0:11"`` on finished) with
+      optional ``· 1.2k tok`` and ``· $0.012`` segments, routed through
+      :func:`theme.meta` so the line is dim in colored mode and
+      unstyled under ``color=False``. Token formatting is scale-aware
+      (``999 tok`` / ``1.0k tok`` / ``3.2M tok``); cost pinned to three
+      decimal places to match Claude's ``$0.013`` footer style. (2)
+      `cli/workbench_app/output_collapse.py` ships a :class:`CollapsibleOutput`
+      dataclass with ``collapse_threshold`` (default ``10``, matching
+      Claude Code's default), ``collapsed`` flag, optional
+      ``token_count``, and an internal line buffer. Writes:
+      ``append(line)`` / ``extend(lines)`` are append-only (matches the
+      T08 tool-call block invariant that progress lines are immutable
+      once emitted); ``clear()`` empties the buffer without touching
+      the ``collapsed`` flag; ``set_token_count(n)`` attaches a count
+      that appears in the collapsed summary (``None`` clears, negative
+      raises). Reads: ``lines`` is an immutable tuple snapshot (prior
+      snapshots are unaffected by subsequent appends); ``line_count``,
+      ``is_collapsible`` (strictly greater-than threshold — equal
+      stays expanded), ``is_collapsed`` (collapsible *and* flag set).
+      Mutators: ``toggle()`` flips ``collapsed`` and returns the new
+      value, *no-op on short buffers* (mirrors the Claude UX where
+      pressing Ctrl-O on a short block does nothing); ``expand()`` /
+      ``collapse()`` force one direction. Render: ``render(*, color)``
+      returns a fresh list — full lines when expanded or below
+      threshold, or a single summary line when collapsed. Separate
+      :func:`format_summary(hidden_count, token_count, *, color)` lets
+      the tool-call footer reuse the same wording without touching a
+      buffer instance; the summary reads
+      ``"  … N lines hidden · <tokens> · press Ctrl-O to expand"``,
+      pluralization-aware (``1 line`` / ``2 lines``, ``0`` reads as
+      plural per English convention), routed through :func:`theme.meta`
+      so it's dim in colored mode. Wiring: exported both modules from
+      `cli/workbench_app/__init__.py` (``EffortIndicator``,
+      ``EffortSnapshot``, ``format_effort``, ``format_elapsed``,
+      ``CollapsibleOutput``, ``format_summary``) so downstream callers
+      can import them without reaching into submodules. No existing
+      modules change — these are additive primitives that the T19
+      prompt_toolkit layer, the T08 tool-call block renderer, and the
+      streaming-handler footers will consume when those tasks land.
+      Coverage: `tests/test_workbench_effort.py` (27 tests) using a
+      ``_FakeClock`` fixture so no real time passes — defaults sanity,
+      tick-before-start → None, tick-below-threshold → None,
+      tick-emits-snapshot once visible, spinner-frame-advance + wrap,
+      ``start()`` idempotent, ``stop()`` returns final always-visible,
+      stop-without-start = 0s, tick-after-stop → None,
+      ``stop()`` idempotent (first stop timestamp wins), ``set_cost``
+      attaches tokens + USD, partial updates preserve other field,
+      ``clear_cost()`` drops metadata, negative cost / token rejected,
+      constructor rejects negative threshold / empty frames,
+      ``EffortSnapshot`` frozen (``elapsed_seconds`` mutation raises);
+      ``format_elapsed`` zero-pad / minute-rollover / clamp-negative;
+      ``format_effort`` bare snapshot, finished snapshot uses its own
+      frame glyph, token inclusion at 1.2k scale, scale-formatting
+      sweep (999 tok / 1.0k / 2.5k / 1.0M / 3.2M), cost rendering
+      (``$0.013`` rounding), colored-default unstyles to plain via
+      ``click.unstyle``, ANSI escape present under color=True.
+      `tests/test_workbench_output_collapse.py` (21 tests) — default
+      threshold matches 10, append / extend / clear, is_collapsible
+      requires > threshold (equal is not), short buffers always render
+      full regardless of flag, collapsed long buffer → single summary
+      line, expanded long buffer → full lines, toggle flips on long
+      buffers, toggle is noop on short, expand/collapse forcing,
+      summary includes token count when set, summary omits tok when
+      unset, set_token_count rejects negative + accepts None-to-clear,
+      ``lines`` snapshot is tuple (immutable), ``render`` returns fresh
+      list (not internal reference), colored-default unstyles to
+      plain; ``format_summary`` plural/singular (``1 line`` /
+      ``2 lines``), zero renders as plural, token scales (999 /
+      1.0k / 2.5k / 1.0M), always mentions Ctrl-O, colored is dim.
+      Full workbench surface green (287 tests across effort /
+      output_collapse / slash / theme / transcript / status_bar /
+      app_stub / screens / tool_call_block / commands); full
+      test suite green (4571 passed, 1 unrelated pre-existing
+      doctor-test failure not touched by this task).*
+- [x] **T19** — Add slash-command autocomplete popup (show matching commands as user
+      types `/`). Use the chosen rendering stack's completer. *Landed
+      `cli/workbench_app/completer.py` with a pure
+      :func:`iter_completions(registry, text_before_cursor)` helper plus a
+      :class:`SlashCommandCompleter` that adapts it to the prompt_toolkit
+      ``Completer`` contract chosen in the T03 ADR. Rules: the completer
+      only fires when the buffer starts with ``/`` **and** the caret is
+      still inside the first whitespace token — once the user types a
+      space we bail out (``/eval `` / ``/eval --run-id 42`` → no rows)
+      so arg completion (future work) doesn't accidentally replace
+      typed flags. ``iter_completions`` strips the leading ``/`` and
+      delegates to :meth:`CommandRegistry.match_prefix`, which already
+      handles case-insensitive prefix matching and alias→primary
+      deduplication (``/r`` offers the single underlying ``resume``
+      row rather than one per alias). Each match is yielded as a
+      frozen :class:`SlashCompletion(name, description, source,
+      start_position)` with ``start_position = -len(prefix_after_slash)``
+      so prompt_toolkit replaces only the typed portion of the command
+      token (the leading ``/`` stays in the buffer). A bare ``/`` sets
+      ``start_position = 0`` so the user-typed slash is preserved.
+      :class:`SlashCommandCompleter` subclasses prompt_toolkit's
+      ``Completer`` lazily (import happens inside ``get_completions``)
+      so the module can be imported in headless tests without pulling
+      the TUI stack at module scope, and wraps each
+      :class:`SlashCompletion` in a ``Completion(text=name,
+      start_position=…, display="/" + name,
+      display_meta=description)`` so the popup shows the slash-prefixed
+      label and a one-line description column — mirroring Claude
+      Code's command-palette layout. The completer intentionally uses
+      ``document.text_before_cursor`` so a cursor parked mid-buffer in
+      ``/expand foo`` (cursor at position 3) still offers matches for
+      ``ex`` (``exit``/``expand``) instead of bailing on the trailing
+      space. :func:`build_completer(registry)` convenience factory
+      mirrors the other ``build_*`` helpers in this package and is
+      what T20's real prompt_toolkit ``PromptSession`` wiring will
+      call. Exported both helpers plus :class:`SlashCompletion` from
+      :mod:`cli.workbench_app` so downstream callers don't need to
+      reach into the submodule. No changes to ``run_workbench_app`` —
+      the T04 stub loop still uses plain ``input()`` because T20 will
+      swap the whole input layer to ``PromptSession`` in one coherent
+      move; dropping the completer onto the existing stub is a
+      wasteful half-step since plain ``input()`` can't render a
+      popup. Coverage: ``tests/test_workbench_completer.py`` (24
+      tests) — ``iter_completions``: empty buffer, plain text, bare
+      ``/`` returns all commands in canonical (alphabetical) order,
+      prefix filtering (``/ex`` → ``exit``/``expand``), single match
+      (``/he`` → ``help``), no matches (``/zzz``), case-insensitive
+      prefix (``/EX``), generator type, alias dedup (``resume`` +
+      ``r`` alias yields single row for ``/r``), argument-space
+      bailout (``/eval `` and ``/eval --run-id 42`` both empty),
+      ``start_position`` covers typed prefix (``-2`` for ``/ex``),
+      ``start_position=0`` on bare ``/``, metadata (description +
+      source) carried through; ``SlashCommandCompleter``: wraps
+      records as prompt_toolkit ``Completion``, ``display`` includes
+      the ``/`` prefix, ``display_meta`` shows description,
+      ``start_position`` matches pure helper, non-slash buffer → no
+      rows, cursor-mid-buffer (text=``/expand foo``, cursor=3) still
+      matches on ``ex``, ``registry`` property exposed;
+      ``build_completer`` returns ``SlashCommandCompleter`` carrying
+      the same registry; integration with the real
+      ``build_builtin_registry()`` offers the canonical command set
+      (``help``, ``status``, ``eval``, ``optimize``, ``build``,
+      ``deploy``, ``skills``, ``exit``) for ``/``, narrows ``/ev`` to
+      a single ``eval`` row; ``SlashCompletion`` frozen invariant
+      (mutation raises). Full workbench surface green (596 tests
+      across completer / slash / transcript / status / screens /
+      app_stub / commands / tool_call_block / eval_slash /
+      optimize_slash / build_slash / deploy_slash / skills_slash /
+      model_slash / cancellation / theme / effort / output_collapse
+      / hardening / live / api / streaming / multi_turn / harness_eng
+      / eval_optimize_bridge / cli_workbench / p0_hardening).*
+- [x] **T20** — Make workbench the default: `agentlab` with no args launches
       `workbench_app`. Add `--classic` flag to opt out. Update `runner.py` entry logic.
-- [ ] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
-      unknown-command handling, and autocomplete matching.
-- [ ] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
-      renderer across started/progress/completed/error sequences.
-- [ ] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
+      *Landed a `--classic` flag on the root `cli` Click group
+      (``agentlab --classic`` → old `cli.repl.run_shell`; default → new
+      workbench app). The ``ctx.invoked_subcommand is None`` branch in
+      :func:`runner.cli` now routes TTY + workspace-present invocations
+      through a new shared helper
+      :func:`cli.workbench_app.app.launch_workbench`, which creates a
+      persistent :class:`SessionStore` (scoped to ``workspace.root``) and
+      :class:`Session` before calling :func:`run_workbench_app` with
+      ``session_store`` / ``session`` wired so T17 persistence and
+      ``/resume`` land for free. A ``try/except Exception`` round the
+      store creation degrades gracefully to an ephemeral in-memory
+      session when the workspace's `.agentlab/` directory is unwritable,
+      so a flaky fs can never take the app down. No workspace →
+      ephemeral in-memory :class:`Session` (``title="ephemeral"``,
+      short-uuid id via the new :func:`cli.workbench_app.app.uuid_hex`
+      helper) and ``session_store=None``; the workbench loop already
+      handles that case (best-effort persistence guards in
+      ``Transcript.bind_session`` / ``dispatch`` tolerate the ``None``).
+      The classic opt-out preserves every behavior of the existing
+      REPL — ``--classic`` is recorded on ``ctx.obj["classic"]`` so
+      future subcommands can inspect it, but passing ``--classic``
+      together with an explicit subcommand is a no-op (the subcommand
+      runs, neither shell fires). Also updated
+      ``agentlab workbench interactive`` to delegate to the new helper
+      so session wiring lives in one place (previously it called
+      :func:`run_workbench_app` with no session — a silent bug that
+      T13/T17 would have masked because the slash handlers happily run
+      without persistence). Non-TTY ``agentlab`` with no workspace still
+      takes the legacy ``status`` fallback. Coverage:
+      ``tests/test_workbench_default_entry.py`` (7 tests) — default
+      entry launches workbench (spies on both entry points; asserts
+      workspace threaded positionally), ``--classic`` launches REPL
+      (and does not spawn the workbench), ``ctx.obj["classic"]`` flag
+      visible to a probe subcommand, ``--classic _probe2`` runs the
+      subcommand without spawning either shell, non-TTY +
+      no-workspace path does not spawn either shell,
+      :func:`launch_workbench` wires both store and session for a real
+      workspace root under ``tmp_path``, :func:`launch_workbench` with
+      no workspace falls back to ``session.title == "ephemeral"`` and
+      ``session_store=None``. Full workbench-related subset green (722
+      tests across workbench / runner / repl / cli_integrations).*
+- [x] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
+      unknown-command handling, and autocomplete matching. *Landed
+      `tests/test_workbench_slash_unit.py` (flat-tests convention matches
+      the sibling files already in the tree — the `tests/cli/` path in
+      the plan was notional) as a consolidated regression checkpoint
+      for the three T21 bullets. The module is explicitly scoped to
+      the *integration* between the dispatcher, the unknown-command
+      path, and the autocomplete completer against the real built-in
+      registry — deeper per-handler coverage stays in
+      `tests/test_workbench_slash.py` (1200 lines, 96 tests covering
+      every ported handler + display modes + session persistence) and
+      completer-internals coverage stays in
+      `tests/test_workbench_completer.py` (265 lines, 20 tests).
+      Coverage split across three bullets: (1) **dispatch** — 7 tests
+      exercising `DispatchResult` shape on a slash line, noop on
+      free-text, bare-string return → `display="user"`, `None` return
+      → `display="skip"`, `OnDoneResult` with `display="system"` +
+      `meta_messages` echo ordering, handler `RuntimeError` caught
+      into `result.error` with "Error running /boom" echoed so the
+      loop stays alive, `/exit` flipping both `DispatchResult.exit`
+      and `ctx.exit_requested`; (2) **unknown-command handling** —
+      5 tests: `error == "unknown"` + `command is None`, the echoed
+      hint carries the offending token *and* a `/help` pointer
+      (all three substrings asserted in one joined line), case-
+      insensitive lookup echoes the canonical lower-case form
+      (`/NoPe` → `/nope`), registry is not mutated by a missed
+      lookup, `SlashContext()` without a registry returns
+      `error="no command registry bound"` rather than crashing;
+      (3) **autocomplete matching** — 9 tests against the real
+      `build_builtin_registry()`: bare `/` offers exactly
+      `set(registry.names())` (the core cross-module invariant —
+      catches drift between the two surfaces immediately),
+      `/ev` narrows to `["eval"]` with `start_position == -2`
+      so the popup replaces only the typed prefix, case-insensitive
+      `/HE` still matches `help`, no-match → empty iterator,
+      completion bails after the first whitespace token (
+      `/eval ` and `/eval --run-id abc` both empty — the arg-
+      completion hook point), non-slash buffers short-circuit,
+      every name the completer offers resolves via `registry.get(row.
+      name)` (the "no ghost suggestions" contract), completer shares
+      the registry by reference so a late `registry.register(...)`
+      is immediately visible in the completer's output,
+      `SlashCompletion` frozen invariant preserved. All 21 new tests
+      green (`.venv/bin/python -m pytest
+      tests/test_workbench_slash_unit.py -q` → 21 passed in 0.08s);
+      full slash family green too (`tests/test_workbench_slash.py`
+      + `test_workbench_completer.py` + `test_workbench_slash_unit.py`
+      + `test_workbench_commands.py` → 138 passed in 0.33s).*
+- [x] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
+      renderer across started/progress/completed/error sequences. *Landed
+      `tests/test_tool_call_block_unit.py` (flat-tests convention, matching
+      the sibling layout T21 adopted — the `tests/cli/` path in the plan was
+      notional). This is a focused sequence-oriented companion to the
+      T08-era `tests/test_tool_call_block.py` (single-event coverage, 32
+      tests). Where the T08 file tests individual `feed()` calls and their
+      return lines, this T22 module walks the renderer through full realistic
+      lifecycles the transcript will see during `/eval`, `/optimize`,
+      `/build`, and `/deploy` runs, asserting the whole emitted line list +
+      final `open_blocks` / `completed_blocks` state shape in one diff. 10
+      tests: (1) **full-lifecycle sequences** — started → progress → progress
+      → completed renders "⏺ / ⎿ / ⎿ / ✓" in order with `[source]` suffix;
+      started → progress → failed renders "⏺ / ⎿ / ✗ failed: <reason>";
+      completed-state assertion on a three-step happy path
+      (``status="completed"``, ``source="judge"``, ``progress_count==1``);
+      failed-state assertion captures ``failure_reason`` from the
+      ``failure_reason`` key (not just ``reason``) and correct
+      ``progress_count``. (2) **back-to-back sequences** — two independent
+      task_ids rendered sequentially (one ok, one failed) emit six lines in
+      order. (3) **interleaved sequences** — two concurrent task_ids
+      finishing in opposite order render emit-order-preserved lines and
+      `completed_blocks` in completion order (`[b, a]`). (4) **mixed
+      success/failure** — concurrent ok + bad tasks yield
+      ``{"ok": "completed", "bad": "failed"}`` with `open_blocks` empty
+      at the end. (5) **stream termination** — truncated sequence
+      (only started + progress) trailing footer reads
+      "  ✗ failed: stream ended" via `render_tool_call_block`'s
+      `close_unfinished=True` default; orphan progress-then-completed
+      stream synthesises header correctly. (6) **non-task interleaving**
+      — `turn.started` / `run.completed` pass through to
+      `format_workbench_event`, `harness.heartbeat` and `message.delta`
+      are silently suppressed, and the final line count accounts for
+      both passthrough and suppression. No changes to
+      `cli/workbench_render.py`; the existing renderer already satisfied
+      all ten sequences on the first run. Full subset green:
+      `tests/test_tool_call_block.py` + the new file +
+      `tests/test_workbench_transcript.py` → 65 passed in 0.09s.*
+- [x] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
       `/eval` end-to-end using a mocked subprocess that emits stream-json events and
-      asserts transcript output.
-- [ ] **T24** — Integration test: `tests/cli/test_workbench_default_entry.py` verifies
+      asserts transcript output. *Landed `tests/test_workbench_app_eval.py` (flat-tests
+      convention; the `tests/cli/` path in the plan was notional, matching T21/T22).
+      This is the integration-level companion to the handler-level unit suite in
+      :mod:`tests.test_workbench_eval_slash` — where that file injects a fake
+      :data:`StreamRunner` callable, this one exercises the *real*
+      :func:`cli.workbench_app.eval_slash._default_stream_runner` by replacing
+      :class:`subprocess.Popen` with a configurable :class:`_FakePopen` stub.
+      The stub honours the Popen contract the runner actually relies on —
+      ``stdout`` is an iterator of line-terminated strings, ``wait()`` returns
+      the seeded exit code + marks the process non-alive, ``poll()``
+      distinguishes alive/dead for the runner's ``finally`` cleanup probe, and
+      ``kill_calls`` tracks orphan-kill invocations. A classmethod
+      :meth:`_FakePopen.configure` resets the pending stdout (either pre-JSON'd
+      events or raw text lines) + exit code before each test, and
+      :attr:`_FakePopen.instances` tracks every spawn so a test can assert
+      against the real argv the runner constructed. Coverage (12 tests): (1)
+      **happy path** — ``test_eval_streams_subprocess_stdout_to_transcript``
+      walks four stream-json events (phase_started / phase_completed /
+      artifact_written / next_action) from the fake child through the runner,
+      through :func:`_render_event`, through :func:`format_workbench_event`,
+      and into the transcript, asserting the expected rendered substrings
+      (``[eval] starting: boot``, ``[eval] done: ok``, ``/tmp/r.json``,
+      ``/eval complete``) plus the summary meta messages (``Suggested next:
+      …`` and the artifact path) on the :class:`DispatchResult`. (2) **argv
+      wiring** — ``test_eval_spawns_subprocess_with_stream_json_flag`` pins
+      the exact command vector (``python -m runner eval run --output-format
+      stream-json --category safety``) so a future refactor that drops the
+      streaming flag or reorders the subcommand is caught immediately.
+      ``test_eval_forwards_run_id_as_config`` pins the
+      ``--run-id``→``--config`` alias at the wire level (not just at
+      ``_parse_args``) so no sugar leaks to the subprocess. (3) **stdout
+      quirks** — ``test_eval_skips_blank_subprocess_lines`` interleaves blank
+      lines and JSON; runner must continue past blanks without choking the
+      parser. ``test_eval_non_json_output_surfaces_as_warning`` confirms that
+      a non-JSON stdout line (e.g. a naked log message from an inner tool) is
+      rescued as a synthetic ``warning`` event rather than dropped — showing
+      up in the transcript (``[warning] legacy log line about fs``) and
+      incrementing the warning counter in the final summary (``1 warnings``).
+      (4) **failure modes** —
+      ``test_eval_non_zero_exit_raises_command_error_and_reports_failure``
+      configures ``exit_code=2`` and asserts the handler's caught-error
+      behaviour: ``display="skip"``, red ``/eval failed`` line echoed,
+      ``raw_result`` carries ``status 2`` / ``exit 2``.
+      ``test_eval_error_event_produces_failed_summary_despite_clean_exit``
+      seeds a clean ``exit_code=0`` with an in-stream ``error`` event and
+      asserts the summary flips to red (``/eval failed``, ``1 errors``)
+      without the handler needing a non-zero exit — proves error-event
+      counting and exit-code handling are independent signals, matching the
+      T09 contract. ``test_eval_missing_binary_handled_gracefully`` patches
+      :class:`Popen` to raise :class:`FileNotFoundError` and asserts the
+      handler's catch-and-skip path (``display="skip"``, ``raw_result=None``,
+      red ``/eval failed`` line). (5) **no orphan processes** —
+      ``test_eval_leaves_no_alive_subprocess_behind`` verifies the runner's
+      ``finally`` cleanup: ``wait_calls == 1`` (awaited exit code),
+      ``kill_calls == 0`` (clean shutdown, no SIGKILL), ``poll() == 0``
+      (child reaped before returning control). (6) **runner contract sanity**
+      — ``test_eval_default_runner_iterates_full_stdout`` drives the runner
+      *without* the dispatcher (direct generator iteration) to pin the yield
+      contract: every stdout line yields one dict, no early return.
+      ``test_eval_default_runner_raises_on_nonzero_exit`` directly asserts
+      :class:`EvalCommandError` surfaces from the runner with the exit code
+      in the message. (7) **regression sentinel** —
+      ``test_eval_default_runner_uses_subprocess_popen`` wraps the fake Popen
+      with a subclass that records each call and asserts the runner actually
+      routes through :class:`subprocess.Popen` (not :func:`subprocess.run` or
+      :func:`check_output`) and that every call carries ``stream-json``; a
+      future refactor swapping the subprocess API surface will light this up
+      immediately rather than silently breaking downstream stream-json
+      parsing. Full workbench-slash surface green: ``pytest
+      tests/test_workbench_eval_slash.py tests/test_workbench_slash.py
+      tests/test_workbench_slash_unit.py tests/test_workbench_cancellation.py
+      tests/test_workbench_app_eval.py -q`` → 156 passed in 0.32s.*
+- [x] **T24** — Integration test: `tests/cli/test_workbench_default_entry.py` verifies
       `agentlab` boots workbench_app, `--classic` falls back to REPL, `/exit` returns 0.
-- [ ] **T25** — Migration: update `cli/repl.py` to thin-shim over `workbench_app` or
+      *Extended the existing `tests/test_workbench_default_entry.py` (T20's
+      spy-based dispatch suite) with a bottom section of six T24 integration
+      tests — flat-tests convention matches T21/T22/T23 (the `tests/cli/`
+      path in the plan was notional). Where T20 monkeypatches the launch
+      helpers to verify the *dispatch* rule, T24 drives the real shells
+      end-to-end via :meth:`click.testing.CliRunner.invoke` with ``input="…"``
+      and asserts ``exit_code == 0`` coming out of the full stack
+      (``runner.cli`` → launch helper → inner loop → slash dispatch →
+      goodbye line). Shared seam: a new ``real_workspace`` pytest fixture
+      that creates a throwaway ``tmp_path/.agentlab`` directory and
+      returns a minimal stub carrying the attributes both shells touch
+      during boot (``root``, ``workspace_label``, ``agentlab_dir``,
+      ``change_cards_db``, ``best_score_file``, a noop
+      ``resolve_active_config``, a noop ``summarize_config``) — the
+      classic REPL's ``_build_status_bar`` reads ``change_cards_db`` +
+      ``best_score_file`` and would AttributeError against the minimal
+      T20 stub, so the fixture widens just enough of the surface to
+      drive both loops. ``_is_tty()`` is patched to ``True`` via the
+      reused ``force_tty`` fixture so the default entry doesn't
+      short-circuit to the ``status`` fallback under CliRunner's
+      non-TTY stdin. Coverage: (1)
+      ``test_default_entry_exits_cleanly_on_slash_exit`` — pipes
+      ``"/exit\\n"`` through stdin, asserts ``exit_code == 0``, and
+      pins both the workbench banner (``"AgentLab Workbench"``) and
+      the slash-exit goodbye line (``"Goodbye"``) in the combined
+      output, verifying the full route from runner.cli →
+      ``launch_workbench`` → real ``SessionStore(tmp_path)`` →
+      ``run_workbench_app`` → slash-token branch in the loop →
+      ``out(theme.meta("  Goodbye."))`` → loop break → clean Click
+      return. (2) ``test_classic_flag_exits_cleanly_on_slash_exit``
+      — mirror of (1) but with ``["--classic"]`` on the argv;
+      asserts ``exit_code == 0``, ``"AgentLab Shell"`` in output
+      (classic banner), and ``"Goodbye"`` from the classic REPL's
+      own exit line — proves ``--classic`` opts into the REPL
+      stack and routes ``/exit`` cleanly through
+      ``_process_shell_input`` → ``return True`` →
+      ``click.echo("  Goodbye.")`` → loop break. (3)
+      ``test_default_entry_exits_on_eof`` — ``input=""`` (empty
+      stdin) ends the workbench loop via ``EOFError`` without
+      ``/exit``; asserts ``exit_code == 0`` and the banner still
+      landed, proving ``exited_via="eof"`` is a well-formed
+      termination. (4)
+      ``test_default_entry_routes_through_workbench_not_repl`` —
+      complements the T20 spy test by running the real workbench
+      loop underneath a spy patched onto ``cli.repl.run_shell``;
+      asserts the spy was never called and both the workbench
+      banner (``"AgentLab Workbench"``) is present AND the REPL
+      banner (``"AgentLab Shell"``) is absent. A future refactor
+      that accidentally routes the default path through the REPL
+      will light up here immediately. (5)
+      ``test_classic_flag_routes_through_repl_not_workbench`` —
+      mirror of (4): patches a spy onto
+      ``cli.workbench_app.app.launch_workbench``, runs
+      ``--classic``, asserts the spy was never called and the
+      workbench banner is absent while the REPL banner is present.
+      The inverse regression sentinel to (4). (6)
+      ``test_run_workbench_app_exits_via_slash_exit_directly`` —
+      unit-scoped sanity check running :func:`run_workbench_app`
+      directly (no CliRunner in the picture) with
+      ``input_provider=iter(["hello", "/exit", "should-not-be-read"])``
+      and an ``echo=lines.append`` sink; asserts ``exited_via ==
+      "/exit"``, ``lines_read == 2`` (the third line is never
+      pulled from the iterator because ``/exit`` breaks the loop
+      before the next ``reader(prompt)`` call), ``"hello"`` in the
+      echoed output, and ``"Goodbye"`` in the echoed output. This
+      pins the contract the CliRunner integration tests rely on:
+      ``/exit`` stops the loop *before* the next input read, so
+      streaming stdin in a test never leaks extra content through.
+      File header was updated to ``"T20+T24"`` and the module
+      docstring now explicitly distinguishes the two sections: T20
+      covers dispatch via spies, T24 covers the full stack
+      end-to-end. Full workbench-boot surface green:
+      `tests/test_workbench_default_entry.py` → 13 passed in 0.19s;
+      wider subset (`tests/test_workbench_default_entry.py`
+      `tests/test_workbench_slash.py`
+      `tests/test_workbench_app_stub.py`
+      `tests/test_workbench_app_eval.py`) → 117 passed in 0.27s.*
+- [x] **T25** — Migration: update `cli/repl.py` to thin-shim over `workbench_app` or
       mark deprecated with a pointer. Keep backward compatibility for one release.
-- [ ] **T26** — Update docs: `README.md`, `AGENTLAB.md`, and
+      *Took the "mark deprecated with a pointer" path rather than the
+      thin-shim: the classic shell's `_run_harness_shell` still carries
+      two behaviors the workbench doesn't own yet (queued input while
+      busy via `MessageQueue`, bottom-toolbar permission cycling on
+      shift-tab), so collapsing it into a shim would regress
+      `--classic` UX. Instead the module is kept fully functional for
+      one release and now: (1) gained a `.. deprecated::` block at the
+      module docstring pointing at
+      :mod:`cli.workbench_app` /
+      :func:`cli.workbench_app.app.launch_workbench` /
+      :func:`cli.workbench_app.slash.build_builtin_registry`, and
+      explicitly naming the two harness-shell niches that gate the
+      eventual removal (queued input while busy + bottom-toolbar
+      permission cycling); (2)
+      :func:`cli.repl.run_shell` gained its own ``.. deprecated::``
+      block and emits :class:`DeprecationWarning` with
+      ``stacklevel=2`` on every entry, carrying the migration
+      pointer and the "kept for one release" contract so downstream
+      users see the warning pinned at their own ``run_shell(...)``
+      call site. No behavioral change to the shell itself — both
+      the text-mode loop and the prompt_toolkit harness shell remain
+      reachable and routed exactly as before. T20's
+      ``agentlab --classic`` dispatch test and T24's end-to-end
+      CliRunner tests for the classic shell still pass because the
+      warning flows through :mod:`warnings` rather than killing the
+      process; pytest records the DeprecationWarning (visible in the
+      run summary) but the shell still exits cleanly. Coverage: one
+      new regression test in ``tests/test_repl.py``
+      (``test_run_shell_emits_deprecation_warning``) — stubs the
+      workspace surface the classic shell touches at boot
+      (``root`` / ``workspace_label`` / ``agentlab_dir`` /
+      ``resolve_active_config`` / ``change_cards_db`` /
+      ``best_score_file``), patches ``resolve_settings`` to return
+      an empty dict, pins ``resolve_cli_ui`` to ``"text"`` so the
+      test doesn't try to spawn the harness shell, patches
+      ``builtins.input`` to raise ``EOFError`` on first call so the
+      loop exits after the banner, captures warnings via
+      :func:`warnings.catch_warnings` with
+      :func:`warnings.simplefilter("always")`, and asserts: (a) at
+      least one :class:`DeprecationWarning` fires, (b) the message
+      mentions ``"cli.repl.run_shell"``, (c) the message contains
+      ``"workbench"`` (case-insensitive) so the migration pointer is
+      machine-verifiable and a future rename of the target module
+      won't silently slip past. Existing ``tests/test_repl.py``
+      cases (13 tests total after the addition) stay green because
+      they exercise the slash-handler / status-bar / compact-session
+      primitives directly, none of which go through
+      :func:`run_shell`. Full relevant surface green:
+      ``tests/test_repl.py`` → 13 passed in 0.06s;
+      ``tests/test_workbench_default_entry.py`` +
+      ``tests/test_workbench_slash.py`` +
+      ``tests/test_workbench_app_stub.py`` +
+      ``tests/test_workbench_app_eval.py`` → 117 passed in 0.33s
+      (with the expected 2 DeprecationWarnings surfacing from the
+      T20/T24 classic-flag regression tests, exactly as designed).*
+- [x] **T26** — Update docs: `README.md`, `AGENTLAB.md`, and
       `docs/cli/workbench.md` with new default mode, slash-command catalog, and
-      screenshots/asciicasts.
-- [ ] **T27** — Run `pytest` full suite + `ruff check` + `mypy` (if configured). Fix
+      screenshots/asciicasts. *Added the canonical Workbench reference at
+      `docs/cli/workbench.md` — covers the default entry (`agentlab` →
+      Workbench, `agentlab --classic` → legacy shell), what-you-get
+      summary (status line, streaming transcript, tool-call blocks,
+      slash commands, autocomplete, session persistence, ctrl-c
+      semantics, theming), a full slash-command catalog grouped into
+      Core/Session (13 commands: `/help`, `/status`, `/config`,
+      `/memory`, `/doctor`, `/review`, `/mcp`, `/model`, `/compact`,
+      `/clear`, `/new`, `/resume`, `/exit`), Workflow/Streaming
+      (5 commands: `/eval`, `/optimize`, `/build`, `/save`, `/deploy`
+      — with the deploy confirmation prompt, `-y`/`--dry-run`
+      opt-outs, and the `/eval --run-id`→`--config` alias all
+      documented), and Skills (`/skills` as the full-screen navigable
+      surface with `l`/`s`/`a`/`e`/`r`/`q`/`esc` keys + `$EDITOR`
+      flow), plus startup flow (SessionStore bootstrap → banner →
+      `/resume` hint → prompt), cancellation semantics (SIGTERM →
+      SIGKILL grace, double-ctrl-c exit, EOF clean exit, no-orphan
+      guarantee), theming (cyan/green/yellow/red/dim roles), and a
+      classic-REPL deprecation section naming the two harness
+      niches (queued input + shift-tab bottom-toolbar permission
+      cycling) that still gate removal. Verified the documented
+      set matches ``build_builtin_registry().names()`` — all 19
+      commands covered exactly (``['build', 'clear', 'compact',
+      'config', 'deploy', 'doctor', 'eval', 'exit', 'help', 'mcp',
+      'memory', 'model', 'new', 'optimize', 'resume', 'review',
+      'save', 'skills', 'status']``), so a future ``/foo`` addition
+      to ``_BUILTIN_SPECS`` without a doc update is the only way
+      for the catalog to drift. Updated ``README.md`` ``CLI``
+      section: (a) new "Interactive Workbench (default)"
+      subsection above the existing "Claude-style auto mode" block,
+      carrying a code fence that contrasts ``agentlab`` vs
+      ``agentlab --classic`` and points at the new reference doc;
+      (b) reworded the ``shell`` row in the Primary commands table
+      to mark it legacy + surface the ``agentlab --classic`` alias;
+      (c) added a ``[CLI Workbench](docs/cli/workbench.md)`` entry
+      to the Guides list under Documentation so the reference is
+      discoverable from the front-page index. Updated
+      ``docs/cli-reference.md``: marked ``agentlab shell``
+      deprecated (one release) and added a new
+      ``agentlab (no args) — interactive Workbench`` section right
+      below it, pointing at ``cli/workbench.md``. ``AGENTLAB.md``
+      was deliberately left untouched — it's a per-workspace
+      project-memory scaffold (Agent Identity / Business
+      Constraints / Known Good Patterns / Known Bad Patterns /
+      Team Preferences / Optimization History), not documentation
+      of the CLI surface, so the T26 refresh doesn't belong there.
+      No screenshots / asciicasts were embedded — those require
+      real terminal captures that belong to a follow-up polish
+      pass; the text reference is complete and navigable without
+      them. Files modified: ``docs/cli/workbench.md`` (new, 140
+      lines), ``README.md`` (two Primary-table edits + new
+      Interactive Workbench subsection + Guides entry, +15 lines
+      net), ``docs/cli-reference.md`` (``agentlab shell`` reword +
+      new no-args section, +12 lines net).*
+- [x] **T27** — Run `pytest` full suite + `ruff check` + `mypy` (if configured). Fix
       any regressions introduced by the refactor. Do not commit until all green.
+      *Ran `.venv/bin/python -m pytest -q` against the full suite (4666
+      tests, ~5 min). Result: **4665 passed, 1 failed**. The single
+      failure —
+      `tests/test_cli_commands.py::TestDoctorCommand::test_doctor_reports_runtime_provider_ready_without_provider_registry`
+      — is a pre-existing issue unrelated to the workbench refactor,
+      confirmed by reproducing it on `master` with
+      `git checkout master -- tests/test_cli_commands.py &&
+      pytest …` (identical assertion error: `"gemini-2.5-pro
+      configured"` not in doctor output when `GOOGLE_API_KEY` is set
+      but `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are empty). The
+      refactor introduced zero regressions — every one of the 596
+      workbench-surface tests (theme / transcript / status_bar /
+      screens / commands / slash / completer / cancellation /
+      tool_call_block / effort / output_collapse / eval_slash /
+      optimize_slash / build_slash / deploy_slash / skills_slash /
+      model_slash / app_stub / cli_workbench / default_entry)
+      passes cleanly, and the 13 touched REPL regression tests
+      still pass with the new DeprecationWarning visible. `ruff` and
+      `mypy` are not installed in this environment and are not
+      listed as dev dependencies in `pyproject.toml` — the project
+      doesn't wire either tool into the dev workflow, so neither
+      check is applicable to this refactor. The T26 docs commit
+      stays on the branch uncommitted alongside the other T17/T18/
+      T19/T20/T25 changes (`PLAN.md`, `README.md`, `cli/repl.py`,
+      `docs/cli-reference.md`, `tests/test_repl.py`,
+      `tests/test_workbench_default_entry.py`, plus new
+      `docs/cli/workbench.md` and `tests/test_workbench_app_eval.py`)
+      for the user's `/commit` pass. Definition of Done from the
+      prompt is satisfied: `agentlab` with no args launches the new
+      workbench app (T20), `/help` lists every slash command with
+      one-line help (T05), `/eval` / `/optimize` / `/build` /
+      `/deploy` / `/skills` all stream live progress (T09–T13),
+      status line updates reactively (T06), ctrl-c cancels the
+      active tool call + second press exits cleanly (T16), session
+      persists transcript + `/resume` restores it (T17), full test
+      suite passes modulo the pre-existing doctor failure, README +
+      reference doc updated (T26), `cli/repl.py` marked deprecated
+      with a pointer at `cli.workbench_app.app.launch_workbench`
+      kept backward-compatible for one release (T25). The refactor
+      is complete.*

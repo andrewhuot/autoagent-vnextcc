@@ -17,8 +17,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Sequence
 
-import click
+import click  # noqa: F401
 
+from cli.workbench_app import theme
 from cli.workbench_app.screens.base import (
     ACTION_EXIT,
     EchoFn,
@@ -62,7 +63,7 @@ def _format_row(item: SkillItem, *, selected: bool) -> str:
     if item.description:
         line = f"{line} — {item.description}"
     if selected:
-        return click.style(f"▶{line[1:]}", fg="cyan", bold=True)
+        return theme.workspace(f"▶{line[1:]}")
     return line
 
 
@@ -100,7 +101,7 @@ class SkillsScreen(Screen):
 
     def render_lines(self) -> list[str]:
         if not self._items:
-            return [click.style("  (no skills installed)", dim=True)]
+            return [theme.meta("  (no skills installed)")]
         return [
             _format_row(item, selected=(i == self._cursor))
             for i, item in enumerate(self._items)
@@ -108,7 +109,7 @@ class SkillsScreen(Screen):
 
     def footer_lines(self) -> list[str]:
         hint = "  [j/k navigate · l list · s show · a add · e edit · r remove · q exit]"
-        return ["", click.style(hint, dim=True)]
+        return ["", theme.meta(hint)]
 
     def handle_key(self, key: str) -> ScreenResult | None:
         if key in _CANCEL_KEYS:
