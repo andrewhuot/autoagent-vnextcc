@@ -285,8 +285,71 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       errors, default runner wiring, meta-message artifact truncation to
       last 3, registry wiring, summary-dataclass frozen guard. Full
       workbench surface green (307 tests).*
-- [ ] **T11** — Add `/build [target]` slash command bound to
+- [x] **T11** — Add `/build [target]` slash command bound to
       `workbench build`/`workbench save` so users can iterate candidates inline.
+      *Landed `cli/workbench_app/build_slash.py` mirroring the T09/T10
+      streaming pattern, plus a companion `/save` local-command in
+      `cli/workbench_app/slash.py`. Two nuances distinguish `/build` from
+      its siblings: (a) it requires a positional `<brief>` argument —
+      missing input is rejected with a red transcript line and
+      `display="skip"` so no subprocess is spawned; (b) workbench
+      stream-json events use the nested `{event, data}` envelope (see
+      `builder/workbench_agent.py`) rather than the flat progress-event
+      shape, so `_event_payload(event)` unwraps `event["data"]` (with a
+      graceful fall-back to the flat envelope for malformed events)
+      before handing the payload to `format_workbench_event`. Frozen
+      `BuildSummary` tracks events, `task.completed` count,
+      `iteration.started` count, artifact paths from `artifact.updated`
+      (both nested `artifact.path` and flat `path`), warnings
+      (`progress.stall` + explicit `warning`), errors (explicit `error`
+      + `run.failed`), `run_status`
+      (`completed`/`failed`/`cancelled`), `run_version` captured from
+      `run.completed.version`, and `failure_reason` from
+      `run.failed.failure_reason` / `run.cancelled.cancel_reason`.
+      `_format_summary` renders `"/build complete (v004)"` green on
+      clean runs, `"/build failed"` red when any error was recorded or
+      `run_status == "failed"`, and `"/build cancelled"` red for
+      ctrl-c paths; singular vs plural `task`/`iteration` labels are
+      honoured. Meta messages surface `Reason: <failure_reason>`,
+      `Next: /save to materialize project <id>` on successful
+      completion, and the last three artifact paths.
+      `BuildCommandError` (non-zero exit) and `FileNotFoundError`
+      (missing binary) both render red failure lines and return
+      `display="skip"` so dispatch doesn't double-print; unparseable
+      subprocess output is rescued as a synthetic nested-envelope
+      `warning` event. `/save` is a thin local delegator that forwards
+      args verbatim to `agentlab workbench save` via the existing
+      `_run_click` invoker — sufficient today because `workbench save`
+      is a one-shot command without stream-json support.
+      `build_builtin_registry()` now wires `/save` under
+      `_BUILTIN_SPECS` (ported tier) and `/build` under
+      `include_streaming=True`, giving 14 default commands (15 with
+      extras). Updated the registry-contains test to expect
+      `{save, build}` in the name set, bumped the extras-length
+      assertion to 15, and added the `include_streaming=False` guard
+      that `"build" not in registry.names()` while `"save"` remains.
+      Coverage: `tests/test_workbench_build_slash.py` (25 tests) —
+      `_parse_args` pass-through, `_event_payload` nested/flat/
+      non-dict branches, `_render_event` nested-data rendering and
+      none-returns, `_summarise` counters across tasks/iterations/
+      artifacts/nested-artifact objects/`run.completed`/`run.failed`/
+      `run.cancelled`/explicit errors+warnings/newest-project-id-wins,
+      `_format_summary` green-with-version / singular task+iteration
+      labels / red on errors / red on `run.failed` without explicit
+      error count / cancelled label / artifact+warning listing,
+      handler integration via `dispatch()` — requires-brief guard
+      (no subprocess call), streams + summary + meta-with-project-id,
+      forwards flags verbatim after the brief, `BuildCommandError` →
+      skip with raw result, `FileNotFoundError` → skip with
+      `raw_result is None`, `run.failed.failure_reason` surfaced as
+      `Reason:` meta line without a `Next: /save` suggestion, artifact
+      meta capped to last three, default-runner wiring check,
+      `build_builtin_registry` wiring, frozen-dataclass guard. Plus
+      two `/save` delegation tests in `tests/test_workbench_slash.py`
+      (zero-args runs `"workbench save"`, flags forwarded). Full
+      workbench surface green (269 tests across build_slash/
+      optimize_slash/eval_slash/slash/transcript/status_bar/screens/
+      tool_call_block/commands/app_stub).*
 - [ ] **T12** — Add `/deploy [--strategy canary|immediate]` slash command bound to
       `deploy`. Require explicit confirm ("y/N") before execution.
 - [ ] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from

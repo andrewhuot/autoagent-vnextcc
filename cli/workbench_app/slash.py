@@ -185,6 +185,18 @@ def _handle_mcp(ctx: SlashContext, *_: str) -> str:
     return _run_click(ctx, "mcp status")
 
 
+def _handle_save(ctx: SlashContext, *args: str) -> str:
+    """Materialize the active Workbench candidate.
+
+    Thin delegator over ``agentlab workbench save``. Extra ``args`` are
+    forwarded as CLI flags (``--project-id``, ``--category``, ``--dataset``,
+    ``--split``, ``--generated-suite-id``) so users can steer save behaviour
+    from the transcript without leaving the REPL.
+    """
+    suffix = (" " + shlex.join(args)) if args else ""
+    return _run_click(ctx, "workbench save" + suffix)
+
+
 def _handle_config(ctx: SlashContext, *_: str) -> str:
     workspace = ctx.workspace
     if workspace is None:
@@ -266,6 +278,7 @@ _BUILTIN_SPECS: tuple[tuple[str, str, Callable[..., str | None]], ...] = (
     ("doctor", "Run workspace diagnostics", _handle_doctor),
     ("review", "Show pending review cards", _handle_review),
     ("mcp", "Show MCP integration status", _handle_mcp),
+    ("save", "Materialize the active Workbench candidate", _handle_save),
     ("compact", "Summarize session to .agentlab/memory/latest_session.md", _handle_compact),
     ("resume", "Resume the most recent session", _handle_resume),
     ("exit", "Exit the shell", _handle_exit),
@@ -296,11 +309,13 @@ def build_builtin_registry(
     if include_streaming:
         # Imported lazily to avoid pulling subprocess machinery into the
         # import path of callers that only want the basic registry.
+        from cli.workbench_app.build_slash import build_build_command
         from cli.workbench_app.eval_slash import build_eval_command
         from cli.workbench_app.optimize_slash import build_optimize_command
 
         registry.register(build_eval_command())
         registry.register(build_optimize_command())
+        registry.register(build_build_command())
     for command in extra:
         registry.register(command)
     return registry
