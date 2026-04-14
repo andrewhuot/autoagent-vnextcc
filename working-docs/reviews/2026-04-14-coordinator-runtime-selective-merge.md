@@ -83,3 +83,19 @@ Selective merge of Codex's stronger architectural ideas into Claude's landed coo
 | `builder/__init__.py` | +12 |
 | `api/server.py` | +9 |
 | `tests/test_builder_coordinator_runtime.py` | NEW (+158) |
+
+## Skeptic Pass Findings
+
+### CRITICAL (noted, not fixed here)
+1. **No auth on coordinator endpoints** — Consistent with all other builder endpoints (pre-existing pattern). Entire builder API lacks auth middleware. Not introduced by this merge; tracked as separate work.
+2. **Race condition in `_remember_run_on_task`** — Read-modify-write on `task.metadata["coordinator_run_ids"]` without locking. Low probability in single-user builder but should be addressed when concurrency is added.
+
+### WARN (one fixed)
+3. **Missing status index** — FIXED: Added `idx_builder_coord_runs_status` on `(status, created_at DESC)`.
+4. **Unvalidated plan_id after persist** — If plan was modified after initial persist, execution uses stale plan. Low risk since plans are immutable after creation in current flow.
+5. **No rollback on worker failure** — Completed workers' artifacts remain after partial failure. By design: partial state is useful for debugging and future resume support.
+
+### INFO (all clean)
+- TypeScript/Python type consistency: confirmed matching
+- Event emission: complete lifecycle coverage verified
+- SQL injection: all queries parameterized, no user input in string interpolation

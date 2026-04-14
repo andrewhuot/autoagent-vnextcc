@@ -398,6 +398,8 @@ class BuilderStore:
                     ON builder_coordinator_runs(root_task_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_builder_coord_runs_session
                     ON builder_coordinator_runs(session_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_builder_coord_runs_status
+                    ON builder_coordinator_runs(status, created_at DESC);
                 """
             )
             conn.commit()
