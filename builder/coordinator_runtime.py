@@ -6,6 +6,7 @@ worker lifecycle state, role-scoped outputs, events, and coordinator synthesis.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from builder.events import BuilderEventType, EventBroker
@@ -27,7 +28,12 @@ from builder.worker_adapters import (
     WorkerAdapterContext,
     normalize_worker_adapters,
 )
-from builder.worker_mode import DEFAULT_WORKER_MODE, WorkerMode, resolve_worker_mode
+from builder.worker_mode import (
+    DEFAULT_WORKER_MODE,
+    WorkerMode,
+    WorkerModeConfigurationError,
+    resolve_worker_mode,
+)
 
 
 class CoordinatorWorkerRuntime:
@@ -41,15 +47,23 @@ class CoordinatorWorkerRuntime:
         worker_adapters: dict[SpecialistRole, WorkerAdapter] | None = None,
         default_worker_adapter: WorkerAdapter | None = None,
         worker_mode: WorkerMode | None = None,
+        checkpoint_manager: Any | None = None,
     ) -> None:
         self._store = store
         self._orchestrator = orchestrator
         self._events = events
         self._worker_adapters = normalize_worker_adapters(worker_adapters)
-        self._worker_mode = worker_mode or resolve_worker_mode()
+        self._checkpoint_manager = checkpoint_manager
+        requested_mode = worker_mode
+        env_mode = str(os.environ.get("AGENTLAB_WORKER_MODE", "")).strip().lower()
+        env_requested_mode = requested_mode is None and env_mode in {WorkerMode.LLM.value, WorkerMode.HYBRID.value}
+        self._worker_mode = requested_mode or resolve_worker_mode()
         self._default_worker_adapter = (
             default_worker_adapter
-            or _build_default_adapter_for_mode(self._worker_mode)
+            or _build_default_adapter_for_mode(
+                self._worker_mode,
+                strict=requested_mode is not None or env_requested_mode,
+            )
         )
 
     @property
@@ -89,6 +103,7 @@ class CoordinatorWorkerRuntime:
             ],
         )
         run.updated_at = now_ts()
+        self._snapshot_before_execution(task, run)
         self._store.save_coordinator_run(run)
         self._remember_run_on_task(task, run)
         self._publish(
@@ -422,6 +437,23 @@ class CoordinatorWorkerRuntime:
         task.updated_at = now_ts()
         self._store.save_task(task)
 
+    def _snapshot_before_execution(
+        self,
+        task: BuilderTask,
+        run: CoordinatorExecutionRun,
+    ) -> None:
+        """Create a config checkpoint before any worker action runs."""
+        manager = self._checkpoint_manager
+        if manager is None:
+            return
+        record = manager.snapshot(reason=f"pre_execution:{run.run_id}")
+        if record is None:
+            return
+        task.metadata["pre_execution_checkpoint_version"] = record.version
+        task.metadata["pre_execution_checkpoint_filename"] = record.filename
+        task.updated_at = now_ts()
+        self._store.save_task(task)
+
     def _publish(
         self,
         event_type: BuilderEventType,
@@ -445,29 +477,57 @@ class CoordinatorWorkerRuntime:
         )
 
 
-def _build_default_adapter_for_mode(mode: WorkerMode) -> WorkerAdapter:
+def _build_default_adapter_for_mode(
+    mode: WorkerMode,
+    *,
+    strict: bool = False,
+) -> WorkerAdapter:
     """Return the default worker adapter for a given mode.
 
-    ``LLM`` falls back to deterministic when the router or provider config
-    cannot be built — the runtime must never refuse to start because of a
-    missing API key.
+    When ``strict`` is true (operator explicitly requested a non-default
+    mode), an unsatisfiable LLM configuration raises
+    :class:`WorkerModeConfigurationError` so the REPL surfaces a
+    ``/doctor``-actionable diagnostic instead of silently degrading to
+    deterministic output. Env-driven mode resolution stays permissive —
+    missing config simply keeps deterministic execution.
     """
 
     if mode == WorkerMode.LLM:
-        try:
-            from builder.llm_worker import LLMWorkerAdapter
-            from builder.model_resolver import resolve_harness_model
-            from optimizer.providers import LLMRouter, RetryPolicy
+        from builder.llm_worker import LLMWorkerAdapter
+        from builder.model_resolver import missing_credential_env, resolve_harness_model
+        from optimizer.providers import LLMRouter, RetryPolicy
 
-            resolution = resolve_harness_model("worker")
-            if resolution.config is None:
-                return DeterministicWorkerAdapter()
+        resolution = resolve_harness_model("worker")
+        if resolution.config is None:
+            if strict:
+                raise WorkerModeConfigurationError(
+                    "WorkerMode.LLM was requested but no worker model resolved "
+                    "from harness.models.worker or optimizer.models[0] "
+                    f"(resolver source: {resolution.source}). Run /doctor and "
+                    "add explicit provider + model keys to agentlab.yaml."
+                )
+            return DeterministicWorkerAdapter()
+        missing_env = missing_credential_env(resolution.config)
+        if missing_env:
+            if strict:
+                raise WorkerModeConfigurationError(
+                    "WorkerMode.LLM resolved "
+                    f"{resolution.source} ({resolution.config.provider}/{resolution.config.model}) "
+                    f"but {missing_env} is not set. Run /doctor to inspect provider settings."
+                )
+            return DeterministicWorkerAdapter()
+        try:
             router = LLMRouter(
                 strategy="single",
                 models=[resolution.config],
                 retry_policy=RetryPolicy(),
             )
             return LLMWorkerAdapter(router=router)
-        except Exception:  # pragma: no cover - defensive startup path
+        except Exception as exc:
+            if strict:
+                raise WorkerModeConfigurationError(
+                    f"Failed to construct LLMRouter for worker mode: {exc}. "
+                    "Run /doctor to inspect provider settings."
+                ) from exc
             return DeterministicWorkerAdapter()
     return DeterministicWorkerAdapter()

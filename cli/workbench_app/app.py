@@ -46,6 +46,7 @@ EchoFn = Callable[[str], None]
 
 DEFAULT_PROMPT = "› "
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q", "exit", "quit"})
+WORKFLOW_COMMANDS = frozenset({"build", "eval", "optimize", "deploy", "skills"})
 RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 """Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
 
@@ -329,6 +330,7 @@ def run_workbench_app(
             active_agent_runtime = None
     if ctx is not None and active_agent_runtime is not None:
         ctx.meta["agent_runtime"] = active_agent_runtime
+        ctx.coordinator_session = getattr(active_agent_runtime, "coordinator_session", None)
 
     lines_read = 0
     interrupts = 0
@@ -395,20 +397,45 @@ def run_workbench_app(
         # the echo fallback remains only for tests/embedders without a runtime.
         handled_as_slash = False
         if ctx is not None and line.startswith("/"):
-            from cli.workbench_app.slash import dispatch
+            from cli.workbench_app.slash import dispatch, parse_slash_line
 
-            result = dispatch(ctx, line)
-            if result.handled:
-                if ctx.exit_requested:
-                    exited_via = "/exit"
-                    break
-                _run_follow_up_turns(
+            parsed = parse_slash_line(line)
+            command_name = parsed[0] if parsed else ""
+            current_mode = (
+                getattr(prompt_state, "mode", None)
+                or _permission_mode_for_workspace(workspace)
+            )
+            if (
+                active_agent_runtime is not None
+                and command_name in WORKFLOW_COMMANDS
+                and _should_gate_with_plan(ctx, current_mode)
+            ):
+                args = parsed[1] if parsed else []
+                _run_plan_gated_turn(
                     runtime=active_agent_runtime,
                     ctx=ctx,
-                    result=result,
+                    line=" ".join(args).strip() or _default_workflow_message(command_name),
                     echo=out,
+                    reader=reader,
+                    command_intent=command_name,
                 )
                 handled_as_slash = True
+            else:
+                result = dispatch(ctx, line)
+                if result.handled:
+                    if ctx.exit_requested:
+                        exited_via = "/exit"
+                        break
+                    _run_follow_up_turns(
+                        runtime=active_agent_runtime,
+                        ctx=ctx,
+                        result=result,
+                        echo=out,
+                    )
+                    handled_as_slash = True
+            if ctx.exit_requested:
+                exited_via = "/exit"
+                break
 
         if not handled_as_slash:
             _persist_user_turn(
@@ -418,12 +445,25 @@ def run_workbench_app(
                 line=line,
             )
             if active_agent_runtime is not None:
-                _run_agent_turn(
-                    runtime=active_agent_runtime,
-                    ctx=ctx,
-                    line=line,
-                    echo=out,
+                current_mode = (
+                    getattr(prompt_state, "mode", None)
+                    or _permission_mode_for_workspace(workspace)
                 )
+                if _should_gate_with_plan(ctx, current_mode):
+                    _run_plan_gated_turn(
+                        runtime=active_agent_runtime,
+                        ctx=ctx,
+                        line=line,
+                        echo=out,
+                        reader=reader,
+                    )
+                else:
+                    _run_agent_turn(
+                        runtime=active_agent_runtime,
+                        ctx=ctx,
+                        line=line,
+                        echo=out,
+                    )
             else:
                 out(theme.user(f"  AgentLab received: {line}", bold=False))
 
@@ -509,6 +549,73 @@ def _run_agent_turn(
         pass
     for transcript_line in tuple(getattr(result, "transcript_lines", ()) or ()):
         echo(str(transcript_line))
+
+
+def _should_gate_with_plan(ctx: "SlashContext | None", mode: str | None) -> bool:
+    """Return True when the current turn must route through :class:`PlanGate`.
+
+    ``plan`` permission mode opts into approval-before-execution for every
+    free-text coordinator turn. Respects an explicit ``ctx.meta[\"skip_plan_gate\"] = True``
+    override so tests / embedders can short-circuit when they're driving
+    process_turn directly.
+    """
+    if ctx is not None and bool(ctx.meta.get("skip_plan_gate")):
+        return False
+    if not mode:
+        return False
+    return str(mode).lower() == "plan"
+
+
+def _run_plan_gated_turn(
+    *,
+    runtime: Any,
+    ctx: "SlashContext | None",
+    line: str,
+    echo: EchoFn,
+    reader: InputProvider,
+    command_intent: str | None = None,
+) -> None:
+    """Route one free-text turn through the plan-mode approval gate."""
+    try:
+        from cli.workbench_app.plan_gate import PlanGate
+    except Exception:  # pragma: no cover - defensive import
+        _run_agent_turn(runtime=runtime, ctx=ctx, line=line, echo=echo)
+        return
+
+    def _prompt(prompt_text: str) -> str:
+        try:
+            return reader(prompt_text)
+        except (EOFError, KeyboardInterrupt):
+            return "n"
+
+    gate = PlanGate(runtime, prompt_fn=_prompt, echo_fn=echo)
+    try:
+        outcome = gate.run(line, ctx=ctx, command_intent=command_intent)
+    except Exception as exc:
+        echo(theme.error(f"  Plan gate error: {exc}", bold=False))
+        return
+
+    if outcome.decision == "approved":
+        try:
+            from cli.workbench_app.runtime import remember_turn_result
+
+            remember_turn_result(ctx, outcome.result)
+        except Exception:  # pragma: no cover - metadata sync is best effort
+            pass
+        for transcript_line in tuple(getattr(outcome.result, "transcript_lines", ()) or ()):
+            echo(str(transcript_line))
+
+
+def _default_workflow_message(command_name: str) -> str:
+    """Return a useful prompt when a workflow slash command has no args."""
+    defaults = {
+        "build": "Build or refine the active agent.",
+        "eval": "Evaluate the active agent candidate and summarize failures.",
+        "optimize": "Optimize the agent from the latest eval evidence.",
+        "deploy": "Prepare a canary deployment and rollback plan.",
+        "skills": "Recommend build-time skills that would improve this agent.",
+    }
+    return defaults.get(command_name, "Continue the agent build.")
 
 
 def _run_follow_up_turns(

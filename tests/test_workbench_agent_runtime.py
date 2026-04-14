@@ -47,6 +47,32 @@ class _FakeTurnRuntime:
         )
 
 
+class _FakePlanRuntime:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str | None, bool]] = []
+
+    def process_turn(
+        self,
+        message: str,
+        *,
+        ctx: SlashContext | None = None,
+        command_intent: str | None = None,
+        dry_run: bool = False,
+    ):
+        self.calls.append((message, command_intent, dry_run))
+        return _FakeTurnResult(
+            transcript_lines=(
+                f"  {'planned' if dry_run else 'ran'} {command_intent}: {message}",
+            ),
+            active_tasks=0,
+        )
+
+
+@dataclass
+class _PromptState:
+    mode: str
+
+
 def test_free_text_routes_to_agent_runtime_instead_of_echoing() -> None:
     """Default Workbench text should become a coordinator turn, not an echo."""
     runtime = _FakeTurnRuntime()
@@ -66,6 +92,30 @@ def test_free_text_routes_to_agent_runtime_instead_of_echoing() -> None:
     assert "coordinator handled: I want to build my agent" in joined
     assert "AgentLab received" not in joined
     assert "1 task" in joined
+
+
+def test_plan_mode_gates_workflow_slash_commands() -> None:
+    """Workflow slash commands should wait for approval when mode is plan."""
+    runtime = _FakePlanRuntime()
+    lines, echo = _capture_echo()
+
+    result = run_workbench_app(
+        workspace=None,
+        input_provider=iter(["/build Add PII guardrail", "y", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        agent_runtime=runtime,
+        prompt_state=_PromptState(mode="plan"),
+    )
+
+    joined = click.unstyle("\n".join(lines))
+    assert result.exited_via == "/exit"
+    assert runtime.calls == [
+        ("Add PII guardrail", "build", True),
+        ("Add PII guardrail", "build", False),
+    ]
+    assert "planned build: Add PII guardrail" in joined
+    assert "ran build: Add PII guardrail" in joined
 
 
 def test_tasks_command_renders_latest_coordinator_turn() -> None:
@@ -88,6 +138,35 @@ def test_tasks_command_renders_latest_coordinator_turn() -> None:
     assert "task-fake" in joined
     assert "plan-fake" in joined
     assert "run-fake" in joined
+
+
+def test_tasks_command_renders_persisted_coordinator_session_state(tmp_path: Path) -> None:
+    """When a CoordinatorSession is attached, /tasks should show real tasks/runs."""
+    from cli.workbench_app.runtime import WorkbenchAgentRuntime
+
+    store = BuilderStore(db_path=str(tmp_path / "builder.db"))
+    runtime = WorkbenchAgentRuntime(
+        store=store,
+        orchestrator=BuilderOrchestrator(store=store),
+        events=EventBroker(),
+    )
+    ctx = SlashContext(registry=build_builtin_registry(include_streaming=False))
+    lines, echo = _capture_echo()
+
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["Build a support agent", "/tasks", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        slash_context=ctx,
+        agent_runtime=runtime,
+    )
+
+    joined = click.unstyle("\n".join(lines))
+    assert "Coordinator Tasks" in joined
+    assert "Recent tasks:" in joined
+    assert "Recent runs:" in joined
+    assert "Build agent" in joined
 
 
 def test_workbench_agent_runtime_creates_and_executes_coordinator_turn(tmp_path: Path) -> None:

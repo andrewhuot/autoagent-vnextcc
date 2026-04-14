@@ -75,6 +75,7 @@ class SlashContext:
     registry: CommandRegistry | None = None
     transcript: "Transcript | None" = None
     cancellation: CancellationToken | None = None
+    coordinator_session: Any | None = None
     exit_requested: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -690,9 +691,17 @@ def build_builtin_registry(
     # stub lister can re-register via ``extra=``.
     from cli.workbench_app.model_slash import build_model_command
     from cli.workbench_app.coordinator_slash import build_tasks_command
+    from cli.workbench_app.checkpoint_slash import (
+        build_checkpoint_command,
+        build_checkpoints_command,
+        build_rewind_command,
+    )
 
     registry.register(build_model_command())
     registry.register(build_tasks_command())
+    registry.register(build_checkpoint_command())
+    registry.register(build_rewind_command())
+    registry.register(build_checkpoints_command())
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,

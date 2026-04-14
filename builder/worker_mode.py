@@ -31,6 +31,16 @@ class WorkerMode(str, Enum):
     HYBRID = "hybrid"
 
 
+class WorkerModeConfigurationError(RuntimeError):
+    """Raised when the requested :class:`WorkerMode` is not satisfiable.
+
+    Explicit ``WorkerMode.LLM`` without a valid ``harness.models.worker``
+    entry must not silently degrade to deterministic — operators would
+    believe real workers were running. The runtime raises this error
+    instead, with a message that points to ``/doctor`` for diagnosis.
+    """
+
+
 DEFAULT_WORKER_MODE = WorkerMode.DETERMINISTIC
 """Fallback mode when no override is configured."""
 
@@ -57,5 +67,6 @@ def resolve_worker_mode(env: dict[str, str] | None = None) -> WorkerMode:
 __all__ = [
     "DEFAULT_WORKER_MODE",
     "WorkerMode",
+    "WorkerModeConfigurationError",
     "resolve_worker_mode",
 ]

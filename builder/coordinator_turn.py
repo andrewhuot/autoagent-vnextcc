@@ -67,8 +67,16 @@ class CoordinatorTurnService:
         session_id: str | None = None,
         command_intent: str | None = None,
         permission_mode: str | None = None,
+        dry_run: bool = False,
     ) -> CoordinatorTurnResult:
-        """Plan and execute one coordinator-managed user turn."""
+        """Plan and (when ``dry_run`` is false) execute one coordinator turn.
+
+        ``dry_run=True`` stops after the plan is persisted: the returned
+        :class:`CoordinatorTurnResult` has ``status="planned"``, no ``run_id``,
+        and a transcript describing the intended worker roster. This is the
+        foundation for plan-mode gating where the operator approves a plan
+        before workers act.
+        """
         cleaned = " ".join(str(message or "").split())
         if not cleaned:
             raise ValueError("Coordinator turn message cannot be empty")
@@ -97,8 +105,18 @@ class CoordinatorTurnService:
                 "command_intent": intent,
                 "permission_mode": permission_mode or "default",
                 "workbench_surface": "cli",
+                "dry_run": dry_run,
             },
         )
+        if dry_run:
+            return self._build_planned_result(
+                plan=plan,
+                task=task,
+                project=project,
+                session=session,
+                intent=intent,
+                message=cleaned,
+            )
         run = self._runtime.execute_plan(
             task_id=task.task_id,
             plan_id=str(plan["plan_id"]),
@@ -133,6 +151,63 @@ class CoordinatorTurnService:
                     for item in plan.get("tasks", [])
                     if isinstance(item, dict) and item.get("materialized_task_id")
                 ],
+            },
+        )
+
+    def _build_planned_result(
+        self,
+        *,
+        plan: dict[str, Any],
+        task: BuilderTask,
+        project: BuilderProject,
+        session: BuilderSession,
+        intent: str,
+        message: str,
+    ) -> CoordinatorTurnResult:
+        """Assemble a :class:`CoordinatorTurnResult` for a dry-run plan."""
+        worker_roles = tuple(
+            str(node.get("worker_role"))
+            for node in plan.get("tasks", [])
+            if isinstance(node, dict)
+            and node.get("worker_role")
+            and node.get("worker_role") != SpecialistRole.ORCHESTRATOR.value
+        )
+        plan_lines: list[str] = [
+            f"  Coordinator plan {plan['plan_id']} ready — {len(worker_roles)} worker"
+            f"{'' if len(worker_roles) == 1 else 's'} queued.",
+        ]
+        for node in plan.get("tasks", []):
+            if not isinstance(node, dict):
+                continue
+            role_value = node.get("worker_role")
+            if not role_value or role_value == SpecialistRole.ORCHESTRATOR.value:
+                continue
+            title = str(node.get("title") or role_value)
+            reason = str(node.get("routing_reason") or "").strip()
+            suffix = f" — {reason}" if reason else ""
+            plan_lines.append(f"  • {role_value.replace('_', ' ')}: {title}{suffix}")
+        plan_lines.append("  Approve with y to execute, n to abort, or edit to refine.")
+        return CoordinatorTurnResult(
+            message=message,
+            command_intent=intent,
+            project_id=project.project_id,
+            session_id=session.session_id,
+            task_id=task.task_id,
+            plan_id=str(plan["plan_id"]),
+            run_id="",
+            status="planned",
+            transcript_lines=tuple(plan_lines),
+            worker_roles=worker_roles,
+            active_tasks=0,
+            next_actions=(
+                "Reply y to run the plan as-is.",
+                "Reply n to abort; nothing will be written.",
+                "Reply edit: <annotation> to refine the goal and re-plan.",
+            ),
+            review_cards=(),
+            metadata={
+                "dry_run": True,
+                "worker_count": len(worker_roles),
             },
         )
 

@@ -22,6 +22,7 @@ to deterministic mode.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -62,6 +63,16 @@ def resolve_harness_model(
     models_section = _maybe_mapping(harness_section.get("models"))
     role_section = _maybe_mapping(models_section.get(role))
     if role_section:
+        if not _has_required_model_keys(role_section):
+            # Partial harness declarations must not silently inherit defaults:
+            # an operator who wrote `harness.models.worker.provider: anthropic`
+            # but forgot `model:` has a bug that should surface in /doctor,
+            # not in a confusing "why is gemini answering" moment later.
+            return ModelResolution(
+                role=role,
+                config=None,
+                source=f"harness.models.{role}.invalid",
+            )
         return ModelResolution(
             role=role,
             config=_to_model_config(role_section, default_role=role),
@@ -72,7 +83,7 @@ def resolve_harness_model(
     optimizer_models = optimizer_section.get("models")
     if isinstance(optimizer_models, list) and optimizer_models:
         first = _maybe_mapping(optimizer_models[0])
-        if first:
+        if first and _has_required_model_keys(first):
             return ModelResolution(
                 role=role,
                 config=_to_model_config(first, default_role=role),
@@ -80,6 +91,13 @@ def resolve_harness_model(
             )
 
     return ModelResolution(role=role, config=None, source="missing")
+
+
+def _has_required_model_keys(raw: dict[str, Any]) -> bool:
+    """Return True only when a model declaration has both provider and model."""
+    provider = str(raw.get("provider") or "").strip()
+    model = str(raw.get("model") or "").strip()
+    return bool(provider) and bool(model)
 
 
 def _load_config(
@@ -109,10 +127,22 @@ def _maybe_mapping(value: Any) -> dict[str, Any]:
 
 
 def _to_model_config(raw: dict[str, Any], *, default_role: str) -> ModelConfig:
-    """Build a :class:`ModelConfig` from a raw YAML mapping with defaults."""
+    """Build a :class:`ModelConfig` from a raw YAML mapping.
+
+    Caller MUST have already validated ``provider`` and ``model`` via
+    :func:`_has_required_model_keys`; this helper assumes the keys are
+    present and rejects blank values so bad configs never bake into
+    opaque ``""`` fields downstream.
+    """
+    provider = str(raw.get("provider") or "").strip()
+    model = str(raw.get("model") or "").strip()
+    if not provider or not model:
+        raise ValueError(
+            "Model declaration requires both 'provider' and 'model' keys."
+        )
     return ModelConfig(
-        provider=str(raw.get("provider") or "google"),
-        model=str(raw.get("model") or "gemini-2.5-flash"),
+        provider=provider,
+        model=model,
         role=str(raw.get("role") or default_role),
         api_key_env=raw.get("api_key_env"),
         base_url=raw.get("base_url"),
@@ -123,8 +153,34 @@ def _to_model_config(raw: dict[str, Any], *, default_role: str) -> ModelConfig:
     )
 
 
+def missing_credential_env(config: ModelConfig) -> str | None:
+    """Return the missing credential variable for ``config``, if required."""
+    provider = config.provider.strip().lower()
+    if provider in {"mock", "local"}:
+        return None
+    env_name = config.api_key_env or _default_api_key_env(provider)
+    if provider == "openai_compatible" and not env_name:
+        return None
+    if env_name and os.environ.get(env_name):
+        return None
+    return env_name
+
+
+def _default_api_key_env(provider: str) -> str | None:
+    """Return the conventional credential variable for known providers."""
+    provider_name = provider.strip().lower()
+    if provider_name == "openai":
+        return "OPENAI_API_KEY"
+    if provider_name == "anthropic":
+        return "ANTHROPIC_API_KEY"
+    if provider_name == "google":
+        return "GOOGLE_API_KEY"
+    return None
+
+
 __all__ = [
     "HarnessRole",
     "ModelResolution",
+    "missing_credential_env",
     "resolve_harness_model",
 ]

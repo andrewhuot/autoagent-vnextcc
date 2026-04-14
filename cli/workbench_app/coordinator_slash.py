@@ -50,13 +50,23 @@ def make_coordinator_handler(intent: str) -> Callable[..., OnDoneResult]:
 
     def _handle(ctx: SlashContext, *args: str) -> OnDoneResult:
         runtime = ctx.meta.get("agent_runtime")
-        if runtime is None:
+        session = ctx.coordinator_session or getattr(runtime, "coordinator_session", None)
+        if session is None and runtime is None:
             return on_done(
                 "  Coordinator runtime is not attached to this Workbench session.",
                 display="system",
             )
         message = " ".join(args).strip() or _default_message(intent)
-        result = runtime.process_turn(message, ctx=ctx, command_intent=intent)
+        if session is not None:
+            result = session.process_turn(
+                message,
+                project_id=_meta_str(ctx, "builder_project_id"),
+                session_id=_meta_str(ctx, "builder_session_id"),
+                command_intent=intent,
+                permission_mode=_meta_str(ctx, "permission_mode"),
+            )
+        else:
+            result = runtime.process_turn(message, ctx=ctx, command_intent=intent)
         remember_turn_result(ctx, result)
         return on_done(
             "\n".join(result.transcript_lines),
@@ -69,6 +79,9 @@ def make_coordinator_handler(intent: str) -> Callable[..., OnDoneResult]:
 
 def _handle_tasks(ctx: SlashContext, *_: str) -> OnDoneResult:
     """Render latest coordinator task state from session metadata."""
+    session = ctx.coordinator_session
+    if session is not None and hasattr(session, "tasks_snapshot"):
+        return on_done(_render_session_tasks(session.tasks_snapshot()), display="user")
     latest = ctx.meta.get("latest_coordinator_turn")
     if latest is None:
         return on_done(
@@ -106,6 +119,40 @@ def _handle_tasks(ctx: SlashContext, *_: str) -> OnDoneResult:
     return on_done("\n".join(lines), display="user")
 
 
+def _render_session_tasks(snapshot: dict[str, Any]) -> str:
+    """Render persisted task/run state from :class:`CoordinatorSession`."""
+    lines = [theme.heading("\n  Coordinator Tasks")]
+    project_id = str(snapshot.get("project_id") or "")
+    session_id = str(snapshot.get("session_id") or "")
+    if project_id:
+        lines.append(f"    Project: {project_id}")
+    if session_id:
+        lines.append(f"    Session: {session_id}")
+    lines.append(f"    Active runs: {int(snapshot.get('active_run_count') or 0)}")
+    tasks = list(snapshot.get("tasks") or [])
+    if tasks:
+        lines.append("")
+        lines.append("    Recent tasks:")
+        for task in tasks:
+            intent = task.get("command_intent") or "turn"
+            title = task.get("title") or task.get("task_id")
+            status = task.get("status") or "unknown"
+            lines.append(f"      • /{intent} {title} [{status}]")
+    runs = list(snapshot.get("runs") or [])
+    if runs:
+        lines.append("")
+        lines.append("    Recent runs:")
+        for run in runs:
+            lines.append(
+                "      • "
+                f"{run.get('run_id')} {run.get('status')} "
+                f"({run.get('worker_count', 0)} workers)"
+            )
+    if not tasks and not runs:
+        lines.append("    No coordinator tasks yet. Start with /build <what you want to make>.")
+    return "\n".join(lines)
+
+
 def _default_message(intent: str) -> str:
     """Return a useful default prompt when the slash command has no args."""
     defaults = {
@@ -125,6 +172,12 @@ def _attr(value: Any, name: str) -> str:
     else:
         raw = getattr(value, name, None)
     return "" if raw is None else str(raw)
+
+
+def _meta_str(ctx: SlashContext, key: str) -> str | None:
+    """Read a string metadata value from the slash context."""
+    value = ctx.meta.get(key)
+    return str(value) if value else None
 
 
 __all__ = [

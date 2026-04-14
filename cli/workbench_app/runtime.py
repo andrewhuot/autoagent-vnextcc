@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from builder.coordinator_runtime import CoordinatorWorkerRuntime
-from builder.coordinator_turn import CoordinatorTurnResult, CoordinatorTurnService
+from builder.coordinator_turn import CoordinatorTurnResult
 from builder.events import EventBroker
 from builder.orchestrator import BuilderOrchestrator
 from builder.store import BuilderStore
 from builder.worker_mode import WorkerMode, resolve_worker_mode
+from cli.workbench_app.coordinator_session import CoordinatorSession
 
 
 class WorkbenchAgentRuntime:
@@ -30,6 +31,7 @@ class WorkbenchAgentRuntime:
         events: EventBroker | None = None,
         coordinator_runtime: CoordinatorWorkerRuntime | None = None,
         db_path: str | None = None,
+        configs_dir: str | Path | None = None,
         worker_mode: WorkerMode | None = None,
     ) -> None:
         self._store = store or BuilderStore(db_path=db_path or ".agentlab/builder.db")
@@ -41,8 +43,9 @@ class WorkbenchAgentRuntime:
             orchestrator=self._orchestrator,
             events=self._events,
             worker_mode=self._worker_mode,
+            checkpoint_manager=_build_checkpoint_manager(configs_dir),
         )
-        self._service = CoordinatorTurnService(
+        self._coordinator_session = CoordinatorSession(
             store=self._store,
             orchestrator=self._orchestrator,
             events=self._events,
@@ -54,25 +57,38 @@ class WorkbenchAgentRuntime:
         """Return the :class:`WorkerMode` driving worker execution."""
         return self._worker_mode
 
+    @property
+    def coordinator_session(self) -> CoordinatorSession:
+        """Return the in-process coordinator session backing the Workbench."""
+        return self._coordinator_session
+
     def process_turn(
         self,
         message: str,
         *,
         ctx: Any | None = None,
         command_intent: str | None = None,
+        dry_run: bool = False,
     ) -> CoordinatorTurnResult:
-        """Run one terminal turn and synchronize context metadata."""
+        """Run one terminal turn and synchronize context metadata.
+
+        ``dry_run=True`` plans without executing — used by :class:`PlanGate`
+        to render the proposed worker roster before asking the operator
+        for approval.
+        """
         project_id = _meta_get(ctx, "builder_project_id")
         session_id = _meta_get(ctx, "builder_session_id")
         permission_mode = _meta_get(ctx, "permission_mode")
-        result = self._service.process_turn(
+        result = self._coordinator_session.process_turn(
             message,
             project_id=project_id,
             session_id=session_id,
             command_intent=command_intent,
             permission_mode=permission_mode,
+            dry_run=dry_run,
         )
-        remember_turn_result(ctx, result)
+        if not dry_run:
+            remember_turn_result(ctx, result)
         return result
 
 
@@ -82,7 +98,7 @@ def build_default_agent_runtime(workspace: Any | None) -> WorkbenchAgentRuntime:
     if root is None:
         return WorkbenchAgentRuntime()
     db_path = str(Path(root) / ".agentlab" / "builder.db")
-    return WorkbenchAgentRuntime(db_path=db_path)
+    return WorkbenchAgentRuntime(db_path=db_path, configs_dir=Path(root) / "configs")
 
 
 def remember_turn_result(ctx: Any | None, result: Any) -> None:
@@ -111,6 +127,18 @@ def _meta_get(ctx: Any | None, key: str) -> str | None:
         return None
     value = meta.get(key)
     return str(value) if value else None
+
+
+def _build_checkpoint_manager(configs_dir: str | Path | None) -> Any | None:
+    """Return a checkpoint manager when a workspace config directory is known."""
+    if configs_dir is None:
+        return None
+    try:
+        from cli.workbench_app.checkpoint import CheckpointManager
+
+        return CheckpointManager(configs_dir=configs_dir)
+    except Exception:
+        return None
 
 
 __all__ = [

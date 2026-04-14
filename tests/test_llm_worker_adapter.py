@@ -317,6 +317,19 @@ def test_resolve_harness_model_returns_missing_when_nothing_configured(tmp_path:
     assert resolution.source == "missing"
 
 
+def test_resolve_harness_model_rejects_incomplete_harness_model() -> None:
+    """Harness models must not inherit baked-in provider/model defaults."""
+    from builder.model_resolver import resolve_harness_model
+
+    resolution = resolve_harness_model(
+        "worker",
+        config={"harness": {"models": {"worker": {"provider": "anthropic"}}}},
+    )
+
+    assert resolution.config is None
+    assert resolution.source == "harness.models.worker.invalid"
+
+
 def test_coordinator_runtime_uses_deterministic_adapter_by_default(tmp_path: Path) -> None:
     """Default construction produces a deterministic-mode runtime."""
     store = BuilderStore(db_path=str(tmp_path / "runtime.db"))
@@ -330,16 +343,26 @@ def test_coordinator_runtime_uses_deterministic_adapter_by_default(tmp_path: Pat
     assert runtime.worker_mode == WorkerMode.DETERMINISTIC
 
 
-def test_coordinator_runtime_reports_llm_mode_when_requested(tmp_path: Path) -> None:
-    """Explicit WorkerMode.LLM is preserved even if provider config is missing."""
+def test_coordinator_runtime_errors_when_explicit_llm_mode_is_unconfigured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Explicit LLM mode should fail with a /doctor-actionable diagnostic.
+
+    Env-polluting tests in the suite can leave ``GOOGLE_API_KEY`` populated;
+    clear it here so the credential check fires deterministically.
+    """
+    from builder.worker_mode import WorkerModeConfigurationError
+
+    for var in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
+
     store = BuilderStore(db_path=str(tmp_path / "runtime.db"))
     orchestrator = BuilderOrchestrator(store=store)
 
-    runtime = CoordinatorWorkerRuntime(
-        store=store,
-        orchestrator=orchestrator,
-        events=EventBroker(),
-        worker_mode=WorkerMode.LLM,
-    )
-
-    assert runtime.worker_mode == WorkerMode.LLM
+    with pytest.raises(WorkerModeConfigurationError, match="/doctor"):
+        CoordinatorWorkerRuntime(
+            store=store,
+            orchestrator=orchestrator,
+            events=EventBroker(),
+            worker_mode=WorkerMode.LLM,
+        )
