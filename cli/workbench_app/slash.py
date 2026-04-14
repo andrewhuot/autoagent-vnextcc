@@ -139,6 +139,25 @@ def _default_click_invoker(command_path: str) -> str:
     return result.output.rstrip() if result.output else ""
 
 
+def _record_command(ctx: SlashContext, raw_line: str) -> None:
+    """Best-effort append of ``raw_line`` to the session command history.
+
+    No-op when either the session or the store is unbound. Failures from the
+    store are swallowed so a flaky filesystem can't take down the loop.
+    """
+    store = ctx.session_store
+    session = ctx.session
+    if store is None or session is None:
+        return
+    command = raw_line.strip()
+    if not command:
+        return
+    try:
+        store.append_command(session, command)
+    except Exception:  # pragma: no cover — defensive; best-effort persistence
+        pass
+
+
 def _run_click(ctx: SlashContext, command_path: str) -> str:
     """Run a click subcommand via the configured invoker, surfacing errors inline."""
     invoker = ctx.click_invoker or _default_click_invoker
@@ -219,18 +238,49 @@ def _handle_config(ctx: SlashContext, *_: str) -> str:
     )
 
 
-def _handle_resume(ctx: SlashContext, *_: str) -> str:
+def _handle_resume(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Resume a prior session — swap ctx.session and rehydrate the transcript.
+
+    Default: resume the most recently updated session on disk. An explicit
+    ``<session_id>`` argument loads that specific session instead. The
+    transcript (when bound) is cleared and repopulated from the loaded
+    session's persisted entries; the store binding rolls over so new
+    appends continue to write to the resumed session.
+    """
     store = ctx.session_store
     current = ctx.session
     if store is None:
-        return "  Sessions are not persisted — nothing to resume."
-    latest = store.latest()
-    if latest is None or (current is not None and latest.session_id == current.session_id):
-        return "  No previous session to resume."
-    return (
-        f"  Loaded session: {latest.title} ({latest.session_id})\n"
-        f"  Goal: {latest.active_goal or '(none)'}\n"
-        f"  Entries: {len(latest.transcript)}"
+        return on_done(
+            "  Sessions are not persisted — nothing to resume.", display="system"
+        )
+
+    requested_id = args[0] if args else None
+    target: Session | None
+    if requested_id is not None:
+        target = store.get(requested_id)
+        if target is None:
+            return on_done(
+                f"  No session with id {requested_id!r}.", display="system"
+            )
+    else:
+        target = store.latest()
+
+    if target is None or (current is not None and target.session_id == current.session_id):
+        return on_done("  No previous session to resume.", display="system")
+
+    ctx.session = target
+    if ctx.transcript is not None:
+        ctx.transcript.clear()
+        ctx.transcript.restore_from_session(target)
+        ctx.transcript.bind_session(target, store)
+
+    meta: list[str] = [
+        f"Session: {target.title or target.session_id} ({target.session_id})",
+        f"Goal: {target.active_goal or '(none)'}",
+        f"Entries restored: {len(target.transcript)}",
+    ]
+    return on_done(
+        "  Resumed previous session.", display="system", meta_messages=meta
     )
 
 
@@ -435,6 +485,8 @@ def dispatch(
     parsed = parse_slash_line(line)
     if parsed is None:
         return DispatchResult(handled=False)
+
+    _record_command(ctx, line)
 
     if active_registry is None:
         return DispatchResult(

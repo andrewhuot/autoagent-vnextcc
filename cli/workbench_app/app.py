@@ -12,14 +12,18 @@ into ``cli/workbench.py``.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable
+from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
+
+if TYPE_CHECKING:
+    from cli.sessions import Session, SessionStore
 
 
 InputProvider = Callable[[str], str]
@@ -34,6 +38,8 @@ EchoFn = Callable[[str], None]
 
 DEFAULT_PROMPT = "agentlab> "
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q"})
+RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
+"""Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
 
 
 @dataclass(frozen=True)
@@ -83,6 +89,53 @@ def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     echo("")
 
 
+def _format_age(seconds: float) -> str:
+    """Turn a delta in seconds into a compact "3h ago" style string."""
+    seconds = max(0.0, seconds)
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        minutes = int(seconds // 60)
+        return f"{minutes}m ago"
+    if seconds < RESUME_HINT_MAX_AGE_SECONDS:
+        hours = int(seconds // 3600)
+        return f"{hours}h ago"
+    days = int(seconds // 86400)
+    return f"{days}d ago"
+
+
+def resume_hint(
+    store: "SessionStore | None",
+    *,
+    current: "Session | None" = None,
+    max_age_seconds: float = RESUME_HINT_MAX_AGE_SECONDS,
+    now: float | None = None,
+) -> str | None:
+    """Return a one-line ``/resume`` tip when a recent previous session exists.
+
+    ``None`` when there's no store, no prior session, or the latest session
+    is older than ``max_age_seconds`` / is the current one. Used by the
+    startup banner; extracted as a pure helper so tests don't need to stand
+    up the full loop.
+    """
+    if store is None:
+        return None
+    try:
+        latest = store.latest()
+    except Exception:  # pragma: no cover — defensive
+        return None
+    if latest is None:
+        return None
+    if current is not None and latest.session_id == current.session_id:
+        return None
+    now_ts = time.time() if now is None else now
+    age = now_ts - (latest.updated_at or 0.0)
+    if age > max_age_seconds:
+        return None
+    title = latest.title or latest.session_id
+    return f"  Tip: /resume to continue \"{title}\" ({_format_age(age)})"
+
+
 def run_workbench_app(
     workspace: Any | None = None,
     *,
@@ -91,6 +144,8 @@ def run_workbench_app(
     prompt: str = DEFAULT_PROMPT,
     show_banner: bool = True,
     cancellation: CancellationToken | None = None,
+    session_store: "SessionStore | None" = None,
+    session: "Session | None" = None,
 ) -> StubAppResult:
     """Run the echo-only workbench stub loop.
 
@@ -121,6 +176,10 @@ def run_workbench_app(
 
     if show_banner:
         _render_banner(out, workspace)
+        hint = resume_hint(session_store, current=session)
+        if hint is not None:
+            out(click.style(hint, dim=True))
+            out("")
 
     token = cancellation if cancellation is not None else CancellationToken()
     lines_read = 0
@@ -189,9 +248,11 @@ def run_workbench_app(
 __all__ = [
     "DEFAULT_PROMPT",
     "EXIT_TOKENS",
+    "RESUME_HINT_MAX_AGE_SECONDS",
     "EchoFn",
     "InputProvider",
     "StubAppResult",
     "build_status_line",
+    "resume_hint",
     "run_workbench_app",
 ]

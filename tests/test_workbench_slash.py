@@ -420,7 +420,7 @@ def test_resume_handler_without_store(
 ) -> None:
     ctx = SlashContext(echo=echo, registry=registry)
     result = dispatch(ctx, "/resume")
-    assert "not persisted" in (result.output or "")
+    assert "not persisted" in click.unstyle(result.output or "")
 
 
 def test_resume_handler_with_only_current_session(
@@ -432,7 +432,7 @@ def test_resume_handler_with_only_current_session(
         echo=echo, registry=registry, session=session, session_store=store
     )
     result = dispatch(ctx, "/resume")
-    assert result.output == "  No previous session to resume."
+    assert click.unstyle(result.output or "") == "  No previous session to resume."
 
 
 def test_resume_handler_loads_older_session(
@@ -454,10 +454,16 @@ def test_resume_handler_loads_older_session(
         echo=echo, registry=registry, session=current, session_store=store
     )
     result = dispatch(ctx, "/resume")
-    assert result.output is not None
-    assert "older" in result.output
-    assert "ship it" in result.output
-    assert "Entries: 1" in result.output
+    assert result.raw_result is not None
+    assert "Resumed previous session" in click.unstyle(result.raw_result)
+    plain_meta = [click.unstyle(m) for m in result.meta_messages]
+    assert any("older" in m for m in plain_meta)
+    assert any("ship it" in m for m in plain_meta)
+    assert any("Entries restored: 1" in m for m in plain_meta)
+    # Session pointer swapped to the resumed session.
+    assert ctx.session is not current
+    assert ctx.session is not None
+    assert ctx.session.session_id == older.session_id
 
 
 def test_compact_handler_without_workspace(ctx: SlashContext) -> None:
@@ -982,3 +988,213 @@ def test_new_handler_omits_previous_meta_when_no_session_bound(
     # No "Previous session" line when ctx.session started as None.
     assert not any(line.startswith("Previous session:") for line in plain_meta)
     assert any(line.startswith("New session:") for line in plain_meta)
+
+
+# ---------------------------------------------------------------------------
+# T17 — session persistence + /resume restoration
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_persists_slash_command_to_history(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="persist-me")
+    ctx = SlashContext(
+        echo=echo, registry=registry, session=session, session_store=store
+    )
+
+    dispatch(ctx, "/help")
+    dispatch(ctx, "/status extra arg")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert reloaded.command_history[-2:] == ["/help", "/status extra arg"]
+
+
+def test_dispatch_skips_history_when_store_or_session_unbound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    # No store bound → no crash, no mutation on the in-memory session.
+    session = Session(session_id="x", title="")
+    ctx = SlashContext(echo=echo, registry=registry, session=session)
+    dispatch(ctx, "/help")
+    assert session.command_history == []
+
+
+def test_dispatch_does_not_record_non_slash_lines(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="quiet")
+    ctx = SlashContext(
+        echo=echo, registry=registry, session=session, session_store=store
+    )
+    result = dispatch(ctx, "just some free text")
+    assert result.handled is False
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert reloaded.command_history == []
+
+
+def test_dispatch_swallows_store_failure_on_command_append(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    class _BadStore:
+        def append_command(self, session: Session, command: str) -> None:
+            raise RuntimeError("disk full")
+
+    session = Session(session_id="abc", title="")
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=session,
+        session_store=_BadStore(),  # type: ignore[arg-type]
+    )
+    # Must not raise — persistence is best-effort.
+    result = dispatch(ctx, "/help")
+    assert result.handled is True
+
+
+def test_resume_handler_swaps_session_and_restores_transcript(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    older = store.create(title="older")
+    older.active_goal = "finish T17"
+    older.transcript.extend(
+        [
+            SessionEntry(role="user", content="hello", timestamp=1.0),
+            SessionEntry(role="assistant", content="hi", timestamp=2.0),
+            SessionEntry(role="tool", content="  running…", timestamp=3.0),
+        ]
+    )
+    store.save(older)
+    current = store.create(title="current")
+    older.updated_at = current.updated_at + 1
+    store.save(older)
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("throwaway line")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=current,
+        session_store=store,
+        transcript=transcript,
+    )
+
+    result = dispatch(ctx, "/resume")
+    assert result.display == "system"
+    # Session pointer swapped.
+    assert ctx.session is not None
+    assert ctx.session.session_id == older.session_id
+    # Transcript restored (throwaway line was wiped, 3 entries restored).
+    assert len(transcript) == 3
+    assert transcript.entries[0].role == "user"
+    assert transcript.entries[0].content == "hello"
+    assert transcript.entries[2].role == "tool"
+    # Transcript rebound to resumed session so future appends persist to it.
+    assert transcript.bound_session is ctx.session
+
+
+def test_resume_handler_accepts_explicit_session_id(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    first = store.create(title="first")
+    second = store.create(title="second")
+    # second is latest; resuming "first" by id should win.
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    result = dispatch(ctx, f"/resume {first.session_id}")
+    assert result.display == "system"
+    assert ctx.session is not None
+    assert ctx.session.session_id == first.session_id
+    # Sanity: default /resume would have picked second.
+    assert second.session_id != first.session_id
+
+
+def test_resume_handler_reports_unknown_session_id(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    store.create(title="existing")
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    result = dispatch(ctx, "/resume nope-missing")
+    assert result.display == "system"
+    assert "nope-missing" in click.unstyle(result.raw_result or "")
+
+
+def test_transcript_bind_session_persists_appends(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="wired")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+
+    transcript.append_user("line one")
+    transcript.append_assistant("line two")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 2
+    assert reloaded.transcript[0].role == "user"
+    assert reloaded.transcript[0].content == "line one"
+    assert reloaded.transcript[1].role == "assistant"
+
+
+def test_transcript_bind_session_detach_stops_persisting(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="detach")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+    transcript.append_user("first")
+    transcript.bind_session(None, None)
+    transcript.append_user("after-detach")
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    contents = [entry.content for entry in reloaded.transcript]
+    assert "first" in contents
+    assert "after-detach" not in contents
+
+
+def test_transcript_clear_keeps_on_disk_session(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="kept")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.bind_session(session, store)
+    transcript.append_user("keep me")
+    transcript.clear()
+    assert len(transcript) == 0
+
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 1
+
+
+def test_transcript_restore_normalizes_unknown_roles(tmp_path: Path) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="legacy")
+    session.transcript.append(
+        SessionEntry(role="weird-role", content="what", timestamp=1.0)
+    )
+    store.save(session)
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.restore_from_session(session)
+    assert len(transcript) == 1
+    # Fallback role is "system" for unknown legacy tags.
+    assert transcript.entries[0].role == "system"

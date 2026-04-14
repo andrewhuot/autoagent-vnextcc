@@ -32,11 +32,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Iterable, Iterator, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, Mapping
 
 import click
 
 from cli.workbench_render import format_workbench_event
+
+if TYPE_CHECKING:
+    from cli.sessions import Session, SessionStore
 
 
 TranscriptRole = Literal[
@@ -139,6 +142,35 @@ class Transcript:
         self._entries: list[TranscriptEntry] = []
         self._echo: EchoFn = echo if echo is not None else click.echo
         self._color = color
+        self._session: "Session | None" = None
+        self._session_store: "SessionStore | None" = None
+
+    # --------------------------------------------------------- session binding
+
+    def bind_session(
+        self,
+        session: "Session | None",
+        store: "SessionStore | None",
+    ) -> None:
+        """Wire the transcript to a :class:`SessionStore` for persistence.
+
+        After binding, each successful ``append_*`` / ``replace_tail`` call
+        also writes a :class:`SessionEntry` to disk via
+        :meth:`SessionStore.append_entry`. ``clear()`` still only wipes
+        in-memory state — the on-disk session is preserved so ``/resume``
+        can still reach it. Passing ``None`` for either argument detaches
+        the binding.
+        """
+        if session is None or store is None:
+            self._session = None
+            self._session_store = None
+            return
+        self._session = session
+        self._session_store = store
+
+    @property
+    def bound_session(self) -> "Session | None":
+        return self._session
 
     # ------------------------------------------------------------------ read
 
@@ -172,6 +204,7 @@ class Transcript:
         self._entries.append(entry)
         if emit:
             self._emit(entry)
+        self._persist(entry)
         return entry
 
     def append_user(self, content: str, *, emit: bool = True) -> TranscriptEntry:
@@ -248,6 +281,7 @@ class Transcript:
         self._entries[-1] = entry
         if emit:
             self._emit(entry)
+        self._persist(entry)
         return entry
 
     def extend(self, entries: Iterable[TranscriptEntry], *, emit: bool = True) -> None:
@@ -257,8 +291,38 @@ class Transcript:
     # ------------------------------------------------------------------ misc
 
     def clear(self) -> None:
-        """Drop all entries. Does not echo — callers repaint if needed."""
+        """Drop all entries. Does not echo — callers repaint if needed.
+
+        Only affects in-memory state; a bound on-disk session's transcript
+        is untouched so ``/clear`` can wipe the visible pane without
+        destroying the conversation file.
+        """
         self._entries.clear()
+
+    def restore_from_session(
+        self, session: "Session", *, emit: bool = False
+    ) -> int:
+        """Repopulate in-memory entries from a persisted :class:`Session`.
+
+        Used by ``/resume`` to rehydrate the transcript when a prior session
+        is loaded. Persistence is suppressed during restore (we'd otherwise
+        double-write every entry back to the same session). Returns the
+        number of restored entries. ``emit=True`` repaints as each line is
+        restored, useful when the loop wants to show a quick recap.
+        """
+        restored = 0
+        for persisted in session.transcript:
+            role = _normalize_role(persisted.role)
+            entry = TranscriptEntry(
+                role=role,
+                content=persisted.content,
+                timestamp=persisted.timestamp or time.time(),
+            )
+            self._entries.append(entry)
+            if emit:
+                self._emit(entry)
+            restored += 1
+        return restored
 
     def render(self, *, color: bool | None = None) -> str:
         """Return the full transcript joined by newlines.
@@ -284,12 +348,48 @@ class Transcript:
             color=self._color if color is None else color,
         )
         clone._entries = list(self._entries)
+        clone._session = self._session
+        clone._session_store = self._session_store
         return clone
 
     # ---------------------------------------------------------- internal
 
     def _emit(self, entry: TranscriptEntry) -> None:
         self._echo(format_entry(entry, color=self._color))
+
+    def _persist(self, entry: TranscriptEntry) -> None:
+        """Best-effort persist via the bound :class:`SessionStore`.
+
+        Failures are swallowed because a flaky filesystem shouldn't take
+        down the live transcript. The rendered ``content`` is persisted
+        verbatim — role/timestamp ride across unchanged. Tool entries
+        store the pre-styled event line; stripping ANSI for a cleaner
+        session file happens in :mod:`cli.sessions` if ever wanted.
+        """
+        store = self._session_store
+        session = self._session
+        if store is None or session is None:
+            return
+        try:
+            store.append_entry(session, entry.role, entry.content)
+        except Exception:  # pragma: no cover — defensive; persistence is best-effort
+            pass
+
+
+_VALID_ROLES: frozenset[str] = frozenset(
+    ("user", "assistant", "system", "tool", "error", "warning", "meta")
+)
+
+
+def _normalize_role(role: str) -> TranscriptRole:
+    """Map a persisted role string to a valid :data:`TranscriptRole`.
+
+    Unknown roles fall back to ``"system"`` so corrupt or legacy sessions
+    can still be resumed without blowing up the restore step.
+    """
+    if role in _VALID_ROLES:
+        return role  # type: ignore[return-value]
+    return "system"
 
 
 def _redact(entry: TranscriptEntry) -> TranscriptEntry:

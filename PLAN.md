@@ -666,9 +666,77 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       wiring — `SlashContext(cancellation=token)` accepted, defaults
       to `None`. Full workbench surface green (450 tests); full test
       suite green (4483 tests).*
-- [ ] **T17** — Wire session persistence: every transcript entry and slash command
+- [x] **T17** — Wire session persistence: every transcript entry and slash command
       appends to the existing `SessionStore`. On startup, offer `/resume` hint if latest
-      session is recent.
+      session is recent. *Landed three wiring points plus a pure hint helper.
+      (1) :class:`Transcript` gained an opt-in :meth:`bind_session(session,
+      store)` seam so the loop can attach a :class:`SessionStore` without
+      breaking the existing in-memory-only callers (tests that construct a
+      bare ``Transcript(echo=…)`` still behave as before). When bound,
+      every ``append_*``/``replace_tail`` writes a :class:`SessionEntry`
+      to disk via :meth:`SessionStore.append_entry`; failures are swallowed
+      (best-effort, a flaky fs must not take down the live transcript).
+      :meth:`Transcript.clear` intentionally stays in-memory-only — the
+      on-disk transcript survives so ``/resume`` can still reach it and
+      ``/clear`` mirrors Claude Code's context-reset semantics.
+      :meth:`Transcript.copy_with` now carries the binding onto clones
+      so screens (T08b) inherit persistence. (2) :func:`dispatch` now
+      appends every matched slash line to ``session.command_history``
+      via :func:`_record_command`, guarded to noop when either
+      ``ctx.session`` or ``ctx.session_store`` is unbound and wrapped in
+      a swallow-all ``try`` for best-effort semantics. Non-slash lines
+      (``handled is False``) are never recorded, so command history
+      stays tight to the slash surface. (3) :func:`_handle_resume` now
+      actually restores — swaps ``ctx.session`` to the loaded session,
+      clears the bound transcript, calls the new
+      :meth:`Transcript.restore_from_session(session)` helper to
+      rehydrate in-memory entries, and rebinds the transcript to the
+      resumed session so future appends flow to it. An optional
+      positional ``<session_id>`` argument loads that specific session
+      instead of the latest; unknown ids render a dim "No session with
+      id …" line. ``restore_from_session`` normalizes unknown role tags
+      to ``"system"`` via ``_normalize_role`` so legacy / corrupted
+      session files resume cleanly. Meta lines surface
+      "Session: <title> (<id>)", "Goal: …", and "Entries restored: N".
+      (4) Startup hint: new pure helper :func:`resume_hint(store, *,
+      current, max_age_seconds, now)` returns a one-line
+      "  Tip: /resume to continue \"<title>\" (Nh ago)" when a prior
+      session exists on disk, isn't the current one, and was updated
+      within :data:`RESUME_HINT_MAX_AGE_SECONDS` (24h). Relative-time
+      formatting (`just now` / `Nm ago` / `Nh ago` / `Nd ago`) lives in
+      :func:`_format_age` as a pure helper so tests don't need a clock
+      mock beyond ``now=``. :func:`run_workbench_app` gained optional
+      ``session_store=`` / ``session=`` parameters; when both the
+      banner and a hint-eligible session are present the hint is
+      echoed dim-styled right under the banner (suppressed when
+      ``show_banner=False``). Defensive: helper swallows
+      ``store.latest()`` exceptions and handles ``updated_at=0``.
+      Coverage: 11 new T17 tests in
+      ``tests/test_workbench_slash.py`` — dispatch persists slash
+      history (``/help``, ``/status extra arg``), unbound
+      store/session no-ops without crash, non-slash free text doesn't
+      touch history, bad-store raising during ``append_command``
+      swallowed, ``/resume`` swaps session + restores 3 transcript
+      entries + rebinds transcript to new session, ``/resume
+      <session_id>`` loads explicit session beating the latest rule,
+      unknown id reports dim system line, ``Transcript.bind_session``
+      persists appends to disk, detach stops persistence, ``clear()``
+      keeps disk entries, ``restore_from_session`` normalizes
+      "weird-role" → "system"; 8 new hint tests in
+      ``tests/test_workbench_app_stub.py`` — ``resume_hint(None)`` is
+      ``None``, empty store returns ``None``, recent session surfaces
+      title + "2h ago" + "/resume", ages over 24h skipped, current ==
+      latest skipped, 150s formats "2m ago", ``run_workbench_app``
+      banner includes the hint, ``show_banner=False`` suppresses the
+      hint. Three legacy ``/resume`` tests updated to consume the new
+      ``display="system"`` dim-wrapped output and the new
+      ``meta_messages`` + session-pointer swap contract. Full
+      workbench surface green (437 tests across slash / transcript /
+      status_bar / screens / app_stub / commands / cli_workbench /
+      tool_call_block / eval_slash / optimize_slash / build_slash /
+      deploy_slash / skills_slash / model_slash / cancellation /
+      sessions); ``repl.py`` / ``shell_commands`` compatibility suite
+      still green (27 tests).*
 - [ ] **T18** — Add theming: dim meta lines, cyan for workspace, green for completed,
       yellow for warnings, red for errors. Read palette from
       `cli/workbench_app/theme.py`.

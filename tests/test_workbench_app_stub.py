@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import time
+from pathlib import Path
 from unittest.mock import patch
 
+import click
 from click.testing import CliRunner
 
+from cli.sessions import SessionStore
 from cli.workbench_app import (
     DEFAULT_PROMPT,
     StubAppResult,
     build_status_line,
     run_workbench_app,
 )
-from cli.workbench_app.app import EXIT_TOKENS
+from cli.workbench_app.app import (
+    EXIT_TOKENS,
+    RESUME_HINT_MAX_AGE_SECONDS,
+    resume_hint,
+)
 from runner import cli as root_cli
 
 
@@ -189,3 +197,91 @@ def test_workbench_interactive_subcommand_runs_stub_with_no_banner() -> None:
     assert result.exit_code == 0, result.output
     # With --no-banner there's no "Experiment. Evaluate. Refine." line.
     assert "Experiment. Evaluate. Refine." not in result.output
+
+
+# ---------------------------------------------------------------------------
+# T17 — /resume startup hint
+# ---------------------------------------------------------------------------
+
+
+def test_resume_hint_returns_none_without_store() -> None:
+    assert resume_hint(None) is None
+
+
+def test_resume_hint_returns_none_with_empty_store(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    assert resume_hint(store) is None
+
+
+def test_resume_hint_offers_recent_session(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="last-friday")
+    # 2 hours ago.
+    session.updated_at = time.time() - 2 * 3600
+    store.save(session)
+
+    hint = resume_hint(store)
+    assert hint is not None
+    assert "last-friday" in hint
+    assert "2h ago" in hint
+    assert "/resume" in hint
+
+
+def test_resume_hint_skips_older_than_max_age(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="ancient")
+    session.updated_at = time.time() - (RESUME_HINT_MAX_AGE_SECONDS + 60)
+    store.save(session)
+    assert resume_hint(store) is None
+
+
+def test_resume_hint_skips_when_current_matches_latest(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="same")
+    assert resume_hint(store, current=session) is None
+
+
+def test_resume_hint_minutes_formatting(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="fresh")
+    session.updated_at = time.time() - 150  # 2m30s
+    store.save(session)
+    hint = resume_hint(store)
+    assert hint is not None and "2m ago" in hint
+
+
+def test_run_workbench_app_shows_resume_hint_in_banner(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="prev")
+    session.updated_at = time.time() - 3600
+    store.save(session)
+
+    lines: list[str] = []
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["/exit"]),
+        echo=lines.append,
+        show_banner=True,
+        session_store=store,
+    )
+    joined = "\n".join(click.unstyle(line) for line in lines)
+    assert "/resume to continue" in joined
+    assert "prev" in joined
+
+
+def test_run_workbench_app_suppresses_hint_without_banner(tmp_path: Path) -> None:
+    store = SessionStore(tmp_path)
+    session = store.create(title="prev")
+    session.updated_at = time.time() - 3600
+    store.save(session)
+
+    lines: list[str] = []
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["/exit"]),
+        echo=lines.append,
+        show_banner=False,
+        session_store=store,
+    )
+    joined = "\n".join(click.unstyle(line) for line in lines)
+    assert "/resume to continue" not in joined
