@@ -174,14 +174,17 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 # Command visibility tiers for simplified help output
 PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "status", "doctor", "shell"}
-SECONDARY_COMMANDS = {"review", "config", "instruction", "model", "provider", "mode", "memory", "template", "connect"}
+SECONDARY_COMMANDS = {
+    "review", "config", "instruction", "model", "provider", "mode", "memory",
+    "template", "connect", "harness", "context",
+}
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
     "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
     "permissions", "usage", "export", "trace", "knowledge", "quickstart", "demo",
     "init", "serve", "server", "full-auto", "edit", "cx", "adk", "dataset",
     "outcomes", "pref", "rl", "benchmark", "run", "build-show", "build-inspect",
-    "policy", "mcp-server", "scorer", "curriculum", "context", "judges",
+    "policy", "mcp-server", "scorer", "curriculum", "judges",
     "changes", "experiment", "runbook", "registry", "logs", "pause", "resume",
     "reject", "pin", "unpin",
 }
@@ -6079,7 +6082,7 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("loop", message="Start optimization loop")
 
-    def _loop_task(event: str, task_id: str, task: str, **payload: Any) -> None:
+    def _loop_task(event: str, task_id: str, task: str, **payload: Any) -> None:  # noqa: E501
         if harness is None:
             return
         from cli.auto_harness import HarnessEvent
@@ -6132,10 +6135,22 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             ),
         )
 
-    budget_ok, budget_message, _ = enforce_workspace_budget(max_budget_usd)
+    budget_ok, budget_message, budget_snapshot = enforce_workspace_budget(max_budget_usd)
     if not budget_ok:
-        progress.warning(message=budget_message or "Budget reached")
-        click.echo(budget_message)
+        message = budget_message or "Budget reached"
+        progress.warning(message=message)
+        if resolved_output_format == "json":
+            from cli.stream2_helpers import json_response
+
+            click.echo(
+                json_response(
+                    "error",
+                    {"message": message, "usage": budget_snapshot},
+                    next_cmd="agentlab usage",
+                )
+            )
+        elif resolved_output_format == "text":
+            click.echo(message)
         return
 
     (
@@ -6200,6 +6215,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             start_cycle = max(1, min(max_cycles, checkpoint.next_cycle))
             plateau_count = max(0, checkpoint.plateau_count)
             completed_cycles = max(0, checkpoint.completed_cycles)
+            progress.recovery_hint(
+                "loop",
+                message=f"Resume from checkpoint at cycle {start_cycle}",
+                command="agentlab loop --resume",
+            )
 
     if resolved_output_format == "text" and harness is None:
         click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
@@ -6228,6 +6248,12 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     last_status="running",
                     last_cycle_started_at=cycle_started,
                 )
+            )
+            progress.checkpoint(
+                "loop-cycle",
+                path=effective_checkpoint,
+                next_cycle=cycle,
+                completed_cycles=completed_cycles,
             )
 
             progress.phase_started("loop-cycle", message=f"Cycle {cycle}/{max_cycles}")
@@ -6341,6 +6367,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     extra={"event": "loop_cycle_failed", "cycle": cycle, "status": "failed"},
                 )
                 progress.error(message=str(exc), phase="loop-cycle")
+                progress.recovery_hint(
+                    "loop-cycle",
+                    message="Cycle failure was queued for operator review",
+                    command="agentlab harness status",
+                )
 
             completed_cycles = cycle
             cycle_finished = time.time()
@@ -6452,6 +6483,12 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             last_cycle_finished_at=time.time(),
         )
     )
+    progress.checkpoint(
+        "loop",
+        path=effective_checkpoint,
+        next_cycle=completed_cycles + 1,
+        completed_cycles=completed_cycles,
+    )
     progress.phase_completed("loop", message=f"{completed_cycles} cycle(s) executed ({final_status})")
     progress.next_action("agentlab status")
     if harness is not None:
@@ -6460,6 +6497,34 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
         _emit_harness_event(harness, HarnessEvent("stage.completed", message=f"Loop complete: {final_status}"))
     if resolved_output_format == "text" and harness is None:
         click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
+
+
+# ---------------------------------------------------------------------------
+# agentlab harness
+# ---------------------------------------------------------------------------
+
+@cli.group("harness", cls=DefaultCommandGroup, default_command="status", default_on_empty=True)
+def harness_group() -> None:
+    """Inspect long-running harness lifecycle, evidence, and recovery state."""
+
+
+@harness_group.command("status")
+@click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
+def harness_status(json_output: bool = False) -> None:
+    """Show long-running harness readiness without starting a loop."""
+    from cli.harness_status import collect_harness_status, render_harness_status
+    from cli.stream2_helpers import json_response
+
+    workspace = _require_workspace("harness")
+    runtime = load_runtime_config(str(workspace.runtime_config_path))
+    snapshot = collect_harness_status(workspace, runtime=runtime)
+    next_cmd = snapshot.next_actions[0] if snapshot.next_actions else "agentlab optimize --continuous"
+
+    if json_output:
+        click.echo(json_response("ok", snapshot.to_dict(), next_cmd=next_cmd))
+        return
+
+    render_harness_status(snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -6502,6 +6567,9 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
     buckets = report.failure_buckets
 
     mode_summary = summarize_mode_state(str(workspace.runtime_config_path))
+    runtime = load_runtime_config(str(workspace.runtime_config_path))
+    from cli.harness_status import collect_harness_status
+    harness_snapshot = collect_harness_status(workspace, runtime=runtime)
     usage_snapshot = build_usage_snapshot(workspace.root)
     memory_snapshot = load_layered_project_context(workspace.root).summary()
     mcp_snapshot = mcp_status_snapshot(workspace.root)
@@ -6572,7 +6640,8 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
             "pending_review_cards": pending_review_cards,
             "pending_autofix_proposals": pending_autofix_proposals,
             "deployment": deployment_label,
-            "loop_status": "idle",
+            "loop_status": harness_snapshot.loop["status"],
+            "harness": harness_snapshot.to_dict(),
             "memory": memory_snapshot,
             "mcp": mcp_snapshot,
             "models": model_snapshot,
@@ -6607,7 +6676,10 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
         pending_review_cards=pending_review_cards,
         pending_autofix_proposals=pending_autofix_proposals,
         deployment_label=deployment_label,
-        loop_label="idle",
+        loop_label=harness_snapshot.loop_label,
+        harness_label=harness_snapshot.summary_label,
+        harness_recovery_label=harness_snapshot.recovery_label,
+        harness_evidence_label=harness_snapshot.evidence_label,
         memory_label=(
             f"{memory_snapshot['active_count']} active source(s)"
             if memory_snapshot["active_count"]
@@ -6703,8 +6775,12 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             else {"active_count": 0, "paths": []}
         )
         mcp_snapshot = mcp_status_snapshot(workspace.root if workspace is not None else Path("."))
+        from cli.harness_status import collect_harness_status
+        harness_snapshot = collect_harness_status(workspace, runtime=runtime) if workspace is not None else None
         if workspace is None:
             issues.append("No AgentLab workspace found")
+        if harness_snapshot is not None and harness_snapshot.health == "blocked":
+            issues.extend(harness_snapshot.issues)
         data = {
             "workspace": str(workspace.root) if workspace is not None else None,
             "issues": issues,
@@ -6712,6 +6788,7 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             "mode": mode_summary["effective_mode"],
             "memory": memory_snapshot,
             "mcp": mcp_snapshot,
+            "harness": harness_snapshot.to_dict() if harness_snapshot is not None else None,
         }
         click.echo(json_response("ok", data, next_cmd="agentlab status"))
         return
@@ -6836,6 +6913,29 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
                 fg="yellow",
             )
         )
+
+    # ------------------------------------------------------------------
+    # Harness readiness
+    # ------------------------------------------------------------------
+    click.echo("\nHarness")
+    from cli.harness_status import collect_harness_status as _doctor_collect_harness
+    doctor_harness_snapshot = _doctor_collect_harness(workspace, runtime=runtime) if workspace is not None else None
+    if doctor_harness_snapshot is None:
+        click.echo(
+            "  Harness:           "
+            + click.style("\u2717 No workspace state available", fg="red")
+        )
+    else:
+        if doctor_harness_snapshot.health == "blocked":
+            issues.extend(doctor_harness_snapshot.issues)
+            health_style = click.style(f"\u2717 {doctor_harness_snapshot.summary_label}", fg="red")
+        elif doctor_harness_snapshot.health == "attention":
+            health_style = click.style(f"\u26a0 {doctor_harness_snapshot.summary_label}", fg="yellow")
+        else:
+            health_style = click.style(f"\u2713 {doctor_harness_snapshot.summary_label}", fg="green")
+        click.echo("  Harness:           " + health_style)
+        click.echo(f"  Recovery:          {doctor_harness_snapshot.recovery_label}")
+        click.echo(f"  Evidence:          {doctor_harness_snapshot.evidence_label}")
 
     # ------------------------------------------------------------------
     # Data Stores
@@ -7021,9 +7121,13 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
 # ---------------------------------------------------------------------------
 
 def _control_store():
-    """Return a HumanControlStore using default or env-configured path."""
+    """Return a HumanControlStore scoped to the active AgentLab workspace."""
     from optimizer.human_control import HumanControlStore
-    return HumanControlStore()
+
+    workspace = discover_workspace()
+    if workspace is None:
+        return HumanControlStore()
+    return HumanControlStore(path=str(workspace.agentlab_dir / "human_control.json"))
 
 
 def _event_log():
@@ -7509,10 +7613,111 @@ def context_group() -> None:
     """Context Engineering Workbench — diagnose and tune agent context.
 
     Examples:
+      agentlab context profiles
+      agentlab context preview --profile balanced
       agentlab context simulate --strategy balanced
       agentlab context report
       agentlab context analyze --trace trace_demo_fail_001
     """
+
+
+@context_group.command("profiles")
+@click.option("--json", "json_output", is_flag=True, help="Output profile data as JSON.")
+def context_profiles(json_output: bool) -> None:
+    """List reusable context-engineering profiles.
+
+    Examples:
+      agentlab context profiles
+      agentlab context profiles --json
+    """
+    from context.engineering import context_profiles_payload
+
+    payload = context_profiles_payload()
+    if json_output:
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    click.echo("\nContext Engineering Profiles")
+    click.echo("=" * 36)
+    click.echo(f"Default: {payload['default_profile']}")
+    for profile in payload["profiles"]:
+        target = profile["target_utilization"]
+        pro_label = "pro" if profile["pro_mode"] else "standard"
+        click.echo(
+            f"  {profile['name']:<9} {profile['label']:<10} "
+            f"budget={profile['token_budget']:<6} target={target:.0%} mode={pro_label}"
+        )
+        click.echo(f"    {profile['description']}")
+
+
+@context_group.command("preview")
+@click.option("--config", "config_path", type=click.Path(dir_okay=False), help="Agent config YAML to inspect.")
+@click.option(
+    "--profile",
+    "profile_name",
+    default="balanced",
+    show_default=True,
+    type=click.Choice(["lean", "balanced", "deep"]),
+    help="Context profile to apply.",
+)
+@click.option("--token-budget", type=int, help="Override the selected profile token budget.")
+@click.option("--pro", "pro_mode", is_flag=True, default=None, help="Enable pro-mode diagnostics in the preview.")
+@click.option("--json", "json_output", is_flag=True, help="Output the preview as JSON.")
+def context_preview(
+    config_path: str | None,
+    profile_name: str,
+    token_budget: int | None,
+    pro_mode: bool | None,
+    json_output: bool,
+) -> None:
+    """Preview context assembly, budget shape, and diagnostics for an agent.
+
+    Examples:
+      agentlab context preview --profile lean
+      agentlab context preview --config configs/v001_base.yaml --json
+    """
+    from context.engineering import build_context_preview_from_workspace
+
+    try:
+        resolved_config_path = _resolve_invocation_input_path(Path(config_path)) if config_path else None
+        preview_root = resolved_config_path.parent if resolved_config_path else Path.cwd()
+        preview = build_context_preview_from_workspace(
+            root=preview_root,
+            config_path=resolved_config_path,
+            profile_name=profile_name,
+            token_budget=token_budget,
+            pro_mode=pro_mode,
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    payload = preview.to_dict()
+    if json_output:
+        click.echo(json.dumps(payload, indent=2))
+        return
+
+    click.echo("\nContext Assembly Preview")
+    click.echo("=" * 36)
+    click.echo(f"Profile: {payload['profile_name']} ({payload['profile_label']})")
+    click.echo(f"Status: {payload['status']}")
+    click.echo(f"Budget: {payload['total_tokens']} / {payload['token_budget']} estimated tokens")
+    click.echo(f"Utilization: {payload['utilization_ratio']:.1%}")
+
+    click.echo("\nComponents:")
+    for component in payload["components"]:
+        if not component["included"]:
+            continue
+        click.echo(
+            f"  - {component['component_id']:<18} "
+            f"{component['token_count']:>5} tokens  source={component['source']}"
+        )
+
+    click.echo("\nDiagnostics:")
+    if not payload["diagnostics"]:
+        click.echo("  - No context diagnostics.")
+    for diagnostic in payload["diagnostics"]:
+        click.echo(f"  - [{diagnostic['severity']}] {diagnostic['category']}: {diagnostic['message']}")
+        click.echo(f"    Try: {diagnostic['recommendation']}")
 
 
 @context_group.command("analyze")

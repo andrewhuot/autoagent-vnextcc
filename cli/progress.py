@@ -154,6 +154,28 @@ class ProgressRenderer:
         """Emit an `artifact_written` event."""
         return self._emit("artifact_written", artifact=artifact, path=path, message=path)
 
+    def checkpoint(
+        self,
+        phase: str,
+        *,
+        path: str,
+        next_cycle: int | None = None,
+        completed_cycles: int | None = None,
+    ) -> dict[str, Any]:
+        """Emit a checkpoint event so operators can resume long-running work."""
+        return self._emit(
+            "checkpoint",
+            phase=phase,
+            path=path,
+            next_cycle=next_cycle,
+            completed_cycles=completed_cycles,
+            message=path,
+        )
+
+    def recovery_hint(self, phase: str, *, message: str, command: str) -> dict[str, Any]:
+        """Emit a recovery hint with a concrete command after interruptions or failures."""
+        return self._emit("recovery_hint", phase=phase, message=message, command=command)
+
     def warning(self, *, message: str, phase: str | None = None) -> dict[str, Any]:
         """Emit a `warning` event."""
         return self._emit("warning", phase=phase, message=message)
@@ -194,6 +216,13 @@ class ProgressRenderer:
             return f"[{phase}] done: {message}"
         if event_type == "artifact_written":
             return f"[artifact] {artifact}: {path}"
+        if event_type == "checkpoint":
+            next_cycle = event.get("next_cycle")
+            suffix = f" (next cycle {next_cycle})" if next_cycle is not None else ""
+            return f"[checkpoint] {phase}: {path}{suffix}"
+        if event_type == "recovery_hint":
+            command = event.get("command")
+            return f"[recover] {message}: {command}"
         if event_type == "warning":
             return f"[warning] {message}"
         if event_type == "error":

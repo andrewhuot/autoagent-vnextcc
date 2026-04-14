@@ -256,6 +256,51 @@ def test_context_analyze_command_reads_trace_events_from_store(tmp_path, monkeyp
     assert "Peak utilization" in result.output
 
 
+def test_context_profiles_command_lists_first_class_profiles() -> None:
+    """`context profiles` should expose the reusable context-engineering presets."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["context", "profiles"])
+
+    assert result.exit_code == 0
+    assert "Context Engineering Profiles" in result.output
+    assert "lean" in result.output
+    assert "balanced" in result.output
+    assert "deep" in result.output
+
+
+def test_context_preview_command_reads_config_and_prints_diagnostics(tmp_path) -> None:
+    """`context preview` should show the assembled context budget for a config."""
+    config_path = tmp_path / "agent.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "model": "claude-sonnet-4-5",
+                "prompts": {
+                    "root": "<role>Support.</role>\n<examples>Example one.</examples>",
+                    "orders": "Verify order ID.",
+                },
+                "tools": {"orders_db": {"enabled": True, "description": "Lookup orders."}},
+                "compaction": {"enabled": False},
+                "memory_policy": {"preload": True, "max_entries": 100},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["context", "preview", "--config", str(config_path), "--profile", "lean"],
+    )
+
+    assert result.exit_code == 0
+    assert "Context Assembly Preview" in result.output
+    assert "Profile: lean" in result.output
+    assert "instructions" in result.output
+    assert "Diagnostics" in result.output
+
+
 def test_scorer_test_command_scores_a_trace_from_persisted_spec(tmp_path, monkeypatch) -> None:
     """`scorer test` should load the persisted scorer spec and evaluate the requested trace."""
     trace_dir = tmp_path / ".agentlab"

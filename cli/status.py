@@ -26,6 +26,9 @@ class StatusSnapshot:
     pending_autofix_proposals: int
     deployment_label: str
     loop_label: str
+    harness_label: str
+    harness_recovery_label: str
+    harness_evidence_label: str
     memory_label: str
     mcp_label: str
     model_label: str
@@ -56,6 +59,9 @@ def render_status(snapshot: StatusSnapshot, *, verbose: bool = False) -> None:
         click.echo(f"  Conversations: {snapshot.conversations_label}")
         click.echo(f"  Cycles run:    {snapshot.cycles_run_label}")
         click.echo(f"  Loop:          {snapshot.loop_label}")
+        click.echo(f"  Harness:       {snapshot.harness_label}")
+        click.echo(f"  Recovery:      {snapshot.harness_recovery_label}")
+        click.echo(f"  Evidence:      {snapshot.harness_evidence_label}")
         click.echo(f"  Last eval:     tokens={snapshot.last_eval_tokens_label}  cost={snapshot.last_eval_cost_label}")
         click.echo(f"  Last optimize: cost={snapshot.last_optimize_cost_label}")
 

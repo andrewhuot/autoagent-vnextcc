@@ -37,6 +37,24 @@ def test_progress_renderer_stream_json_emits_standard_event_shapes() -> None:
     assert payloads[-1]["message"] == "agentlab eval run"
 
 
+def test_progress_renderer_emits_harness_lifecycle_events() -> None:
+    """Long-running commands should be able to stream checkpoints and recovery hints."""
+    from cli.progress import ProgressRenderer
+
+    lines: list[str] = []
+    renderer = ProgressRenderer(output_format="stream-json", writer=lines.append)
+    renderer.checkpoint("loop", path=".agentlab/loop_checkpoint.json", next_cycle=4)
+    renderer.recovery_hint("loop", message="Resume from checkpoint", command="agentlab loop --resume")
+
+    payloads = [json.loads(line) for line in lines]
+    assert payloads[0]["event"] == "checkpoint"
+    assert payloads[0]["phase"] == "loop"
+    assert payloads[0]["path"] == ".agentlab/loop_checkpoint.json"
+    assert payloads[0]["next_cycle"] == 4
+    assert payloads[1]["event"] == "recovery_hint"
+    assert payloads[1]["command"] == "agentlab loop --resume"
+
+
 def test_build_stream_json_emits_progress_events(runner: CliRunner) -> None:
     """Long-running commands should expose the shared progress stream."""
     with runner.isolated_filesystem():
