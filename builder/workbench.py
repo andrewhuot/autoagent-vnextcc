@@ -13,8 +13,24 @@ from typing import Any
 
 import yaml
 
-from builder.types import new_id
+from agent.config.schema import AgentConfig
+from builder.types import (
+    CoordinatorExecutionRun,
+    SpecialistRole,
+    WorkerExecutionStatus,
+    new_id,
+)
 from builder.workbench_bridge import build_workbench_improvement_bridge
+from shared.canonical_ir import (
+    GuardrailEnforcement,
+    GuardrailSpec,
+    GuardrailType,
+    Instruction,
+    InstructionRole,
+    ToolContract,
+    ToolInvocationHint,
+    ToolParameter,
+)
 
 
 WorkbenchTarget = str
@@ -4156,3 +4172,305 @@ def _model_counts(model: dict[str, Any]) -> dict[str, int]:
         "guardrails": len(model.get("guardrails", [])),
         "eval_suites": len(model.get("eval_suites", [])),
     }
+
+
+# ---------------------------------------------------------------------------
+# Coordinator synthesis → AgentConfig (V1 /build)
+# ---------------------------------------------------------------------------
+
+
+def apply_coordinator_synthesis(
+    config: AgentConfig | None,
+    synthesis: Any,
+) -> AgentConfig:
+    """Merge a coordinator run's worker artifacts into a new ``AgentConfig``.
+
+    The function is the V1 ``/build`` apply step: it takes the active
+    :class:`AgentConfig` and the completed coordinator synthesis (either a
+    :class:`CoordinatorExecutionRun` or a dict carrying worker artifacts)
+    and returns a validated :class:`AgentConfig` reflecting the applied
+    patches. Canonical IR types from :mod:`shared.canonical_ir` validate each
+    patch before it is written onto the dict shape so downstream callers
+    never persist a malformed config.
+
+    Supported artifact contracts (see :mod:`builder.worker_prompts`):
+
+    - ``prompt_engineer.prompt_diff`` — dict of role → ``{after: str}``;
+      applied to ``prompts[role]``.
+    - ``guardrail_author.guardrail_policy`` — list of guardrail dicts; new
+      entries appended to ``guardrails`` (existing names preserved).
+    - ``tool_engineer.tool_contract`` — dict keyed by tool name; upserted
+      into ``tools_config`` with parameter validation.
+    - ``build_engineer.config_draft`` — partial AgentConfig dict; deep-merged
+      last so the build engineer can override prior patches.
+
+    The function is intentionally tolerant: malformed artifacts are skipped
+    rather than raised, so a single bad worker response cannot abort the
+    apply step. The returned ``AgentConfig`` is always the result of a full
+    pydantic validation pass, so callers can trust its shape.
+    """
+    base_cfg = config or AgentConfig()
+    patch_dict: dict[str, Any] = base_cfg.model_dump()
+    worker_artifacts = _extract_worker_artifacts(synthesis)
+
+    _apply_prompt_diff(patch_dict, worker_artifacts)
+    _apply_guardrail_policy(patch_dict, worker_artifacts)
+    _apply_tool_contract(patch_dict, worker_artifacts)
+    _apply_build_config_draft(patch_dict, worker_artifacts)
+
+    return AgentConfig.model_validate(patch_dict)
+
+
+def _extract_worker_artifacts(synthesis: Any) -> dict[str, dict[str, Any]]:
+    """Return ``{role_value: {artifact_name: payload}}`` from any supported shape.
+
+    Accepts:
+
+    - :class:`CoordinatorExecutionRun` — reads ``state.result.artifacts`` for
+      each completed worker, keyed by role value.
+    - ``dict`` with ``worker_states`` / ``worker_results`` list: each entry
+      carries ``worker_role`` + ``result.artifacts`` or ``artifacts``.
+    - Pre-extracted ``dict[str, dict[str, Any]]`` — returned as-is.
+    """
+    if synthesis is None:
+        return {}
+
+    if isinstance(synthesis, CoordinatorExecutionRun):
+        return _artifacts_from_run(synthesis)
+
+    if isinstance(synthesis, dict):
+        if "worker_states" in synthesis or "worker_results" in synthesis:
+            return _artifacts_from_state_list(
+                synthesis.get("worker_states") or synthesis.get("worker_results") or []
+            )
+        # Heuristic: if every value is itself a dict (artifacts payload), pass through.
+        if all(isinstance(value, dict) for value in synthesis.values()):
+            return {str(role): dict(arts) for role, arts in synthesis.items()}
+
+    return {}
+
+
+def _artifacts_from_run(run: CoordinatorExecutionRun) -> dict[str, dict[str, Any]]:
+    """Index completed worker artifacts from a :class:`CoordinatorExecutionRun`."""
+    artifacts: dict[str, dict[str, Any]] = {}
+    for state in run.worker_states:
+        if state.status != WorkerExecutionStatus.COMPLETED or state.result is None:
+            continue
+        role_value = state.worker_role.value
+        artifacts[role_value] = dict(state.result.artifacts or {})
+    return artifacts
+
+
+def _artifacts_from_state_list(states: list) -> dict[str, dict[str, Any]]:
+    """Index artifacts from a list of worker-state-like dicts or objects."""
+    artifacts: dict[str, dict[str, Any]] = {}
+    for entry in states:
+        role_value, payload = _role_and_artifacts(entry)
+        if role_value and payload:
+            artifacts[role_value] = dict(payload)
+    return artifacts
+
+
+def _role_and_artifacts(entry: Any) -> tuple[str | None, dict[str, Any] | None]:
+    """Extract ``(role_value, artifacts)`` from a worker-state-like object."""
+    if isinstance(entry, dict):
+        role_value = str(entry.get("worker_role") or "") or None
+        raw_result = entry.get("result")
+        if isinstance(raw_result, dict):
+            arts = raw_result.get("artifacts")
+        else:
+            arts = entry.get("artifacts")
+        if isinstance(arts, dict):
+            return role_value, arts
+        return role_value, None
+    role = getattr(entry, "worker_role", None)
+    role_value = role.value if hasattr(role, "value") else (str(role) if role else None)
+    result = getattr(entry, "result", None)
+    arts = getattr(result, "artifacts", None) if result is not None else None
+    if isinstance(arts, dict):
+        return role_value, arts
+    return role_value, None
+
+
+def _artifact(
+    artifacts: dict[str, dict[str, Any]],
+    role: SpecialistRole,
+    name: str,
+) -> Any:
+    """Return ``artifacts[role][name]`` when present, else ``None``."""
+    role_bag = artifacts.get(role.value) or {}
+    return role_bag.get(name)
+
+
+def _apply_prompt_diff(
+    patch_dict: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+) -> None:
+    """Write ``prompt_diff`` into ``prompts[role]`` after IR validation."""
+    prompt_diff = _artifact(artifacts, SpecialistRole.PROMPT_ENGINEER, "prompt_diff")
+    if not isinstance(prompt_diff, dict):
+        return
+    prompts = patch_dict.setdefault("prompts", {})
+    for role, change in prompt_diff.items():
+        if not isinstance(change, dict):
+            continue
+        after = change.get("after")
+        if not isinstance(after, str) or not after.strip():
+            continue
+        # IR validation — throws if content/label are not strings.
+        Instruction(
+            role=InstructionRole.SYSTEM,
+            content=after,
+            label=str(role),
+        )
+        prompts[str(role)] = after
+
+
+def _apply_guardrail_policy(
+    patch_dict: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+) -> None:
+    """Append new guardrails — name-deduped — with IR enum validation."""
+    policy = _artifact(artifacts, SpecialistRole.GUARDRAIL_AUTHOR, "guardrail_policy")
+    if not isinstance(policy, list):
+        return
+    existing = patch_dict.setdefault("guardrails", [])
+    existing_names = {
+        str(entry.get("name")).strip()
+        for entry in existing
+        if isinstance(entry, dict) and entry.get("name")
+    }
+    for entry in policy:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or name in existing_names:
+            continue
+        gtype = _coerce_enum(
+            entry.get("type"),
+            GuardrailType,
+            default=GuardrailType.BOTH,
+        )
+        enforcement = _coerce_enum(
+            entry.get("enforcement"),
+            GuardrailEnforcement,
+            default=GuardrailEnforcement.BLOCK,
+        )
+        # IR validation — throws on malformed payloads.
+        GuardrailSpec(
+            name=name,
+            type=gtype,
+            enforcement=enforcement,
+            description=str(entry.get("description") or ""),
+        )
+        existing.append(
+            {
+                "name": name,
+                "type": gtype.value,
+                "enforcement": enforcement.value,
+                "description": str(entry.get("description") or ""),
+            }
+        )
+        existing_names.add(name)
+
+
+def _apply_tool_contract(
+    patch_dict: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+) -> None:
+    """Upsert tool entries into ``tools_config`` with parameter validation."""
+    contracts = _artifact(artifacts, SpecialistRole.TOOL_ENGINEER, "tool_contract")
+    if not isinstance(contracts, dict):
+        return
+    tools_config = patch_dict.setdefault("tools_config", {})
+    for name, entry in contracts.items():
+        if not isinstance(entry, dict):
+            continue
+        clean_name = str(name or "").strip()
+        if not clean_name:
+            continue
+        parameters: list[ToolParameter] = []
+        raw_params = entry.get("parameters")
+        if isinstance(raw_params, list):
+            for raw_param in raw_params:
+                if not isinstance(raw_param, dict) or not raw_param.get("name"):
+                    continue
+                parameters.append(
+                    ToolParameter(
+                        name=str(raw_param["name"]),
+                        type=str(raw_param.get("type", "string")),
+                        required=bool(raw_param.get("required", False)),
+                        description=str(raw_param.get("description", "")),
+                    )
+                )
+        invocation_hint = _coerce_enum(
+            entry.get("invocation_hint"),
+            ToolInvocationHint,
+            default=ToolInvocationHint.AUTO,
+        )
+        timeout_ms = _coerce_int(entry.get("timeout_ms"), default=5000)
+        # IR validation.
+        ToolContract(
+            name=clean_name,
+            description=str(entry.get("description") or ""),
+            parameters=parameters,
+            invocation_hint=invocation_hint,
+            timeout_ms=timeout_ms,
+        )
+        tool_entry: dict[str, Any] = {
+            "enabled": bool(entry.get("enabled", True)),
+            "timeout_ms": timeout_ms,
+            "description": str(entry.get("description") or ""),
+        }
+        if parameters:
+            tool_entry["parameters"] = [
+                p.model_dump(exclude_none=True) for p in parameters
+            ]
+        if invocation_hint != ToolInvocationHint.AUTO:
+            tool_entry["invocation_hint"] = invocation_hint.value
+        tools_config[clean_name] = tool_entry
+
+
+def _apply_build_config_draft(
+    patch_dict: dict[str, Any],
+    artifacts: dict[str, dict[str, Any]],
+) -> None:
+    """Deep-merge a BUILD_ENGINEER-authored partial AgentConfig patch."""
+    draft = _artifact(artifacts, SpecialistRole.BUILD_ENGINEER, "config_draft")
+    if not isinstance(draft, dict):
+        return
+    _deep_merge_in_place(patch_dict, draft)
+
+
+def _deep_merge_in_place(base: dict[str, Any], patch: dict[str, Any]) -> None:
+    """Recursively merge ``patch`` into ``base``; lists replace, dicts merge."""
+    for key, value in patch.items():
+        if (
+            isinstance(value, dict)
+            and isinstance(base.get(key), dict)
+        ):
+            _deep_merge_in_place(base[key], value)
+        else:
+            base[key] = copy.deepcopy(value)
+
+
+def _coerce_enum(value: Any, enum_cls: type, default: Any) -> Any:
+    """Coerce a loose string into an enum value, falling back to ``default``."""
+    if isinstance(value, enum_cls):
+        return value
+    if isinstance(value, str):
+        try:
+            return enum_cls(value.lower())
+        except ValueError:
+            return default
+    return default
+
+
+def _coerce_int(value: Any, *, default: int) -> int:
+    """Coerce a loose numeric value, falling back to ``default`` on failure."""
+    if isinstance(value, bool):
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
