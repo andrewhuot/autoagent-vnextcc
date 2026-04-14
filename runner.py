@@ -6944,6 +6944,14 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
         click.echo(f"  Evidence:          {doctor_harness_snapshot.evidence_label}")
 
     # ------------------------------------------------------------------
+    # Coordinator / worker runtime
+    # ------------------------------------------------------------------
+    from cli.harness_doctor import render_coordinator_section
+
+    click.echo("")
+    click.echo(render_coordinator_section(workspace).rstrip())
+
+    # ------------------------------------------------------------------
     # Data Stores
     # ------------------------------------------------------------------
     click.echo("\nData Stores")

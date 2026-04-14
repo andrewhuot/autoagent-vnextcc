@@ -772,6 +772,55 @@ def _run_follow_up_turns(
         )
 
 
+def _maybe_run_first_run_onboarding(workspace: Any | None) -> None:
+    """Run guided onboarding before launching the REPL when needed.
+
+    Triggers when *either*:
+    - no ``agentlab.yaml`` is discoverable from the active workspace root
+      (or the current directory when the REPL was launched outside one), or
+    - an ``agentlab.yaml`` exists but its ``harness.models.{coordinator,worker}``
+      keys are missing/invalid — the exact case LLM worker mode blows up on.
+
+    Silent on failure: onboarding is best-effort and must not prevent
+    the REPL from coming up for users who know what they're doing.
+    """
+    import os as _os
+    from pathlib import Path as _Path
+
+    if workspace is not None:
+        config_path = _Path(getattr(workspace, "runtime_config_path", workspace.root / "agentlab.yaml"))
+    else:
+        config_path = _Path(_os.getcwd()) / "agentlab.yaml"
+
+    try:
+        from cli.harness_onboarding import needs_harness_config
+    except Exception:  # pragma: no cover — defensive
+        return
+
+    should_prompt_for_workspace = workspace is None and not config_path.exists()
+    try:
+        should_prompt_for_models = needs_harness_config(config_path)
+    except Exception:  # pragma: no cover — never block REPL on doctor errors
+        should_prompt_for_models = False
+
+    if not (should_prompt_for_workspace or should_prompt_for_models):
+        return
+
+    try:
+        if should_prompt_for_workspace:
+            from cli.onboarding import run_onboarding
+
+            run_onboarding()
+        else:
+            from cli.onboarding import _maybe_run_harness_wizard  # type: ignore[attr-defined]
+
+            _maybe_run_harness_wizard(config_path)
+    except (EOFError, KeyboardInterrupt):  # pragma: no cover — user bailed
+        return
+    except Exception:  # pragma: no cover — defensive: never block REPL
+        return
+
+
 def launch_workbench(
     workspace: Any | None,
     *,
@@ -792,10 +841,17 @@ def launch_workbench(
     and a shift+tab binding that cycles the permission mode. Callers
     supplying ``input_provider`` (tests, piped stdin) skip this wiring.
     """
+    import os
     import sys
 
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
+
+    # Gate onboarding on both a workspace-presence check and an env
+    # escape hatch so tests / piped invocations never get stuck on a
+    # prompt. Tests set AGENTLAB_SKIP_ONBOARDING=1.
+    if not os.environ.get("AGENTLAB_SKIP_ONBOARDING"):
+        _maybe_run_first_run_onboarding(workspace)
 
     store: SessionStore | None = None
     session: Session | None = None

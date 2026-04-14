@@ -800,6 +800,51 @@ class TestDoctorCommand:
         assert result.exit_code == 0
         assert "Status: All checks passed" in result.output
 
+    def test_doctor_reports_coordinator_section(self, runner, tmp_dir):
+        """doctor prints the new Coordinator section with worker mode + model rows."""
+        config_file = os.path.join(tmp_dir, "agentlab.yaml")
+        Path(config_file).write_text("optimizer:\n  use_mock: false\n", encoding="utf-8")
+        result = runner.invoke(cli, ["doctor", "--config", config_file])
+        assert result.exit_code == 0
+        assert "Coordinator" in result.output
+        assert "Worker mode:" in result.output
+        assert "Coordinator model:" in result.output
+        assert "Worker model:" in result.output
+        assert "Credentials:" in result.output
+
+    def test_doctor_coordinator_section_shows_resolved_models(self, runner, tmp_dir, monkeypatch):
+        """doctor surfaces the configured harness.models so operators see live mode routing."""
+        workspace = Path(tmp_dir) / "coord-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+        assert init_result.exit_code == 0, init_result.output
+        monkeypatch.chdir(workspace)
+
+        config_file = workspace / "agentlab.yaml"
+        existing = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        existing.setdefault("harness", {}).setdefault("models", {})
+        existing["harness"]["models"]["coordinator"] = {
+            "provider": "anthropic",
+            "model": "claude-opus-4-6",
+            "api_key_env": "ANTHROPIC_API_KEY",
+        }
+        existing["harness"]["models"]["worker"] = {
+            "provider": "anthropic",
+            "model": "claude-sonnet-4-6",
+            "api_key_env": "ANTHROPIC_API_KEY",
+        }
+        config_file.write_text(yaml.safe_dump(existing), encoding="utf-8")
+
+        env = {
+            **os.environ,
+            "ANTHROPIC_API_KEY": "sk-ant-test",
+        }
+        result = runner.invoke(cli, ["doctor", "--config", str(config_file)], env=env)
+        assert result.exit_code == 0, result.output
+        assert "claude-opus-4-6" in result.output
+        assert "claude-sonnet-4-6" in result.output
+        assert "harness.models.coordinator" in result.output
+        assert "harness.models.worker" in result.output
+
     def test_eval_run_prints_mock_warning(self, runner):
         """eval run warns when the harness falls back to mock mode."""
         result = runner.invoke(cli, ["eval", "run"], env=_env_without_api_keys())

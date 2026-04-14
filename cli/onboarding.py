@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -129,4 +130,57 @@ def run_onboarding() -> OnboardingResult:
         return OnboardingResult(workspace=workspace, mode="live", saved_key_env=None)
 
     mode, saved = _prompt_for_provider_key()
+    _maybe_run_harness_wizard()
     return OnboardingResult(workspace=workspace, mode=mode, saved_key_env=saved)
+
+
+def _maybe_run_harness_wizard(config_path: Optional[Path] = None) -> None:
+    """Offer to write ``harness.models.{coordinator,worker}`` on first run.
+
+    We run this after the workspace/API-key step so the wizard inherits
+    the same prompt loop. Failures are soft-logged — a broken wizard
+    must never block workspace creation because doctor can always be
+    used later to finish the configuration.
+    """
+    try:
+        from cli.harness_onboarding import (
+            needs_harness_config,
+            run_harness_wizard,
+            write_harness_models,
+        )
+    except Exception:  # pragma: no cover — defensive import guard
+        return
+
+    target = Path(config_path) if config_path is not None else Path("agentlab.yaml")
+    try:
+        if not needs_harness_config(target):
+            return
+    except Exception:  # pragma: no cover — never block onboarding on doctor errors
+        return
+
+    def _prompt(label: str, choices, default: str) -> str:
+        return click.prompt(
+            label,
+            type=click.Choice(list(choices)),
+            default=default,
+            show_choices=False,
+        )
+
+    try:
+        choice = run_harness_wizard(target, prompt_fn=_prompt, echo_fn=click.echo)
+        write_harness_models(target, choice)
+        click.echo(
+            click.style(
+                f"  ✓ Wrote harness.models to {target} "
+                f"(coordinator={choice.coordinator.model}, worker={choice.worker.model})\n",
+                fg="green",
+            )
+        )
+    except Exception as exc:  # pragma: no cover — surfaced via doctor instead
+        click.echo(
+            click.style(
+                f"  ⚠ Could not configure harness models automatically: {exc}. "
+                "Run `agentlab doctor` to finish setup.\n",
+                fg="yellow",
+            )
+        )
