@@ -298,7 +298,7 @@ def test_stub_loop_binds_missing_fields_on_partial_slash_context(
 
 
 def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
-    """Each turn leaves a compact Claude-style status/footer near the prompt."""
+    """Plain providers keep deterministic footer output for tests/non-TTY runs."""
     lines, echo = _capture_echo()
     run_workbench_app(
         workspace=None,
@@ -312,6 +312,22 @@ def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
     assert any(line.startswith("⏵ ") for line in plain)
     assert any("Default permissions on" in line for line in plain)
     assert any("idle" in line for line in plain)
+
+
+def test_stub_loop_can_let_prompt_toolkit_own_footer_chrome() -> None:
+    """TTY prompt_toolkit path should not duplicate the bottom toolbar after turns."""
+    lines, echo = _capture_echo()
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        prompt_owns_footer=True,
+    )
+
+    plain = [click.unstyle(line) for line in lines]
+    assert not any(set(line) == {"─"} for line in plain if line)
+    assert not any(line.startswith("⏵ ") for line in plain)
 
 
 def test_stub_loop_footer_uses_real_activity_counters() -> None:

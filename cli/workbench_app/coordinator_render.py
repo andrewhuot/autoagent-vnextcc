@@ -2,50 +2,108 @@
 
 from __future__ import annotations
 
+import click
+
 from builder.events import BuilderEvent, BuilderEventType
 from builder.types import now_ts
 
 
-def format_coordinator_event(event: BuilderEvent) -> str | None:
-    """Return one compact transcript line for a coordinator event.
+_RUNNING_GLYPH = "●"
+_BRANCH_GLYPH = "├─"
+_END_GLYPH = "└─"
+_DETAIL_GLYPH = "⎿"
 
-    The renderer intentionally keeps events terse: the Workbench transcript
-    should feel live without flooding the screen with raw JSON payloads.
+
+def _role_label(event: BuilderEvent) -> str:
+    """Return the readable worker/coordinator role label for an event."""
+    role = str(event.payload.get("worker_role") or "").replace("_", " ").strip()
+    return role or "worker"
+
+
+def _truncate(text: str, *, width: int = 140) -> str:
+    """Keep streaming worker notes from pushing the input chrome around."""
+    clean = " ".join(str(text or "").split())
+    if len(clean) <= width:
+        return clean
+    return clean[: width - 1].rstrip() + "…"
+
+
+def _dim(text: str) -> str:
+    return click.style(text, dim=True)
+
+
+def _success(text: str) -> str:
+    return click.style(text, fg="green")
+
+
+def _error(text: str) -> str:
+    return click.style(text, fg="red", bold=True)
+
+
+def _warn(text: str) -> str:
+    return click.style(text, fg="yellow")
+
+
+def _worker_line(role: str, status: str, *, terminal: bool = False) -> str:
+    glyph = _END_GLYPH if terminal else _BRANCH_GLYPH
+    return _dim(f"  {glyph} ") + f"{role} {status}"
+
+
+def _detail_line(text: str) -> str:
+    return _dim(f"  │  {_DETAIL_GLYPH} {_truncate(text)}")
+
+
+def format_coordinator_event(event: BuilderEvent) -> str | None:
+    """Return one Claude-Code-style transcript line for a coordinator event.
+
+    Worker state is rendered as a compact tree rather than a raw log stream,
+    matching Claude Code's progress blocks while staying native to the
+    Python terminal renderer.
     """
     payload = event.payload
     event_type = event.event_type
-    role = str(payload.get("worker_role") or "").replace("_", " ")
+    role = _role_label(event)
     if event_type == BuilderEventType.COORDINATOR_EXECUTION_STARTED:
-        return f"  Coordinator started {payload.get('worker_count', 0)} worker(s)."
+        return click.style(
+            f"{_RUNNING_GLYPH} Coordinator started {payload.get('worker_count', 0)} worker(s)",
+            fg="cyan",
+            bold=True,
+        )
     if event_type == BuilderEventType.WORKER_GATHERING_CONTEXT:
-        return f"  [{role}] gathering context"
+        return _worker_line(role, "gathering context")
     if event_type == BuilderEventType.WORKER_ACTING:
-        return f"  [{role}] acting"
+        return _worker_line(role, "acting")
     if event_type == BuilderEventType.WORKER_VERIFYING:
-        return f"  [{role}] verifying artifacts"
+        return _worker_line(role, "verifying artifacts")
     if event_type == BuilderEventType.WORKER_MESSAGE_DELTA:
-        text = " ".join(str(payload.get("text") or "").split())
+        text = _truncate(str(payload.get("text") or ""), width=120)
         if not text:
             return None
-        clipped = text[:160] + ("..." if len(text) > 160 else "")
-        return f"  [{role}] {clipped}"
+        return _detail_line(text)
     if event_type == BuilderEventType.WORKER_COMPLETED:
         summary = str(payload.get("summary") or "").strip()
         suffix = f": {summary}" if summary else ""
-        return f"  [{role}] completed{suffix}"
+        return _success(_worker_line(role, f"completed{suffix}", terminal=True))
     if event_type == BuilderEventType.WORKER_FAILED:
-        return f"  [{role}] failed: {payload.get('error') or 'unknown error'}"
+        return _error(
+            f"  {_END_GLYPH} ! {role} failed: {payload.get('error') or 'unknown error'}"
+        )
     if event_type == BuilderEventType.WORKER_BLOCKED:
-        return f"  [{role}] blocked: {payload.get('reason') or 'needs approval'}"
+        return _warn(
+            f"  {_END_GLYPH} ! {role} blocked: {payload.get('reason') or 'needs approval'}"
+        )
     if event_type == BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED:
         summary = str(payload.get("summary") or "").strip()
-        return f"  Synthesis complete: {summary}" if summary else "  Synthesis complete."
+        text = f"Synthesis complete: {summary}" if summary else "Synthesis complete"
+        return _detail_line(text)
     if event_type == BuilderEventType.COORDINATOR_EXECUTION_COMPLETED:
-        return "  Coordinator run completed."
+        return _success(f"  {_END_GLYPH} ✓ Coordinator run completed")
     if event_type == BuilderEventType.COORDINATOR_EXECUTION_FAILED:
-        return f"  Coordinator run failed: {payload.get('error') or 'unknown error'}"
+        return _error(
+            f"  {_END_GLYPH} ! Coordinator run failed: {payload.get('error') or 'unknown error'}"
+        )
     if event_type == BuilderEventType.COORDINATOR_EXECUTION_BLOCKED:
-        return "  Coordinator run blocked."
+        return _warn(f"  {_END_GLYPH} ! Coordinator run blocked")
     return None
 
 
@@ -55,19 +113,18 @@ def render_progress_line(
     *,
     now: float | None = None,
 ) -> str | None:
-    """Return a transcript line for ``event`` prefixed with elapsed seconds.
+    """Return a Claude-style live transcript line for ``event``.
 
-    Used by the live REPL loop to echo each coordinator event as it arrives,
-    with a short ``[Ns]`` hint so the operator can feel the turn's progress
-    instead of watching a dead prompt. Returns ``None`` for events that
-    :func:`format_coordinator_event` chooses to skip (e.g. noisy deltas).
+    The elapsed time is preserved as compact dim metadata at the end of the
+    line instead of a noisy ``[Ns]`` log prefix, which keeps the transcript
+    visually close to Claude Code's agent progress blocks.
     """
     line = format_coordinator_event(event)
     if line is None:
         return None
     reference = event.timestamp if event.timestamp else (now if now is not None else now_ts())
     elapsed = max(0, int(reference - start_ts))
-    return f"  [{elapsed}s]{line[1:] if line.startswith(' ') else ' ' + line}"
+    return f"{line}{_dim(f' · {elapsed}s')}"
 
 
 def worker_phase_verb(event: BuilderEvent) -> str | None:

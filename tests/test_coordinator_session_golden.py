@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import click
 import pytest
 
 from builder.event_replay import EventReplay, load_events
@@ -89,9 +90,10 @@ def test_build_transcript_snapshot_first_lines() -> None:
         for event in bundle.events
         if (line := format_coordinator_event(event))
     ]
-    # Lock the first line — the rest grows with the recorded roster.
-    assert lines[0].startswith("  Coordinator started ")
-    assert lines[-1] in {
-        "  Coordinator run completed.",
-        "  Coordinator run blocked.",
+    # Lock the Claude-style shape — the rest grows with the recorded roster.
+    assert "● Coordinator" in lines[0]
+    assert any("├─" in line or "└─" in line for line in lines[1:])
+    assert click.unstyle(lines[-1]) in {
+        "  └─ ✓ Coordinator run completed",
+        "  └─ ! Coordinator run blocked",
     }

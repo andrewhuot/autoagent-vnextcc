@@ -7,9 +7,9 @@ detected, this module presents a friendly guided choice:
 2. Create empty workspace (minimal scaffold)
 
 If no provider API key is detected on the system after the workspace
-selection, the user is prompted to either paste one now (enabling live
-mode) or explicitly opt into mock mode. Live mode is the default when
-any provider key is already available in the environment.
+selection, the user must paste one before workspace creation continues.
+Live mode is the default when any provider key is already available in
+the environment.
 """
 
 from __future__ import annotations
@@ -54,44 +54,44 @@ def _detect_existing_provider_key() -> Optional[str]:
 
 
 def _prompt_for_provider_key() -> tuple[str, Optional[str]]:
-    """Prompt the user to paste a provider key or choose mock.
+    """Prompt until the user provides a provider key.
 
     Returns (mode, saved_env_name) where mode is "live" or "mock".
     """
     click.echo("")
-    click.echo(click.style("  AgentLab works best with a real LLM.", bold=True))
-    click.echo("  Paste a provider API key to enable live mode, or choose mock for")
-    click.echo("  canned responses while you explore.\n")
+    click.echo(click.style("  Add a provider API key to continue.", bold=True))
+    click.echo("  AgentLab uses live model calls for the workbench. Your key is saved")
+    click.echo("  to .agentlab/.env and is not printed back to the terminal.\n")
     for number, label, env_name in PROVIDER_CHOICES:
         click.echo(f"    {number}) Paste {label} key ({env_name})")
-    click.echo("    4) Use mock mode for now (no key)\n")
+    click.echo("")
 
     choice = click.prompt(
         "  Choose",
-        type=click.Choice(["1", "2", "3", "4"]),
+        type=click.Choice(["1", "2", "3"]),
         default="1",
         show_choices=False,
     )
 
-    if choice == "4":
-        click.echo(
-            "  Using mock mode. Run `agentlab mode set live` after saving a key via "
-            "`agentlab provider configure`.\n"
-        )
-        return "mock", None
-
-    env_name = next(env for number, _label, env in PROVIDER_CHOICES if number == choice)
-    key_value = click.prompt(
-        f"  Paste your {env_name}",
-        hide_input=True,
-        confirmation_prompt=False,
-        default="",
-        show_default=False,
-    ).strip()
-
-    if not key_value:
-        click.echo("  No key provided — falling back to mock mode.\n")
-        return "mock", None
+    env_name = next(
+        (
+            env
+            for number, _label, env in PROVIDER_CHOICES
+            if number == choice
+        ),
+        "OPENAI_API_KEY",
+    )
+    key_value = ""
+    while not key_value:
+        key_value = click.prompt(
+            f"  Paste your {env_name}",
+            hide_input=True,
+            confirmation_prompt=False,
+            default="",
+            show_default=False,
+        ).strip()
+        if not key_value:
+            click.echo(click.style("  API key is required to continue.", fg="yellow"))
 
     write_workspace_env_values({env_name: key_value})
     os.environ[env_name] = key_value

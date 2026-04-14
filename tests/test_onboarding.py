@@ -45,11 +45,11 @@ def test_onboarding_without_key_prompts_and_saves(monkeypatch: pytest.MonkeyPatc
     assert "GOOGLE_API_KEY=fake-google-key" in env_file.read_text(encoding="utf-8")
 
 
-def test_onboarding_provider_prompt_defaults_to_api_key_collection(
+def test_onboarding_provider_prompt_requires_api_key_collection(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    """First-run onboarding should make live/API-key setup the default path."""
+    """First-run onboarding should require a provider key before workspace creation."""
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
     defaults: list[str | None] = []
@@ -58,33 +58,36 @@ def test_onboarding_provider_prompt_defaults_to_api_key_collection(
         defaults.append(kwargs.get("default"))
         if len(defaults) == 1:
             return "1"
-        return "4"
+        if len(defaults) == 2:
+            return "1"
+        return "fake-openai-key"
 
     with patch("click.prompt", side_effect=fake_prompt):
         result = run_onboarding()
 
-    assert result.mode == "mock"
+    assert result.mode == "live"
+    assert result.saved_key_env == "OPENAI_API_KEY"
     assert defaults[:2] == ["1", "1"]
 
 
-def test_onboarding_user_picks_mock_for_now(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_onboarding_does_not_offer_mock_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    with patch("click.prompt", side_effect=["1", "4"]):
+    with patch("click.prompt", side_effect=["1", "4", "fake-openai-key"]):
         result = run_onboarding()
     assert result.workspace == "demo"
-    assert result.mode == "mock"
-    assert result.saved_key_env is None
-    assert not (tmp_path / ".agentlab" / ".env").exists()
+    assert result.mode == "live"
+    assert result.saved_key_env == "OPENAI_API_KEY"
+    assert (tmp_path / ".agentlab" / ".env").exists()
 
 
-def test_onboarding_empty_key_input_falls_back_to_mock(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_onboarding_empty_key_input_reprompts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    with patch("click.prompt", side_effect=["1", "1", "   "]):
+    with patch("click.prompt", side_effect=["1", "1", "   ", "fake-openai-key"]):
         result = run_onboarding()
-    assert result.mode == "mock"
-    assert result.saved_key_env is None
+    assert result.mode == "live"
+    assert result.saved_key_env == "OPENAI_API_KEY"
 
 
 def test_onboarding_gemini_alias_is_detected(monkeypatch: pytest.MonkeyPatch) -> None:

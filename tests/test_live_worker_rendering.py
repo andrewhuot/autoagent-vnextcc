@@ -47,7 +47,7 @@ def _make_event(
         payload=payload,
     )
     # ``BuilderEvent.timestamp`` defaults to ``now_ts``; overwrite so the
-    # rendered ``[Ns]`` prefix is deterministic in assertions.
+    # rendered elapsed metadata is deterministic in assertions.
     event.timestamp = timestamp
     return event
 
@@ -130,17 +130,18 @@ class _FakeStreamingRuntime:
         )
 
 
-def test_render_progress_line_prefixes_elapsed_seconds() -> None:
-    """The live transcript line must prepend an ``[Ns]`` elapsed-time hint."""
+def test_render_progress_line_uses_claude_style_tree_line() -> None:
+    """The live transcript line should use Claude-style tree glyphs, not log prefixes."""
     start = 100.0
     event = _make_event(BuilderEventType.WORKER_ACTING, timestamp=102.0)
 
     line = render_progress_line(event, start)
 
     assert line is not None
-    assert line.startswith("  [2s] ")
-    # The underlying coordinator event text still renders after the prefix.
-    assert "build worker" in line
+    plain = click.unstyle(line)
+    assert plain.startswith("  ├─ ")
+    assert "[2s]" not in plain
+    assert "build worker" in plain
     assert "acting" in line
 
 
@@ -203,14 +204,13 @@ def test_live_worker_events_echo_before_final_result() -> None:
     assert runtime.stream_calls == ["Build a support agent"]
     assert runtime.batched_calls == []
 
-    # Progress lines should appear — one per rendered event — with the
-    # ``[Ns]`` elapsed-time prefix in front of each coordinator/worker line.
+    # Progress lines should appear — one per rendered event — using the
+    # Claude-style tree glyphs rather than raw elapsed-time log prefixes.
     assert "gathering context" in joined
     assert "acting" in joined
     assert "completed" in joined
-    # At least one ``[0s]``/``[Ns]`` prefix must be present to prove the
-    # live renderer ran instead of the batched transcript path.
-    assert any("[0s]" in line or "[1s]" in line or "[2s]" in line for line in captured)
+    assert any("├─" in click.unstyle(line) or "└─" in click.unstyle(line) for line in captured)
+    assert not any("[0s]" in line or "[1s]" in line or "[2s]" in line for line in captured)
 
 
 def test_live_rendering_drives_effort_indicator_verb_sequence() -> None:

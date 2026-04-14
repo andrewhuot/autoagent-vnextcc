@@ -41,6 +41,7 @@ __all__ = [
     "WorkbenchPromptState",
     "build_prompt_input_provider",
     "cycle_permission_mode",
+    "render_bottom_toolbar",
 ]
 
 PROMPT_PERMISSION_MODE_CYCLE = ("default", "acceptEdits", "plan", "bypass")
@@ -111,6 +112,38 @@ def _supports_rounded_corners() -> bool:
 
     encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
     return encoding.startswith("utf")
+
+
+def _fit_toolbar(text: str, width: int) -> str:
+    """Fit toolbar text into one terminal row without wrapping."""
+    clean = " ".join(text.split())
+    if width <= 0 or len(clean) <= width:
+        return clean
+    if width <= 1:
+        return clean[:width]
+    return clean[: width - 1].rstrip() + "…"
+
+
+def render_bottom_toolbar(mode: str, *, width: int | None = None) -> str:
+    """Return the single-line prompt-owned toolbar for the live TTY path.
+
+    Claude Code keeps the bottom chrome compact: permission mode first,
+    then only the keyboard affordances that fit. Narrow terminals get a
+    shorter one-row variant so prompt_toolkit never reserves a surprise
+    second toolbar row at the bottom of the screen.
+    """
+    resolved_width = width if width is not None else _terminal_width()
+    label = theme.format_mode(mode, color=False)
+    variants = (
+        f"{label} permissions on · shift+tab to cycle · ? shortcuts · / commands · ctrl+t transcript",
+        f"{label} permissions on · shift+tab · ? shortcuts · / commands",
+        f"{label} permissions on · shift+tab",
+        f"{label} permissions on",
+    )
+    for variant in variants:
+        if len(variant) <= resolved_width:
+            return variant
+    return _fit_toolbar(variants[-1], resolved_width)
 
 
 def _render_top_border(echo: EchoFn) -> None:
@@ -194,22 +227,15 @@ def build_prompt_input_provider(
             buf.start_completion(select_first=False)
 
     def _bottom_toolbar() -> Any:
-        label = theme.format_mode(state.mode, color=False)
-        permission_line = f"{label} permissions on · shift+tab to cycle"
-        hint_line = "? for shortcuts · / for commands · ctrl+t toggles transcript"
         return FormattedText(
-            [
-                ("class:toolbar", permission_line),
-                ("", "\n"),
-                ("class:toolbar.dim", hint_line),
-            ]
+            [("class:toolbar", render_bottom_toolbar(state.mode))]
         )
 
     session: Any = PromptSession(
         completer=completer,
         complete_while_typing=True,
         complete_style=CompleteStyle.COLUMN,
-        reserve_space_for_menu=8,
+        reserve_space_for_menu=6,
         key_bindings=bindings,
         bottom_toolbar=_bottom_toolbar,
         mouse_support=False,

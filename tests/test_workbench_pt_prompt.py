@@ -13,8 +13,9 @@ Covers:
 from __future__ import annotations
 
 import json
+import sys
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
-from types import SimpleNamespace
 
 import click
 import pytest
@@ -23,8 +24,60 @@ from cli.permissions import DEFAULT_PERMISSION_MODE
 from cli.workbench_app.pt_prompt import (
     PROMPT_PERMISSION_MODE_CYCLE,
     WorkbenchPromptState,
+    render_bottom_toolbar,
     cycle_permission_mode,
 )
+
+
+def _install_fake_prompt_toolkit(
+    monkeypatch: pytest.MonkeyPatch,
+    session_cls: type,
+) -> None:
+    """Install a tiny prompt_toolkit stub for tests that do not need a TTY."""
+    prompt_toolkit = ModuleType("prompt_toolkit")
+    prompt_toolkit.PromptSession = session_cls  # type: ignore[attr-defined]
+
+    formatted_text = ModuleType("prompt_toolkit.formatted_text")
+
+    class ANSI(str):
+        pass
+
+    class FormattedText(list):
+        pass
+
+    formatted_text.ANSI = ANSI  # type: ignore[attr-defined]
+    formatted_text.FormattedText = FormattedText  # type: ignore[attr-defined]
+
+    history = ModuleType("prompt_toolkit.history")
+
+    class InMemoryHistory:
+        pass
+
+    history.InMemoryHistory = InMemoryHistory  # type: ignore[attr-defined]
+
+    key_binding = ModuleType("prompt_toolkit.key_binding")
+
+    class KeyBindings:
+        def __init__(self) -> None:
+            self.bindings: list[SimpleNamespace] = []
+
+        def add(self, *keys: str):
+            def decorator(fn):
+                self.bindings.append(SimpleNamespace(keys=keys, handler=fn))
+                return fn
+
+            return decorator
+
+    key_binding.KeyBindings = KeyBindings  # type: ignore[attr-defined]
+
+    shortcuts = ModuleType("prompt_toolkit.shortcuts")
+    shortcuts.CompleteStyle = SimpleNamespace(COLUMN="COLUMN")  # type: ignore[attr-defined]
+
+    monkeypatch.setitem(sys.modules, "prompt_toolkit", prompt_toolkit)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.formatted_text", formatted_text)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.history", history)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", key_binding)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.shortcuts", shortcuts)
 
 
 def test_cycle_permission_mode_walks_canonical_order() -> None:
@@ -94,9 +147,7 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
         def prompt(self, _prompt: str) -> str:
             return ""
 
-    import prompt_toolkit
-
-    monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakeSession)
+    _install_fake_prompt_toolkit(monkeypatch, _FakeSession)
 
     registry = build_builtin_registry(include_streaming=False)
     pt_prompt.build_prompt_input_provider(
@@ -118,6 +169,24 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
     assert captured_kwargs.get("enable_history_search") is True
 
 
+def test_bottom_toolbar_compacts_to_single_line_on_narrow_width() -> None:
+    """The prompt-owned toolbar should not consume two rows in short terminals."""
+    toolbar = render_bottom_toolbar("default", width=36)
+    assert "\n" not in toolbar
+    assert "Default permissions on" in toolbar
+    assert "shift+tab" in toolbar
+    assert len(toolbar) <= 36
+
+
+def test_bottom_toolbar_keeps_full_hint_when_width_allows() -> None:
+    toolbar = render_bottom_toolbar("plan", width=96)
+    assert "\n" not in toolbar
+    assert "Plan Mode permissions on" in toolbar
+    assert "? shortcuts" in toolbar
+    assert "/ commands" in toolbar
+    assert "ctrl+t transcript" in toolbar
+
+
 def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyPatch) -> None:
     """Borders should wrap every prompt call, even when prompt_toolkit
     raises (e.g. EOF) — we rely on a ``try / finally`` for that.
@@ -135,9 +204,7 @@ def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyP
             return "hi"
 
     # Swap the real PromptSession for a stub so the test doesn't open a TTY.
-    import prompt_toolkit
-
-    monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakeSession)
+    _install_fake_prompt_toolkit(monkeypatch, _FakeSession)
     monkeypatch.setattr(pt_prompt, "_terminal_width", lambda default=80: 20)
 
     registry = build_builtin_registry(include_streaming=False)

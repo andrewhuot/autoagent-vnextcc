@@ -250,6 +250,7 @@ def run_workbench_app(
     slash_context: "SlashContext | None" = None,
     prompt_state: Any | None = None,
     agent_runtime: Any | None = None,
+    prompt_owns_footer: bool = False,
 ) -> StubAppResult:
     """Run the interactive workbench loop.
 
@@ -269,6 +270,10 @@ def run_workbench_app(
     show_banner:
         Suppress the banner for test scenarios that only care about loop
         behavior.
+    prompt_owns_footer:
+        True when the live prompt_toolkit session is rendering the bottom
+        toolbar. In that mode the loop does not echo an extra post-turn
+        footer, avoiding duplicated/clipped bottom chrome.
     """
     out: EchoFn = echo if echo is not None else click.echo
     if input_provider is None:
@@ -342,6 +347,17 @@ def run_workbench_app(
         ctx.meta["agent_runtime"] = active_agent_runtime
         ctx.coordinator_session = getattr(active_agent_runtime, "coordinator_session", None)
 
+    def _maybe_render_turn_footer() -> None:
+        if prompt_owns_footer:
+            return
+        _render_turn_footer(
+            out,
+            workspace,
+            mode_override=getattr(prompt_state, "mode", None),
+            active_shells=_meta_int(ctx, "active_shells"),
+            active_tasks=_meta_int(ctx, "active_tasks"),
+        )
+
     lines_read = 0
     interrupts = 0
     exited_via = "eof"
@@ -393,13 +409,7 @@ def run_workbench_app(
 
         if line == "?":
             out(render_shortcuts_help())
-            _render_turn_footer(
-                out,
-                workspace,
-                mode_override=getattr(prompt_state, "mode", None),
-                active_shells=_meta_int(ctx, "active_shells"),
-                active_tasks=_meta_int(ctx, "active_tasks"),
-            )
+            _maybe_render_turn_footer()
             continue
 
         # `!cmd` — shell-mode passthrough, gated by permission mode.
@@ -416,13 +426,7 @@ def run_workbench_app(
                 echo=out,
                 reader=reader,
             )
-            _render_turn_footer(
-                out,
-                workspace,
-                mode_override=getattr(prompt_state, "mode", None),
-                active_shells=_meta_int(ctx, "active_shells"),
-                active_tasks=_meta_int(ctx, "active_tasks"),
-            )
+            _maybe_render_turn_footer()
             continue
 
         # `&cmd` — dispatch the remainder as a background coordinator turn.
@@ -433,13 +437,7 @@ def run_workbench_app(
                 line=line[1:].strip(),
                 echo=out,
             )
-            _render_turn_footer(
-                out,
-                workspace,
-                mode_override=getattr(prompt_state, "mode", None),
-                active_shells=_meta_int(ctx, "active_shells"),
-                active_tasks=_meta_int(ctx, "active_tasks"),
-            )
+            _maybe_render_turn_footer()
             continue
 
         # Route ``/command`` input through the slash registry when one is
@@ -517,13 +515,7 @@ def run_workbench_app(
             else:
                 out(theme.user(f"  AgentLab received: {line}", bold=False))
 
-        _render_turn_footer(
-            out,
-            workspace,
-            mode_override=getattr(prompt_state, "mode", None),
-            active_shells=_meta_int(ctx, "active_shells"),
-            active_tasks=_meta_int(ctx, "active_tasks"),
-        )
+        _maybe_render_turn_footer()
 
     return StubAppResult(
         lines_read=lines_read,
@@ -702,8 +694,8 @@ def _echo_post_stream_summary(
 ) -> None:
     """Echo header + ``Next:`` lines the live stream didn't cover itself.
 
-    The live echo path prints each worker event with an ``[Ns]`` elapsed
-    prefix. The batched transcript also includes a ``Coordinator plan X
+    The live echo path prints each worker event as a Claude-style progress
+    line. The batched transcript also includes a ``Coordinator plan X
     created for N worker(s).`` header and a trailing ``Next: ...``
     summary. We surface any transcript line that wasn't matched by a live
     progress echo so the operator still sees the plan header and the
@@ -1044,6 +1036,7 @@ def launch_workbench(
         registry=registry,
         slash_context=ctx,
         prompt_state=prompt_state,
+        prompt_owns_footer=prompt_state is not None,
     )
 
 
