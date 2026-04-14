@@ -249,6 +249,24 @@ def test_completer_returns_nothing_for_non_slash_buffer(
     assert _get_completions(completer, "hello") == []
 
 
+@pytest.mark.asyncio
+async def test_completer_supports_prompt_toolkit_async_completion_path(
+    registry: CommandRegistry,
+) -> None:
+    """prompt_toolkit uses async completions for while-typing menus."""
+    completer = SlashCommandCompleter(registry)
+    document = Document(text="/he", cursor_position=3)
+
+    completions = [
+        completion
+        async for completion in completer.get_completions_async(
+            document, CompleteEvent()
+        )
+    ]
+
+    assert [completion.text for completion in completions] == ["help"]
+
+
 def test_completer_cursor_mid_buffer_only_uses_text_before_cursor(
     registry: CommandRegistry,
 ) -> None:

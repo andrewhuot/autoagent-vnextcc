@@ -183,6 +183,7 @@ def build_prompt_input_provider(
     try:
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import ANSI, FormattedText
+        from prompt_toolkit.filters import Condition
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.shortcuts import CompleteStyle
@@ -226,14 +227,32 @@ def build_prompt_input_provider(
         if buf.document.text_before_cursor == "/":
             buf.start_completion(select_first=False)
 
+    session: Any
+
+    @Condition
+    def _complete_for_slash_commands() -> bool:
+        """Reserve completion-menu rows only while slash input is active.
+
+        ``PromptSession`` uses ``complete_while_typing`` to decide whether the
+        input window needs at least ``reserve_space_for_menu`` rows. Keeping it
+        always-on makes the idle prompt float above the bottom toolbar. Claude
+        Code only swaps footer space for suggestions when suggestions are
+        visible, so we do the same for slash-command input.
+        """
+        try:
+            text = session.default_buffer.text
+        except Exception:
+            return False
+        return text.lstrip().startswith("/")
+
     def _bottom_toolbar() -> Any:
         return FormattedText(
             [("class:toolbar", render_bottom_toolbar(state.mode))]
         )
 
-    session: Any = PromptSession(
+    session = PromptSession(
         completer=completer,
-        complete_while_typing=True,
+        complete_while_typing=_complete_for_slash_commands,
         complete_style=CompleteStyle.COLUMN,
         reserve_space_for_menu=6,
         key_bindings=bindings,

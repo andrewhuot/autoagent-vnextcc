@@ -25,7 +25,7 @@ import difflib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterable, Iterator
 
 from cli.workbench_app.commands import CommandRegistry, SlashCommand
 
@@ -351,6 +351,15 @@ class SlashCommandCompleter:
                 display=f"/{record.name}",
                 display_meta=record.display_meta,
             )
+
+    async def get_completions_async(
+        self,
+        document: "Document",
+        complete_event: "CompleteEvent",
+    ) -> "AsyncIterator[Completion]":
+        """Yield completions for prompt_toolkit's while-typing async path."""
+        for completion in self.get_completions(document, complete_event):
+            yield completion
 
 
 def build_completer(

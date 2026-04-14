@@ -70,6 +70,9 @@ def _install_fake_prompt_toolkit(
 
     key_binding.KeyBindings = KeyBindings  # type: ignore[attr-defined]
 
+    filters = ModuleType("prompt_toolkit.filters")
+    filters.Condition = lambda fn: fn  # type: ignore[attr-defined]
+
     shortcuts = ModuleType("prompt_toolkit.shortcuts")
     shortcuts.CompleteStyle = SimpleNamespace(COLUMN="COLUMN")  # type: ignore[attr-defined]
 
@@ -77,6 +80,7 @@ def _install_fake_prompt_toolkit(
     monkeypatch.setitem(sys.modules, "prompt_toolkit.formatted_text", formatted_text)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.history", history)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", key_binding)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.filters", filters)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.shortcuts", shortcuts)
 
 
@@ -139,10 +143,13 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
     from cli.workbench_app.slash import build_builtin_registry
 
     captured_kwargs: dict[str, object] = {}
+    captured_session: SimpleNamespace = SimpleNamespace(instance=None)
 
     class _FakeSession:
         def __init__(self, **kwargs: object) -> None:
+            self.default_buffer = SimpleNamespace(text="")
             captured_kwargs.update(kwargs)
+            captured_session.instance = self
 
         def prompt(self, _prompt: str) -> str:
             return ""
@@ -163,7 +170,11 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
     assert "/" in binding_strs
     assert any("s-tab" in b or "Keys.BackTab" in b for b in binding_strs)
 
-    assert captured_kwargs.get("complete_while_typing") is True
+    completion_filter = captured_kwargs.get("complete_while_typing")
+    assert callable(completion_filter)
+    assert completion_filter() is False
+    captured_session.instance.default_buffer.text = "/"
+    assert completion_filter() is True
     assert captured_kwargs.get("reserve_space_for_menu", 0) >= 6
     assert captured_kwargs.get("history") is not None
     assert captured_kwargs.get("enable_history_search") is True
