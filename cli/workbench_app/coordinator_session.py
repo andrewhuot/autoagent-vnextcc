@@ -128,39 +128,12 @@ class CoordinatorSession:
                 message=cleaned,
             )
 
-        emitted = tuple(self.execute(str(plan["plan_id"])))
-        run = self._require_latest_run()
-        transcript_lines = tuple(self._render_transcript_lines(plan=plan, run=run, events=emitted))
-        self._record_turn_history(
-            intent=intent,
-            goal=cleaned,
+        emitted = tuple(self.execute_iter(str(plan["plan_id"])))
+        return self.finalize(
             plan=plan,
-            run=run,
-        )
-        return CoordinatorTurnResult(
+            events=emitted,
+            intent=intent,
             message=cleaned,
-            command_intent=intent,
-            project_id=project.project_id,
-            session_id=session.session_id,
-            task_id=task.task_id,
-            plan_id=str(plan["plan_id"]),
-            run_id=run.run_id,
-            status=run.status.value,
-            transcript_lines=transcript_lines,
-            worker_roles=tuple(state.worker_role.value for state in run.worker_states),
-            active_tasks=0 if run.status in _TERMINAL_RUN_STATUSES else len(run.worker_states),
-            next_actions=tuple(self._next_actions(run_status=run.status, intent=intent)),
-            review_cards=tuple(self._review_cards(run)),
-            metadata={
-                "coordinator_synthesis": dict(run.coordinator_synthesis),
-                "worker_count": len(run.worker_states),
-                "event_count": len(emitted),
-                "materialized_task_ids": [
-                    str(item.get("materialized_task_id"))
-                    for item in plan.get("tasks", [])
-                    if isinstance(item, dict) and item.get("materialized_task_id")
-                ],
-            },
         )
 
     def plan(
@@ -213,8 +186,18 @@ class CoordinatorSession:
         self.active_plan_id = str(plan["plan_id"])
         return plan
 
-    def execute(self, plan_id: str | None = None, dry_run: bool = False) -> Iterator[BuilderEvent]:
-        """Execute the active plan and yield coordinator events in order."""
+    def execute_iter(
+        self, plan_id: str | None = None, dry_run: bool = False
+    ) -> Iterator[BuilderEvent]:
+        """Execute the active plan and yield coordinator events in order.
+
+        This is the streaming-friendly primitive: callers can iterate events
+        lazily and echo each one live instead of waiting for the full batch.
+        The underlying ``CoordinatorWorkerRuntime.execute_plan`` is still
+        synchronous today, so events surface in a burst once execution
+        finishes; the generator shape keeps the REPL integration ready for
+        a future async worker runtime without another refactor.
+        """
         task = self._require_active_task()
         selected_plan_id = plan_id or self.active_plan_id
         if not selected_plan_id:
@@ -247,6 +230,73 @@ class CoordinatorSession:
             since_timestamp=start_ts,
         ):
             yield event
+
+    def execute(
+        self, plan_id: str | None = None, dry_run: bool = False
+    ) -> Iterator[BuilderEvent]:
+        """Backward-compatible alias for :meth:`execute_iter`.
+
+        Existing callers (and tests) iterate ``session.execute(plan_id)`` to
+        drain events into a tuple. Keep the name bound so we don't break
+        that contract while new code uses ``execute_iter``.
+        """
+        return self.execute_iter(plan_id=plan_id, dry_run=dry_run)
+
+    def finalize(
+        self,
+        *,
+        plan: Mapping[str, Any],
+        events: tuple[BuilderEvent, ...],
+        intent: str,
+        message: str,
+    ) -> CoordinatorTurnResult:
+        """Materialize a :class:`CoordinatorTurnResult` from a finished run.
+
+        Split out of :meth:`process_turn` so the REPL can consume events via
+        :meth:`execute_iter` and then ask the session to assemble the result
+        once the generator is drained. This keeps the batched ``process_turn``
+        contract and the live path using the same transcript rendering.
+        """
+        task = self._require_active_task()
+        project = self._store.get_project(task.project_id)
+        session = self._store.get_session(task.session_id)
+        if project is None or session is None:
+            raise ValueError("Coordinator session lost its active project or session")
+        run = self._require_latest_run()
+        transcript_lines = tuple(
+            self._render_transcript_lines(plan=dict(plan), run=run, events=events)
+        )
+        self._record_turn_history(
+            intent=intent,
+            goal=message,
+            plan=dict(plan),
+            run=run,
+        )
+        return CoordinatorTurnResult(
+            message=message,
+            command_intent=intent,
+            project_id=project.project_id,
+            session_id=session.session_id,
+            task_id=task.task_id,
+            plan_id=str(plan["plan_id"]),
+            run_id=run.run_id,
+            status=run.status.value,
+            transcript_lines=transcript_lines,
+            worker_roles=tuple(state.worker_role.value for state in run.worker_states),
+            active_tasks=0 if run.status in _TERMINAL_RUN_STATUSES else len(run.worker_states),
+            next_actions=tuple(self._next_actions(run_status=run.status, intent=intent)),
+            review_cards=tuple(self._review_cards(run)),
+            metadata={
+                "coordinator_synthesis": dict(run.coordinator_synthesis),
+                "worker_count": len(run.worker_states),
+                "event_count": len(events),
+                "materialized_task_ids": [
+                    str(item.get("materialized_task_id"))
+                    for item in plan.get("tasks", [])
+                    if isinstance(item, dict) and item.get("materialized_task_id")
+                ],
+            },
+        )
 
     def cancel(self) -> bool:
         """Request cancellation of active coordinator work.

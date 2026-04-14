@@ -575,20 +575,136 @@ def _run_agent_turn(
     echo: EchoFn,
     command_intent: str | None = None,
 ) -> None:
-    """Route one user turn into the coordinator and echo its transcript lines."""
+    """Route one user turn into the coordinator and echo its transcript lines.
+
+    Prefers the streaming ``process_turn(stream=True)`` path when the
+    runtime exposes it so worker state transitions render live instead of
+    all-at-once after the full turn completes. Falls back to the batched
+    path transparently when a stub runtime doesn't understand ``stream``.
+    """
+    outcome = _stream_turn_with_live_echo(
+        runtime=runtime,
+        ctx=ctx,
+        line=line,
+        echo=echo,
+        command_intent=command_intent,
+    )
+    if outcome is _STREAM_NOT_SUPPORTED:
+        try:
+            result = runtime.process_turn(line, ctx=ctx, command_intent=command_intent)
+        except Exception as exc:
+            echo(theme.error(f"  Coordinator error: {exc}", bold=False))
+            return
+        try:
+            from cli.workbench_app.runtime import remember_turn_result
+
+            remember_turn_result(ctx, result)
+        except Exception:  # pragma: no cover - metadata sync is best effort
+            pass
+        for transcript_line in tuple(getattr(result, "transcript_lines", ()) or ()):
+            echo(str(transcript_line))
+    elif outcome is not None:
+        # Streaming path already echoed per-event progress lines; emit
+        # the header + trailing summary lines the live loop didn't cover.
+        result, live_text = outcome
+        _echo_post_stream_summary(
+            result=result, echo=echo, live_echoed_lines=live_text
+        )
+
+
+# Sentinel returned by the streaming helper when the runtime does not
+# accept ``stream=True`` — callers fall back to the batched path.
+_STREAM_NOT_SUPPORTED = object()
+
+
+def _stream_turn_with_live_echo(
+    *,
+    runtime: Any,
+    ctx: "SlashContext | None",
+    line: str,
+    echo: EchoFn,
+    command_intent: str | None,
+) -> Any:
+    """Iterate coordinator events as they arrive and render progress live.
+
+    Returns:
+        - ``(result, live_echoed_text)`` when streaming succeeded. The set
+          contains the original (un-prefixed) transcript strings the live
+          loop already echoed so callers can skip duplicates when emitting
+          the batched transcript's header and synthesis footer.
+        - ``None`` if the streaming path raised (error already echoed).
+        - ``_STREAM_NOT_SUPPORTED`` when the runtime has no ``stream`` kwarg.
+    """
     try:
-        result = runtime.process_turn(line, ctx=ctx, command_intent=command_intent)
+        stream = runtime.process_turn(
+            line,
+            ctx=ctx,
+            command_intent=command_intent,
+            stream=True,
+        )
+    except TypeError:
+        # The runtime (likely a test stub) doesn't accept ``stream``; let
+        # the caller fall back to the batched invocation.
+        return _STREAM_NOT_SUPPORTED
     except Exception as exc:
         echo(theme.error(f"  Coordinator error: {exc}", bold=False))
-        return
-    try:
-        from cli.workbench_app.runtime import remember_turn_result
+        return None
 
-        remember_turn_result(ctx, result)
-    except Exception:  # pragma: no cover - metadata sync is best effort
-        pass
-    for transcript_line in tuple(getattr(result, "transcript_lines", ()) or ()):
-        echo(str(transcript_line))
+    from cli.workbench_app.coordinator_render import (
+        format_coordinator_event,
+        render_progress_line,
+        worker_phase_verb,
+    )
+    from cli.workbench_app.effort import EffortIndicator
+
+    indicator = EffortIndicator()
+    indicator.start()
+    start_ts = time.time()
+    result: Any = None
+    live_text: set[str] = set()
+    try:
+        while True:
+            try:
+                event = next(stream)
+            except StopIteration as stop:
+                result = stop.value
+                break
+            verb = worker_phase_verb(event)
+            if verb is not None:
+                indicator.set_verb(verb)
+                indicator.record_progress()
+            rendered = render_progress_line(event, start_ts)
+            if rendered is not None:
+                echo(rendered)
+                base = format_coordinator_event(event)
+                if base is not None:
+                    live_text.add(base.strip())
+    except Exception as exc:
+        echo(theme.error(f"  Coordinator error: {exc}", bold=False))
+        return None
+    finally:
+        indicator.stop()
+    return result, live_text
+
+
+def _echo_post_stream_summary(
+    *, result: Any, echo: EchoFn, live_echoed_lines: set[str]
+) -> None:
+    """Echo header + ``Next:`` lines the live stream didn't cover itself.
+
+    The live echo path prints each worker event with an ``[Ns]`` elapsed
+    prefix. The batched transcript also includes a ``Coordinator plan X
+    created for N worker(s).`` header and a trailing ``Next: ...``
+    summary. We surface any transcript line that wasn't matched by a live
+    progress echo so the operator still sees the plan header and the
+    synthesis hint without duplicating per-event lines.
+    """
+    lines = tuple(getattr(result, "transcript_lines", ()) or ())
+    for candidate in lines:
+        text = str(candidate)
+        if text.strip() in live_echoed_lines:
+            continue
+        echo(text)
 
 
 def _should_gate_with_plan(ctx: "SlashContext | None", mode: str | None) -> bool:
@@ -615,7 +731,14 @@ def _run_plan_gated_turn(
     reader: InputProvider,
     command_intent: str | None = None,
 ) -> None:
-    """Route one free-text turn through the plan-mode approval gate."""
+    """Route one free-text turn through the plan-mode approval gate.
+
+    The gate drives the plan-then-confirm loop and, on approval, executes
+    the real turn through ``runtime.process_turn``. We keep the gate's
+    batched execution here (plan-mode already requires a round-trip with
+    the operator, so live streaming during execution is less critical)
+    and echo the same transcript the non-gated batched path would.
+    """
     try:
         from cli.workbench_app.plan_gate import PlanGate
     except Exception:  # pragma: no cover - defensive import
