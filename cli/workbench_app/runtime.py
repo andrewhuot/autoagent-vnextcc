@@ -8,12 +8,13 @@ can render current work without re-querying the user.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 from builder.coordinator_runtime import CoordinatorWorkerRuntime
 from builder.coordinator_turn import CoordinatorTurnResult
-from builder.events import EventBroker
+from builder.events import BuilderEvent, EventBroker
 from builder.orchestrator import BuilderOrchestrator
 from builder.store import BuilderStore
 from builder.worker_mode import WorkerMode, resolve_worker_mode
@@ -69,16 +70,33 @@ class WorkbenchAgentRuntime:
         ctx: Any | None = None,
         command_intent: str | None = None,
         dry_run: bool = False,
-    ) -> CoordinatorTurnResult:
+        stream: bool = False,
+    ) -> CoordinatorTurnResult | Iterator[BuilderEvent]:
         """Run one terminal turn and synchronize context metadata.
 
         ``dry_run=True`` plans without executing — used by :class:`PlanGate`
         to render the proposed worker roster before asking the operator
         for approval.
+
+        ``stream=True`` returns a generator that yields each
+        :class:`BuilderEvent` as it becomes available and finally returns
+        (via ``StopIteration.value``) the materialized
+        :class:`CoordinatorTurnResult`. Callers use this to drive live
+        progress rendering in the REPL. The batched default behaviour is
+        unchanged so existing tests and API surfaces stay green.
         """
         project_id = _meta_get(ctx, "builder_project_id")
         session_id = _meta_get(ctx, "builder_session_id")
         permission_mode = _meta_get(ctx, "permission_mode")
+        if stream and not dry_run:
+            return self._stream_turn(
+                message=message,
+                ctx=ctx,
+                project_id=project_id,
+                session_id=session_id,
+                command_intent=command_intent,
+                permission_mode=permission_mode,
+            )
         result = self._coordinator_session.process_turn(
             message,
             project_id=project_id,
@@ -89,6 +107,56 @@ class WorkbenchAgentRuntime:
         )
         if not dry_run:
             remember_turn_result(ctx, result)
+        return result
+
+    def _stream_turn(
+        self,
+        *,
+        message: str,
+        ctx: Any | None,
+        project_id: str | None,
+        session_id: str | None,
+        command_intent: str | None,
+        permission_mode: str | None,
+    ) -> Iterator[BuilderEvent]:
+        """Generator-driven coordinator turn for live REPL rendering.
+
+        Yields :class:`BuilderEvent` values as the underlying session
+        produces them; the final :class:`CoordinatorTurnResult` is delivered
+        via ``StopIteration.value`` so callers can both echo events and
+        update context metadata without double-running the turn.
+        """
+        from builder.coordinator_turn import detect_command_intent
+
+        cleaned = " ".join(str(message or "").split())
+        if not cleaned:
+            raise ValueError("Coordinator turn message cannot be empty")
+        intent = command_intent or detect_command_intent(cleaned)
+
+        session = self._coordinator_session
+        plan = session.plan(
+            cleaned,
+            verb=intent,
+            context={
+                "permission_mode": permission_mode or "default",
+                "workbench_surface": "cli",
+                "dry_run": False,
+            },
+        )
+        plan_id = str(plan["plan_id"])
+
+        collected: list[BuilderEvent] = []
+        for event in session.execute_iter(plan_id):
+            collected.append(event)
+            yield event
+
+        result = session.finalize(
+            plan=plan,
+            events=tuple(collected),
+            intent=intent,
+            message=cleaned,
+        )
+        remember_turn_result(ctx, result)
         return result
 
 

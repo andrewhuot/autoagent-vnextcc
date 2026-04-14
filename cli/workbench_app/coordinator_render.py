@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from builder.events import BuilderEvent, BuilderEventType
+from builder.types import now_ts
 
 
 def format_coordinator_event(event: BuilderEvent) -> str | None:
@@ -48,4 +49,61 @@ def format_coordinator_event(event: BuilderEvent) -> str | None:
     return None
 
 
-__all__ = ["format_coordinator_event"]
+def render_progress_line(
+    event: BuilderEvent,
+    start_ts: float,
+    *,
+    now: float | None = None,
+) -> str | None:
+    """Return a transcript line for ``event`` prefixed with elapsed seconds.
+
+    Used by the live REPL loop to echo each coordinator event as it arrives,
+    with a short ``[Ns]`` hint so the operator can feel the turn's progress
+    instead of watching a dead prompt. Returns ``None`` for events that
+    :func:`format_coordinator_event` chooses to skip (e.g. noisy deltas).
+    """
+    line = format_coordinator_event(event)
+    if line is None:
+        return None
+    reference = event.timestamp if event.timestamp else (now if now is not None else now_ts())
+    elapsed = max(0, int(reference - start_ts))
+    return f"  [{elapsed}s]{line[1:] if line.startswith(' ') else ' ' + line}"
+
+
+def worker_phase_verb(event: BuilderEvent) -> str | None:
+    """Map a worker-phase event to an ``EffortIndicator.set_verb`` string.
+
+    Returns ``None`` for events that don't imply a phase change so callers
+    can leave the spinner verb untouched. The shape — ``"<role> <phase>"``
+    — matches what the Workbench footer renders beside the spinner frame.
+    """
+    payload = event.payload
+    role = str(payload.get("worker_role") or "").replace("_", " ").strip()
+    role_prefix = f"{role} " if role else ""
+    event_type = event.event_type
+    if event_type == BuilderEventType.WORKER_GATHERING_CONTEXT:
+        return f"{role_prefix}gathering context".strip()
+    if event_type == BuilderEventType.WORKER_ACTING:
+        return f"{role_prefix}acting".strip()
+    if event_type == BuilderEventType.WORKER_VERIFYING:
+        return f"{role_prefix}verifying".strip()
+    if event_type == BuilderEventType.WORKER_COMPLETED:
+        return f"{role_prefix}completed".strip()
+    if event_type == BuilderEventType.WORKER_FAILED:
+        return f"{role_prefix}failed".strip()
+    if event_type == BuilderEventType.WORKER_BLOCKED:
+        return f"{role_prefix}blocked".strip()
+    if event_type == BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED:
+        return "synthesizing"
+    if event_type == BuilderEventType.COORDINATOR_EXECUTION_STARTED:
+        return "coordinator starting"
+    if event_type == BuilderEventType.COORDINATOR_EXECUTION_COMPLETED:
+        return "coordinator completed"
+    return None
+
+
+__all__ = [
+    "format_coordinator_event",
+    "render_progress_line",
+    "worker_phase_verb",
+]
