@@ -14,6 +14,8 @@ BUILD -> WORKBENCH -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 >
 > **[Detailed Guide](docs/DETAILED_GUIDE.md)** — Full CLI walkthrough, including XML instructions and deployment
 >
+> **[Claude-Style Auto Mode](docs/guides/claude-style-auto-mode.md)** — Live terminal harness, queued input, permissions, and full-auto workflows
+>
 > **[UI Quick Start](docs/UI_QUICKSTART_GUIDE.md)** — Browser walkthrough for the current web console
 >
 > **[Platform Overview](docs/platform-overview.md)** — Product and architecture map
@@ -59,17 +61,26 @@ pip install -e .
 
 ### API keys
 
-AgentLab auto-detects your environment:
+AgentLab is live-first. New workspaces default to live runtime mode, and provider-backed workflows use real LLM providers once a key is available. Save a key through the CLI:
 
-- **Live mode:** if provider credentials are present, it uses real LLM providers.
-- **Mock mode:** if they are missing, it falls back to deterministic mock responses. Mock mode returns predictable, labeled outputs so you can explore the full workflow (build, eval, optimize, deploy) without spending API credits. Eval scores in mock mode are synthetic — useful for learning the tool, not for measuring real agent quality.
+```bash
+agentlab provider configure --provider openai --model gpt-4o --api-key sk-...
+```
 
-To enable live provider workflows, set at least one key:
+Or set provider keys in your shell:
+
 
 ```bash
 export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 export GOOGLE_API_KEY=AI...
+```
+
+Mock mode remains available when you want deterministic offline exploration:
+
+```bash
+agentlab init --mode mock
+agentlab mode set mock
 ```
 
 Run `agentlab doctor` to verify the current mode and provider readiness.
@@ -133,6 +144,12 @@ Default help groups the CLI into **Primary** and **Secondary** commands. Run `ag
 | `template` | List and apply bundled starter templates |
 
 All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md) for the full reference, including the advanced surface.
+
+### Claude-style auto mode
+
+Long-running interactive text commands default to `--ui auto`, which opens a Claude Code-inspired live harness in a real terminal and falls back to classic text in CI, pipes, redirects, and structured output modes. Use it for `agentlab shell`, `agentlab optimize`, `agentlab loop run`, and `agentlab full-auto` when you want to watch progress, queue follow-up input, and see the current permission mode while work runs.
+
+See [docs/guides/claude-style-auto-mode.md](docs/guides/claude-style-auto-mode.md) for the end-to-end workflow.
 
 ### CLI Workbench
 
@@ -240,6 +257,7 @@ See [docs/deployment.md](docs/deployment.md) for local, container, and Cloud Run
 **Guides:**
 
 - [Detailed Guide](docs/DETAILED_GUIDE.md) — Full CLI walkthrough
+- [Claude-Style Auto Mode](docs/guides/claude-style-auto-mode.md) — Live terminal harness, queued input, permissions, and full-auto workflows
 - [UI Quick Start](docs/UI_QUICKSTART_GUIDE.md) — Browser walkthrough
 - [Agentic Coding Tools](docs/guides/agentic-coding-tools.md) — MCP and coding agent setup
 

@@ -37,6 +37,7 @@ from cli.workbench_app.commands import (
     DisplayMode,
     LocalCommand,
     LocalHandlerReturn,
+    LocalJSXCommand,
     OnDoneResult,
     SlashCommand,
     on_done,
@@ -313,11 +314,13 @@ def build_builtin_registry(
         from cli.workbench_app.deploy_slash import build_deploy_command
         from cli.workbench_app.eval_slash import build_eval_command
         from cli.workbench_app.optimize_slash import build_optimize_command
+        from cli.workbench_app.skills_slash import build_skills_command
 
         registry.register(build_eval_command())
         registry.register(build_optimize_command())
         registry.register(build_build_command())
         registry.register(build_deploy_command())
+        registry.register(build_skills_command())
     for command in extra:
         registry.register(command)
     return registry
@@ -382,6 +385,9 @@ def dispatch(
             ctx.echo(message)
             return DispatchResult(handled=True, output=message, error="unknown")
 
+        if isinstance(command, LocalJSXCommand):
+            return _dispatch_local_jsx(ctx, command, args)
+
         if not isinstance(command, LocalCommand):
             message = (
                 f"  /{command.name} is a {command.kind} command; "
@@ -422,6 +428,61 @@ def dispatch(
         )
     finally:
         ctx.registry = previous_registry
+
+
+# ---------------------------------------------------------------------------
+# LocalJSXCommand dispatch (T13) — hand over to a Screen, translate result.
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_local_jsx(
+    ctx: SlashContext,
+    command: LocalJSXCommand,
+    args: Sequence[str],
+) -> "DispatchResult":
+    """Run a ``local-jsx`` screen and fold its :class:`ScreenResult` into
+    a :class:`DispatchResult`.
+
+    The screen is constructed via ``command.screen_factory(ctx, *args)`` so
+    factories can read workspace/session state off the context. ``meta_messages``
+    on the screen result are echoed as dim lines (mirroring the
+    :class:`OnDoneResult` routing in :func:`_render_and_echo`) so the screen
+    can pass a summary back to the transcript without a second dispatch hop.
+    ``action``/``value`` ride through on :class:`DispatchResult` so callers
+    that want to react to a selected skill id / session id can.
+    """
+    factory = command.screen_factory
+    assert factory is not None  # LocalJSXCommand.__post_init__ guarantees this.
+    try:
+        screen = factory(ctx, *args)
+        screen_result = screen.run()
+    except Exception as exc:  # Keep the loop alive on screen failures.
+        message = f"  Error running /{command.name}: {exc}"
+        ctx.echo(message)
+        return DispatchResult(
+            handled=True,
+            command=command,
+            output=message,
+            error=str(exc),
+            display="system",
+            raw_result=message,
+        )
+
+    meta = tuple(getattr(screen_result, "meta_messages", ()) or ())
+    for line in meta:
+        ctx.echo(click.style(line, dim=True))
+
+    value = getattr(screen_result, "value", None)
+    raw = value if isinstance(value, str) else None
+    return DispatchResult(
+        handled=True,
+        command=command,
+        output=None,
+        exit=ctx.exit_requested,
+        display="system",
+        meta_messages=meta,
+        raw_result=raw,
+    )
 
 
 # ---------------------------------------------------------------------------
