@@ -136,6 +136,18 @@ def test_parse_slash_line_falls_back_on_unbalanced_quotes() -> None:
     assert args == ['"open']
 
 
+def test_dispatch_emits_warning_on_unbalanced_quotes(
+    ctx: SlashContext, registry: CommandRegistry
+) -> None:
+    """Unbalanced quotes should surface a 'Warning:' line so users aren't
+    silently handed mangled args. Regression guard for reviewer concern #5."""
+    echoed: list[str] = []
+    ctx.echo = echoed.append
+    ctx.registry = registry
+    dispatch(ctx, '/help "dangling')
+    assert any("Warning: unbalanced quotes" in line for line in echoed), echoed
+
+
 # ---------------------------------------------------------------------------
 # build_builtin_registry — the ten ported commands
 # ---------------------------------------------------------------------------
@@ -387,7 +399,27 @@ def test_click_invoker_error_surfaces_as_transcript_line(
     ctx = SlashContext(echo=echo, click_invoker=_boom, registry=registry)
     result = dispatch(ctx, "/status")
     assert result.output is not None
+    # Regression: reviewer concern #6 — tag the exception type so CI can
+    # tell "command not found" apart from "command crashed".
     assert "Error running 'status'" in result.output
+    assert "RuntimeError" in result.output
+
+
+def test_click_invoker_propagates_systemexit(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    """SystemExit (raised by Click on --help / ExitError) must propagate.
+
+    Regression guard for reviewer concern #6: swallowing SystemExit would
+    turn a legitimate harness exit request into a silent no-op.
+    """
+
+    def _exiter(_cmd: str) -> str:
+        raise SystemExit(2)
+
+    ctx = SlashContext(echo=echo, click_invoker=_exiter, registry=registry)
+    with pytest.raises(SystemExit):
+        dispatch(ctx, "/status")
 
 
 def test_config_handler_with_no_workspace(ctx: SlashContext) -> None:

@@ -402,8 +402,17 @@ def _enter_discovered_workspace(command_name: str | None) -> AgentLabWorkspace |
 
 
 def _is_tty() -> bool:
-    """Return True when stdin is connected to an interactive terminal."""
-    return hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    """Return True only when both stdin and stdout are interactive terminals.
+
+    Checking both is required because `agentlab | tee log.txt` leaves stdin a
+    TTY while stdout is a pipe — launching the interactive Workbench in that
+    shape would render ANSI to the pipe and hang on an `input()` call that
+    never surfaces a prompt the user can see.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            return False
+    return True
 
 
 def _require_workspace(command_name: str | None = None) -> AgentLabWorkspace:

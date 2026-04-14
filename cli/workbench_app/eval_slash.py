@@ -96,10 +96,12 @@ def _default_stream_runner(
         text=True,
         bufsize=1,
     )
-    assert proc.stdout is not None  # subprocess.PIPE guarantees a stream.
-    exit_code = 0
+    # Register immediately so any exception before the try-block still
+    # sees the process cleaned up on ctrl-c.
     if cancellation is not None:
         cancellation.register_process(proc)
+    assert proc.stdout is not None  # subprocess.PIPE guarantees a stream.
+    exit_code = 0
     try:
         for raw in proc.stdout:
             if cancellation is not None and cancellation.cancelled:

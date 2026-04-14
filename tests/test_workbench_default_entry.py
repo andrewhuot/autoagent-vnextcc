@@ -177,6 +177,40 @@ def test_no_workspace_no_tty_falls_back_to_status(
     assert not run_shell.called
 
 
+def test_is_tty_requires_both_stdin_and_stdout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression guard for reviewer concern #2 (``agentlab | tee log.txt``).
+
+    When stdout is a pipe — common in ``agentlab | …`` shell pipelines — we
+    must NOT launch the interactive Workbench, because its ANSI output and
+    input() prompts would both disappear into the pipe. The fix checks both
+    stdin and stdout; this test pins that contract.
+    """
+
+    class _Fake:
+        def __init__(self, is_tty_value: bool) -> None:
+            self._is_tty = is_tty_value
+
+        def isatty(self) -> bool:
+            return self._is_tty
+
+    # Both streams TTY → interactive is OK.
+    monkeypatch.setattr("sys.stdin", _Fake(True))
+    monkeypatch.setattr("sys.stdout", _Fake(True))
+    assert runner_module._is_tty() is True
+
+    # stdout is a pipe → must be False (fixes the bug).
+    monkeypatch.setattr("sys.stdin", _Fake(True))
+    monkeypatch.setattr("sys.stdout", _Fake(False))
+    assert runner_module._is_tty() is False
+
+    # stdin is redirected → also False.
+    monkeypatch.setattr("sys.stdin", _Fake(False))
+    monkeypatch.setattr("sys.stdout", _Fake(True))
+    assert runner_module._is_tty() is False
+
+
 def test_launch_workbench_helper_wires_session(
     monkeypatch: pytest.MonkeyPatch, tmp_path
 ) -> None:

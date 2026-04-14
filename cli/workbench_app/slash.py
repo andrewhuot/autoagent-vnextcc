@@ -160,12 +160,28 @@ def _record_command(ctx: SlashContext, raw_line: str) -> None:
 
 
 def _run_click(ctx: SlashContext, command_path: str) -> str:
-    """Run a click subcommand via the configured invoker, surfacing errors inline."""
+    """Run a click subcommand via the configured invoker, surfacing errors inline.
+
+    Exceptions are surfaced as transcript text (not a crash) but tagged with
+    their type so CI scripts parsing output can distinguish "command not
+    found" / "usage error" / internal crash instead of one generic string.
+    A debug-level log captures the full traceback for local diagnosis.
+    """
+    import logging
+
     invoker = ctx.click_invoker or _default_click_invoker
     try:
         return invoker(command_path)
-    except Exception as exc:  # Surfaced as transcript text, not a crash.
-        return f"  Error running '{command_path}': {exc}"
+    except SystemExit:
+        # Click raises SystemExit on --help/ExitError; propagate so the
+        # harness can honor the exit request rather than masquerading it
+        # as a runtime error.
+        raise
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            "slash _run_click failed", exc_info=exc, extra={"command_path": command_path},
+        )
+        return f"  Error running '{command_path}': {type(exc).__name__}: {exc}"
 
 
 # ---------------------------------------------------------------------------
@@ -455,19 +471,35 @@ def build_builtin_registry(
 
 
 def parse_slash_line(line: str) -> tuple[str, list[str]] | None:
-    """Split ``"/cmd a b"`` → ``("cmd", ["a", "b"])``; return ``None`` otherwise."""
+    """Split ``"/cmd a b"`` → ``("cmd", ["a", "b"])``; return ``None`` otherwise.
+
+    Unbalanced quotes fall back to a whitespace split so the caller still
+    sees a command name and can surface a useful error. Callers that want
+    to warn the user should use :func:`_parse_slash_line_with_warning`.
+    """
+    parsed = _parse_slash_line_with_warning(line)
+    if parsed is None:
+        return None
+    name, args, _warning = parsed
+    return name, args
+
+
+def _parse_slash_line_with_warning(
+    line: str,
+) -> tuple[str, list[str], str] | None:
+    """Parser variant that also returns a quote-warning string (empty when OK)."""
     stripped = line.strip()
     if not stripped.startswith("/"):
         return None
+    warning = ""
     try:
         tokens = shlex.split(stripped[1:])
-    except ValueError:
-        # Unbalanced quotes — fall back to whitespace split so the caller
-        # still sees a command name and can render a useful error.
+    except ValueError as exc:
         tokens = stripped[1:].split()
+        warning = f"unbalanced quotes ({exc}); falling back to whitespace split"
     if not tokens:
         return None
-    return tokens[0].lower(), tokens[1:]
+    return tokens[0].lower(), tokens[1:], warning
 
 
 def dispatch(
@@ -483,11 +515,15 @@ def dispatch(
     scoped registry (e.g. tests or nested screens).
     """
     active_registry = registry or ctx.registry
-    parsed = parse_slash_line(line)
+    parsed = _parse_slash_line_with_warning(line)
     if parsed is None:
         return DispatchResult(handled=False)
+    name, args, quote_warning = parsed
 
     _record_command(ctx, line)
+
+    if quote_warning:
+        ctx.echo(f"  Warning: {quote_warning}")
 
     if active_registry is None:
         return DispatchResult(
@@ -501,7 +537,6 @@ def dispatch(
     previous_registry = ctx.registry
     ctx.registry = active_registry
     try:
-        name, args = parsed
         command = active_registry.get(name)
         if command is None:
             message = (
