@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import time
 
+import click
+import pytest
+
 from cli.auto_harness import (
     HarnessEvent,
     HarnessRenderer,
@@ -120,8 +123,11 @@ def test_resolve_cli_ui_keeps_structured_output_non_interactive(monkeypatch) -> 
     monkeypatch.setenv("AGENTLAB_CLI_UI", "claude")
 
     assert resolve_cli_ui("stream-json", requested_ui="auto", is_tty=True, is_ci=False) == "classic"
+    assert resolve_cli_ui("text", requested_ui=None, is_tty=True, is_ci=False) == "claude"
     assert resolve_cli_ui("text", requested_ui="auto", is_tty=True, is_ci=False) == "claude"
-    assert resolve_cli_ui("text", requested_ui="claude", is_tty=False, is_ci=False) == "claude"
+    assert resolve_cli_ui("text", requested_ui="auto", is_tty=False, is_ci=False) == "classic"
+    with pytest.raises(click.ClickException):
+        resolve_cli_ui("text", requested_ui="claude", is_tty=False, is_ci=False)
 
 
 def test_workbench_events_adapt_to_harness_events() -> None:
@@ -163,6 +169,7 @@ def test_long_running_commands_expose_claude_ui_choice() -> None:
         result = runner.invoke(cli, [*command, "--help"])
         assert result.exit_code == 0, result.output
         assert "--ui [auto|claude|classic]" in result.output
+        assert "[default: auto]" in " ".join(result.output.split())
 
 
 def test_full_auto_claude_ui_reuses_one_harness(monkeypatch) -> None:
@@ -177,6 +184,7 @@ def test_full_auto_claude_ui_reuses_one_harness(monkeypatch) -> None:
     def fake_loop(**kwargs) -> None:
         seen_harnesses.append(kwargs["harness"])
 
+    monkeypatch.setattr("cli.auto_harness._stdout_is_tty", lambda: True)
     monkeypatch.setattr(runner_module.optimize, "callback", fake_optimize)
     monkeypatch.setattr(runner_module.loop_run, "callback", fake_loop)
 

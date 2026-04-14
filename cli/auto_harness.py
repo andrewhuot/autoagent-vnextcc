@@ -442,11 +442,18 @@ def resolve_cli_ui(
         requested = "claude"
     if requested not in {"auto", "claude", "classic"}:
         raise click.ClickException("Unsupported UI mode. Choose auto, claude, or classic.")
-    if requested in {"claude", "classic"}:
+    if requested == "classic":
         return requested
 
     tty = _stdout_is_tty() if is_tty is None else is_tty
     ci = bool(os.environ.get("CI")) if is_ci is None else is_ci
+    if requested == "claude":
+        if tty and not ci:
+            return "claude"
+        raise click.ClickException(
+            "Claude UI requires an interactive terminal. Use --ui auto or --ui classic "
+            "for non-TTY runs."
+        )
     return "claude" if tty and not ci else "classic"
 
 

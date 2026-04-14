@@ -519,11 +519,10 @@ def _create_workspace(
 def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
     """Resolve bootstrap mode using API-key presence when the caller left it default.
 
-    WHY: The CLI is live-first. When a user has a provider key in their
-    environment, we should not silently coerce `auto` to `mock`. When no key is
-    present and the caller passed `mode=auto` (default), keep the legacy
-    safe-default of `mock` so non-interactive scripts don't blow up on a
-    missing key.
+    WHY: The CLI is live-first. A fresh workspace should try real providers by
+    default, while provider runtime can still fall back gracefully when a key is
+    not configured yet. Explicit `--mode auto` keeps the older detection path
+    for callers that intentionally request environment-based mode resolution.
     """
     source = ctx.get_parameter_source("mode")
     if mode != "auto":
@@ -531,10 +530,7 @@ def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
     if source is not ParameterSource.DEFAULT:
         return "auto"
 
-    from cli.workspace_env import hydrate_provider_key_aliases, PROVIDER_API_KEY_ENV_VARS
-    hydrate_provider_key_aliases()
-    has_key = any(os.environ.get(name) for name in PROVIDER_API_KEY_ENV_VARS)
-    return "live" if has_key else "mock"
+    return "live"
 
 
 def _doctor_fix_workspace(workspace: AgentLabWorkspace) -> list[str]:
@@ -2700,9 +2696,17 @@ def provider_group(ctx: click.Context) -> None:
 )
 @click.option("--model", default=None, help="Model name to store. Prompts when omitted.")
 @click.option("--api-key-env", default=None, help="API key environment variable. Prompts when omitted.")
-def provider_configure(provider_name: str | None, model: str | None, api_key_env: str | None) -> None:
+@click.option("--api-key", default=None, help="Provider API key to save to .agentlab/.env.")
+def provider_configure(
+    provider_name: str | None,
+    model: str | None,
+    api_key_env: str | None,
+    api_key: str | None,
+) -> None:
     """Interactively configure a workspace provider profile."""
     workspace = _require_workspace("provider")
+    from cli.workspace_env import hydrate_provider_key_aliases, write_workspace_env_values
+
     resolved_provider = provider_name or click.prompt(
         "Provider",
         type=click.Choice(["openai", "anthropic", "google"], case_sensitive=False),
@@ -2715,11 +2719,16 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
         show_default=True,
     )
     normalized_model = normalize_model_name(resolved_provider, resolved_model)
-    resolved_env = api_key_env or click.prompt(
-        "API key env var",
-        default=default_api_key_env_for(resolved_provider),
-        show_default=True,
-    )
+    if api_key_env:
+        resolved_env = api_key_env
+    elif api_key is not None and api_key.strip():
+        resolved_env = default_api_key_env_for(resolved_provider)
+    else:
+        resolved_env = click.prompt(
+            "API key env var",
+            default=default_api_key_env_for(resolved_provider),
+            show_default=True,
+        )
 
     registry_path = providers_file_path(workspace)
     upsert_provider(
@@ -2738,7 +2747,14 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
     click.echo(click.style(f"Applied: provider {resolved_provider}:{normalized_model}", fg="green"))
     click.echo(f"  Registry: {registry_path}")
     click.echo(f"  Runtime:  {workspace.runtime_config_path}")
-    click.echo(f"  Next:     export {resolved_env}=... && agentlab provider test")
+    if api_key is not None and api_key.strip():
+        write_workspace_env_values({resolved_env: api_key}, workspace.agentlab_dir / ".env")
+        os.environ[resolved_env] = api_key.strip()
+        hydrate_provider_key_aliases()
+        click.echo(f"  Saved {resolved_env} to .agentlab/.env")
+        click.echo("  Next:     agentlab provider test --live")
+    else:
+        click.echo(f"  Next:     export {resolved_env}=... && agentlab provider test")
 
 
 @provider_group.command("list")

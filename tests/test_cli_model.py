@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from click.testing import CliRunner
 
 from runner import cli
@@ -122,3 +123,31 @@ def test_provider_configure_normalizes_fully_qualified_model_input(runner: CliRu
         show_payload = json.loads(show_result.output)
         assert show_payload["data"]["proposer"]["key"] == "openai:gpt-4o"
         assert show_payload["data"]["evaluator"]["key"] == "openai:gpt-4o"
+
+
+def test_provider_configure_accepts_and_saves_api_key(runner: CliRunner) -> None:
+    """Provider setup should be able to take a pasted API key and enable live mode."""
+    with runner.isolated_filesystem():
+        init_result = runner.invoke(cli, ["init", "--dir", ".", "--mode", "mock"])
+        assert init_result.exit_code == 0, init_result.output
+
+        configure_result = runner.invoke(
+            cli,
+            [
+                "provider",
+                "configure",
+                "--provider",
+                "openai",
+                "--model",
+                "gpt-4o",
+                "--api-key",
+                "sk-live-test",
+            ],
+        )
+
+        assert configure_result.exit_code == 0, configure_result.output
+        assert "Saved OPENAI_API_KEY to .agentlab/.env" in configure_result.output
+        env_file = Path(".agentlab") / ".env"
+        assert "OPENAI_API_KEY=sk-live-test" in env_file.read_text(encoding="utf-8")
+        runtime = yaml.safe_load(Path("agentlab.yaml").read_text(encoding="utf-8"))
+        assert runtime["optimizer"]["use_mock"] is False

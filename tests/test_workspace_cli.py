@@ -103,20 +103,20 @@ def test_init_defaults_to_live_when_api_key_is_present(
     assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
 
 
-def test_init_defaults_to_mock_when_no_api_keys_present(
+def test_init_defaults_to_live_when_no_api_keys_present(
     runner: CliRunner,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without any provider keys, `init` stays in mock mode so scripted setups still work."""
-    workspace = tmp_path / "mock-default"
+    """Fresh workspaces should be live by default; provider calls can still fall back later."""
+    workspace = tmp_path / "live-default-without-key"
     for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
 
     result = runner.invoke(cli, ["init", "--dir", str(workspace)])
 
     assert result.exit_code == 0, result.output
-    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is True
+    assert _workspace_runtime(workspace)["optimizer"]["use_mock"] is False
 
 
 def test_new_mode_auto_uses_api_key_detection_when_explicitly_requested(

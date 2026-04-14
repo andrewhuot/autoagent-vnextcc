@@ -68,7 +68,7 @@ def _prompt_for_provider_key() -> tuple[str, Optional[str]]:
     choice = click.prompt(
         "  Choose",
         type=click.Choice(["1", "2", "3", "4"]),
-        default="4",
+        default="1",
         show_choices=False,
     )
 
