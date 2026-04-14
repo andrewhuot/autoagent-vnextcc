@@ -43,7 +43,7 @@ EchoFn = Callable[[str], None]
 """Write one line to the transcript. Defaults to :func:`click.echo`."""
 
 DEFAULT_PROMPT = "› "
-EXIT_TOKENS = frozenset({"/exit", "/quit", ":q"})
+EXIT_TOKENS = frozenset({"/exit", "/quit", ":q", "exit", "quit"})
 RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 """Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
 

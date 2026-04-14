@@ -141,5 +141,8 @@ def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyP
 
     assert provider("› ") == "hi"
     plain = [line for line in captured]
-    assert any("╭" in line and "╮" in line for line in plain)
-    assert any("╰" in line and "╯" in line for line in plain)
+    # Two horizontal rules, one above and one below the input.
+    rule_lines = [line for line in plain if "─" in line and "╭" not in line]
+    assert len(rule_lines) == 2
+    # No rounded-corner glyphs — we moved to plain rules.
+    assert all("╭" not in line and "╯" not in line for line in plain)

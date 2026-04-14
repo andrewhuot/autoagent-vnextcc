@@ -96,12 +96,12 @@ def _terminal_width(default: int = 80) -> int:
 
 def _render_top_border(echo: EchoFn) -> None:
     width = _terminal_width()
-    echo(theme.meta("╭" + "─" * (width - 2) + "╮"))
+    echo(theme.meta("─" * width))
 
 
 def _render_bottom_border(echo: EchoFn) -> None:
     width = _terminal_width()
-    echo(theme.meta("╰" + "─" * (width - 2) + "╯"))
+    echo(theme.meta("─" * width))
 
 
 def build_prompt_input_provider(
@@ -164,7 +164,7 @@ def build_prompt_input_provider(
     def provider(prompt_text: str) -> str:
         _render_top_border(echo)
         try:
-            raw = session.prompt(f"│ {prompt_text}")
+            raw = session.prompt(prompt_text)
         finally:
             _render_bottom_border(echo)
         return raw

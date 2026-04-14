@@ -167,6 +167,19 @@ def test_stub_loop_recognizes_all_exit_tokens() -> None:
         assert result.exited_via == "/exit", f"{token!r} should end via /exit"
 
 
+def test_stub_loop_accepts_bare_exit_and_quit() -> None:
+    """Users shouldn't have to remember the slash — bare ``exit`` / ``quit`` work."""
+    for token in ("exit", "quit", "EXIT", "Quit"):
+        lines, echo = _capture_echo()
+        result = run_workbench_app(
+            workspace=None,
+            input_provider=iter([token]),
+            echo=echo,
+            show_banner=False,
+        )
+        assert result.exited_via == "/exit", f"{token!r} should end via /exit"
+
+
 def test_stub_loop_default_prompt_string() -> None:
     """The live prompt should match Claude Code's single-chevron input."""
     assert DEFAULT_PROMPT == "› "
