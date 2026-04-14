@@ -23,6 +23,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import click
 
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
@@ -31,7 +32,7 @@ from cli.workbench_render import format_workbench_event
 StreamEvent = dict[str, Any]
 """One JSON event emitted by a stream-json subprocess."""
 
-StreamRunner = Callable[[Sequence[str]], Iterator[StreamEvent]]
+StreamRunner = Callable[..., Iterator[StreamEvent]]
 """Given ``(args,)`` yield parsed JSON events until the process exits.
 
 Raise :class:`OptimizeCommandError` for non-zero exits or parse failures.
@@ -69,12 +70,18 @@ _CYCLE_PHASE = "optimize-cycle"
 # ---------------------------------------------------------------------------
 
 
-def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
+def _default_stream_runner(
+    args: Sequence[str],
+    *,
+    cancellation: CancellationToken | None = None,
+) -> Iterator[StreamEvent]:
     """Spawn ``agentlab optimize`` and yield stream-json events line by line.
 
     ``args`` are the extra CLI args after ``optimize`` (e.g. ``["--cycles",
     "3"]``). ``--output-format stream-json`` is appended automatically so
-    callers don't need to remember the flag.
+    callers don't need to remember the flag. When ``cancellation`` is
+    provided, ctrl-c at the app level kills the subprocess via
+    :class:`CancellationToken` and the reader breaks out cleanly.
     """
     cmd: list[str] = [
         sys.executable,
@@ -93,8 +100,13 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         bufsize=1,
     )
     assert proc.stdout is not None
+    exit_code = 0
+    if cancellation is not None:
+        cancellation.register_process(proc)
     try:
         for raw in proc.stdout:
+            if cancellation is not None and cancellation.cancelled:
+                break
             line = raw.strip()
             if not line:
                 continue
@@ -107,7 +119,9 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    if exit_code != 0:
+        if cancellation is not None:
+            cancellation.unregister_process(proc)
+    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
         raise OptimizeCommandError(
             f"optimize exited with status {exit_code}"
         )
@@ -207,23 +221,41 @@ def make_optimize_handler(
             fg="cyan",
         ))
 
+        cancellation = ctx.cancellation
+        cancelled = False
         try:
             final_summary = OptimizeSummary()
-            for event, summary in _summarise(active_runner(stream_args)):
+            stream = _invoke_runner(active_runner, stream_args, cancellation)
+            for event, summary in _summarise(stream):
                 final_summary = summary
                 line = _render_event(event)
                 if line is not None:
                     echo(line)
+                if cancellation is not None and cancellation.cancelled:
+                    cancelled = True
+                    break
+        except KeyboardInterrupt:
+            cancelled = True
+            if cancellation is not None:
+                cancellation.cancel()
         except OptimizeCommandError as exc:
-            echo(click.style(f"  /optimize failed: {exc}", fg="red", bold=True))
-            return on_done(
-                result=f"  /optimize failed: {exc}",
-                display="skip",
-                meta_messages=(str(exc),),
-            )
+            if cancellation is not None and cancellation.cancelled:
+                cancelled = True
+            else:
+                echo(click.style(f"  /optimize failed: {exc}", fg="red", bold=True))
+                return on_done(
+                    result=f"  /optimize failed: {exc}",
+                    display="skip",
+                    meta_messages=(str(exc),),
+                )
         except FileNotFoundError as exc:
             echo(click.style(f"  /optimize failed: {exc}", fg="red", bold=True))
             return on_done(result=None, display="skip")
+
+        if cancelled:
+            message = "  /optimize cancelled — ctrl-c; no changes persisted."
+            echo(click.style(message, fg="yellow"))
+            return on_done(result=message, display="skip")
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -238,6 +270,25 @@ def make_optimize_handler(
         )
 
     return _handle_optimize
+
+
+def _invoke_runner(
+    runner: StreamRunner,
+    args: Sequence[str],
+    cancellation: CancellationToken | None,
+) -> Iterator[StreamEvent]:
+    """Call ``runner`` with or without the cancellation kwarg.
+
+    Legacy runners accept a single positional ``args`` parameter; the
+    default runner gained a keyword-only ``cancellation`` parameter in T16.
+    Probe at call time so existing tests keep working.
+    """
+    if cancellation is None:
+        return iter(runner(args))
+    try:
+        return iter(runner(args, cancellation=cancellation))
+    except TypeError:
+        return iter(runner(args))
 
 
 def _parse_args(args: Sequence[str]) -> list[str]:

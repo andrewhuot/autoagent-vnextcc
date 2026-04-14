@@ -592,8 +592,80 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       status / screens / commands / eval_slash / optimize_slash /
       build_slash / deploy_slash / skills_slash / model_slash /
       tool_call_block / app_stub).*
-- [ ] **T16** — Implement ctrl-c / esc handling: first press cancels the current
+- [x] **T16** — Implement ctrl-c / esc handling: first press cancels the current
       streaming tool call, second press aborts the app. Ensure no orphan subprocesses.
+      *Landed `cli/workbench_app/cancellation.py` with a thread-safe
+      `CancellationToken` that tracks a monotonic `cancelled` flag plus a
+      registry of live :class:`subprocess.Popen` children. `cancel()` is
+      idempotent, sends SIGTERM, and escalates to SIGKILL after a
+      configurable grace window (`terminate_grace=0.5s` default) so a
+      hung or signal-swallowing child never leaks as an orphan; a race
+      window check (processes registered *after* a cancel) immediately
+      terminates the late arriver. `ProcessLookupError` and `OSError`
+      are swallowed at the termination site to stay resilient under
+      races. `register_process` / `unregister_process` / `reset` round
+      out the API; `iter_with_cancellation(stream, token)` is a small
+      helper for draining iterators that don't know about the token.
+      Threaded the token through `SlashContext.cancellation` (new
+      optional field, defaults to `None`) and into each of the four
+      streaming runners (`/eval`, `/optimize`, `/build`, `/deploy`) via
+      a new keyword-only `cancellation` parameter on
+      `_default_stream_runner`. Each runner now registers the
+      subprocess on start, polls `token.cancelled` between line reads,
+      and always unregisters in the `finally` clause so a late cancel
+      can't race with a natural exit. The non-zero exit check is
+      suppressed when a cancellation is in flight so the handler
+      doesn't double-report the subprocess error. An `_invoke_runner`
+      helper in each `*_slash.py` probes the runner signature so the
+      existing test fixtures (single-arg `runner(args)`) still work
+      unchanged — only callers who opt in to a cancellation token pay
+      the kwarg. Handler side: each of the four streaming handlers
+      now wraps the event loop in `try/except KeyboardInterrupt`,
+      flips `token.cancel()` (which kills the subprocess), and falls
+      through to a shared cancelled-path that emits a yellow
+      `"/{cmd} cancelled — …"` line and returns
+      `on_done(display="skip")` so the dispatch layer doesn't
+      double-print. The same path also catches the case where a
+      `*CommandError` surfaces *because* the cancellation flipped the
+      subprocess exit code — the error is then treated as a
+      consequence of the cancel rather than a real failure.
+      App-loop side: `run_workbench_app()` gained an optional
+      `cancellation` parameter (default: a fresh token), tracks a
+      consecutive-interrupts streak, and routes ctrl-c based on
+      `token.active`: (a) if a tool call is registered the first press
+      calls `token.cancel()` and echoes "cancelled active tool call
+      — press ctrl-c again to exit" (yellow), leaving the loop intact;
+      (b) at idle the first press echoes "press ctrl-c again to exit,
+      or /exit" (yellow) and continues; (c) a second consecutive press
+      without intervening input exits with `exited_via="interrupt"`.
+      Successful input resets both the streak and the token so a
+      stray ctrl-c never forces the user out. `StubAppResult` gained
+      an `interrupts` field so tests can inspect the exit streak.
+      Coverage: 28 tests in `tests/test_workbench_cancellation.py` —
+      token defaults (uncancelled + inactive), idempotent `cancel()`,
+      `reset()` clearing flag + registry, `register_process` active-
+      state tracking, graceful SIGTERM-only path, SIGKILL escalation
+      when terminate is ignored (`exits_on_terminate=False` fake +
+      `terminate_grace=0.01`), late-arriver termination after cancel,
+      best-effort `unregister_process` (double-call tolerated),
+      `ProcessLookupError` swallowed at terminate site,
+      `iter_with_cancellation` breaking on flag flip, real subprocess
+      cleanup (spawns a 10s `time.sleep` Python child, registers,
+      cancels, asserts `poll() is not None` within 1s + last-resort
+      cleanup); handler integration — parameterised across all four
+      streaming commands for both mid-stream token flip and direct
+      `KeyboardInterrupt`, legacy handler w/o token still emits
+      yellow cancelled line, runner that accepts `cancellation` kwarg
+      receives the token, runner with legacy positional-only signature
+      is still invoked via the probe helper; app-loop — first
+      interrupt at idle warns without exiting, double-interrupt with
+      no input exits cleanly, stray interrupt between valid inputs is
+      forgiven (resets streak), interrupt with an active tool call
+      fires `token.cancel()` (verified via fake `Popen.terminate` call
+      count) and does not count toward the exit threshold; context
+      wiring — `SlashContext(cancellation=token)` accepted, defaults
+      to `None`. Full workbench surface green (450 tests); full test
+      suite green (4483 tests).*
 - [ ] **T17** — Wire session persistence: every transcript entry and slash command
       appends to the existing `SessionStore`. On startup, offer `/resume` hint if latest
       session is recent.

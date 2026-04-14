@@ -43,6 +43,8 @@ from cli.workbench_app.commands import (
     on_done,
 )
 
+from cli.workbench_app.cancellation import CancellationToken
+
 if TYPE_CHECKING:
     from cli.workbench_app.transcript import Transcript
 
@@ -69,6 +71,7 @@ class SlashContext:
     click_invoker: ClickInvoker | None = None
     registry: CommandRegistry | None = None
     transcript: "Transcript | None" = None
+    cancellation: CancellationToken | None = None
     exit_requested: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
 

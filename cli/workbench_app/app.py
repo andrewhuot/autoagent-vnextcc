@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterable
 import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
 
 
@@ -41,6 +42,7 @@ class StubAppResult:
 
     lines_read: int
     exited_via: str  # "/exit", "eof", "interrupt"
+    interrupts: int = 0
 
 
 def build_status_line(workspace: Any | None, *, color: bool = True) -> str:
@@ -88,6 +90,7 @@ def run_workbench_app(
     echo: EchoFn | None = None,
     prompt: str = DEFAULT_PROMPT,
     show_banner: bool = True,
+    cancellation: CancellationToken | None = None,
 ) -> StubAppResult:
     """Run the echo-only workbench stub loop.
 
@@ -119,7 +122,9 @@ def run_workbench_app(
     if show_banner:
         _render_banner(out, workspace)
 
+    token = cancellation if cancellation is not None else CancellationToken()
     lines_read = 0
+    interrupts = 0
     exited_via = "eof"
     while True:
         try:
@@ -129,10 +134,36 @@ def run_workbench_app(
             out("")
             break
         except KeyboardInterrupt:
-            exited_via = "interrupt"
+            # T16 double-ctrl-c semantics:
+            #   1st press with an active tool call → cancel it.
+            #   1st press at idle → warn the user to press again.
+            #   2nd consecutive press (no successful input between) → exit.
+            if token.active:
+                token.cancel()
+                interrupts += 1
+                out("")
+                out(click.style(
+                    "  (cancelled active tool call — press ctrl-c again to exit)",
+                    fg="yellow",
+                ))
+                continue
+            interrupts += 1
+            if interrupts >= 2:
+                exited_via = "interrupt"
+                out("")
+                out(click.style("  (interrupted)", fg="yellow"))
+                break
             out("")
-            out(click.style("  (interrupted)", fg="yellow"))
-            break
+            out(click.style(
+                "  (press ctrl-c again to exit, or /exit)",
+                fg="yellow",
+            ))
+            continue
+
+        # A successful read resets the interrupt streak so the user can
+        # recover from a stray ctrl-c without getting forced out.
+        interrupts = 0
+        token.reset()
 
         line = raw.strip()
         if not line:
@@ -148,7 +179,11 @@ def run_workbench_app(
         # Echo-only stub: future tasks dispatch into the slash registry.
         out(f"  echo: {line}")
 
-    return StubAppResult(lines_read=lines_read, exited_via=exited_via)
+    return StubAppResult(
+        lines_read=lines_read,
+        exited_via=exited_via,
+        interrupts=interrupts,
+    )
 
 
 __all__ = [

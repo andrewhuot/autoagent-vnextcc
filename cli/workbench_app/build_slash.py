@@ -32,6 +32,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import click
 
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
@@ -40,7 +41,7 @@ from cli.workbench_render import format_workbench_event
 StreamEvent = dict[str, Any]
 """One JSON event emitted by a stream-json subprocess."""
 
-StreamRunner = Callable[[Sequence[str]], Iterator[StreamEvent]]
+StreamRunner = Callable[..., Iterator[StreamEvent]]
 """Given ``(args,)`` yield parsed JSON events until the process exits.
 
 Raise :class:`BuildCommandError` for non-zero exits. Tests inject a generator
@@ -73,12 +74,17 @@ class BuildSummary:
 # ---------------------------------------------------------------------------
 
 
-def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
+def _default_stream_runner(
+    args: Sequence[str],
+    *,
+    cancellation: CancellationToken | None = None,
+) -> Iterator[StreamEvent]:
     """Spawn ``agentlab workbench build`` and yield stream-json events line by line.
 
     ``args`` must include the ``brief`` positional argument as the first token
     — the handler guarantees that before calling. ``--output-format stream-json``
-    is appended automatically.
+    is appended automatically. When ``cancellation`` is provided, ctrl-c kills
+    the subprocess and the reader breaks out cleanly without leaking orphans.
     """
     cmd: list[str] = [
         sys.executable,
@@ -98,8 +104,13 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         bufsize=1,
     )
     assert proc.stdout is not None
+    exit_code = 0
+    if cancellation is not None:
+        cancellation.register_process(proc)
     try:
         for raw in proc.stdout:
+            if cancellation is not None and cancellation.cancelled:
+                break
             line = raw.strip()
             if not line:
                 continue
@@ -112,7 +123,9 @@ def _default_stream_runner(args: Sequence[str]) -> Iterator[StreamEvent]:
         if proc.poll() is None:
             proc.kill()
             proc.wait()
-    if exit_code != 0:
+        if cancellation is not None:
+            cancellation.unregister_process(proc)
+    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
         raise BuildCommandError(
             f"workbench build exited with status {exit_code}"
         )
@@ -282,23 +295,41 @@ def make_build_handler(
             fg="cyan",
         ))
 
+        cancellation = ctx.cancellation
+        cancelled = False
         try:
             final_summary = BuildSummary()
-            for event, summary in _summarise(active_runner(stream_args)):
+            stream = _invoke_runner(active_runner, stream_args, cancellation)
+            for event, summary in _summarise(stream):
                 final_summary = summary
                 line = _render_event(event)
                 if line is not None:
                     echo(line)
+                if cancellation is not None and cancellation.cancelled:
+                    cancelled = True
+                    break
+        except KeyboardInterrupt:
+            cancelled = True
+            if cancellation is not None:
+                cancellation.cancel()
         except BuildCommandError as exc:
-            echo(click.style(f"  /build failed: {exc}", fg="red", bold=True))
-            return on_done(
-                result=f"  /build failed: {exc}",
-                display="skip",
-                meta_messages=(str(exc),),
-            )
+            if cancellation is not None and cancellation.cancelled:
+                cancelled = True
+            else:
+                echo(click.style(f"  /build failed: {exc}", fg="red", bold=True))
+                return on_done(
+                    result=f"  /build failed: {exc}",
+                    display="skip",
+                    meta_messages=(str(exc),),
+                )
         except FileNotFoundError as exc:
             echo(click.style(f"  /build failed: {exc}", fg="red", bold=True))
             return on_done(result=None, display="skip")
+
+        if cancelled:
+            message = "  /build cancelled — ctrl-c; candidate not materialized."
+            echo(click.style(message, fg="yellow"))
+            return on_done(result=message, display="skip")
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -322,6 +353,20 @@ def make_build_handler(
         )
 
     return _handle_build
+
+
+def _invoke_runner(
+    runner: StreamRunner,
+    args: Sequence[str],
+    cancellation: CancellationToken | None,
+) -> Iterator[StreamEvent]:
+    """Call ``runner`` with or without the cancellation kwarg (see T16)."""
+    if cancellation is None:
+        return iter(runner(args))
+    try:
+        return iter(runner(args, cancellation=cancellation))
+    except TypeError:
+        return iter(runner(args))
 
 
 def _parse_args(args: Sequence[str]) -> list[str]:
