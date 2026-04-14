@@ -72,3 +72,15 @@ optimization:
   - instructions
   - examples
   - tool_descriptions
+harness:
+  models:
+    coordinator:
+      provider: google
+      model: gemini-2.5-pro
+      role: coordinator
+      api_key_env: GOOGLE_API_KEY
+    worker:
+      provider: google
+      model: gemini-2.5-pro
+      role: worker
+      api_key_env: GOOGLE_API_KEY
