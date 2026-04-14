@@ -45,6 +45,7 @@ from cli.workbench_app.commands import (
 )
 
 from cli.workbench_app.cancellation import CancellationToken
+from cli.terminal_renderer import render_pane
 
 if TYPE_CHECKING:
     from cli.workbench_app.transcript import Transcript
@@ -197,11 +198,11 @@ def _handle_help(ctx: SlashContext, *_: str) -> OnDoneResult:
     registry = ctx.registry
     if registry is None:
         return on_done("  /help unavailable: no command registry bound.")
-    lines = [theme.heading("\n  Slash Commands")]
+    lines: list[str] = []
     for name, description in registry.help_table().items():
-        lines.append(f"    {name:<12} {description}")
-    lines.append("")
-    return on_done("\n".join(lines), display="user")
+        lines.append(f"{name:<12} {description}")
+    rendered = render_pane("Slash Commands", lines)
+    return on_done("\n".join(rendered), display="user")
 
 
 def _handle_exit(ctx: SlashContext, *_: str) -> str:

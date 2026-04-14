@@ -151,6 +151,7 @@ def test_stub_loop_renders_banner_by_default() -> None:
     assert "AgentLab Workbench" in joined
     # The branded ASCII-art intro is back — the tagline anchors the logo.
     assert "Experiment. Evaluate. Refine." in joined
+    assert " Session " in joined
     assert "Type /help for commands" in joined
     assert "permissions on" in click.unstyle(joined)
 
@@ -213,6 +214,7 @@ def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
     )
 
     plain = [click.unstyle(line) for line in lines]
+    assert any(set(line) == {"─"} for line in plain if line)
     assert any(line.startswith("⏵ ") for line in plain)
     assert any("default permissions on" in line for line in plain)
     assert any("0 shells, 0 tasks" in line for line in plain)

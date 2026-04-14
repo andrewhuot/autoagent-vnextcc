@@ -21,10 +21,17 @@ predictably.
 - **Status line** — workspace label, active config version, model,
   pending-review count, best eval score, plus per-run overlays
   (current phase/cycle).
+- **Structured terminal panes** — startup session context, `/help`,
+  candidate summaries, readiness, provenance, and next steps all share a
+  width-aware renderer so output stays readable in narrow terminals and
+  copy/paste logs.
 - **Transcript pane** — streaming, role-colored lines: user input,
   assistant output, tool calls, errors, warnings, and dim meta.
 - **Tool-call blocks** — nested `⏺ title / ⎿ progress / ✓ done` blocks
   for every `task.started`/`task.progress`/`task.completed` sequence.
+  Events that carry `ratio`, `progress`, or `current`/`total` render a
+  fixed-width fractional progress bar without changing plain progress
+  events.
 - **Slash commands** — the entire workflow (`/eval`, `/optimize`,
   `/build`, `/deploy`, `/skills`, and session utilities) available
   inline with live stream-json progress.
@@ -87,6 +94,12 @@ stream-json` and pipe events into the transcript in real time.
 All completed slash-command output lands on the transcript with the
 appropriate role coloring, and the final summary surfaces as a dim meta
 line (e.g. `Suggested next: …`, artifact paths).
+
+The pane/progress primitives live in `cli/terminal_renderer.py`. They are
+the current Python-native bridge toward a fuller Ink/React renderer: CLI
+business logic emits structured data first, and terminal formatting stays
+centralized so the Workbench can migrate surface by surface without
+rewriting the Click command layer.
 
 ---
 

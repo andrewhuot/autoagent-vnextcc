@@ -25,6 +25,7 @@ from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
+from cli.terminal_renderer import render_pane, render_status_footer
 
 if TYPE_CHECKING:
     from cli.sessions import Session, SessionStore
@@ -114,8 +115,8 @@ def _render_turn_footer(
     current choice before the settings file has been reloaded.
     """
     mode = mode_override or _permission_mode_for_workspace(workspace)
-    echo(theme.meta("─" * 72))
-    echo(theme.warning(f"⏵ {mode} permissions on · 0 shells, 0 tasks"))
+    for line in render_status_footer(mode=mode, shells=0, tasks=0):
+        echo(line)
 
 
 def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
@@ -147,9 +148,15 @@ def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     echo("")
     echo(theme.workspace(f"  ✻ Welcome to AgentLab Workbench  v{version}"))
     echo("")
-    echo(theme.meta(f"    cwd: {cwd}"))
-    echo(f"    [{build_status_line(workspace)}]")
-    echo(theme.meta(f"    {_permission_mode_for_workspace(workspace)} permissions on · ? for shortcuts"))
+    for line in render_pane(
+        "Session",
+        [
+            f"cwd: {cwd}",
+            f"status: {build_status_line(workspace, color=False)}",
+            f"mode: {_permission_mode_for_workspace(workspace)} permissions on · ? for shortcuts",
+        ],
+    ):
+        echo(line)
     echo("")
     echo("  Type /help for commands, /exit to leave.")
     echo("")

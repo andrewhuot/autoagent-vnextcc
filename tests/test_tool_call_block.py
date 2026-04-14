@@ -231,6 +231,19 @@ def test_progress_accepts_message_field_fallback():
     assert click.unstyle(out[0]) == "  ⎿ msg note"
 
 
+def test_progress_with_current_total_renders_fractional_bar():
+    r = ToolCallBlockRenderer()
+    r.feed("task.started", {"task_id": "t", "title": "T"})
+    out = r.feed(
+        "task.progress",
+        {"task_id": "t", "note": "scoring cases", "current": 2, "total": 4},
+    )
+    plain = click.unstyle(out[0])
+    assert plain.startswith("  ⎿ scoring cases")
+    assert "█████" in plain
+    assert "50%" in plain
+
+
 def test_title_falls_back_to_task_id_then_task_then_name():
     r = ToolCallBlockRenderer()
     # task_id only

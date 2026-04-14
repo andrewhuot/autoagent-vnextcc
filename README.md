@@ -147,7 +147,7 @@ All commands support `--help`. See [docs/cli-reference.md](docs/cli-reference.md
 
 ### Interactive Workbench (default)
 
-Running `agentlab` with no subcommand launches the **Workbench**, a Claude-Code-style interactive REPL with a live status line, streaming transcript, slash-command surface (`/eval`, `/optimize`, `/build`, `/deploy`, `/skills`, `/help`, `/status`, `/model`, `/resume`, `/clear`, …), autocomplete popup, and session persistence. Ctrl-C cancels the active tool call; a second press exits cleanly.
+Running `agentlab` with no subcommand launches the **Workbench**, a Claude-Code-style interactive REPL with a live status line, structured terminal panes, streaming transcript, slash-command surface (`/eval`, `/optimize`, `/build`, `/deploy`, `/skills`, `/help`, `/status`, `/model`, `/resume`, `/clear`, …), autocomplete popup, and session persistence. Ctrl-C cancels the active tool call; a second press exits cleanly.
 
 ```bash
 agentlab            # interactive Workbench (default)

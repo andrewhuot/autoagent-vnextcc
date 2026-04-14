@@ -11,6 +11,8 @@ from typing import Any, Iterable, Iterator, Literal, Mapping
 
 import click
 
+from cli.terminal_renderer import render_pane, render_progress_bar
+
 
 # ---------------------------------------------------------------------------
 # Streaming event rendering (from Claude — 30+ event types)
@@ -182,8 +184,43 @@ def _format_header(title: str) -> str:
     return click.style(f"{_BLOCK_HEADER_GLYPH} {title}", fg="cyan", bold=True)
 
 
-def _format_progress(note: str) -> str:
-    return click.style(f"  {_BLOCK_BODY_GLYPH} {note}", dim=True)
+def _progress_ratio(data: Mapping[str, Any]) -> float | None:
+    """Extract normalized progress when events carry structured counts."""
+
+    raw_ratio = data.get("ratio")
+    if raw_ratio is None:
+        raw_ratio = data.get("progress")
+    if raw_ratio is not None:
+        try:
+            ratio = float(raw_ratio)
+        except (TypeError, ValueError):
+            return None
+        if ratio > 1.0 and ratio <= 100.0:
+            ratio = ratio / 100.0
+        return min(1.0, max(0.0, ratio))
+
+    current = data.get("current")
+    total = data.get("total")
+    if current is None or total is None:
+        return None
+    try:
+        current_value = float(current)
+        total_value = float(total)
+    except (TypeError, ValueError):
+        return None
+    if total_value <= 0:
+        return None
+    return min(1.0, max(0.0, current_value / total_value))
+
+
+def _format_progress(note: str, data: Mapping[str, Any] | None = None) -> str:
+    payload = data or {}
+    ratio = _progress_ratio(payload)
+    suffix = ""
+    if ratio is not None:
+        bar = render_progress_bar(ratio, width=10)
+        suffix = f"  {bar} {round(ratio * 100):>3d}%"
+    return click.style(f"  {_BLOCK_BODY_GLYPH} {note}{suffix}", dim=True)
 
 
 def _format_completed(source: str | None) -> str:
@@ -301,7 +338,7 @@ class ToolCallBlockRenderer:
             state = ToolCallBlockState(task_id=key, title=title)
             lines.append(_format_header(title))
         self._open[key] = replace(state, progress_count=state.progress_count + 1)
-        lines.append(_format_progress(note))
+        lines.append(_format_progress(note, data))
         return lines
 
     def _on_completed(self, data: Mapping[str, Any]) -> list[str]:
@@ -460,54 +497,73 @@ def render_candidate_summary(data: dict[str, Any], *, compact: bool = False) -> 
     counts = agent_card.get("counts") if isinstance(agent_card.get("counts"), dict) else {}
 
     click.echo(click.style("\nAgentLab Workbench", bold=True))
-    click.echo("\u2501" * 18)
-    click.echo(f"  Project:   {data.get('project_id')} ({data.get('name')})")
-    click.echo(f"  Target:    {data.get('target')} / {data.get('environment')}")
-    click.echo(f"  Version:   {data.get('version')}")
-    click.echo(f"  Run:       {run.get('status') or 'none'}")
+
+    overview = [
+        f"Project: {data.get('project_id')} ({data.get('name')})",
+        f"Target: {data.get('target')} / {data.get('environment')}",
+        f"Version: Draft v{data.get('version')}",
+        f"Run: {run.get('status') or 'none'}",
+    ]
     if run.get("execution_mode") or run.get("provider") or run.get("model"):
         execution_label = str(run.get("execution_mode") or "unknown")
         provider_label = str(run.get("provider") or "").strip()
         model_label = str(run.get("model") or "").strip()
         provider_model = ":".join(part for part in (provider_label, model_label) if part)
         suffix = f" via {provider_model}" if provider_model else ""
-        click.echo(f"  Execution: {execution_label}{suffix}")
+        overview.append(f"Execution: {execution_label}{suffix}")
     if run.get("failure_reason"):
-        click.echo(f"  Reason:    {run.get('failure_reason')}")
-    click.echo(f"  Agent:     {agent_card.get('name')} ({agent_card.get('model')})")
-    click.echo(
-        "  Card:      "
-        f"{counts.get('tools', 0)} tool(s), "
-        f"{counts.get('guardrails', 0)} guardrail(s), "
-        f"{counts.get('eval_suites', 0)} eval suite(s)"
+        overview.append(f"Reason: {run.get('failure_reason')}")
+    overview.extend(
+        [
+            f"Agent: {agent_card.get('name')} ({agent_card.get('model')})",
+            "Card: "
+            f"{counts.get('tools', 0)} tool(s), "
+            f"{counts.get('guardrails', 0)} guardrail(s), "
+            f"{counts.get('eval_suites', 0)} eval suite(s)",
+            f"Artifacts: {data.get('artifact_count')} · Turns: {data.get('turn_count')}",
+            f"Validation: {summary.get('validation_status') or 'not_run'}",
+        ]
     )
-    click.echo(f"  Artifacts: {data.get('artifact_count')}")
-    click.echo(f"  Validation:{summary.get('validation_status') or 'not_run'}")
-    click.echo("")
-    click.echo(click.style("Readiness", bold=True))
-    click.echo(f"  Eval:      {evaluation.get('label') or 'Candidate needed'}")
+    for line in render_pane("Workbench Candidate", overview):
+        click.echo(line)
+
+    readiness = [
+        f"Eval: {evaluation.get('label') or 'Candidate needed'}",
+    ]
     if evaluation.get("description"):
-        click.echo(f"             {evaluation.get('description')}")
-    click.echo(f"  Optimize:  {optimization.get('label') or 'Eval candidate not ready'}")
+        readiness.append(str(evaluation.get("description")))
+    readiness.append(f"Optimize: {optimization.get('label') or 'Eval candidate not ready'}")
     if optimization.get("description") and not compact:
-        click.echo(f"             {optimization.get('description')}")
+        readiness.append(str(optimization.get("description")))
     blockers = list(evaluation.get("blocking_reasons") or [])
     if blockers:
-        click.echo("  Blockers:")
-        for reason in blockers:
-            click.echo(f"    - {reason}")
-    click.echo("")
-    click.echo("Note: Workbench structural validation is not an eval result.")
-    click.echo("")
-    click.echo(click.style("Next step", bold=True))
+        readiness.append("Blockers:")
+        readiness.extend(f"- {reason}" for reason in blockers)
+    for line in render_pane("Readiness", readiness):
+        click.echo(line)
+
+    provenance = [
+        "Workbench structural validation is not an eval result.",
+        "Save materializes this candidate before Eval or Optimize can trust it.",
+    ]
+    latest_artifact = data.get("latest_artifact")
+    if isinstance(latest_artifact, dict) and latest_artifact.get("name"):
+        category = latest_artifact.get("category")
+        suffix = f" ({category})" if category else ""
+        provenance.append(f"Latest artifact: {latest_artifact.get('name')}{suffix}")
+    for line in render_pane("Provenance", provenance):
+        click.echo(line)
+
     next_commands = data.get("next_commands") if isinstance(data.get("next_commands"), dict) else {}
-    readiness = evaluation.get("readiness_state")
-    if readiness == "needs_materialization":
-        click.echo(f"  {next_commands.get('save')}")
-    elif readiness == "ready_for_eval":
-        click.echo(f"  {next_commands.get('eval')}")
+    readiness_state = evaluation.get("readiness_state")
+    if readiness_state == "needs_materialization":
+        next_command = next_commands.get("save")
+    elif readiness_state == "ready_for_eval":
+        next_command = next_commands.get("eval")
     else:
-        click.echo(f"  {next_commands.get('iterate')}")
+        next_command = next_commands.get("iterate")
+    for line in render_pane("Next Step", [str(next_command or "agentlab workbench show")]):
+        click.echo(line)
 
 
 # ---------------------------------------------------------------------------
