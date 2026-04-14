@@ -98,6 +98,8 @@ class SpecialistRole(str, Enum):
     TRACE_ANALYST = "trace_analyst"
     DEPLOYMENT_ENGINEER = "deployment_engineer"
     RELEASE_MANAGER = "release_manager"
+    GATE_RUNNER = "gate_runner"
+    PLATFORM_PUBLISHER = "platform_publisher"
 
 
 class ApprovalStatus(str, Enum):

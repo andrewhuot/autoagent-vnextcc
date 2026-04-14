@@ -705,10 +705,12 @@ def build_builtin_registry(
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,
+            build_skills_coordinator_command,
         )
 
-        for intent in ("eval", "optimize", "build", "deploy", "skills"):
+        for intent in ("eval", "optimize", "build", "deploy"):
             registry.register(build_coordinator_command(intent))
+        registry.register(build_skills_coordinator_command())
     for command in extra:
         registry.register(command)
     return registry

@@ -30,6 +30,8 @@ COORDINATOR_WORKER_ORDER: tuple[SpecialistRole, ...] = (
     SpecialistRole.EVAL_AUTHOR,
     SpecialistRole.OPTIMIZATION_ENGINEER,
     SpecialistRole.TRACE_ANALYST,
+    SpecialistRole.GATE_RUNNER,
+    SpecialistRole.PLATFORM_PUBLISHER,
     SpecialistRole.DEPLOYMENT_ENGINEER,
     SpecialistRole.RELEASE_MANAGER,
 )
@@ -49,6 +51,8 @@ _ROLE_SKILL_LAYER: dict[SpecialistRole, str] = {
     SpecialistRole.TRACE_ANALYST: "none",
     SpecialistRole.DEPLOYMENT_ENGINEER: "none",
     SpecialistRole.RELEASE_MANAGER: "none",
+    SpecialistRole.GATE_RUNNER: "none",
+    SpecialistRole.PLATFORM_PUBLISHER: "none",
 }
 
 
@@ -66,6 +70,8 @@ _ROLE_EXPECTED_ARTIFACTS: dict[SpecialistRole, list[str]] = {
     SpecialistRole.TRACE_ANALYST: ["trace_evidence", "root_cause_summary"],
     SpecialistRole.DEPLOYMENT_ENGINEER: ["deployment_plan", "canary_check", "rollback_plan"],
     SpecialistRole.RELEASE_MANAGER: ["release_candidate", "promotion_evidence"],
+    SpecialistRole.GATE_RUNNER: ["gate_report", "regression_summary"],
+    SpecialistRole.PLATFORM_PUBLISHER: ["release_candidate", "publish_record"],
 }
 
 
@@ -83,6 +89,8 @@ _ROLE_TASK_TITLES: dict[SpecialistRole, str] = {
     SpecialistRole.TRACE_ANALYST: "Analyze traces and failure evidence",
     SpecialistRole.DEPLOYMENT_ENGINEER: "Plan deploy, canary, and rollback",
     SpecialistRole.RELEASE_MANAGER: "Package release candidate",
+    SpecialistRole.GATE_RUNNER: "Run CI/CD deploy gate",
+    SpecialistRole.PLATFORM_PUBLISHER: "Publish release candidate to platform",
 }
 
 

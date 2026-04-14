@@ -237,3 +237,49 @@ class AgentSkillStore:
         skill.status = status
         self.save(skill)
         return True
+
+    # ------------------------------------------------------------------
+    # Coordinator artifact ingestion
+    # ------------------------------------------------------------------
+
+    def save_from_coordinator_artifact(self, artifact: dict[str, Any]) -> GeneratedSkill:
+        """Persist a ``generated_skill`` artifact emitted by the coordinator.
+
+        The coordinator ``SkillAuthorWorker`` emits artifacts that serialize
+        a :class:`GeneratedSkill` via ``to_dict()``. This helper rehydrates
+        the record and saves it so ``/skills generate <slug>`` → store
+        stays a single API call.
+        """
+        if not isinstance(artifact, dict):
+            raise TypeError("save_from_coordinator_artifact expects a dict artifact")
+        files_payload = artifact.get("files") or []
+        files = [
+            GeneratedFile(
+                path=str(item.get("path", "")),
+                content=str(item.get("content", "")),
+                is_new=bool(item.get("is_new", True)),
+                diff=item.get("diff"),
+            )
+            for item in files_payload
+            if isinstance(item, dict)
+        ]
+        skill = GeneratedSkill(
+            skill_id=str(artifact.get("skill_id") or ""),
+            gap_id=str(artifact.get("gap_id") or ""),
+            platform=str(artifact.get("platform") or "adk"),
+            skill_type=str(artifact.get("skill_type") or "tool"),
+            name=str(artifact.get("name") or artifact.get("skill_id") or "skill"),
+            description=str(artifact.get("description") or ""),
+            source_code=artifact.get("source_code"),
+            config_yaml=artifact.get("config_yaml"),
+            files=files,
+            eval_criteria=list(artifact.get("eval_criteria") or []),
+            estimated_improvement=float(artifact.get("estimated_improvement", 0.0) or 0.0),
+            confidence=str(artifact.get("confidence") or "medium"),
+            status=str(artifact.get("status") or "draft"),
+            review_notes=str(artifact.get("review_notes") or ""),
+        )
+        if not skill.skill_id:
+            raise ValueError("Coordinator artifact missing skill_id")
+        self.save(skill)
+        return skill

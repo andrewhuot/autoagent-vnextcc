@@ -14,6 +14,7 @@ from api.models import (
     DeployStatusResponse,
     DeployStrategy,
 )
+from deployer.publish import PublishError, publish_config
 
 
 class PromoteRequest(BaseModel):
@@ -94,89 +95,47 @@ async def deploy_config(body: DeployRequest, request: Request) -> DeployResponse
     deployer, vm = _deploy_context(request)
     attempt_id = _resolve_attempt_id(request, body.attempt_id)
 
+    strategy_value = (
+        "immediate" if body.strategy == DeployStrategy.immediate else "canary"
+    )
+    scores = body.scores or {}
+    try:
+        outcome = publish_config(
+            deployer,
+            vm,
+            strategy=strategy_value,
+            version=body.version,
+            config=body.config,
+            scores=scores,
+        )
+    except PublishError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except ValueError as exc:
+        # Underlying version-manager errors (unknown version, etc.).
+        raise HTTPException(status_code=404, detail=str(exc))
+
     if body.version is not None:
-        # Deploy an existing saved version instead of duplicating it.
-        try:
-            if body.strategy == DeployStrategy.immediate:
-                vm.promote(body.version)
-            else:
-                vm.mark_canary(body.version)
-        except ValueError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
-        event_type = "promote" if body.strategy == DeployStrategy.immediate else "deploy_canary"
-        _record_lineage(
-            request,
-            event_type,
-            attempt_id=attempt_id,
-            version=body.version,
-            payload={"source": "deploy_existing_version"},
-        )
-        if body.strategy == DeployStrategy.immediate:
-            return DeployResponse(
-                message=f"Promoted v{body.version:03d} to active (immediate)",
-                version=body.version,
-                strategy="immediate",
-            )
-        return DeployResponse(
-            message=f"Deployed v{body.version:03d} as canary",
-            version=body.version,
-            strategy="canary",
-        )
+        event_type = "promote" if outcome.strategy == "immediate" else "deploy_canary"
+        payload: dict[str, Any] = {"source": outcome.source}
+    elif body.config is not None:
+        event_type = "promote" if outcome.strategy == "immediate" else "deploy_canary"
+        payload = {"source": outcome.source, "scores": scores}
+    else:
+        event_type = "promote"
+        payload = {"source": outcome.source}
 
-    if body.config is not None:
-        # Deploy a new config dict
-        scores = body.scores or {}
-        if body.strategy == DeployStrategy.immediate:
-            cv = vm.save_version(body.config, scores, status="active")
-            _record_lineage(
-                request,
-                "promote",
-                attempt_id=attempt_id,
-                version=cv.version,
-                payload={"source": "deploy_new_config", "scores": scores},
-            )
-            return DeployResponse(
-                message=f"Deployed v{cv.version:03d} as active (immediate)",
-                version=cv.version,
-                strategy="immediate",
-            )
-        else:
-            msg = deployer.deploy(body.config, scores)
-            canary_ver = vm.manifest.get("canary_version")
-            _record_lineage(
-                request,
-                "deploy_canary",
-                attempt_id=attempt_id,
-                version=canary_ver,
-                payload={"source": "deploy_new_config", "scores": scores},
-            )
-            return DeployResponse(
-                message=msg,
-                version=canary_ver,
-                strategy="canary",
-            )
-
-    # No config and no version — try to promote current canary
-    canary_ver = vm.manifest.get("canary_version")
-    if canary_ver is None:
-        raise HTTPException(status_code=400, detail="No config, version, or active canary to deploy")
-
-    if body.strategy == DeployStrategy.immediate:
-        vm.promote(canary_ver)
-        _record_lineage(
-            request,
-            "promote",
-            attempt_id=attempt_id,
-            version=canary_ver,
-            payload={"source": "promote_current_canary"},
-        )
-        return DeployResponse(
-            message=f"Promoted canary v{canary_ver:03d} to active",
-            version=canary_ver,
-            strategy="immediate",
-        )
-
-    raise HTTPException(status_code=400, detail="Provide config or version to deploy")
+    _record_lineage(
+        request,
+        event_type,
+        attempt_id=attempt_id,
+        version=outcome.version,
+        payload=payload,
+    )
+    return DeployResponse(
+        message=outcome.message,
+        version=outcome.version,
+        strategy=outcome.strategy,
+    )
 
 
 @router.get("/status", response_model=DeployStatusResponse)
