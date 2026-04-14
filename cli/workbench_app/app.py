@@ -970,10 +970,14 @@ def launch_workbench(
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
 
-    # Gate onboarding on both a workspace-presence check and an env
-    # escape hatch so tests / piped invocations never get stuck on a
-    # prompt. Tests set AGENTLAB_SKIP_ONBOARDING=1.
-    if not os.environ.get("AGENTLAB_SKIP_ONBOARDING"):
+    # Gate onboarding on env escape hatch, an explicit input_provider
+    # (tests drive the REPL synchronously), and a TTY check so piped
+    # stdin doesn't get consumed by the wizard prompts.
+    if (
+        not os.environ.get("AGENTLAB_SKIP_ONBOARDING")
+        and input_provider is None
+        and sys.stdin.isatty()
+    ):
         _maybe_run_first_run_onboarding(workspace)
 
     store: SessionStore | None = None
