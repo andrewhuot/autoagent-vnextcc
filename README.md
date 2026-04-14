@@ -10,6 +10,8 @@ AgentLab is a local-first toolkit for iterating on AI agent configurations. Give
 BUILD -> WORKBENCH -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 ```
 
+> **[Workbench Guide](docs/WORKBENCH_GUIDE.md)** — End-to-end walkthrough of the Claude-Code-style Workbench (build → eval → optimize → deploy, plan mode, checkpoints, multi-turn memory, /diff and /accept)
+>
 > **[Quick Start](docs/QUICKSTART_GUIDE.md)** — Get a workspace running in minutes
 >
 > **[Detailed Guide](docs/DETAILED_GUIDE.md)** — Full CLI walkthrough, including XML instructions and deployment
