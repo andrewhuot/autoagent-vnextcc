@@ -114,6 +114,52 @@ _ROLE_TASK_TITLES: dict[SpecialistRole, str] = {
 }
 
 
+_BUILD_VERB_BASELINE: tuple[SpecialistRole, ...] = (
+    SpecialistRole.REQUIREMENTS_ANALYST,
+    SpecialistRole.BUILD_ENGINEER,
+    SpecialistRole.PROMPT_ENGINEER,
+    SpecialistRole.EVAL_AUTHOR,
+)
+
+
+_VERB_BASELINE_ROLES: dict[str, tuple[SpecialistRole, ...]] = {
+    "build": _BUILD_VERB_BASELINE,
+    "eval": (SpecialistRole.EVAL_AUTHOR, SpecialistRole.TRACE_ANALYST),
+    "optimize": (
+        SpecialistRole.TRACE_ANALYST,
+        SpecialistRole.OPTIMIZATION_ENGINEER,
+    ),
+    "deploy": (
+        SpecialistRole.DEPLOYMENT_ENGINEER,
+        SpecialistRole.RELEASE_MANAGER,
+    ),
+    "skills": (SpecialistRole.SKILL_AUTHOR,),
+}
+
+
+_BUILD_KEYWORD_ROLES: tuple[tuple[tuple[str, ...], SpecialistRole], ...] = (
+    (("guardrail", "pii", "policy", "safety", "moderation", "compliance"), SpecialistRole.GUARDRAIL_AUTHOR),
+    (("tool", "integration", "api", "endpoint", "connector", "lookup"), SpecialistRole.TOOL_ENGINEER),
+    (("skill", "skills", "manifest", "playbook"), SpecialistRole.SKILL_AUTHOR),
+    (("graph", "topology", "sub-agent", "sub agent", "subagent", "adk"), SpecialistRole.ADK_ARCHITECT),
+    (("eval", "benchmark", "regression", "quality"), SpecialistRole.EVAL_AUTHOR),
+)
+
+
+def _verb_baseline_roles(verb: str) -> tuple[SpecialistRole, ...]:
+    """Return the baseline worker roster for a verb (empty when unknown)."""
+    return _VERB_BASELINE_ROLES.get(verb, ())
+
+
+def _build_keyword_augmentation(text: str) -> list[SpecialistRole]:
+    """Select extra build-time roles from keywords in the goal text."""
+    extras: list[SpecialistRole] = []
+    for keywords, role in _BUILD_KEYWORD_ROLES:
+        if any(keyword in text for keyword in keywords):
+            extras.append(role)
+    return extras
+
+
 @dataclass
 class HandoffRecord:
     """Record representing a specialist-to-specialist handoff."""
@@ -380,7 +426,12 @@ class BuilderOrchestrator:
 
         normalized_goal = " ".join(str(goal or task.description or task.title).split())
         project = self._store.get_project(task.project_id)
-        roles = self._select_worker_roles(normalized_goal, requested_roles=requested_roles)
+        verb = str((extra_context or {}).get("command_intent") or "").strip().lower()
+        roles = self._select_worker_roles(
+            normalized_goal,
+            requested_roles=requested_roles,
+            verb=verb or None,
+        )
         plan_id = f"coord-{new_id()}"
         skill_context = self._build_skill_context(project, goal=normalized_goal)
 
@@ -499,8 +550,20 @@ class BuilderOrchestrator:
         self,
         goal: str,
         requested_roles: list[SpecialistRole] | None = None,
+        verb: str | None = None,
     ) -> list[SpecialistRole]:
-        """Choose worker roles for a goal using explicit roles or keyword matches."""
+        """Choose worker roles for a goal using verb + keyword matches.
+
+        Precedence:
+
+        1. ``requested_roles`` — explicit set from caller wins.
+        2. ``verb`` — when provided, seed the roster with a verb-scoped
+           baseline so every ``/build`` run always gets requirements +
+           build + prompt workers, then augment with keyword matches so
+           goals mentioning tools, guardrails, skills, or evals pick up
+           the matching specialist.
+        3. Otherwise fall back to pure keyword matching.
+        """
 
         if requested_roles:
             return [
@@ -511,10 +574,17 @@ class BuilderOrchestrator:
 
         text = goal.lower()
         selected: set[SpecialistRole] = set()
+
+        if verb:
+            selected.update(_verb_baseline_roles(verb))
+
         for role in COORDINATOR_WORKER_ORDER:
             keywords = get_specialist_keywords(role)
             if any(keyword in text for keyword in keywords):
                 selected.add(role)
+
+        if verb == "build":
+            selected.update(_build_keyword_augmentation(text))
 
         if "agent" in text and not selected:
             selected.add(SpecialistRole.BUILD_ENGINEER)

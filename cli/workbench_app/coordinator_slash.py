@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
+from pathlib import Path
 from typing import Any, Callable
 
+from agent.config.schema import AgentConfig
+from builder.workbench import apply_coordinator_synthesis
 from cli.workbench_app import theme
+from cli.workbench_app.checkpoint import CheckpointManager
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.runtime import remember_turn_result
 from cli.workbench_app.slash import SlashContext
+from deployer.versioning import ConfigVersionManager
+
+logger = logging.getLogger(__name__)
 
 
 _COMMAND_DESCRIPTIONS: dict[str, str] = {
@@ -96,8 +104,15 @@ def make_coordinator_handler(intent: str) -> Callable[..., OnDoneResult]:
         else:
             result = runtime.process_turn(message, ctx=ctx, command_intent=intent)
         remember_turn_result(ctx, result)
+        extra_lines: list[str] = []
+        if intent == "build":
+            applied = _apply_build_synthesis(ctx, session, result)
+            if applied:
+                extra_lines.append(applied)
+        transcript = list(result.transcript_lines)
+        transcript.extend(extra_lines)
         return on_done(
-            "\n".join(result.transcript_lines),
+            "\n".join(transcript),
             display="user",
             meta_messages=tuple(result.next_actions),
         )
@@ -211,6 +226,102 @@ def _handle_skills_coordinator(
         display="user",
         meta_messages=tuple(result.next_actions),
     )
+
+
+def _apply_build_synthesis(
+    ctx: SlashContext,
+    session: Any | None,
+    result: Any,
+) -> str | None:
+    """Persist a new config version from a successful ``/build`` run.
+
+    The coordinator runtime already snapshots the active config before
+    execution starts (pre-execution auto-snapshot). This step writes the
+    post-build config as a new candidate version so the operator can
+    review, promote, or rewind via the existing checkpoint slash surface.
+
+    Returns a short transcript line to append, or ``None`` when nothing
+    was applied (run not completed, no version manager, or no diff).
+    """
+    status = getattr(result, "status", None)
+    run_id = getattr(result, "run_id", None) or ""
+    if status != "completed" or not run_id or session is None:
+        return None
+    run = _fetch_coordinator_run(session, run_id)
+    if run is None:
+        return None
+    version_manager = _resolve_version_manager(ctx)
+    if version_manager is None:
+        return None
+    try:
+        version_manager.reload()
+        active = version_manager.get_active_config()
+        base_config = AgentConfig.model_validate(active) if active else AgentConfig()
+        new_config = apply_coordinator_synthesis(base_config, run)
+    except Exception as exc:  # defensive — never abort the turn on apply failure
+        logger.warning("apply_coordinator_synthesis failed: %s", exc)
+        return None
+    new_dict = new_config.model_dump()
+    if active and new_dict == active:
+        return None
+    try:
+        cv = version_manager.save_version(
+            config=new_dict,
+            scores={"_reason": f"build:{run_id}"},
+            status="candidate",
+        )
+    except Exception as exc:  # defensive
+        logger.warning("save_version failed: %s", exc)
+        return None
+    return f"  Wrote candidate config v{cv.version:03d} ({cv.filename})."
+
+
+def _fetch_coordinator_run(session: Any, run_id: str) -> Any | None:
+    """Return the :class:`CoordinatorExecutionRun` for ``run_id`` if available."""
+    store = getattr(session, "_store", None)
+    if store is None:
+        return None
+    try:
+        return store.get_coordinator_run(run_id)
+    except Exception:
+        return None
+
+
+def _resolve_version_manager(ctx: SlashContext) -> ConfigVersionManager | None:
+    """Find the :class:`ConfigVersionManager` for the active workspace."""
+    cached = ctx.meta.get("version_manager")
+    if isinstance(cached, ConfigVersionManager):
+        return cached
+    checkpoint = ctx.meta.get("checkpoint_manager")
+    if isinstance(checkpoint, CheckpointManager):
+        versions = getattr(checkpoint, "_versions", None)
+        if isinstance(versions, ConfigVersionManager):
+            ctx.meta["version_manager"] = versions
+            return versions
+    configs_dir = _resolve_configs_dir(ctx)
+    if configs_dir is None:
+        return None
+    versions = ConfigVersionManager(configs_dir=str(configs_dir))
+    ctx.meta["version_manager"] = versions
+    return versions
+
+
+def _resolve_configs_dir(ctx: SlashContext) -> Path | None:
+    """Return the ``configs/`` directory for the current workspace."""
+    override = ctx.meta.get("configs_dir")
+    if override:
+        path = Path(override)
+        return path if path.exists() else None
+    workspace = ctx.workspace
+    root = getattr(workspace, "root", None) if workspace is not None else None
+    candidates: list[Path] = []
+    if root is not None:
+        candidates.append(Path(root) / "configs")
+    candidates.append(Path.cwd() / "configs")
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def _handle_tasks(ctx: SlashContext, *_: str) -> OnDoneResult:
