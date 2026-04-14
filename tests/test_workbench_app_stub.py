@@ -204,6 +204,25 @@ def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
     assert any("0 shells, 0 tasks" in line for line in plain)
 
 
+def test_stub_loop_footer_reflects_live_prompt_state_mode() -> None:
+    """When shift+tab has cycled the mode, the footer renders the new one."""
+    from cli.workbench_app.pt_prompt import WorkbenchPromptState
+
+    lines, echo = _capture_echo()
+    state = WorkbenchPromptState(workspace=None, mode="plan")
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello", "/exit"]),
+        echo=echo,
+        show_banner=False,
+        prompt_state=state,
+    )
+
+    plain = [click.unstyle(line) for line in lines]
+    assert any("plan permissions on" in line for line in plain)
+    assert not any("default permissions on" in line for line in plain)
+
+
 # ---------------------------------------------------------------------------
 # Click subcommand wiring
 # ---------------------------------------------------------------------------

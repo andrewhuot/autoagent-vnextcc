@@ -96,15 +96,24 @@ def _permission_mode_for_workspace(workspace: Any | None) -> str:
         return DEFAULT_PERMISSION_MODE
 
 
-def _render_turn_footer(echo: EchoFn, workspace: Any | None = None) -> None:
+def _render_turn_footer(
+    echo: EchoFn,
+    workspace: Any | None = None,
+    *,
+    mode_override: str | None = None,
+) -> None:
     """Emit a compact Claude Code-style footer line after each user turn.
 
     Mirrors Claude Code's bottom-of-input status chrome: a small chevron,
     the current permission mode, and lightweight activity counters. We
     expose it as a separate helper so tests can assert the format without
     standing up the rest of the loop.
+
+    ``mode_override`` lets callers inject a live prompt_toolkit-tracked
+    mode (e.g. after shift+tab cycling) so the footer reflects the user's
+    current choice before the settings file has been reloaded.
     """
-    mode = _permission_mode_for_workspace(workspace)
+    mode = mode_override or _permission_mode_for_workspace(workspace)
     echo(theme.meta("─" * 72))
     echo(theme.warning(f"⏵ {mode} permissions on · 0 shells, 0 tasks"))
 
@@ -203,6 +212,7 @@ def run_workbench_app(
     session: "Session | None" = None,
     registry: "CommandRegistry | None" = None,
     slash_context: "SlashContext | None" = None,
+    prompt_state: Any | None = None,
 ) -> StubAppResult:
     """Run the interactive workbench loop.
 
@@ -338,7 +348,11 @@ def run_workbench_app(
         if not handled_as_slash:
             out(theme.user(f"  AgentLab received: {line}", bold=False))
 
-        _render_turn_footer(out, workspace)
+        _render_turn_footer(
+            out,
+            workspace,
+            mode_override=getattr(prompt_state, "mode", None),
+        )
 
     return StubAppResult(
         lines_read=lines_read,
@@ -361,7 +375,14 @@ def launch_workbench(
     place. When no workspace is active we still run the loop with an
     ephemeral in-memory session — persistence is a best-effort feature,
     not a precondition for launching.
+
+    The default input path attaches a prompt_toolkit session with the
+    slash-command completer, a ``╭─╮ / ╰─╯`` border around the input,
+    and a shift+tab binding that cycles the permission mode. Callers
+    supplying ``input_provider`` (tests, piped stdin) skip this wiring.
     """
+    import sys
+
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
 
@@ -388,15 +409,37 @@ def launch_workbench(
         session_store=store,
         registry=registry,
     )
+
+    resolved_echo: EchoFn = echo if echo is not None else click.echo
+    provider = input_provider
+    prompt_state: Any | None = None
+    if provider is None and sys.stdin.isatty():
+        try:
+            from cli.workbench_app.pt_prompt import (
+                WorkbenchPromptState,
+                build_prompt_input_provider,
+            )
+
+            prompt_state = WorkbenchPromptState(
+                workspace=workspace,
+                mode=_permission_mode_for_workspace(workspace),
+            )
+            provider = build_prompt_input_provider(
+                registry, prompt_state, echo=resolved_echo
+            )
+        except Exception:  # pragma: no cover — fall back to input() on any failure
+            provider = None
+
     return run_workbench_app(
         workspace,
         show_banner=show_banner,
-        input_provider=input_provider,
+        input_provider=provider,
         echo=echo,
         session_store=store,
         session=session,
         registry=registry,
         slash_context=ctx,
+        prompt_state=prompt_state,
     )
 
 
