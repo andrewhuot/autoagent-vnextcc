@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import click
 import pytest
@@ -110,6 +111,55 @@ def test_tool_output_summary_uses_tail_counts_elapsed_and_exit_status() -> None:
     assert "line 1" not in summary
 
 
+def test_tool_output_summary_can_expand_full_output() -> None:
+    """Claude-style Bash rows should collapse by default and expand on demand."""
+    output = "\n".join(f"line {index}" for index in range(8))
+    summarizer = ToolOutputSummarizer(max_tail_lines=3)
+
+    collapsed = summarizer.summarize(
+        command="pytest tests -q",
+        output=output,
+        exit_code=0,
+        elapsed_seconds=3.2,
+    )
+    expanded = summarizer.summarize(
+        command="pytest tests -q",
+        output=output,
+        exit_code=0,
+        elapsed_seconds=3.2,
+        expanded=True,
+    )
+
+    assert "line 0" not in collapsed
+    assert "showing last 3 of 8 lines" in collapsed
+    assert "line 0" in expanded
+    assert "showing all 8 lines" in expanded
+
+
+def test_harness_tool_completed_event_summarizes_collapsed_output() -> None:
+    """Tool completion events should render Bash output without dumping logs."""
+    session = HarnessSession(permission_mode="default")
+
+    session.emit(
+        HarnessEvent(
+            "tool.completed",
+            payload={
+                "command": "pytest tests -q",
+                "output": "\n".join(f"line {index}" for index in range(6)),
+                "exit_code": 0,
+                "elapsed_seconds": 4.5,
+            },
+        )
+    )
+
+    output = HarnessRenderer(width=100).render(session.snapshot())
+
+    assert "● Bash pytest tests -q" in output
+    assert "showing last" in output
+    assert "line 5" in output
+    assert "line 0" not in output
+
+
 def test_permission_footer_cycles_modes() -> None:
     """The footer owns visible permission state and cycling behavior."""
     footer = PermissionFooter(mode="default")
@@ -138,6 +188,45 @@ def test_permission_footer_renders_prompt_toolbar_like_claude_code() -> None:
     )
 
 
+def test_permission_footer_exposes_styled_prompt_toolkit_fragments() -> None:
+    """The live footer should carry Claude-like color roles, not plain text only."""
+    session = HarnessSession(permission_mode="bypass")
+    session.emit(HarnessEvent("stage.started", message="Running tests"))
+    session.emit(HarnessEvent("task.started", task_id="run", task="Run tests"))
+
+    fragments = PermissionFooter(mode="bypass").render_toolbar_fragments(
+        session.snapshot(),
+        width=32,
+    )
+
+    assert ("class:prompt.border", "─" * 32) in fragments
+    assert ("class:permission.danger", "⏵ bypass permissions on") in fragments
+    assert ("class:activity", "1 shell, 1 monitor") in fragments
+    assert ("class:hint", "↓ to manage") in fragments
+
+
+def test_manage_panel_toggles_and_renders_live_work() -> None:
+    """The down-arrow manage hint should reveal a real monitor panel."""
+    session = HarnessSession(permission_mode="bypass")
+    session.emit(HarnessEvent("stage.started", message="Running tests"))
+    session.emit(HarnessEvent("task.started", task_id="run", task="Run tests"))
+    session.emit(HarnessEvent("input.queued", message="follow up"))
+    session.emit(
+        HarnessEvent(
+            "agent.progress",
+            payload={"name": "builder", "status": "running", "tool": "pytest"},
+        )
+    )
+
+    session.emit(HarnessEvent("manage.toggled"))
+    output = HarnessRenderer(width=100).render(session.snapshot())
+
+    assert "Shells and tasks" in output
+    assert "Active: Running tests" in output
+    assert "Queued: follow up" in output
+    assert "Agent: builder | running | pytest" in output
+
+
 def test_renderer_can_omit_footer_for_live_prompt_toolkit_shell() -> None:
     """The live shell avoids printing a duplicate footer into the transcript."""
     session = HarnessSession(permission_mode="default")
@@ -147,6 +236,19 @@ def test_renderer_can_omit_footer_for_live_prompt_toolkit_shell() -> None:
 
     assert "Ready." in output
     assert "default permissions" not in output
+
+
+def test_harness_renderer_can_style_transcript_blocks() -> None:
+    """Styled rendering should add ANSI roles for Claude-like transcript blocks."""
+    session = HarnessSession(permission_mode="default")
+    session.emit(HarnessEvent("message.delta", message="Ready."))
+    session.emit(HarnessEvent("input.queued", message="follow up"))
+
+    output = HarnessRenderer(width=80, styled=True).render(session.snapshot())
+
+    assert "\x1b[" in output
+    assert "Ready." in output
+    assert "› follow up" in output
 
 
 def test_message_queue_orders_priorities_and_tracks_age() -> None:
@@ -201,6 +303,51 @@ def test_workbench_events_adapt_to_harness_events() -> None:
     assert metrics.event == "metrics.updated"
     assert metrics.tokens == 4200
     assert metrics.cost_usd == 0.12
+
+
+def test_workbench_tool_events_adapt_to_harness_events() -> None:
+    """Workbench and runner tool events should flow into Bash-style summaries."""
+    adapted = workbench_event_to_harness_event(
+        "tool.completed",
+        {
+            "command": "pytest tests -q",
+            "output": "one\ntwo\nthree",
+            "exit_code": 0,
+            "elapsed_seconds": 1.25,
+        },
+    )
+
+    assert adapted is not None
+    assert adapted.event == "tool.completed"
+    assert adapted.payload["command"] == "pytest tests -q"
+
+
+def test_claude_style_terminal_snapshot_matches_fixture() -> None:
+    """A representative frame should stay visually close to the Claude reference."""
+    session = HarnessSession(permission_mode="bypass")
+    session.emit(HarnessEvent("message.delta", message="› is it still running?"))
+    session.emit(
+        HarnessEvent(
+            "tool.completed",
+            payload={
+                "command": "ps aux | grep ralph",
+                "output": "ralph.sh\nclaude child\nshell",
+                "exit_code": 0,
+                "elapsed_seconds": 2.0,
+            },
+        )
+    )
+    session.emit(HarnessEvent("stage.started", message="Letting it run"))
+    session.emit(HarnessEvent("task.started", task_id="run", task="Monitor existing run"))
+    session.emit(HarnessEvent("input.queued", message="yeah let it run"))
+    session.emit(HarnessEvent("manage.toggled"))
+
+    output = HarnessRenderer(width=72, now=lambda: session.snapshot().started_at + 4).render(
+        session.snapshot()
+    )
+
+    fixture = Path(__file__).parent / "fixtures" / "claude_shell_snapshot.txt"
+    assert output == fixture.read_text(encoding="utf-8").rstrip("\n")
 
 
 def test_long_running_commands_expose_claude_ui_choice() -> None:

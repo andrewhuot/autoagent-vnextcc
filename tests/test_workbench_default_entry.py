@@ -1,4 +1,4 @@
-"""T20: Verify `agentlab` defaults to the workbench app and --classic opts out.
+"""T20+T24: Verify ``agentlab`` defaults to the workbench app and ``--classic`` opts out.
 
 The default entry rule is the contract between runner.py's root Click group
 and the new cli.workbench_app loop:
@@ -6,10 +6,15 @@ and the new cli.workbench_app loop:
 - ``agentlab`` with no subcommand on a TTY launches ``run_workbench_app``.
 - ``agentlab --classic`` falls back to the pre-existing ``cli.repl.run_shell``.
 - Subcommands (e.g. ``agentlab status``) are unaffected by ``--classic``.
+- ``/exit`` from either shell leaves the process with exit code 0.
 
-The tests monkeypatch the launch helpers so they don't actually block on
-``input()``. ``_is_tty`` is also patched to True so CliRunner's non-TTY
-stdin doesn't short-circuit to the ``status`` fallback branch.
+The **T20** tests at the top of the file monkeypatch the launch helpers so
+they don't actually block on ``input()`` — they verify the *dispatch* rule.
+The **T24** tests at the bottom drive the real loops end-to-end via
+``CliRunner(input=…)`` and assert ``/exit`` returns cleanly through the whole
+stack (runner.cli → launch helper → loop → slash dispatch → exit code 0).
+``_is_tty`` is patched to ``True`` so CliRunner's non-TTY stdin doesn't
+short-circuit to the ``status`` fallback branch.
 """
 
 from __future__ import annotations
@@ -225,3 +230,158 @@ def test_launch_workbench_without_workspace_uses_ephemeral_session(
     session = captured["kwargs"]["session"]
     assert session is not None
     assert session.title == "ephemeral"
+
+
+# ---------------------------------------------------------------------------
+# T24 — end-to-end integration tests
+#
+# These tests drive the real shells through ``CliRunner(input=…)`` instead of
+# stubbing ``launch_workbench``/``run_shell``. The goal is to verify the glue
+# between runner.cli, the launch helper, the inner loop, and the slash
+# dispatch actually returns a clean ``exit_code == 0`` when the user types
+# ``/exit``. The T20 tests above cover dispatch; T24 covers the full stack.
+#
+# Each T24 test pins ``_enter_discovered_workspace`` onto a real ``tmp_path``
+# so ``SessionStore(workspace.root)`` succeeds, and forces ``_is_tty()`` to
+# ``True`` so the default entry doesn't short-circuit to the ``status``
+# fallback.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> Any:
+    """Return a workspace whose ``root`` is a real writable directory.
+
+    Needed so the T24 integration tests exercise the real ``SessionStore``
+    creation path inside ``launch_workbench`` (rather than the defensive
+    ephemeral fallback).
+    """
+
+    agentlab_dir = tmp_path / ".agentlab"
+    agentlab_dir.mkdir(parents=True, exist_ok=True)
+
+    class _Ws:
+        workspace_label = "integration-ws"
+        root = tmp_path
+        agentlab_dir = tmp_path / ".agentlab"
+        change_cards_db = tmp_path / ".agentlab" / "change_cards.db"
+        best_score_file = tmp_path / ".agentlab" / "best_score.txt"
+
+        def resolve_active_config(self) -> None:  # pragma: no cover — may be called by status bar
+            return None
+
+        def summarize_config(self, _config: Any) -> str:  # pragma: no cover
+            return ""
+
+    ws = _Ws()
+    monkeypatch.setattr(
+        runner_module,
+        "_enter_discovered_workspace",
+        lambda _name: ws,
+    )
+    return ws
+
+
+def test_default_entry_exits_cleanly_on_slash_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    real_workspace: Any,
+    force_tty: None,
+) -> None:
+    """Pipe ``/exit`` through stdin — the workbench loop returns exit code 0."""
+    result = CliRunner().invoke(runner_module.cli, [], input="/exit\n")
+
+    assert result.exit_code == 0, result.output
+    # Banner lands first, then the slash loop routes /exit to the goodbye line.
+    assert "AgentLab Workbench" in result.output
+    assert "Goodbye" in result.output
+
+
+def test_classic_flag_exits_cleanly_on_slash_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    real_workspace: Any,
+    force_tty: None,
+) -> None:
+    """``--classic`` runs the old REPL; ``/exit`` still returns 0."""
+    result = CliRunner().invoke(runner_module.cli, ["--classic"], input="/exit\n")
+
+    assert result.exit_code == 0, result.output
+    # Classic REPL banner text.
+    assert "AgentLab Shell" in result.output
+    assert "Goodbye" in result.output
+
+
+def test_default_entry_exits_on_eof(
+    monkeypatch: pytest.MonkeyPatch,
+    real_workspace: Any,
+    force_tty: None,
+) -> None:
+    """Empty stdin (EOF) exits the workbench cleanly with code 0."""
+    result = CliRunner().invoke(runner_module.cli, [], input="")
+
+    assert result.exit_code == 0, result.output
+    assert "AgentLab Workbench" in result.output
+
+
+def test_default_entry_routes_through_workbench_not_repl(
+    monkeypatch: pytest.MonkeyPatch,
+    real_workspace: Any,
+    force_tty: None,
+) -> None:
+    """Verify the default path goes through ``launch_workbench`` — not ``run_shell``.
+
+    Complements the T20 spy test by running the real loop underneath so any
+    future refactor that accidentally routes default-entry through the classic
+    REPL lights up here.
+    """
+    run_shell_spy = _Spy()
+    monkeypatch.setattr("cli.repl.run_shell", run_shell_spy)
+
+    result = CliRunner().invoke(runner_module.cli, [], input="/exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert not run_shell_spy.called, "default entry must not invoke the classic REPL"
+    # Workbench banner (not REPL banner) landed.
+    assert "AgentLab Workbench" in result.output
+    assert "AgentLab Shell" not in result.output
+
+
+def test_classic_flag_routes_through_repl_not_workbench(
+    monkeypatch: pytest.MonkeyPatch,
+    real_workspace: Any,
+    force_tty: None,
+) -> None:
+    """Mirror of the previous test: ``--classic`` must not invoke the workbench."""
+    launch_spy = _Spy()
+    monkeypatch.setattr("cli.workbench_app.app.launch_workbench", launch_spy)
+
+    result = CliRunner().invoke(runner_module.cli, ["--classic"], input="/exit\n")
+
+    assert result.exit_code == 0, result.output
+    assert not launch_spy.called, "--classic must not invoke the workbench app"
+    assert "AgentLab Shell" in result.output
+    assert "AgentLab Workbench" not in result.output
+
+
+def test_run_workbench_app_exits_via_slash_exit_directly() -> None:
+    """Unit-scoped sanity check: ``run_workbench_app`` honors ``/exit`` itself.
+
+    The end-to-end tests above run through CliRunner. This one confirms the
+    contract the integration relies on: ``exited_via == "/exit"`` and the
+    loop stops reading input after the first ``/exit`` token.
+    """
+    from cli.workbench_app.app import run_workbench_app
+
+    lines: list[str] = []
+    result = run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello", "/exit", "should-not-be-read"]),
+        echo=lines.append,
+        show_banner=False,
+    )
+
+    assert result.exited_via == "/exit"
+    assert result.lines_read == 2  # "hello" then "/exit" — third line never read.
+    # The echo-only branch printed "hello"; the exit branch printed Goodbye.
+    joined = "\n".join(lines)
+    assert "hello" in joined
+    assert "Goodbye" in joined

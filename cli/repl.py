@@ -1,4 +1,18 @@
-"""Interactive REPL shell for AgentLab."""
+"""Interactive REPL shell for AgentLab.
+
+.. deprecated::
+    This module is the legacy interactive shell reachable via
+    ``agentlab --classic``. It is kept for one release for backward
+    compatibility; new work should target
+    :mod:`cli.workbench_app`, which powers the default ``agentlab``
+    entry point (see :func:`cli.workbench_app.app.run_workbench_app`
+    and :func:`cli.workbench_app.app.launch_workbench`). Every slash
+    command ported here has an equivalent handler registered through
+    :func:`cli.workbench_app.slash.build_builtin_registry`. The
+    classic shell will be removed in a future release once the
+    workbench surface covers the remaining harness-shell niches
+    (queued input while busy, bottom-toolbar permission cycling).
+"""
 
 from __future__ import annotations
 
@@ -7,6 +21,7 @@ import shlex
 import sys
 import time
 import uuid
+import warnings
 from typing import Any
 
 import click
@@ -283,7 +298,21 @@ def run_shell(
     session_store: SessionStore | None = None,
     ui: str | None = None,
 ) -> None:
-    """Run the interactive REPL shell for the current workspace."""
+    """Run the interactive REPL shell for the current workspace.
+
+    .. deprecated::
+        Prefer :func:`cli.workbench_app.app.launch_workbench`. This
+        function is reached via ``agentlab --classic`` and will be
+        removed in a future release. A :class:`DeprecationWarning` is
+        emitted on each entry to surface the migration path.
+    """
+    warnings.warn(
+        "cli.repl.run_shell is deprecated; use "
+        "cli.workbench_app.app.launch_workbench (default for "
+        "`agentlab` with no args). `--classic` is kept for one release.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     session, session_store = _create_shell_session(workspace, session_store)
 
     settings = resolve_settings(
@@ -354,6 +383,7 @@ def _run_harness_shell(
         from prompt_toolkit import PromptSession
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.patch_stdout import patch_stdout
+        from prompt_toolkit.styles import Style
     except ImportError:
         raise
 
@@ -362,7 +392,7 @@ def _run_harness_shell(
         footer = PermissionFooter(PermissionManager(root=permission_root).mode)
         harness = HarnessSession(permission_mode=footer.mode)
         queue = MessageQueue()
-        renderer = HarnessRenderer(include_footer=False)
+        renderer = HarnessRenderer(include_footer=False, styled=True)
         bindings = KeyBindings()
 
         @bindings.add("s-tab")
@@ -375,11 +405,29 @@ def _run_harness_shell(
                     {"permissions": {"mode": footer.mode}},
                     root=workspace.root,
                 )
+            event.app.invalidate()
+
+        @bindings.add("down")
+        def _toggle_manage_panel(event) -> None:  # noqa: ANN001 - prompt_toolkit callback
+            harness.emit(HarnessEvent("manage.toggled"))
+            event.app.invalidate()
 
         prompt_session = PromptSession(
             message=renderer.prompt_message() if prompt_str == "agentlab> " else prompt_str,
-            bottom_toolbar=lambda: footer.render_toolbar(harness.snapshot()),
+            bottom_toolbar=lambda: footer.render_toolbar_fragments(harness.snapshot()),
             key_bindings=bindings,
+            style=Style.from_dict(
+                {
+                    "prompt.border": "ansibrightblack",
+                    "permission.danger": "ansired",
+                    "permission.normal": "ansiwhite",
+                    "separator": "ansibrightblack",
+                    "activity": "ansicyan",
+                    "hint": "ansibrightblack",
+                    "panel.title": "ansicyan bold",
+                    "panel.row": "ansiwhite",
+                }
+            ),
         )
         harness.emit(HarnessEvent("session.started", message="AgentLab Shell"))
         harness.emit(

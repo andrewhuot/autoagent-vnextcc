@@ -45,3 +45,4 @@ test-agent/
 # Environment
 .env
 .env.local
+ralph*.log

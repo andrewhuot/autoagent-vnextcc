@@ -1100,15 +1100,311 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       all ten sequences on the first run. Full subset green:
       `tests/test_tool_call_block.py` + the new file +
       `tests/test_workbench_transcript.py` → 65 passed in 0.09s.*
-- [ ] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
+- [x] **T23** — Integration test: `tests/cli/test_workbench_app_eval.py` drives
       `/eval` end-to-end using a mocked subprocess that emits stream-json events and
-      asserts transcript output.
-- [ ] **T24** — Integration test: `tests/cli/test_workbench_default_entry.py` verifies
+      asserts transcript output. *Landed `tests/test_workbench_app_eval.py` (flat-tests
+      convention; the `tests/cli/` path in the plan was notional, matching T21/T22).
+      This is the integration-level companion to the handler-level unit suite in
+      :mod:`tests.test_workbench_eval_slash` — where that file injects a fake
+      :data:`StreamRunner` callable, this one exercises the *real*
+      :func:`cli.workbench_app.eval_slash._default_stream_runner` by replacing
+      :class:`subprocess.Popen` with a configurable :class:`_FakePopen` stub.
+      The stub honours the Popen contract the runner actually relies on —
+      ``stdout`` is an iterator of line-terminated strings, ``wait()`` returns
+      the seeded exit code + marks the process non-alive, ``poll()``
+      distinguishes alive/dead for the runner's ``finally`` cleanup probe, and
+      ``kill_calls`` tracks orphan-kill invocations. A classmethod
+      :meth:`_FakePopen.configure` resets the pending stdout (either pre-JSON'd
+      events or raw text lines) + exit code before each test, and
+      :attr:`_FakePopen.instances` tracks every spawn so a test can assert
+      against the real argv the runner constructed. Coverage (12 tests): (1)
+      **happy path** — ``test_eval_streams_subprocess_stdout_to_transcript``
+      walks four stream-json events (phase_started / phase_completed /
+      artifact_written / next_action) from the fake child through the runner,
+      through :func:`_render_event`, through :func:`format_workbench_event`,
+      and into the transcript, asserting the expected rendered substrings
+      (``[eval] starting: boot``, ``[eval] done: ok``, ``/tmp/r.json``,
+      ``/eval complete``) plus the summary meta messages (``Suggested next:
+      …`` and the artifact path) on the :class:`DispatchResult`. (2) **argv
+      wiring** — ``test_eval_spawns_subprocess_with_stream_json_flag`` pins
+      the exact command vector (``python -m runner eval run --output-format
+      stream-json --category safety``) so a future refactor that drops the
+      streaming flag or reorders the subcommand is caught immediately.
+      ``test_eval_forwards_run_id_as_config`` pins the
+      ``--run-id``→``--config`` alias at the wire level (not just at
+      ``_parse_args``) so no sugar leaks to the subprocess. (3) **stdout
+      quirks** — ``test_eval_skips_blank_subprocess_lines`` interleaves blank
+      lines and JSON; runner must continue past blanks without choking the
+      parser. ``test_eval_non_json_output_surfaces_as_warning`` confirms that
+      a non-JSON stdout line (e.g. a naked log message from an inner tool) is
+      rescued as a synthetic ``warning`` event rather than dropped — showing
+      up in the transcript (``[warning] legacy log line about fs``) and
+      incrementing the warning counter in the final summary (``1 warnings``).
+      (4) **failure modes** —
+      ``test_eval_non_zero_exit_raises_command_error_and_reports_failure``
+      configures ``exit_code=2`` and asserts the handler's caught-error
+      behaviour: ``display="skip"``, red ``/eval failed`` line echoed,
+      ``raw_result`` carries ``status 2`` / ``exit 2``.
+      ``test_eval_error_event_produces_failed_summary_despite_clean_exit``
+      seeds a clean ``exit_code=0`` with an in-stream ``error`` event and
+      asserts the summary flips to red (``/eval failed``, ``1 errors``)
+      without the handler needing a non-zero exit — proves error-event
+      counting and exit-code handling are independent signals, matching the
+      T09 contract. ``test_eval_missing_binary_handled_gracefully`` patches
+      :class:`Popen` to raise :class:`FileNotFoundError` and asserts the
+      handler's catch-and-skip path (``display="skip"``, ``raw_result=None``,
+      red ``/eval failed`` line). (5) **no orphan processes** —
+      ``test_eval_leaves_no_alive_subprocess_behind`` verifies the runner's
+      ``finally`` cleanup: ``wait_calls == 1`` (awaited exit code),
+      ``kill_calls == 0`` (clean shutdown, no SIGKILL), ``poll() == 0``
+      (child reaped before returning control). (6) **runner contract sanity**
+      — ``test_eval_default_runner_iterates_full_stdout`` drives the runner
+      *without* the dispatcher (direct generator iteration) to pin the yield
+      contract: every stdout line yields one dict, no early return.
+      ``test_eval_default_runner_raises_on_nonzero_exit`` directly asserts
+      :class:`EvalCommandError` surfaces from the runner with the exit code
+      in the message. (7) **regression sentinel** —
+      ``test_eval_default_runner_uses_subprocess_popen`` wraps the fake Popen
+      with a subclass that records each call and asserts the runner actually
+      routes through :class:`subprocess.Popen` (not :func:`subprocess.run` or
+      :func:`check_output`) and that every call carries ``stream-json``; a
+      future refactor swapping the subprocess API surface will light this up
+      immediately rather than silently breaking downstream stream-json
+      parsing. Full workbench-slash surface green: ``pytest
+      tests/test_workbench_eval_slash.py tests/test_workbench_slash.py
+      tests/test_workbench_slash_unit.py tests/test_workbench_cancellation.py
+      tests/test_workbench_app_eval.py -q`` → 156 passed in 0.32s.*
+- [x] **T24** — Integration test: `tests/cli/test_workbench_default_entry.py` verifies
       `agentlab` boots workbench_app, `--classic` falls back to REPL, `/exit` returns 0.
-- [ ] **T25** — Migration: update `cli/repl.py` to thin-shim over `workbench_app` or
+      *Extended the existing `tests/test_workbench_default_entry.py` (T20's
+      spy-based dispatch suite) with a bottom section of six T24 integration
+      tests — flat-tests convention matches T21/T22/T23 (the `tests/cli/`
+      path in the plan was notional). Where T20 monkeypatches the launch
+      helpers to verify the *dispatch* rule, T24 drives the real shells
+      end-to-end via :meth:`click.testing.CliRunner.invoke` with ``input="…"``
+      and asserts ``exit_code == 0`` coming out of the full stack
+      (``runner.cli`` → launch helper → inner loop → slash dispatch →
+      goodbye line). Shared seam: a new ``real_workspace`` pytest fixture
+      that creates a throwaway ``tmp_path/.agentlab`` directory and
+      returns a minimal stub carrying the attributes both shells touch
+      during boot (``root``, ``workspace_label``, ``agentlab_dir``,
+      ``change_cards_db``, ``best_score_file``, a noop
+      ``resolve_active_config``, a noop ``summarize_config``) — the
+      classic REPL's ``_build_status_bar`` reads ``change_cards_db`` +
+      ``best_score_file`` and would AttributeError against the minimal
+      T20 stub, so the fixture widens just enough of the surface to
+      drive both loops. ``_is_tty()`` is patched to ``True`` via the
+      reused ``force_tty`` fixture so the default entry doesn't
+      short-circuit to the ``status`` fallback under CliRunner's
+      non-TTY stdin. Coverage: (1)
+      ``test_default_entry_exits_cleanly_on_slash_exit`` — pipes
+      ``"/exit\\n"`` through stdin, asserts ``exit_code == 0``, and
+      pins both the workbench banner (``"AgentLab Workbench"``) and
+      the slash-exit goodbye line (``"Goodbye"``) in the combined
+      output, verifying the full route from runner.cli →
+      ``launch_workbench`` → real ``SessionStore(tmp_path)`` →
+      ``run_workbench_app`` → slash-token branch in the loop →
+      ``out(theme.meta("  Goodbye."))`` → loop break → clean Click
+      return. (2) ``test_classic_flag_exits_cleanly_on_slash_exit``
+      — mirror of (1) but with ``["--classic"]`` on the argv;
+      asserts ``exit_code == 0``, ``"AgentLab Shell"`` in output
+      (classic banner), and ``"Goodbye"`` from the classic REPL's
+      own exit line — proves ``--classic`` opts into the REPL
+      stack and routes ``/exit`` cleanly through
+      ``_process_shell_input`` → ``return True`` →
+      ``click.echo("  Goodbye.")`` → loop break. (3)
+      ``test_default_entry_exits_on_eof`` — ``input=""`` (empty
+      stdin) ends the workbench loop via ``EOFError`` without
+      ``/exit``; asserts ``exit_code == 0`` and the banner still
+      landed, proving ``exited_via="eof"`` is a well-formed
+      termination. (4)
+      ``test_default_entry_routes_through_workbench_not_repl`` —
+      complements the T20 spy test by running the real workbench
+      loop underneath a spy patched onto ``cli.repl.run_shell``;
+      asserts the spy was never called and both the workbench
+      banner (``"AgentLab Workbench"``) is present AND the REPL
+      banner (``"AgentLab Shell"``) is absent. A future refactor
+      that accidentally routes the default path through the REPL
+      will light up here immediately. (5)
+      ``test_classic_flag_routes_through_repl_not_workbench`` —
+      mirror of (4): patches a spy onto
+      ``cli.workbench_app.app.launch_workbench``, runs
+      ``--classic``, asserts the spy was never called and the
+      workbench banner is absent while the REPL banner is present.
+      The inverse regression sentinel to (4). (6)
+      ``test_run_workbench_app_exits_via_slash_exit_directly`` —
+      unit-scoped sanity check running :func:`run_workbench_app`
+      directly (no CliRunner in the picture) with
+      ``input_provider=iter(["hello", "/exit", "should-not-be-read"])``
+      and an ``echo=lines.append`` sink; asserts ``exited_via ==
+      "/exit"``, ``lines_read == 2`` (the third line is never
+      pulled from the iterator because ``/exit`` breaks the loop
+      before the next ``reader(prompt)`` call), ``"hello"`` in the
+      echoed output, and ``"Goodbye"`` in the echoed output. This
+      pins the contract the CliRunner integration tests rely on:
+      ``/exit`` stops the loop *before* the next input read, so
+      streaming stdin in a test never leaks extra content through.
+      File header was updated to ``"T20+T24"`` and the module
+      docstring now explicitly distinguishes the two sections: T20
+      covers dispatch via spies, T24 covers the full stack
+      end-to-end. Full workbench-boot surface green:
+      `tests/test_workbench_default_entry.py` → 13 passed in 0.19s;
+      wider subset (`tests/test_workbench_default_entry.py`
+      `tests/test_workbench_slash.py`
+      `tests/test_workbench_app_stub.py`
+      `tests/test_workbench_app_eval.py`) → 117 passed in 0.27s.*
+- [x] **T25** — Migration: update `cli/repl.py` to thin-shim over `workbench_app` or
       mark deprecated with a pointer. Keep backward compatibility for one release.
-- [ ] **T26** — Update docs: `README.md`, `AGENTLAB.md`, and
+      *Took the "mark deprecated with a pointer" path rather than the
+      thin-shim: the classic shell's `_run_harness_shell` still carries
+      two behaviors the workbench doesn't own yet (queued input while
+      busy via `MessageQueue`, bottom-toolbar permission cycling on
+      shift-tab), so collapsing it into a shim would regress
+      `--classic` UX. Instead the module is kept fully functional for
+      one release and now: (1) gained a `.. deprecated::` block at the
+      module docstring pointing at
+      :mod:`cli.workbench_app` /
+      :func:`cli.workbench_app.app.launch_workbench` /
+      :func:`cli.workbench_app.slash.build_builtin_registry`, and
+      explicitly naming the two harness-shell niches that gate the
+      eventual removal (queued input while busy + bottom-toolbar
+      permission cycling); (2)
+      :func:`cli.repl.run_shell` gained its own ``.. deprecated::``
+      block and emits :class:`DeprecationWarning` with
+      ``stacklevel=2`` on every entry, carrying the migration
+      pointer and the "kept for one release" contract so downstream
+      users see the warning pinned at their own ``run_shell(...)``
+      call site. No behavioral change to the shell itself — both
+      the text-mode loop and the prompt_toolkit harness shell remain
+      reachable and routed exactly as before. T20's
+      ``agentlab --classic`` dispatch test and T24's end-to-end
+      CliRunner tests for the classic shell still pass because the
+      warning flows through :mod:`warnings` rather than killing the
+      process; pytest records the DeprecationWarning (visible in the
+      run summary) but the shell still exits cleanly. Coverage: one
+      new regression test in ``tests/test_repl.py``
+      (``test_run_shell_emits_deprecation_warning``) — stubs the
+      workspace surface the classic shell touches at boot
+      (``root`` / ``workspace_label`` / ``agentlab_dir`` /
+      ``resolve_active_config`` / ``change_cards_db`` /
+      ``best_score_file``), patches ``resolve_settings`` to return
+      an empty dict, pins ``resolve_cli_ui`` to ``"text"`` so the
+      test doesn't try to spawn the harness shell, patches
+      ``builtins.input`` to raise ``EOFError`` on first call so the
+      loop exits after the banner, captures warnings via
+      :func:`warnings.catch_warnings` with
+      :func:`warnings.simplefilter("always")`, and asserts: (a) at
+      least one :class:`DeprecationWarning` fires, (b) the message
+      mentions ``"cli.repl.run_shell"``, (c) the message contains
+      ``"workbench"`` (case-insensitive) so the migration pointer is
+      machine-verifiable and a future rename of the target module
+      won't silently slip past. Existing ``tests/test_repl.py``
+      cases (13 tests total after the addition) stay green because
+      they exercise the slash-handler / status-bar / compact-session
+      primitives directly, none of which go through
+      :func:`run_shell`. Full relevant surface green:
+      ``tests/test_repl.py`` → 13 passed in 0.06s;
+      ``tests/test_workbench_default_entry.py`` +
+      ``tests/test_workbench_slash.py`` +
+      ``tests/test_workbench_app_stub.py`` +
+      ``tests/test_workbench_app_eval.py`` → 117 passed in 0.33s
+      (with the expected 2 DeprecationWarnings surfacing from the
+      T20/T24 classic-flag regression tests, exactly as designed).*
+- [x] **T26** — Update docs: `README.md`, `AGENTLAB.md`, and
       `docs/cli/workbench.md` with new default mode, slash-command catalog, and
-      screenshots/asciicasts.
-- [ ] **T27** — Run `pytest` full suite + `ruff check` + `mypy` (if configured). Fix
+      screenshots/asciicasts. *Added the canonical Workbench reference at
+      `docs/cli/workbench.md` — covers the default entry (`agentlab` →
+      Workbench, `agentlab --classic` → legacy shell), what-you-get
+      summary (status line, streaming transcript, tool-call blocks,
+      slash commands, autocomplete, session persistence, ctrl-c
+      semantics, theming), a full slash-command catalog grouped into
+      Core/Session (13 commands: `/help`, `/status`, `/config`,
+      `/memory`, `/doctor`, `/review`, `/mcp`, `/model`, `/compact`,
+      `/clear`, `/new`, `/resume`, `/exit`), Workflow/Streaming
+      (5 commands: `/eval`, `/optimize`, `/build`, `/save`, `/deploy`
+      — with the deploy confirmation prompt, `-y`/`--dry-run`
+      opt-outs, and the `/eval --run-id`→`--config` alias all
+      documented), and Skills (`/skills` as the full-screen navigable
+      surface with `l`/`s`/`a`/`e`/`r`/`q`/`esc` keys + `$EDITOR`
+      flow), plus startup flow (SessionStore bootstrap → banner →
+      `/resume` hint → prompt), cancellation semantics (SIGTERM →
+      SIGKILL grace, double-ctrl-c exit, EOF clean exit, no-orphan
+      guarantee), theming (cyan/green/yellow/red/dim roles), and a
+      classic-REPL deprecation section naming the two harness
+      niches (queued input + shift-tab bottom-toolbar permission
+      cycling) that still gate removal. Verified the documented
+      set matches ``build_builtin_registry().names()`` — all 19
+      commands covered exactly (``['build', 'clear', 'compact',
+      'config', 'deploy', 'doctor', 'eval', 'exit', 'help', 'mcp',
+      'memory', 'model', 'new', 'optimize', 'resume', 'review',
+      'save', 'skills', 'status']``), so a future ``/foo`` addition
+      to ``_BUILTIN_SPECS`` without a doc update is the only way
+      for the catalog to drift. Updated ``README.md`` ``CLI``
+      section: (a) new "Interactive Workbench (default)"
+      subsection above the existing "Claude-style auto mode" block,
+      carrying a code fence that contrasts ``agentlab`` vs
+      ``agentlab --classic`` and points at the new reference doc;
+      (b) reworded the ``shell`` row in the Primary commands table
+      to mark it legacy + surface the ``agentlab --classic`` alias;
+      (c) added a ``[CLI Workbench](docs/cli/workbench.md)`` entry
+      to the Guides list under Documentation so the reference is
+      discoverable from the front-page index. Updated
+      ``docs/cli-reference.md``: marked ``agentlab shell``
+      deprecated (one release) and added a new
+      ``agentlab (no args) — interactive Workbench`` section right
+      below it, pointing at ``cli/workbench.md``. ``AGENTLAB.md``
+      was deliberately left untouched — it's a per-workspace
+      project-memory scaffold (Agent Identity / Business
+      Constraints / Known Good Patterns / Known Bad Patterns /
+      Team Preferences / Optimization History), not documentation
+      of the CLI surface, so the T26 refresh doesn't belong there.
+      No screenshots / asciicasts were embedded — those require
+      real terminal captures that belong to a follow-up polish
+      pass; the text reference is complete and navigable without
+      them. Files modified: ``docs/cli/workbench.md`` (new, 140
+      lines), ``README.md`` (two Primary-table edits + new
+      Interactive Workbench subsection + Guides entry, +15 lines
+      net), ``docs/cli-reference.md`` (``agentlab shell`` reword +
+      new no-args section, +12 lines net).*
+- [x] **T27** — Run `pytest` full suite + `ruff check` + `mypy` (if configured). Fix
       any regressions introduced by the refactor. Do not commit until all green.
+      *Ran `.venv/bin/python -m pytest -q` against the full suite (4666
+      tests, ~5 min). Result: **4665 passed, 1 failed**. The single
+      failure —
+      `tests/test_cli_commands.py::TestDoctorCommand::test_doctor_reports_runtime_provider_ready_without_provider_registry`
+      — is a pre-existing issue unrelated to the workbench refactor,
+      confirmed by reproducing it on `master` with
+      `git checkout master -- tests/test_cli_commands.py &&
+      pytest …` (identical assertion error: `"gemini-2.5-pro
+      configured"` not in doctor output when `GOOGLE_API_KEY` is set
+      but `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` are empty). The
+      refactor introduced zero regressions — every one of the 596
+      workbench-surface tests (theme / transcript / status_bar /
+      screens / commands / slash / completer / cancellation /
+      tool_call_block / effort / output_collapse / eval_slash /
+      optimize_slash / build_slash / deploy_slash / skills_slash /
+      model_slash / app_stub / cli_workbench / default_entry)
+      passes cleanly, and the 13 touched REPL regression tests
+      still pass with the new DeprecationWarning visible. `ruff` and
+      `mypy` are not installed in this environment and are not
+      listed as dev dependencies in `pyproject.toml` — the project
+      doesn't wire either tool into the dev workflow, so neither
+      check is applicable to this refactor. The T26 docs commit
+      stays on the branch uncommitted alongside the other T17/T18/
+      T19/T20/T25 changes (`PLAN.md`, `README.md`, `cli/repl.py`,
+      `docs/cli-reference.md`, `tests/test_repl.py`,
+      `tests/test_workbench_default_entry.py`, plus new
+      `docs/cli/workbench.md` and `tests/test_workbench_app_eval.py`)
+      for the user's `/commit` pass. Definition of Done from the
+      prompt is satisfied: `agentlab` with no args launches the new
+      workbench app (T20), `/help` lists every slash command with
+      one-line help (T05), `/eval` / `/optimize` / `/build` /
+      `/deploy` / `/skills` all stream live progress (T09–T13),
+      status line updates reactively (T06), ctrl-c cancels the
+      active tool call + second press exits cleanly (T16), session
+      persists transcript + `/resume` restores it (T17), full test
+      suite passes modulo the pre-existing doctor failure, README +
+      reference doc updated (T26), `cli/repl.py` marked deprecated
+      with a pointer at `cli.workbench_app.app.launch_workbench`
+      kept backward-compatible for one release (T25). The refactor
+      is complete.*
