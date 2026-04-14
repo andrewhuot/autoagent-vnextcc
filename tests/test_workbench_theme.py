@@ -38,6 +38,10 @@ def test_palette_default_role_colors() -> None:
     assert theme.PALETTE.plan_mode == "cyan"
     assert theme.PALETTE.accept_mode == "green"
     assert theme.PALETTE.danger_mode == "red"
+    # Amber accent (xterm 256-colour index) for the Claude-Code-style chevron.
+    assert theme.PALETTE.prompt_accent == 208
+    # Border roles default to dim chrome (None triggers the dim path).
+    assert theme.PALETTE.border is None
 
 
 # -------------------------------------------------------------------- meta
@@ -210,3 +214,44 @@ def test_stylize_returns_text_verbatim_when_no_flags() -> None:
 
 def test_stylize_color_false_short_circuits() -> None:
     assert theme.stylize("plain", fg="red", bold=True, color=False) == "plain"
+
+
+# ----------------------------------------------------------------- accent
+# The amber chevron role emits 256-colour SGR `38;5;208` and stays bold by
+# default so the prompt reads as the visual anchor of the input card.
+
+AMBER_256_CODE = "\x1b[38;5;208"
+
+
+def test_accent_default_is_amber_bold() -> None:
+    styled = theme.accent("›")
+    assert click.unstyle(styled) == "›"
+    assert AMBER_256_CODE in styled
+    assert BOLD_CODE in styled
+
+
+def test_accent_bold_false_drops_bold() -> None:
+    styled = theme.accent("›", bold=False)
+    assert AMBER_256_CODE in styled
+    assert BOLD_CODE not in styled
+
+
+def test_accent_color_false_returns_plain() -> None:
+    assert theme.accent("›", color=False) == "›"
+
+
+# ----------------------------------------------------------------- border
+# The border helper paints rounded-box chrome dim-grey by default so it
+# recedes behind content. When a call site asks for ``color=False`` the
+# text must pass through untouched so tests can assert layout without
+# ANSI escapes.
+
+
+def test_border_default_is_dim() -> None:
+    styled = theme.border("╭──╮")
+    assert click.unstyle(styled) == "╭──╮"
+    assert DIM_CODE in styled
+
+
+def test_border_color_false_returns_plain() -> None:
+    assert theme.border("╭──╮", color=False) == "╭──╮"

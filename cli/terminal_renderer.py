@@ -9,17 +9,21 @@ and a future true Ink sidecar can target the same shapes.
 from __future__ import annotations
 
 import math
+import os
 import shutil
+import sys
 import textwrap
 from collections.abc import Iterable
 
 import click
 
 __all__ = [
+    "render_box",
     "render_divider",
     "render_pane",
     "render_progress_bar",
     "render_status_footer",
+    "supports_unicode_box",
     "terminal_width",
 ]
 
@@ -173,6 +177,87 @@ def render_pane(
     for raw_line in body_lines:
         for wrapped in _wrap_body_line(str(raw_line), content_width):
             lines.append(_fit(prefix + wrapped, resolved_width))
+    return lines
+
+
+def supports_unicode_box() -> bool:
+    """Return ``True`` when the terminal can render ``╭─╮ │ ╰─╯`` glyphs.
+
+    Non-UTF encodings (cp437, cp1252) mojibake the corners. We gate on the
+    detected ``stdout`` encoding so the fallback only kicks in when needed —
+    piping to a UTF-8 file still keeps the pretty glyphs.
+    """
+
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    return encoding.startswith("utf")
+
+
+def render_box(
+    body_lines: Iterable[str],
+    *,
+    title: str | None = None,
+    width: int | None = None,
+    rounded: bool = True,
+    color: bool = True,
+    padding: int = 1,
+) -> list[str]:
+    """Render a bordered box wrapping ``body_lines``.
+
+    Mirrors Claude Code's welcome card — the border recedes (dim grey) while
+    the interior content keeps its own styling. ``padding`` controls the
+    left/right interior gutter (in columns). When the terminal cannot render
+    Unicode corners, falls back to ``+ - |``; ``NO_COLOR`` / ``color=False``
+    still produces the box chrome, just without ANSI escapes.
+
+    Returns a list of rendered lines (top border, body lines, bottom border)
+    so callers can interleave with other output before echoing.
+    """
+
+    resolved_width = max(_MIN_WIDTH, width or terminal_width())
+    unicode_ok = supports_unicode_box()
+    if rounded and unicode_ok:
+        tl, tr, bl, br, horiz, vert = "╭", "╮", "╰", "╯", "─", "│"
+    elif unicode_ok:
+        tl, tr, bl, br, horiz, vert = "┌", "┐", "└", "┘", "─", "│"
+    else:
+        tl = tr = bl = br = "+"
+        horiz, vert = "-", "|"
+
+    inner_width = max(1, resolved_width - 2 - (2 * padding))
+    gutter = " " * padding
+
+    def _chrome(text: str) -> str:
+        return text if not color else click.style(text, dim=True)
+
+    def _frame(line: str) -> str:
+        plain = click.unstyle(line)
+        fill = max(0, inner_width - len(plain))
+        return _chrome(vert) + gutter + line + (" " * fill) + gutter + _chrome(vert)
+
+    top_body = horiz * (resolved_width - 2)
+    if title:
+        label = f" {title.strip()} "
+        label_len = len(label)
+        if label_len < resolved_width - 4:
+            left = 2
+            right = (resolved_width - 2) - left - label_len
+            top_body = (horiz * left) + label + (horiz * max(0, right))
+    top = _chrome(tl + top_body + tr)
+    bottom = _chrome(bl + (horiz * (resolved_width - 2)) + br)
+
+    lines: list[str] = [top]
+    for raw_line in body_lines:
+        text = str(raw_line)
+        plain = click.unstyle(text)
+        if len(plain) <= inner_width:
+            lines.append(_frame(text))
+            continue
+        # Only wrap the plain representation — text with ANSI escapes is
+        # already width-known to the caller. We wrap on the plain form so
+        # styled content that overflows degrades gracefully.
+        for wrapped in _wrap_body_line(plain, inner_width):
+            lines.append(_frame(wrapped))
+    lines.append(bottom)
     return lines
 
 

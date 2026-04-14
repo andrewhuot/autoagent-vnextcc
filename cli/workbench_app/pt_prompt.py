@@ -5,7 +5,8 @@ chrome pieces the plain ``input()`` loop couldn't offer:
 
 - a slash-command completion popup driven by
   :class:`cli.workbench_app.completer.SlashCommandCompleter`,
-- a Unicode ``╭─╮ / ╰─╯`` border rendered around the input line, and
+- Unicode rounded-corner borders (``╭──╮`` / ``╰──╯``) rendered above and
+  below the input line — Claude Code's signature input card, and
 - a ``shift+tab`` key binding that cycles the active permission mode
   (``default`` → ``acceptEdits`` → ``plan`` → ``bypass``),
   persisting the choice to ``.agentlab/settings.json`` when a workspace
@@ -104,14 +105,35 @@ def _terminal_width(default: int = 80) -> int:
     return max(20, min(cols, 160))
 
 
+def _supports_rounded_corners() -> bool:
+    """Return ``True`` when stdout can render ``╭╮╰╯`` without mojibake."""
+    import sys
+
+    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
+    return encoding.startswith("utf")
+
+
 def _render_top_border(echo: EchoFn) -> None:
+    """Emit the top edge of the input card.
+
+    Real rounded corners (``╭──╮``) when the terminal advertises UTF; a
+    plain horizontal rule otherwise so cp437 users don't see question marks.
+    """
     width = _terminal_width()
-    echo(theme.meta("─" * width))
+    if _supports_rounded_corners() and width >= 4:
+        body = "─" * (width - 2)
+        echo(theme.border(f"╭{body}╮"))
+    else:
+        echo(theme.border("─" * width))
 
 
 def _render_bottom_border(echo: EchoFn) -> None:
     width = _terminal_width()
-    echo(theme.meta("─" * width))
+    if _supports_rounded_corners() and width >= 4:
+        body = "─" * (width - 2)
+        echo(theme.border(f"╰{body}╯"))
+    else:
+        echo(theme.border("─" * width))
 
 
 def build_prompt_input_provider(
@@ -127,7 +149,7 @@ def build_prompt_input_provider(
     """
     try:
         from prompt_toolkit import PromptSession
-        from prompt_toolkit.formatted_text import FormattedText
+        from prompt_toolkit.formatted_text import ANSI, FormattedText
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.shortcuts import CompleteStyle
@@ -173,8 +195,14 @@ def build_prompt_input_provider(
 
     def _bottom_toolbar() -> Any:
         label = theme.format_mode(state.mode, color=False)
+        permission_line = f"{label} permissions on · shift+tab to cycle"
+        hint_line = "? for shortcuts · / for commands · ctrl+t toggles transcript"
         return FormattedText(
-            [("class:toolbar", f"{label} permissions on · shift+tab to cycle")]
+            [
+                ("class:toolbar", permission_line),
+                ("", "\n"),
+                ("class:toolbar.dim", hint_line),
+            ]
         )
 
     session: Any = PromptSession(
@@ -191,8 +219,12 @@ def build_prompt_input_provider(
 
     def provider(prompt_text: str) -> str:
         _render_top_border(echo)
+        # Style the chevron amber so it matches Claude Code's accent. We wrap
+        # the styled string in ``ANSI`` so prompt_toolkit respects the SGR
+        # escapes — otherwise they render as literal ``\x1b[...]`` text.
+        styled_prompt = ANSI(theme.accent(prompt_text))
         try:
-            raw = session.prompt(prompt_text)
+            raw = session.prompt(styled_prompt)
         finally:
             _render_bottom_border(echo)
         return raw

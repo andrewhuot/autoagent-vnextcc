@@ -22,6 +22,7 @@ import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
 from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
+from cli.terminal_renderer import render_box, terminal_width
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.help_text import render_shortcuts_help
@@ -154,29 +155,38 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
 
 
 def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
-    """Render the branded ASCII-logo intro + Claude Code-style status block.
+    """Render the branded ASCII-logo intro + Claude-Code-style welcome card.
 
     The AgentLab logo (logo + wordmark + "Experiment. Evaluate. Refine."
     tagline) anchors the top so the REPL feels like *our* tool rather
-    than a clone. Below it we keep the Claude Code pattern users now
-    expect: a ``✻ Welcome`` line, cwd, one-line status, permission hint,
-    and a compact help nudge — followed by the turn-footer chevron that
-    lines up with the bordered input box.
+    than a clone. Below it we render Claude Code's signature rounded
+    welcome card: a ``✻ Welcome`` title, cwd, one-line status, and
+    permission/shortcuts hints — all boxed together so the eye lands on
+    a single card on first render.
     """
     version = get_agentlab_version()
     cwd = _safe_cwd()
     echo(render_startup_banner(version))
     echo("")
-    echo(theme.workspace(f"  ✻ Welcome to AgentLab Workbench  v{version}"))
+
+    # Size the welcome card to the narrower of the terminal width or a
+    # comfortable reading width. Claude Code's card is not full-width on
+    # wide monitors — it feels lighter when capped.
+    card_width = min(terminal_width(), 76)
+    mode_label = theme.format_mode(_permission_mode_for_workspace(workspace), color=False)
+    status = build_status_line(workspace, color=False)
+    body_lines: list[str] = [
+        theme.accent(f"✻ Welcome to AgentLab Workbench  v{version}"),
+        "",
+        theme.meta(f"cwd: {cwd}"),
+        theme.meta(f"status: {status}"),
+        "",
+        theme.meta(f"{mode_label} permissions on · ? for shortcuts · / for commands"),
+        theme.meta("Type /help for commands, /exit to leave."),
+    ]
+    for line in render_box(body_lines, width=card_width, padding=2):
+        echo(line)
     echo("")
-    echo(theme.meta(f"    cwd: {cwd}"))
-    echo(f"    [{build_status_line(workspace)}]")
-    mode = theme.format_mode(_permission_mode_for_workspace(workspace), color=False)
-    echo(theme.meta(f"    {mode} permissions on · ? for shortcuts"))
-    echo("")
-    echo("  Type /help for commands, /exit to leave.")
-    echo("")
-    _render_turn_footer(echo, workspace)
 
 
 def _format_age(seconds: float) -> str:

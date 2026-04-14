@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 
 from cli.permissions import DEFAULT_PERMISSION_MODE
@@ -146,9 +147,12 @@ def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyP
     )
 
     assert provider("› ") == "hi"
-    plain = [line for line in captured]
-    # Two horizontal rules, one above and one below the input.
-    rule_lines = [line for line in plain if "─" in line and "╭" not in line]
-    assert len(rule_lines) == 2
-    # No rounded-corner glyphs — we moved to plain rules.
-    assert all("╭" not in line and "╯" not in line for line in plain)
+    plain = [click.unstyle(line) for line in captured]
+    # Rounded-corner input card: one ╭──╮ top and one ╰──╯ bottom.
+    top_corners = [line for line in plain if line.startswith("╭") and line.endswith("╮")]
+    bottom_corners = [line for line in plain if line.startswith("╰") and line.endswith("╯")]
+    assert len(top_corners) == 1
+    assert len(bottom_corners) == 1
+    # Both corners span the mocked 20-column width.
+    assert len(top_corners[0]) == 20
+    assert len(bottom_corners[0]) == 20

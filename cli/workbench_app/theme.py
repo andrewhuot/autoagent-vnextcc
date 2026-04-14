@@ -28,8 +28,10 @@ import click
 __all__ = [
     "PALETTE",
     "Palette",
+    "accent",
     "accept_mode",
     "assistant",
+    "border",
     "command_name",
     "danger_mode",
     "error",
@@ -64,6 +66,16 @@ class Palette:
     plan_mode: str = "cyan"
     accept_mode: str = "green"
     danger_mode: str = "red"
+    # Amber accent used for the rounded input chevron and Claude-Code-style
+    # chrome that should stand out from workspace cyan. Stored as a 256-colour
+    # index so 256-colour and 16M-colour terminals both render it cleanly; the
+    # int routes through ``click.style(fg=208)`` which Click forwards as an
+    # SGR ``38;5;208`` sequence.
+    prompt_accent: int = 208
+    # Dimmed grey used for the rounded box chrome (welcome card, input border).
+    # Rendered via ``stylize(dim=True)``; kept as a field so a future theme
+    # can override without touching call sites.
+    border: str | None = None
 
 
 PALETTE = Palette()
@@ -180,6 +192,30 @@ def danger_mode(text: str, *, color: bool = True) -> str:
     """Emphasized color used for bypass-style permission indicators."""
 
     return stylize(text, fg=PALETTE.danger_mode, bold=True, color=color)
+
+
+def accent(text: str, *, bold: bool = True, color: bool = True) -> str:
+    """Amber accent used for the rounded input chevron and key chrome.
+
+    Mirrors Claude Code's orange ``>`` prompt. The palette uses a 256-colour
+    index (``208``) so the result stays amber-ish even when the terminal
+    only advertises 256-colour support.
+    """
+
+    return stylize(text, fg=PALETTE.prompt_accent, bold=bold, color=color)
+
+
+def border(text: str, *, color: bool = True) -> str:
+    """Chrome colour for rounded-box borders and divider rules.
+
+    Defaults to the terminal's dim-grey so the border recedes behind the
+    content it frames. A future palette swap can point this at a fg colour
+    without changing call sites.
+    """
+
+    if PALETTE.border is None:
+        return stylize(text, dim=True, color=color)
+    return stylize(text, fg=PALETTE.border, color=color)
 
 
 def format_mode(mode: str, *, color: bool = True) -> str:

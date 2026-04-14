@@ -58,7 +58,8 @@ def render_startup_banner(version: str) -> str:
         " " * len(logo_lines[0])
         + click.style(f"Experiment. Evaluate. Refine.   v{version}", **subtitle_style)
     )
-    lines.append(click.style("  " + "-" * 72, dim=True))
+    # The rounded welcome card below already provides a visual seam — an extra
+    # dashed rule under the logo just adds noise before the card opens.
     return "\n".join(lines)
 
 
