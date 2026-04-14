@@ -242,6 +242,56 @@ def run_workbench_app(
     )
 
 
+def launch_workbench(
+    workspace: Any | None,
+    *,
+    show_banner: bool = True,
+    input_provider: InputProvider | None = None,
+    echo: EchoFn | None = None,
+) -> StubAppResult:
+    """Create a persisted session and run the workbench app.
+
+    Thin wrapper used by both ``agentlab`` (default entry) and
+    ``agentlab workbench interactive`` so session wiring stays in one
+    place. When no workspace is active we still run the loop with an
+    ephemeral in-memory session — persistence is a best-effort feature,
+    not a precondition for launching.
+    """
+    from cli.sessions import Session, SessionStore
+
+    store: SessionStore | None = None
+    session: Session | None = None
+    if workspace is not None:
+        try:
+            store = SessionStore(workspace.root)
+            session = store.create()
+        except Exception:  # pragma: no cover — defensive
+            store = None
+            session = None
+    if session is None:
+        session = Session(
+            session_id=uuid_hex(),
+            title="ephemeral",
+            started_at=time.time(),
+            updated_at=time.time(),
+        )
+    return run_workbench_app(
+        workspace,
+        show_banner=show_banner,
+        input_provider=input_provider,
+        echo=echo,
+        session_store=store,
+        session=session,
+    )
+
+
+def uuid_hex() -> str:
+    """Generate a short id for ephemeral sessions."""
+    import uuid
+
+    return uuid.uuid4().hex[:12]
+
+
 __all__ = [
     "DEFAULT_PROMPT",
     "EXIT_TOKENS",
@@ -250,6 +300,7 @@ __all__ = [
     "InputProvider",
     "StubAppResult",
     "build_status_line",
+    "launch_workbench",
     "resume_hint",
     "run_workbench_app",
 ]

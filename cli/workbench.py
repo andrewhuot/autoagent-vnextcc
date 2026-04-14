@@ -988,7 +988,7 @@ def interactive_command(no_banner: bool) -> None:
     Upcoming tasks wire the slash-command registry, streaming transcript,
     tool-call blocks, and full-screen screens onto this loop.
     """
-    from cli.workbench_app.app import run_workbench_app
+    from cli.workbench_app.app import launch_workbench
 
     workspace = discover_workspace()
-    run_workbench_app(workspace, show_banner=not no_banner)
+    launch_workbench(workspace, show_banner=not no_banner)

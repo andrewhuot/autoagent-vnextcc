@@ -2163,9 +2163,15 @@ def _load_versioned_config(configs_dir: str, config_version: int | None) -> tupl
 
 @click.group(cls=AgentLabGroup, invoke_without_command=True)
 @click.version_option(version=AGENTLAB_VERSION, prog_name="agentlab")
+@click.option(
+    "--classic",
+    is_flag=True,
+    default=False,
+    help="Launch the classic REPL shell instead of the new Workbench UI.",
+)
 @_banner_flag_options
 @click.pass_context
-def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
+def cli(ctx: click.Context, classic: bool, quiet: bool, no_banner: bool) -> None:
     """AgentLab VNextCC — agent optimization platform.
 
     A product-grade platform for iterating ADK agent quality.
@@ -2173,14 +2179,20 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
     """
     del quiet, no_banner
     ctx.obj = ctx.obj or {}
+    ctx.obj["classic"] = classic
     ctx.obj["workspace"] = _enter_discovered_workspace(ctx.invoked_subcommand)
     if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
         workspace = ctx.obj.get("workspace")
         if _is_tty():
             if workspace is not None:
-                from cli.repl import run_shell
+                if classic:
+                    from cli.repl import run_shell
 
-                run_shell(workspace)
+                    run_shell(workspace)
+                else:
+                    from cli.workbench_app.app import launch_workbench
+
+                    launch_workbench(workspace)
             else:
                 from cli.onboarding import run_onboarding
 

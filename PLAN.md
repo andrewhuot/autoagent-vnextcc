@@ -971,8 +971,49 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       model_slash / cancellation / theme / effort / output_collapse
       / hardening / live / api / streaming / multi_turn / harness_eng
       / eval_optimize_bridge / cli_workbench / p0_hardening).*
-- [ ] **T20** — Make workbench the default: `agentlab` with no args launches
+- [x] **T20** — Make workbench the default: `agentlab` with no args launches
       `workbench_app`. Add `--classic` flag to opt out. Update `runner.py` entry logic.
+      *Landed a `--classic` flag on the root `cli` Click group
+      (``agentlab --classic`` → old `cli.repl.run_shell`; default → new
+      workbench app). The ``ctx.invoked_subcommand is None`` branch in
+      :func:`runner.cli` now routes TTY + workspace-present invocations
+      through a new shared helper
+      :func:`cli.workbench_app.app.launch_workbench`, which creates a
+      persistent :class:`SessionStore` (scoped to ``workspace.root``) and
+      :class:`Session` before calling :func:`run_workbench_app` with
+      ``session_store`` / ``session`` wired so T17 persistence and
+      ``/resume`` land for free. A ``try/except Exception`` round the
+      store creation degrades gracefully to an ephemeral in-memory
+      session when the workspace's `.agentlab/` directory is unwritable,
+      so a flaky fs can never take the app down. No workspace →
+      ephemeral in-memory :class:`Session` (``title="ephemeral"``,
+      short-uuid id via the new :func:`cli.workbench_app.app.uuid_hex`
+      helper) and ``session_store=None``; the workbench loop already
+      handles that case (best-effort persistence guards in
+      ``Transcript.bind_session`` / ``dispatch`` tolerate the ``None``).
+      The classic opt-out preserves every behavior of the existing
+      REPL — ``--classic`` is recorded on ``ctx.obj["classic"]`` so
+      future subcommands can inspect it, but passing ``--classic``
+      together with an explicit subcommand is a no-op (the subcommand
+      runs, neither shell fires). Also updated
+      ``agentlab workbench interactive`` to delegate to the new helper
+      so session wiring lives in one place (previously it called
+      :func:`run_workbench_app` with no session — a silent bug that
+      T13/T17 would have masked because the slash handlers happily run
+      without persistence). Non-TTY ``agentlab`` with no workspace still
+      takes the legacy ``status`` fallback. Coverage:
+      ``tests/test_workbench_default_entry.py`` (7 tests) — default
+      entry launches workbench (spies on both entry points; asserts
+      workspace threaded positionally), ``--classic`` launches REPL
+      (and does not spawn the workbench), ``ctx.obj["classic"]`` flag
+      visible to a probe subcommand, ``--classic _probe2`` runs the
+      subcommand without spawning either shell, non-TTY +
+      no-workspace path does not spawn either shell,
+      :func:`launch_workbench` wires both store and session for a real
+      workspace root under ``tmp_path``, :func:`launch_workbench` with
+      no workspace falls back to ``session.title == "ephemeral"`` and
+      ``session_store=None``. Full workbench-related subset green (722
+      tests across workbench / runner / repl / cli_integrations).*
 - [ ] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
       unknown-command handling, and autocomplete matching.
 - [ ] **T22** — Unit tests: `tests/cli/test_tool_call_block.py` for the new block
