@@ -71,6 +71,46 @@ def test_prompt_state_persist_noop_without_workspace() -> None:
     assert state._persisted_failed is False
 
 
+def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The popup keybinding wiring (/ opens menu, shift+tab cycles modes)
+    must survive refactors — regressing it silently breaks the UX.
+    """
+    from cli.workbench_app import pt_prompt
+    from cli.workbench_app.slash import build_builtin_registry
+
+    captured_kwargs: dict[str, object] = {}
+
+    class _FakeSession:
+        def __init__(self, **kwargs: object) -> None:
+            captured_kwargs.update(kwargs)
+
+        def prompt(self, _prompt: str) -> str:
+            return ""
+
+    import prompt_toolkit
+
+    monkeypatch.setattr(prompt_toolkit, "PromptSession", _FakeSession)
+
+    registry = build_builtin_registry(include_streaming=False)
+    pt_prompt.build_prompt_input_provider(
+        registry, WorkbenchPromptState(), echo=lambda _s: None
+    )
+
+    bindings = captured_kwargs.get("key_bindings")
+    assert bindings is not None
+    binding_strs = {
+        ",".join(str(key) for key in binding.keys)
+        for binding in bindings.bindings
+    }
+    assert "/" in binding_strs
+    assert any("s-tab" in b or "Keys.BackTab" in b for b in binding_strs)
+
+    assert captured_kwargs.get("complete_while_typing") is True
+    assert captured_kwargs.get("reserve_space_for_menu", 0) >= 6
+
+
 def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyPatch) -> None:
     """Borders should wrap every prompt call, even when prompt_toolkit
     raises (e.g. EOF) — we rely on a ``try / finally`` for that.

@@ -119,6 +119,7 @@ def build_prompt_input_provider(
         from prompt_toolkit import PromptSession
         from prompt_toolkit.formatted_text import FormattedText
         from prompt_toolkit.key_binding import KeyBindings
+        from prompt_toolkit.shortcuts import CompleteStyle
     except ImportError as exc:  # pragma: no cover — prompt_toolkit is a hard dep
         raise RuntimeError("prompt_toolkit is required for the interactive prompt") from exc
 
@@ -132,12 +133,29 @@ def build_prompt_input_provider(
         state.persist()
         event.app.invalidate()
 
+    @bindings.add("/")
+    def _open_slash_menu(event: Any) -> None:  # pragma: no cover — needs real PT app
+        """Show the slash-command popup as soon as the user types ``/``.
+
+        ``complete_while_typing=True`` only re-runs the completer when
+        existing completions have to be refreshed — it does not kick the
+        menu open on the first trigger character. We fire
+        ``start_completion`` explicitly so the dropdown appears the moment
+        a slash lands on an empty line, matching Claude Code's UX.
+        """
+        buf = event.current_buffer
+        buf.insert_text("/")
+        if buf.document.text_before_cursor == "/":
+            buf.start_completion(select_first=False)
+
     def _bottom_toolbar() -> Any:
         return FormattedText([("class:toolbar", f"⏵ {state.mode} permissions on · shift+tab to cycle")])
 
     session: Any = PromptSession(
         completer=completer,
         complete_while_typing=True,
+        complete_style=CompleteStyle.COLUMN,
+        reserve_space_for_menu=8,
         key_bindings=bindings,
         bottom_toolbar=_bottom_toolbar,
         mouse_support=False,
