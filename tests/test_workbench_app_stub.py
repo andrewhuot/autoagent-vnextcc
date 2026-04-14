@@ -151,7 +151,7 @@ def test_stub_loop_renders_banner_by_default() -> None:
     assert "AgentLab Workbench" in joined
     # The branded ASCII-art intro is back — the tagline anchors the logo.
     assert "Experiment. Evaluate. Refine." in joined
-    assert " Session " in joined
+    assert "cwd:" in click.unstyle(joined)
     assert "Type /help for commands" in joined
     assert "permissions on" in click.unstyle(joined)
 

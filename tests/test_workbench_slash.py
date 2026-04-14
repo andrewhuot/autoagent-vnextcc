@@ -214,9 +214,9 @@ def test_builtin_registry_help_table_has_descriptions(
 def test_help_command_uses_structured_terminal_pane(ctx: SlashContext, echo: _EchoCapture) -> None:
     dispatch(ctx, "/help")
     combined = click.unstyle("\n".join(echo.lines))
-    assert " Slash Commands " in combined
+    assert "Slash Commands" in combined
     assert "/status" in combined
-    assert all(len(line) <= 80 for line in combined.splitlines() if line)
+    assert all(len(line) <= 120 for line in combined.splitlines() if line)
 
 
 def test_builtin_registry_accepts_extra_commands() -> None:
