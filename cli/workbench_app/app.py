@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import click
 
-from cli.branding import get_agentlab_version
+from cli.branding import get_agentlab_version, render_startup_banner
 from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
@@ -132,16 +132,19 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
 
 
 def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
-    """Render the compact Claude Code-style banner.
+    """Render the branded ASCII-logo intro + Claude Code-style status block.
 
-    The heavy AgentLab ASCII art is intentionally suppressed here — the
-    workbench REPL favours the minimal "sparkle + welcome + status" pattern
-    Claude Code uses, so the transcript doesn't eat a whole screen on each
-    launch. The ASCII-art banner still lives in :func:`render_startup_banner`
-    for one-shot CLI surfaces that want the full branding.
+    The AgentLab logo (logo + wordmark + "Experiment. Evaluate. Refine."
+    tagline) anchors the top so the REPL feels like *our* tool rather
+    than a clone. Below it we keep the Claude Code pattern users now
+    expect: a ``✻ Welcome`` line, cwd, one-line status, permission hint,
+    and a compact help nudge — followed by the turn-footer chevron that
+    lines up with the bordered input box.
     """
     version = get_agentlab_version()
     cwd = _safe_cwd()
+    echo(render_startup_banner(version))
+    echo("")
     echo(theme.workspace(f"  ✻ Welcome to AgentLab Workbench  v{version}"))
     echo("")
     echo(theme.meta(f"    cwd: {cwd}"))
