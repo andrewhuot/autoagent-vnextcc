@@ -27,6 +27,7 @@ from builder.worker_adapters import (
     WorkerAdapterContext,
     normalize_worker_adapters,
 )
+from builder.worker_mode import DEFAULT_WORKER_MODE, WorkerMode, resolve_worker_mode
 
 
 class CoordinatorWorkerRuntime:
@@ -39,12 +40,22 @@ class CoordinatorWorkerRuntime:
         events: EventBroker,
         worker_adapters: dict[SpecialistRole, WorkerAdapter] | None = None,
         default_worker_adapter: WorkerAdapter | None = None,
+        worker_mode: WorkerMode | None = None,
     ) -> None:
         self._store = store
         self._orchestrator = orchestrator
         self._events = events
         self._worker_adapters = normalize_worker_adapters(worker_adapters)
-        self._default_worker_adapter = default_worker_adapter or DeterministicWorkerAdapter()
+        self._worker_mode = worker_mode or resolve_worker_mode()
+        self._default_worker_adapter = (
+            default_worker_adapter
+            or _build_default_adapter_for_mode(self._worker_mode)
+        )
+
+    @property
+    def worker_mode(self) -> WorkerMode:
+        """Return the resolved :class:`WorkerMode` backing this runtime."""
+        return self._worker_mode
 
     def execute_plan(self, task_id: str, plan_id: str | None = None) -> CoordinatorExecutionRun:
         """Execute a previously persisted coordinator plan for a root task."""
@@ -432,3 +443,31 @@ class CoordinatorWorkerRuntime:
                 **payload,
             },
         )
+
+
+def _build_default_adapter_for_mode(mode: WorkerMode) -> WorkerAdapter:
+    """Return the default worker adapter for a given mode.
+
+    ``LLM`` falls back to deterministic when the router or provider config
+    cannot be built — the runtime must never refuse to start because of a
+    missing API key.
+    """
+
+    if mode == WorkerMode.LLM:
+        try:
+            from builder.llm_worker import LLMWorkerAdapter
+            from builder.model_resolver import resolve_harness_model
+            from optimizer.providers import LLMRouter, RetryPolicy
+
+            resolution = resolve_harness_model("worker")
+            if resolution.config is None:
+                return DeterministicWorkerAdapter()
+            router = LLMRouter(
+                strategy="single",
+                models=[resolution.config],
+                retry_policy=RetryPolicy(),
+            )
+            return LLMWorkerAdapter(router=router)
+        except Exception:  # pragma: no cover - defensive startup path
+            return DeterministicWorkerAdapter()
+    return DeterministicWorkerAdapter()

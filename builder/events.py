@@ -48,6 +48,7 @@ class BuilderEventType(str, Enum):
     WORKER_COMPLETED = "worker.completed"
     WORKER_FAILED = "worker.failed"
     WORKER_BLOCKED = "worker.blocked"
+    WORKER_MESSAGE_DELTA = "worker.message.delta"
     COORDINATOR_SYNTHESIS_COMPLETED = "coordinator.synthesis.completed"
     COORDINATOR_EXECUTION_COMPLETED = "coordinator.execution.completed"
     COORDINATOR_EXECUTION_FAILED = "coordinator.execution.failed"

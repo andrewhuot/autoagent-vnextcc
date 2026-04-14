@@ -16,6 +16,7 @@ from builder.coordinator_turn import CoordinatorTurnResult, CoordinatorTurnServi
 from builder.events import EventBroker
 from builder.orchestrator import BuilderOrchestrator
 from builder.store import BuilderStore
+from builder.worker_mode import WorkerMode, resolve_worker_mode
 
 
 class WorkbenchAgentRuntime:
@@ -29,14 +30,17 @@ class WorkbenchAgentRuntime:
         events: EventBroker | None = None,
         coordinator_runtime: CoordinatorWorkerRuntime | None = None,
         db_path: str | None = None,
+        worker_mode: WorkerMode | None = None,
     ) -> None:
         self._store = store or BuilderStore(db_path=db_path or ".agentlab/builder.db")
         self._events = events or EventBroker()
         self._orchestrator = orchestrator or BuilderOrchestrator(store=self._store)
+        self._worker_mode = worker_mode or resolve_worker_mode()
         self._coordinator_runtime = coordinator_runtime or CoordinatorWorkerRuntime(
             store=self._store,
             orchestrator=self._orchestrator,
             events=self._events,
+            worker_mode=self._worker_mode,
         )
         self._service = CoordinatorTurnService(
             store=self._store,
@@ -44,6 +48,11 @@ class WorkbenchAgentRuntime:
             events=self._events,
             runtime=self._coordinator_runtime,
         )
+
+    @property
+    def worker_mode(self) -> WorkerMode:
+        """Return the :class:`WorkerMode` driving worker execution."""
+        return self._worker_mode
 
     def process_turn(
         self,
