@@ -225,6 +225,58 @@ class Optimizer:
             return self._optimize_simple(health_report, current_config, failure_samples)
         return self._optimize_hybrid(health_report, current_config, failure_samples)
 
+    AXIS_INSTRUCTIONS = "instructions"
+    AXIS_GUARDRAILS = "guardrails"
+    AXIS_CALLBACKS = "callbacks"
+    SUPPORTED_AXES: tuple[str, ...] = (AXIS_INSTRUCTIONS, AXIS_GUARDRAILS, AXIS_CALLBACKS)
+
+    def run_axis_cycle(
+        self,
+        axis: str,
+        health_report: HealthReport,
+        current_config: dict,
+        failure_samples: list[dict] | None = None,
+        *,
+        cycle_id: str | None = None,
+        estimated_cycle_cost: float = 0.0,
+    ) -> tuple[dict | None, str, str]:
+        """Run one optimization cycle scoped to a single optimization axis.
+
+        This is the axis-scoped entry point used by the V3 coordinator
+        workflow where ``instruction_optimizer``, ``guardrail_optimizer``,
+        and ``callback_optimizer`` drive change cards individually.
+
+        Backward compatibility: this method is strictly additive. The
+        existing :meth:`optimize` full-pass API is unchanged — callers that
+        want to run all axes together continue to call it as before. This
+        helper simply delegates to :meth:`optimize` and tags the axis on
+        the returned diagnostics so the coordinator can match the cycle
+        back to the worker that requested it.
+
+        Returns ``(candidate_config_or_none, status, axis)``. ``status``
+        mirrors :meth:`optimize`; ``axis`` echoes the (lowercased,
+        normalized) axis label for downstream tracking.
+        """
+        normalized = str(axis or "").strip().lower()
+        if normalized not in self.SUPPORTED_AXES:
+            return (
+                None,
+                f"REJECTED (unsupported_axis): {axis!r} is not one of {self.SUPPORTED_AXES}",
+                normalized,
+            )
+
+        candidate, status = self.optimize(
+            health_report=health_report,
+            current_config=current_config,
+            failure_samples=failure_samples,
+            cycle_id=cycle_id,
+            estimated_cycle_cost=estimated_cycle_cost,
+        )
+        self._last_strategy_diagnostics.proposal_config_section = (
+            self._last_strategy_diagnostics.proposal_config_section or normalized
+        )
+        return candidate, status, normalized
+
     def get_pareto_snapshot(self) -> dict[str, Any]:
         """Return latest Pareto archive snapshot for detail views."""
         return self.pareto_archive.as_dict()

@@ -370,13 +370,17 @@ def roles_for_intent(intent: str, message: str) -> list[SpecialistRole]:
         ],
         "eval": [
             SpecialistRole.EVAL_AUTHOR,
+            SpecialistRole.EVAL_RUNNER,
+            SpecialistRole.LOSS_ANALYST,
             SpecialistRole.TRACE_ANALYST,
         ],
         "optimize": [
             SpecialistRole.TRACE_ANALYST,
             SpecialistRole.OPTIMIZATION_ENGINEER,
-            SpecialistRole.PROMPT_ENGINEER,
-            SpecialistRole.GUARDRAIL_AUTHOR,
+            SpecialistRole.INSTRUCTION_OPTIMIZER,
+            SpecialistRole.GUARDRAIL_OPTIMIZER,
+            SpecialistRole.CALLBACK_OPTIMIZER,
+            SpecialistRole.EVAL_AUTHOR,
         ],
         "deploy": [
             SpecialistRole.DEPLOYMENT_ENGINEER,
