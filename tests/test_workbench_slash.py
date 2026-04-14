@@ -163,6 +163,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "optimize",
         "build",
         "deploy",
+        "skills",
     }
     assert set(registry.names()) == expected
 
@@ -173,6 +174,7 @@ def test_builtin_registry_without_streaming() -> None:
     assert "optimize" not in registry.names()
     assert "build" not in registry.names()
     assert "deploy" not in registry.names()
+    assert "skills" not in registry.names()
     assert "save" in registry.names()  # /save is ported, not streaming
     assert "help" in registry.names()
 
@@ -194,8 +196,8 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
     # 11 ported built-ins (incl. /save T11) + /eval (T09) + /optimize (T10)
-    # + /build (T11) + /deploy (T12) + /custom (extra) = 16
-    assert len(registry) == 16
+    # + /build (T11) + /deploy (T12) + /skills (T13) + /custom (extra) = 17
+    assert len(registry) == 17
 
 
 # ---------------------------------------------------------------------------
@@ -499,26 +501,66 @@ def test_dispatch_exit_flag_mirrors_ctx_exit(ctx: SlashContext) -> None:
 
 
 # ---------------------------------------------------------------------------
-# LocalJSXCommand kind is rejected but recognized
+# LocalJSXCommand dispatch — T13 wires screens into dispatch
 # ---------------------------------------------------------------------------
 
 
-def test_dispatch_localjsx_command_reports_unsupported_kind(
+def test_dispatch_localjsx_command_runs_screen(
     echo: _EchoCapture,
 ) -> None:
+    from cli.workbench_app.screens.base import ScreenResult as _ScreenResult
+
     class _Screen:
-        def run(self) -> int:
-            return 0
+        calls: list[tuple] = []
+
+        def __init__(self, ctx, *args):
+            type(self).calls.append((ctx, args))
+
+        def run(self) -> _ScreenResult:
+            return _ScreenResult(
+                action="done",
+                value="payload",
+                meta_messages=("one.", "two."),
+            )
 
     jsx = LocalJSXCommand(
-        name="skills", description="Browse", screen_factory=_Screen
+        name="showcase", description="Demo screen", screen_factory=_Screen
     )
     registry = build_builtin_registry(extra=[jsx])
     ctx = SlashContext(echo=echo, registry=registry)
-    result = dispatch(ctx, "/skills")
+    result = dispatch(ctx, "/showcase arg1")
     assert result.handled is True
-    assert result.error == "unsupported-kind"
+    assert result.error is None
     assert result.command is jsx
+    assert result.display == "system"
+    assert result.meta_messages == ("one.", "two.")
+    assert result.raw_result == "payload"
+    # Factory received the SlashContext + remaining args.
+    assert len(_Screen.calls) == 1
+    assert _Screen.calls[0][1] == ("arg1",)
+    # Meta messages echoed as dim lines (styling intact).
+    plain_lines = [click.unstyle(line) for line in echo.lines]
+    assert "one." in plain_lines
+    assert "two." in plain_lines
+
+
+def test_dispatch_localjsx_command_handles_factory_errors(
+    echo: _EchoCapture,
+) -> None:
+    def _boom(ctx, *args):
+        raise RuntimeError("screen exploded")
+
+    jsx = LocalJSXCommand(
+        name="broken", description="x", screen_factory=_boom
+    )
+    registry = build_builtin_registry(extra=[jsx])
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/broken")
+    assert result.handled is True
+    assert result.error == "screen exploded"
+    assert any("Error running /broken" in line for line in echo.lines)
+
+
 
 
 # ---------------------------------------------------------------------------

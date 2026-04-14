@@ -404,10 +404,81 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       Full workbench surface green (406 tests across deploy_slash/
       build_slash/optimize_slash/eval_slash/slash/transcript/
       status_bar/screens/tool_call_block/commands/app_stub/cli_workbench).*
-- [ ] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from
+- [x] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from
       T08b) modeled on the mirror's `SkillsMenu`. Arrow-key navigable list with
       `list / show / add / edit / remove` actions; `$EDITOR` opens for add/edit; delegates
       to `cli/skills.py` under the hood. NOT a flat CLI — it's a full-screen modal.
+      *Landed `cli/workbench_app/skills_slash.py` with three seams so the flow
+      is testable without a TTY or real sqlite: a `SkillsBackend` Protocol
+      (`list_skills` / `show` / `add` / `edit` / `remove` → `BackendResult`),
+      a `CliSkillsBackend` default that delegates to `core.skills.store`
+      via the existing `cli.skills._get_store` helper, and a
+      `SkillsScreenAdapter(Screen)` that runs the T08b `SkillsScreen` once,
+      inspects the returned `ScreenResult.action` (`list` / `show` / `add`
+      / `edit` / `remove` / `exit` / `cancel`), dispatches the matching
+      backend method, echoes its `lines` verbatim to the transcript, and
+      returns a `ScreenResult(action="exit", meta_messages=(summary,))` so
+      the outer dispatch layer surfaces the summary as a dim meta line.
+      Single-shot semantics mirror Claude Code's `SkillsMenu` exit-on-action
+      UX; users re-invoke `/skills` for a follow-up action, which keeps the
+      inner screen re-paint logic trivial and leaves no nested loops to
+      manage. `$EDITOR`/`$VISUAL` launching is isolated behind an injectable
+      `EditorRunner = Callable[[Path], int]` seam (default shells out to
+      `subprocess.call([editor, path])` with `EDITOR → VISUAL → vi`
+      fallback) and confirmation before `remove` lives behind `Confirmer =
+      Callable[[str], bool]` (default `click.confirm(..., default=False)`
+      with `click.Abort` / `KeyboardInterrupt` / `EOFError` all coerced to
+      `False`). `add` writes a starter YAML template to a temp file, opens
+      `$EDITOR`, parses via `core.skills.loader.SkillLoader`, and
+      `store.create`s each parsed skill. `edit` dumps the selected skill
+      to a temp YAML, opens `$EDITOR`, re-parses via
+      `core.skills.types.Skill.from_dict`, and calls `store.update`; parse
+      errors render a red meta line without mutating the store. `remove`
+      confirms, deletes via `store.delete`, and surfaces the result.
+      Every temp file is unlinked in a `finally` clause via
+      `_unlink_quiet(path)` so crashes don't leak scratch YAML into `/tmp`.
+      To make dispatch handle `local-jsx` properly, extended
+      `cli.workbench_app.slash.dispatch` with a new `_dispatch_local_jsx`
+      branch: constructs the screen via `command.screen_factory(ctx, *args)`,
+      runs `screen.run()`, echoes `ScreenResult.meta_messages` as dim lines
+      (mirroring `_render_and_echo`'s `meta_messages` routing), and folds
+      the result into `DispatchResult(display="system", meta_messages=...,
+      raw_result=value if str else None)`. Factory exceptions render a red
+      `"Error running /skills: <exc>"` line and return `error=<str(exc)>`
+      so the loop stays alive. `PromptCommand` still returns
+      `error="unsupported-kind"` (landing in T14+). `build_skills_command(*,
+      backend=None)` returns a `LocalJSXCommand(source="builtin",
+      screen_factory=...)`; the factory accepts `(ctx, *args)` and threads
+      `ctx.echo` into the adapter so the transcript owns every line. Wired
+      into `build_builtin_registry(include_streaming=True)` alongside the
+      other T09–T12 streaming commands (16 built-ins + 1 extras slot = 17
+      total). Coverage: `tests/test_workbench_skills_slash.py` (23 tests) —
+      adapter exit key / list count (plural + singular) / show with cursor
+      navigation / show-needs-selection on empty list / add without
+      selection / edit / remove / empty-summary omits meta / EOF exits
+      cleanly; `build_skills_command` type + kind + source; full dispatch
+      integration with patched key provider + echo assertion;
+      `CliSkillsBackend` via a `monkeypatch`-installed fake `SkillStore`
+      (`_get_store` patched at `cli.skills._get_store`) — list→items
+      projection, store-close accounting, `show` missing-skill + yaml
+      body, `remove` cancels on `confirmer=False` without calling delete,
+      `remove` deletes on confirm, `remove` of missing skill reports
+      error, `edit` aborts on editor non-zero exit with no store mutation,
+      `edit` saves after successful editor and cleans up the temp file,
+      `edit` missing skill, `add` aborts on editor non-zero, `add` creates
+      from editor buffer via a stub `SkillLoader`. Plus two updates to
+      `tests/test_workbench_slash.py`: the registry contains set gains
+      `"skills"`, the extras-registry count bumps to 17, the
+      `include_streaming=False` guard adds `"skills" not in
+      registry.names()`, and the old
+      `test_dispatch_localjsx_command_reports_unsupported_kind` is
+      replaced with `test_dispatch_localjsx_command_runs_screen` /
+      `test_dispatch_localjsx_command_handles_factory_errors` covering
+      the new happy path + factory-error path (factory args thread-through,
+      meta_messages dim-echoed, raw_result from str value). Full
+      workbench surface green (329 tests across skills_slash/slash/
+      transcript/status/screens/app_stub/commands/tool_call_block/
+      eval_slash/optimize_slash/build_slash/deploy_slash).*
 - [ ] **T14** — Add `/model` slash command that lists configured models and switches the
       active one for the session (persist to session state).
 - [ ] **T15** — Add `/clear` (wipe transcript, keep session) and `/new` (start fresh
