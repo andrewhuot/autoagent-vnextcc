@@ -1339,7 +1339,7 @@ def _harness_session(
     stage: str,
     tasks: list[dict[str, str]],
     output_format: str,
-    ui: str,
+    ui: str | None,
 ) -> Any | None:
     """Create and render a Claude-style harness session when requested."""
     from cli.auto_harness import HarnessEvent, HarnessRenderer, HarnessSession, resolve_cli_ui
@@ -2270,12 +2270,12 @@ def advanced_commands(ctx: click.Context) -> None:
 @click.option(
     "--ui",
     type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
-    default="auto",
-    show_default=True,
+    default=None,
+    show_default="auto",
     help="Interactive UI mode.",
 )
 @click.pass_context
-def shell_command(ctx: click.Context, ui: str) -> None:
+def shell_command(ctx: click.Context, ui: str | None) -> None:
     """Launch the interactive AgentLab shell."""
     from cli.repl import run_shell
 
@@ -4167,8 +4167,8 @@ def _run_optimize_cycle(
 @click.option(
     "--ui",
     type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
-    default="auto",
-    show_default=True,
+    default=None,
+    show_default="auto",
     help="Interactive UI mode for text output.",
 )
 def optimize(
@@ -4187,7 +4187,7 @@ def optimize(
     json_output: bool = False,
     max_budget_usd: float | None = None,
     output_format: str = "text",
-    ui: str = "auto",
+    ui: str | None = None,
     harness: Any | None = None,
 ) -> None:
     """Run optimization cycles to improve agent config.
@@ -5947,15 +5947,15 @@ def loop_group() -> None:
 @click.option(
     "--ui",
     type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
-    default="auto",
-    show_default=True,
+    default=None,
+    show_default="auto",
     help="Interactive UI mode for text output.",
 )
 def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
              interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
              resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str,
              max_budget_usd: float | None = None, output_format: str = "text",
-             ui: str = "auto", harness: Any | None = None) -> None:
+             ui: str | None = None, harness: Any | None = None) -> None:
     """Run the continuous autoresearch loop.
 
     Observes agent health, proposes improvements, evaluates them, and deploys
@@ -9459,8 +9459,8 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
 @click.option(
     "--ui",
     type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
-    default="auto",
-    show_default=True,
+    default=None,
+    show_default="auto",
     help="Interactive UI mode for text output.",
 )
 @click.pass_context
@@ -9469,7 +9469,7 @@ def full_auto(
     cycles: int,
     max_loop_cycles: int,
     acknowledge: bool,
-    ui: str,
+    ui: str | None,
 ) -> None:
     """Run optimization + loop in dangerous full-auto mode.
 

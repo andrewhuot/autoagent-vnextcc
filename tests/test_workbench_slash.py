@@ -143,9 +143,10 @@ def test_parse_slash_line_falls_back_on_unbalanced_quotes() -> None:
 
 def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -> None:
     # T09 adds ``/eval``, T10 adds ``/optimize``, T11 adds ``/save`` (ported)
-    # and ``/build`` (streaming) to the default registry. Tests that want
-    # just the ported built-ins construct the registry with
-    # ``include_streaming=False`` — see ``test_builtin_registry_without_streaming``.
+    # and ``/build`` (streaming), T12 adds ``/deploy`` (streaming) to the
+    # default registry. Tests that want just the ported built-ins construct
+    # the registry with ``include_streaming=False`` — see
+    # ``test_builtin_registry_without_streaming``.
     expected = {
         "help",
         "status",
@@ -161,6 +162,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "eval",
         "optimize",
         "build",
+        "deploy",
     }
     assert set(registry.names()) == expected
 
@@ -170,6 +172,7 @@ def test_builtin_registry_without_streaming() -> None:
     assert "eval" not in registry.names()
     assert "optimize" not in registry.names()
     assert "build" not in registry.names()
+    assert "deploy" not in registry.names()
     assert "save" in registry.names()  # /save is ported, not streaming
     assert "help" in registry.names()
 
@@ -191,8 +194,8 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
     # 11 ported built-ins (incl. /save T11) + /eval (T09) + /optimize (T10)
-    # + /build (T11) + /custom (extra) = 15
-    assert len(registry) == 15
+    # + /build (T11) + /deploy (T12) + /custom (extra) = 16
+    assert len(registry) == 16
 
 
 # ---------------------------------------------------------------------------

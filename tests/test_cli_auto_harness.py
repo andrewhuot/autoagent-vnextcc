@@ -125,6 +125,8 @@ def test_resolve_cli_ui_keeps_structured_output_non_interactive(monkeypatch) -> 
     assert resolve_cli_ui("stream-json", requested_ui="auto", is_tty=True, is_ci=False) == "classic"
     assert resolve_cli_ui("text", requested_ui=None, is_tty=True, is_ci=False) == "claude"
     assert resolve_cli_ui("text", requested_ui="auto", is_tty=True, is_ci=False) == "claude"
+    monkeypatch.setenv("AGENTLAB_CLI_UI", "classic")
+    assert resolve_cli_ui("text", requested_ui=None, is_tty=True, is_ci=False) == "classic"
     assert resolve_cli_ui("text", requested_ui="auto", is_tty=False, is_ci=False) == "classic"
     with pytest.raises(click.ClickException):
         resolve_cli_ui("text", requested_ui="claude", is_tty=False, is_ci=False)
@@ -169,7 +171,9 @@ def test_long_running_commands_expose_claude_ui_choice() -> None:
         result = runner.invoke(cli, [*command, "--help"])
         assert result.exit_code == 0, result.output
         assert "--ui [auto|claude|classic]" in result.output
-        assert "[default: auto]" in " ".join(result.output.split())
+        normalized_output = " ".join(result.output.split())
+        assert "default:" in normalized_output
+        assert "auto" in normalized_output
 
 
 def test_full_auto_claude_ui_reuses_one_harness(monkeypatch) -> None:

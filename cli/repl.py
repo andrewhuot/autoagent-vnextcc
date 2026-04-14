@@ -281,7 +281,7 @@ def run_shell(
     workspace: Any,
     *,
     session_store: SessionStore | None = None,
-    ui: str = "auto",
+    ui: str | None = None,
 ) -> None:
     """Run the interactive REPL shell for the current workspace."""
     session, session_store = _create_shell_session(workspace, session_store)
