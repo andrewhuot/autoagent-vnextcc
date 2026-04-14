@@ -284,3 +284,49 @@ class TestCoordinatorPlan:
 
         updated_session = store.get_session(session.session_id)
         assert all(entry["materialized_task_id"] in updated_session.task_ids for entry in materialized)
+
+    def test_plan_work_preserves_prior_turns_on_coordinator_node(
+        self,
+        orchestrator,
+        store,
+        session,
+        task,
+    ):
+        """plan_work should attach prior-turn history to the root coordinator node."""
+        orchestrator.start_session(session)
+        prior_turns = [
+            {
+                "intent": "build",
+                "goal": "Build support agent",
+                "plan_id": "coord-prev",
+                "run_id": "run-prev",
+                "status": "completed",
+                "worker_summaries": [
+                    {"worker_role": "build_engineer", "status": "completed", "summary": "done"}
+                ],
+                "next_step": "Evaluate",
+                "created_at": 1.0,
+            }
+        ]
+        latest_synthesis = {"status": "completed", "next_step": "Evaluate"}
+
+        plan = orchestrator.plan_work(
+            task=task,
+            goal="Evaluate the support agent",
+            extra_context={
+                "command_intent": "eval",
+                "prior_turns": prior_turns,
+                "latest_synthesis": latest_synthesis,
+            },
+        )
+
+        root = next(entry for entry in plan["tasks"] if entry["worker_role"] == "orchestrator")
+        assert root["provenance"]["prior_turns"] == prior_turns
+        assert root["provenance"]["latest_synthesis"] == latest_synthesis
+
+        reloaded = store.get_task(task.task_id)
+        persisted_plan = reloaded.metadata["coordinator_plan"]
+        persisted_root = next(
+            entry for entry in persisted_plan["tasks"] if entry["worker_role"] == "orchestrator"
+        )
+        assert persisted_root["provenance"]["prior_turns"] == prior_turns

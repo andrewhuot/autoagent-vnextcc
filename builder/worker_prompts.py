@@ -356,6 +356,8 @@ def build_worker_prompt(
     system_parts.append(_OUTPUT_ENVELOPE)
     system = "\n".join(part for part in system_parts if part is not None)
 
+    prior_turns_raw = context.get("prior_turns") or []
+    prior_turns = [dict(entry) for entry in prior_turns_raw if isinstance(entry, dict)][-3:]
     user_payload = {
         "goal": context.get("goal", ""),
         "command_intent": context.get("command_intent"),
@@ -367,6 +369,7 @@ def build_worker_prompt(
         "dependency_summaries": dict(context.get("dependency_summaries", {})),
         "context_boundary": context.get("context_boundary"),
         "routing_reason": routed.get("provenance", {}).get("routing_reason"),
+        "prior_turns": prior_turns,
     }
     user = json.dumps(user_payload, indent=2, sort_keys=True)
     return WorkerPrompt(system=system, user=user)

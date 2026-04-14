@@ -69,6 +69,19 @@ def build_skills_coordinator_command() -> LocalCommand:
     )
 
 
+def build_context_command() -> LocalCommand:
+    """Return the `/context` command that renders prior-turn session history."""
+    return LocalCommand(
+        name="context",
+        description="Show recent coordinator turn history carried forward",
+        handler=_handle_context,
+        source="builtin",
+        when_to_use="Use to inspect what prior turns the coordinator is carrying into the next plan.",
+        effort="low",
+        sensitive=False,
+    )
+
+
 def build_tasks_command() -> LocalCommand:
     """Return the `/tasks` command that renders latest coordinator state."""
     return LocalCommand(
@@ -324,6 +337,42 @@ def _resolve_configs_dir(ctx: SlashContext) -> Path | None:
     return None
 
 
+def _handle_context(ctx: SlashContext, *_: str) -> OnDoneResult:
+    """Render the coordinator session's prior-turn history."""
+    session = ctx.coordinator_session
+    if session is None:
+        return on_done(
+            "  No coordinator session bound. Start with /build <request>.",
+            display="system",
+        )
+    history = list(getattr(session, "_turn_history", []) or [])
+    lines = [theme.heading("\n  Coordinator Context")]
+    if not history:
+        lines.append("    (no prior turns yet)")
+        return on_done("\n".join(lines), display="user")
+    lines.append(f"    Prior turns: {len(history)} (cap "
+                 f"{getattr(type(session), 'MAX_TURN_HISTORY', 5)})")
+    for index, entry in enumerate(history, start=1):
+        intent = entry.get("intent") or "turn"
+        goal = entry.get("goal") or ""
+        status = entry.get("status") or "unknown"
+        run_id = entry.get("run_id") or ""
+        next_step = entry.get("next_step") or ""
+        lines.append("")
+        lines.append(f"    {index}. /{intent} [{status}] {run_id}")
+        if goal:
+            lines.append(f"       goal: {goal}")
+        summaries = entry.get("worker_summaries") or []
+        for worker in summaries[:5]:
+            role = str(worker.get("worker_role") or "").replace("_", " ")
+            summary = worker.get("summary") or ""
+            suffix = f" - {summary}" if summary else ""
+            lines.append(f"       - {role}: {worker.get('status') or ''}{suffix}")
+        if next_step:
+            lines.append(f"       next: {next_step}")
+    return on_done("\n".join(lines), display="user")
+
+
 def _handle_tasks(ctx: SlashContext, *_: str) -> OnDoneResult:
     """Render latest coordinator task state from session metadata."""
     session = ctx.coordinator_session
@@ -428,6 +477,7 @@ def _meta_str(ctx: SlashContext, key: str) -> str | None:
 
 
 __all__ = [
+    "build_context_command",
     "build_coordinator_command",
     "build_skills_coordinator_command",
     "build_tasks_command",
