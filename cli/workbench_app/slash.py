@@ -7,12 +7,18 @@ they format workspace/session state or delegate to existing Click
 subcommands via :class:`click.testing.CliRunner` so no business logic is
 duplicated.
 
-The full Claude Code ``onDone`` return protocol (display routing,
-``should_query``, meta-messages) lands in T05b. For now handlers return
-``str | None`` — ``None`` means "no transcript output" and any string is
-echoed verbatim. Exit is signalled via :meth:`SlashContext.request_exit`
-rather than a sentinel value so that handler return types stay aligned
-with :data:`cli.workbench_app.commands.LocalHandler`.
+T05b adds Claude Code's ``onDone(result, display, shouldQuery, metaMessages)``
+protocol. Handlers return an :class:`OnDoneResult` built via
+:func:`cli.workbench_app.commands.on_done`; :func:`dispatch` routes ``display``
+to the transcript (``skip`` → no echo, ``system`` → dim meta line,
+``user`` → normal line), echoes ``meta_messages`` as dim lines, and surfaces
+``should_query`` on :class:`DispatchResult` so the enclosing loop can feed the
+output back into the model on the next turn. Bare ``str`` and ``None`` returns
+remain valid sugar for ``on_done(result=value)`` and ``on_done(display="skip")``.
+
+Exit is signalled via :meth:`SlashContext.request_exit` rather than a sentinel
+value so that handler return types stay aligned with
+:data:`cli.workbench_app.commands.LocalHandler`.
 """
 
 from __future__ import annotations
@@ -28,8 +34,12 @@ import click
 from cli.sessions import Session, SessionStore
 from cli.workbench_app.commands import (
     CommandRegistry,
+    DisplayMode,
     LocalCommand,
+    LocalHandlerReturn,
+    OnDoneResult,
     SlashCommand,
+    on_done,
 )
 
 EchoFn = Callable[[str], None]
@@ -66,10 +76,23 @@ class SlashContext:
 class DispatchResult:
     """Outcome of a single slash-command dispatch.
 
-    The ``output`` field carries whatever the handler returned (already
-    echoed by :func:`dispatch`). ``handled`` is ``False`` when the input
-    does not start with ``/`` or no matching command was found — the
-    caller decides whether to route the line as free text instead.
+    The ``output`` field carries the rendered result (after display-mode
+    styling — i.e. what was echoed). ``handled`` is ``False`` when the input
+    does not start with ``/`` or no matching command was found — the caller
+    decides whether to route the line as free text instead.
+
+    T05b additions:
+
+    - ``display``        — the :data:`DisplayMode` the handler selected (or
+      ``"user"`` / ``"skip"`` inferred from a bare ``str`` / ``None`` return).
+    - ``should_query``   — when ``True``, the enclosing loop should feed the
+      raw result back into the model as a new user turn.
+    - ``meta_messages``  — additional dim lines the handler asked to surface
+      alongside the result. Already echoed by :func:`dispatch`; retained so
+      tests and future session logging can inspect them.
+    - ``raw_result``     — the ``result`` field on the handler's
+      :class:`OnDoneResult`, unmodified by display styling. Useful when the
+      caller needs to re-render or archive the value.
     """
 
     handled: bool
@@ -77,6 +100,10 @@ class DispatchResult:
     output: str | None = None
     exit: bool = False
     error: str | None = None
+    display: DisplayMode = "user"
+    should_query: bool = False
+    meta_messages: tuple[str, ...] = ()
+    raw_result: str | None = None
 
 
 class UnknownSlashCommandError(KeyError):
@@ -118,15 +145,19 @@ def _run_click(ctx: SlashContext, command_path: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _handle_help(ctx: SlashContext, *_: str) -> str:
+def _handle_help(ctx: SlashContext, *_: str) -> OnDoneResult:
+    # Reference port illustrating the ``onDone`` contract: we build the
+    # result and return via :func:`on_done` so ``display`` / ``should_query``
+    # routing is visible at the call site rather than implicit in a bare
+    # string return.
     registry = ctx.registry
     if registry is None:
-        return "  /help unavailable: no command registry bound."
+        return on_done("  /help unavailable: no command registry bound.")
     lines = [click.style("\n  Slash Commands", bold=True)]
     for name, description in registry.help_table().items():
         lines.append(f"    {name:<12} {description}")
     lines.append("")
-    return "\n".join(lines)
+    return on_done("\n".join(lines), display="user")
 
 
 def _handle_exit(ctx: SlashContext, *_: str) -> str:
@@ -242,12 +273,15 @@ _BUILTIN_SPECS: tuple[tuple[str, str, Callable[..., str | None]], ...] = (
 
 
 def build_builtin_registry(
-    *, extra: Sequence[SlashCommand] = ()
+    *, extra: Sequence[SlashCommand] = (), include_streaming: bool = True
 ) -> CommandRegistry:
-    """Return a registry populated with the ten ported built-in commands.
+    """Return a registry populated with the ported built-in commands.
 
     ``extra`` allows callers (and tests) to register additional commands
     during construction without needing a second ``.register`` pass.
+    ``include_streaming`` opts in streaming commands that shell out to the
+    root CLI (``/eval``, later `/optimize` etc). Tests that want a pure
+    in-process registry can disable it; production callers keep the default.
     """
     registry = CommandRegistry()
     for name, description, handler in _BUILTIN_SPECS:
@@ -259,6 +293,12 @@ def build_builtin_registry(
                 source="builtin",
             )
         )
+    if include_streaming:
+        # Imported lazily to avoid pulling subprocess machinery into the
+        # import path of callers that only want the basic registry.
+        from cli.workbench_app.eval_slash import build_eval_command
+
+        registry.register(build_eval_command())
     for command in extra:
         registry.register(command)
     return registry
@@ -337,37 +377,92 @@ def dispatch(
         assert handler is not None  # Guaranteed by LocalCommand.__post_init__.
         try:
             output = handler(ctx, *args)
+            normalized = _normalize_handler_return(output)
+            rendered = _render_and_echo(ctx, normalized)
         except Exception as exc:  # Surface handler errors without crashing loop.
             message = f"  Error running /{command.name}: {exc}"
             ctx.echo(message)
             return DispatchResult(
-                handled=True, command=command, output=message, error=str(exc)
+                handled=True,
+                command=command,
+                output=message,
+                error=str(exc),
+                display="system",
+                raw_result=message,
             )
-
-        rendered: str | None
-        if output is None:
-            rendered = None
-        else:
-            rendered = str(output)
-            ctx.echo(rendered)
 
         return DispatchResult(
             handled=True,
             command=command,
             output=rendered,
             exit=ctx.exit_requested,
+            display=normalized.display,
+            should_query=normalized.should_query,
+            meta_messages=normalized.meta_messages,
+            raw_result=normalized.result,
         )
     finally:
         ctx.registry = previous_registry
+
+
+# ---------------------------------------------------------------------------
+# onDone normalization + display routing (T05b).
+# ---------------------------------------------------------------------------
+
+
+def _normalize_handler_return(value: LocalHandlerReturn) -> OnDoneResult:
+    """Coerce a handler return into an :class:`OnDoneResult`.
+
+    Bare strings map to ``display="user"`` so existing handlers that returned
+    plain text keep rendering identically. ``None`` maps to ``display="skip"``
+    (no transcript output). Anything else must already be an
+    :class:`OnDoneResult`.
+    """
+    if isinstance(value, OnDoneResult):
+        return value
+    if value is None:
+        return on_done(display="skip")
+    if isinstance(value, str):
+        return on_done(result=value, display="user")
+    raise TypeError(
+        f"slash handler returned unsupported type {type(value).__name__!r}; "
+        "expected str | None | OnDoneResult"
+    )
+
+
+def _render_and_echo(ctx: SlashContext, result: OnDoneResult) -> str | None:
+    """Echo ``result`` according to its ``display`` mode and return the line.
+
+    Returns whatever was written to the transcript (post-styling) or ``None``
+    when ``display="skip"`` / the result is empty. ``meta_messages`` are
+    always echoed as dim lines after the main output, regardless of mode.
+    """
+    rendered: str | None = None
+    text = result.result
+    if result.display == "skip" or text is None:
+        rendered = None
+    elif result.display == "system":
+        rendered = click.style(text, dim=True)
+        ctx.echo(rendered)
+    else:  # "user"
+        rendered = text
+        ctx.echo(rendered)
+
+    for meta in result.meta_messages:
+        ctx.echo(click.style(meta, dim=True))
+
+    return rendered
 
 
 __all__ = [
     "ClickInvoker",
     "DispatchResult",
     "EchoFn",
+    "OnDoneResult",
     "SlashContext",
     "UnknownSlashCommandError",
     "build_builtin_registry",
     "dispatch",
+    "on_done",
     "parse_slash_line",
 ]

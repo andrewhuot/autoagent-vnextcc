@@ -42,6 +42,62 @@ CommandEffort = Literal["minimal", "low", "medium", "high"]
 SlashCommandKind = Literal["local", "local-jsx", "prompt"]
 """Discriminator on ``SlashCommand.kind``."""
 
+DisplayMode = Literal["skip", "system", "user"]
+"""How a ``LocalCommand`` result appears in the transcript.
+
+- ``"skip"``   — the result is carried on the :class:`OnDoneResult` but no line
+  is written to the transcript. Handlers that already echoed progress inline
+  typically end with ``on_done(display="skip")``.
+- ``"system"`` — the result is rendered as a dim meta line (informational,
+  not attributable to the user).
+- ``"user"``   — the result is rendered as a normal transcript line, as if the
+  user had typed it. This is the default and matches the legacy handler
+  contract that returned plain strings.
+"""
+
+
+@dataclass(frozen=True)
+class OnDoneResult:
+    """Return contract for :data:`LocalHandler` implementations.
+
+    Mirrors Claude Code's ``onDone(result, display, shouldQuery, metaMessages)``
+    protocol from ``src/types/command.ts``. The dispatch layer normalizes bare
+    ``str`` / ``None`` returns into this structure so existing handlers stay
+    one-liners, but new code is expected to call :func:`on_done` explicitly so
+    the ``display`` / ``should_query`` / ``meta_messages`` routing is visible
+    at the call site.
+    """
+
+    result: str | None = None
+    display: DisplayMode = "user"
+    should_query: bool = False
+    meta_messages: tuple[str, ...] = ()
+
+
+def on_done(
+    result: str | None = None,
+    *,
+    display: DisplayMode = "user",
+    should_query: bool = False,
+    meta_messages: Sequence[str] | None = None,
+) -> OnDoneResult:
+    """Construct an :class:`OnDoneResult` with sensible defaults.
+
+    Intended to be the final expression of every :class:`LocalCommand`
+    handler::
+
+        def _handle_help(ctx, *args):
+            return on_done(render_help(ctx), display="system")
+
+    ``meta_messages`` is normalized to a tuple so the result stays hashable.
+    """
+    return OnDoneResult(
+        result=result,
+        display=display,
+        should_query=should_query,
+        meta_messages=tuple(meta_messages or ()),
+    )
+
 
 @runtime_checkable
 class Screen(Protocol):
@@ -56,9 +112,23 @@ class Screen(Protocol):
         ...
 
 
-LocalHandler = Callable[..., Union[str, None, Awaitable[Union[str, None]]]]
-"""Signature for ``LocalCommand`` handlers. Return value is rendered per the
-``onDone(display=...)`` contract in T05b; ``None`` means ``display='skip'``."""
+LocalHandlerReturn = Union[str, None, OnDoneResult]
+"""Accepted synchronous return types for a ``LocalCommand`` handler.
+
+- ``OnDoneResult`` — explicit control over display / should_query / meta lines.
+- ``str``          — sugar for ``on_done(result=value, display="user")``.
+- ``None``         — sugar for ``on_done(display="skip")``.
+"""
+
+LocalHandler = Callable[
+    ..., Union[LocalHandlerReturn, Awaitable[LocalHandlerReturn]]
+]
+"""Signature for ``LocalCommand`` handlers.
+
+Returns either a bare string / ``None`` (which :func:`cli.workbench_app.slash.dispatch`
+normalizes into an :class:`OnDoneResult`) or an :class:`OnDoneResult` built via
+:func:`on_done`. Async handlers are permitted by the type but are not yet
+awaited by the current dispatch layer — future work."""
 
 ScreenFactory = Callable[..., Screen]
 """Factory that constructs the screen to launch for a ``LocalJSXCommand``."""
@@ -284,9 +354,12 @@ __all__ = [
     "CommandEffort",
     "CommandRegistry",
     "CommandSource",
+    "DisplayMode",
     "LocalCommand",
     "LocalJSXCommand",
     "LocalHandler",
+    "LocalHandlerReturn",
+    "OnDoneResult",
     "PromptCommand",
     "PromptTemplate",
     "Screen",
@@ -294,4 +367,5 @@ __all__ = [
     "SlashCommand",
     "SlashCommandKind",
     "build_default_registry",
+    "on_done",
 ]

@@ -128,17 +128,116 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       `copy_with` isolation, redaction idempotence, and colored `task.completed`
       green styling. Full workbench surface green (179 tests across
       transcript/status/slash/app stub/commands/cli_workbench/streaming).*
-- [ ] **T08** — Build the tool-call block renderer: a nested block (header, streaming
+- [x] **T08** — Build the tool-call block renderer: a nested block (header, streaming
       body, footer) for `task.started`/`task.progress`/`task.completed` sequences. Add
       to `cli/workbench_render.py` as `render_tool_call_block(event_stream)` + unit tests.
-- [ ] **T08b** — Port Claude Code's screen/dialog pattern to
+      *Landed frozen `ToolCallBlockState` + stateful `ToolCallBlockRenderer` keyed by
+      `task_id` (with title/name fallback), plus a `render_tool_call_block(stream)`
+      generator for the one-shot batch case. Visual layout mirrors Claude Code:
+      cyan-bold `⏺ <title>` header, dim `  ⎿ <note>` body lines, green `  ✓ done
+      [source]` footer on `task.completed`, red-bold `  ✗ failed: <reason>` footer on
+      `task.failed` (reason/failure_reason/message keys all accepted). Interleaved
+      task_ids render independently; duplicate `task.started` refreshes the title
+      without re-emitting a header; orphan `task.progress` / `task.completed` events
+      synthesize headers on the fly so the block is always balanced. Non-task events
+      fall through to `format_workbench_event` so a single renderer can drive the
+      whole transcript. `close_all(reason=…)` flushes any still-open blocks with a
+      failure footer — used by `render_tool_call_block` when the stream ends with
+      open blocks and by the T16 ctrl-c path for orphan cleanup. Coverage:
+      `tests/test_tool_call_block.py` (27 tests) — happy path, styling (cyan/dim/
+      green/red), state tracking on `open_blocks` / `completed_blocks`,
+      task.failed reason fallbacks, interleaved task_ids, duplicate-started,
+      orphan progress/completed, empty/missing notes, message-field fallback,
+      title/name/task_id resolution priority, title-keyed grouping when task_id is
+      absent, non-task passthrough, `harness.heartbeat` + `message.delta`
+      suppression, `None` data tolerance, `close_all` footer batching, and
+      `render_tool_call_block(close_unfinished=False)` opt-out. Full workbench
+      surface green (184 tests across tool_call_block/transcript/status/slash/
+      app stub/commands/cli_workbench).*
+- [x] **T08b** — Port Claude Code's screen/dialog pattern to
       `cli/workbench_app/screens/` (full-screen takeovers that pause the transcript).
       Scaffold `DoctorScreen`, `ResumeScreen`, `SkillsScreen` base classes with a
       `run() -> Result` contract. Each screen owns its own key bindings and restores
-      the transcript on exit.
-- [ ] **T09** — Add `/eval [--run-id …]` slash command that spawns `agentlab eval run`
+      the transcript on exit. *Landed a `cli/workbench_app/screens/` package with
+      an abstract `Screen` base class (satisfies the pre-declared `Screen` Protocol
+      in `commands.py`), frozen `ScreenResult(action, value, meta_messages)`, and a
+      `KeyProvider = Callable[[], str]` seam that accepts either a callable or an
+      iterable of keystrokes (`iter_keys([...])`) so tests drive the loop without a
+      TTY. `Screen.run()` paints header → `render_lines()` → footer via an
+      injectable `echo`, reads keys, dispatches to `handle_key(key)`, and
+      re-paints until the subclass returns a result; `EOFError` /
+      `KeyboardInterrupt` from the provider both translate into
+      `ScreenResult(action="cancel")` so callers always get a well-formed value.
+      Keys are normalized (named keys lower-cased, single-character keys
+      preserved for case-sensitive bindings). The transcript-restoration
+      contract is fixed: screens never write to the main `Transcript`; they
+      paint locally and return `meta_messages` that the wrapping
+      `LocalJSXCommand` dispatch will surface through `onDone(meta_messages=…)`.
+      Three scaffold subclasses: (a) `DoctorScreen` — runs the `doctor` Click
+      command via an injectable `DoctorRunner` (cached across re-paints),
+      renders stdout lines, exits on `q`/`enter`/`escape`/`ctrl+c`, and paints
+      a red error line if the runner throws; (b) `ResumeScreen` — consumes
+      either a `Sequence[Session]` or a `SessionStore` (pulling
+      `list_sessions(limit=…)` lazily), highlights the cursor row with `▶`
+      cyan-bold, navigates on `j/k` / `up/down` (clamped), returns
+      `action="resume"` on `enter` and `action="fork"` on `f` (both carry the
+      `session_id` plus a dim meta line), `q`/`escape` cancel, empty-list
+      renders a dim placeholder and cancels with a meta explanation; (c)
+      `SkillsScreen` — displays `SkillItem(skill_id, name, kind, description)`
+      rows with `[kind]` prefixes, arrow-key navigation, and action keys
+      `l`/`s`/`a`/`e`/`r` returning `ScreenResult(action=<verb>, value=skill_id
+      | None)` (list/add omit the selection payload; show/edit/remove carry
+      it), `q`/`escape` exit, unknown keys ignored. T13/T17 will flesh these
+      into real delegations via `LocalJSXCommand`; the scaffold fixes the
+      contract today. Coverage: `tests/test_workbench_screens.py` (28 tests) —
+      `iter_keys` exhaustion, base-class paint/re-paint counts, header/footer
+      ordering, EOF and KeyboardInterrupt → cancel, named-key lower-casing,
+      case-sensitive single-char preservation, `Screen` Protocol conformance,
+      `Screen()` abstract-instantiation rejection; `DoctorScreen` runner
+      caching, `enter`/`escape` exits, empty-output placeholder, exception
+      rendering, unknown-key re-paint; `ResumeScreen` empty list, arrow
+      navigation, cursor clamping, enter-returns-id, fork action, cancel
+      key, selected-marker rendering, `store=` auto-load ordering;
+      `SkillsScreen` empty placeholder, navigate-and-show, add without
+      selection payload, remove with selection, unknown-keys-ignored,
+      cursor clamping, kind/description rendering. Full workbench surface
+      green (212 tests across screens/tool_call_block/transcript/status/
+      slash/app stub/commands/cli_workbench).*
+- [x] **T09** — Add `/eval [--run-id …]` slash command that spawns `agentlab eval run`
       as an async subprocess, pipes stream-json output through the transcript, and
-      surfaces summary on completion.
+      surfaces summary on completion. *Landed `cli/workbench_app/eval_slash.py` with
+      a frozen `EvalSummary`, an injectable `StreamRunner` seam (default shells out
+      to `python -m runner eval run --output-format stream-json` via
+      `subprocess.Popen(bufsize=1, text=True, stderr→stdout)`), and an `_parse_args`
+      layer that aliases `--run-id <v>` → `--config <v>` so the documented `/eval`
+      surface matches the real `eval run` flag. The handler echoes a cyan start
+      banner, streams events through `format_workbench_event` (extended to cover
+      `phase_started` / `phase_completed` / `artifact_written` / `next_action` /
+      `warning`, which were previously emitted but unstyled), and ends with an
+      `on_done(...)` summary line — red + `/eval failed` when any `error` event
+      arrived or the subprocess exited non-zero, green + `/eval complete`
+      otherwise. Meta messages surface the final `next_action` as "Suggested
+      next: …" and the last three artifact paths so the main summary stays terse.
+      Subprocess errors (`EvalCommandError` from non-zero exit, `FileNotFoundError`
+      for a missing interpreter) render a red line and return `display="skip"` so
+      dispatch doesn't double-print; unparseable subprocess output is rescued as a
+      synthetic `warning` event so nothing is silently dropped.
+      `build_builtin_registry()` gained an `include_streaming=True` toggle so tests
+      that want just the ten ported built-ins can opt out, and `/eval` registers as
+      a `LocalCommand(source="builtin")` by default. Coverage:
+      `tests/test_workbench_eval_slash.py` (23 tests) — arg parsing pass-through,
+      `--run-id` alias, mixed flags, trailing value, empty; `_render_event` happy
+      paths and none-returns; `_summarise` counters (phases/artifacts/warnings/
+      errors/next_action), empty-stream, artifact-without-path fallback;
+      `_format_summary` green clean / red errors / artifact + warning counts;
+      handler integration through `dispatch()` — streams events + summary,
+      forwards args incl. `--run-id`, reports `EvalCommandError` as skip-display,
+      reports `FileNotFoundError` with no raw_result, surfaces mixed warnings/
+      errors, default runner wiring, meta-message artifact truncation to last 3,
+      registry wiring. Plus a new `test_builtin_registry_without_streaming` and an
+      updated extras test in `tests/test_workbench_slash.py` (using `/optimize`
+      since `/eval` now occupies the default extras slot). Full workbench surface
+      green (197 tests).*
 - [ ] **T10** — Add `/optimize [--cycles N] [--mode …]` slash command bound to the
       `optimize` CLI. Stream progress per cycle.
 - [ ] **T11** — Add `/build [target]` slash command bound to

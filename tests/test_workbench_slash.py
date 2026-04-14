@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import click
 import pytest
 
 from cli.sessions import Session, SessionEntry, SessionStore
@@ -12,7 +13,9 @@ from cli.workbench_app.commands import (
     CommandRegistry,
     LocalCommand,
     LocalJSXCommand,
+    OnDoneResult,
     PromptCommand,
+    on_done,
 )
 from cli.workbench_app.slash import (
     DispatchResult,
@@ -139,6 +142,9 @@ def test_parse_slash_line_falls_back_on_unbalanced_quotes() -> None:
 
 
 def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -> None:
+    # T09 adds ``/eval`` to the default registry. Tests that want just the
+    # ten ported built-ins construct the registry with ``include_streaming
+    # =False`` — see ``test_builtin_registry_without_streaming``.
     expected = {
         "help",
         "status",
@@ -150,8 +156,15 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "compact",
         "resume",
         "exit",
+        "eval",
     }
     assert set(registry.names()) == expected
+
+
+def test_builtin_registry_without_streaming() -> None:
+    registry = build_builtin_registry(include_streaming=False)
+    assert "eval" not in registry.names()
+    assert "help" in registry.names()
 
 
 def test_builtin_registry_help_table_has_descriptions(
@@ -164,13 +177,14 @@ def test_builtin_registry_help_table_has_descriptions(
 
 def test_builtin_registry_accepts_extra_commands() -> None:
     extra = LocalCommand(
-        name="eval",
-        description="Run eval",
-        handler=lambda *_a, **_k: "eval ran",
+        name="optimize",
+        description="Run optimize",
+        handler=lambda *_a, **_k: "optimize ran",
     )
     registry = build_builtin_registry(extra=[extra])
-    assert registry.get("/eval") is extra
-    assert len(registry) == 11
+    assert registry.get("/optimize") is extra
+    # 10 ported built-ins + /eval (T09) + /optimize (extra) = 12
+    assert len(registry) == 12
 
 
 # ---------------------------------------------------------------------------
@@ -480,3 +494,220 @@ def test_dispatch_localjsx_command_reports_unsupported_kind(
     assert result.handled is True
     assert result.error == "unsupported-kind"
     assert result.command is jsx
+
+
+# ---------------------------------------------------------------------------
+# T05b — onDone return protocol (display modes / should_query / meta messages)
+# ---------------------------------------------------------------------------
+
+
+def _register(registry: CommandRegistry, name: str, handler) -> None:
+    registry.register(LocalCommand(name=name, description=name, handler=handler))
+
+
+def test_on_done_helper_defaults_to_user_display() -> None:
+    result = on_done("hello")
+    assert isinstance(result, OnDoneResult)
+    assert result.result == "hello"
+    assert result.display == "user"
+    assert result.should_query is False
+    assert result.meta_messages == ()
+
+
+def test_on_done_helper_normalizes_meta_messages_to_tuple() -> None:
+    result = on_done("ok", meta_messages=["a", "b"])
+    assert result.meta_messages == ("a", "b")
+    # Frozen dataclass — tuple makes it hashable and immutable.
+    assert hash(result) == hash(result)
+
+
+def test_dispatch_user_display_echoes_plain_text(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(registry, "user_ping", lambda *_a, **_k: on_done("pong", display="user"))
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/user_ping")
+
+    assert result.display == "user"
+    assert result.output == "pong"
+    assert result.raw_result == "pong"
+    assert echo.lines == ["pong"]
+
+
+def test_dispatch_system_display_emits_dim_line(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(
+        registry, "sys_note", lambda *_a, **_k: on_done("loaded 3 configs", display="system")
+    )
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/sys_note")
+
+    assert result.display == "system"
+    assert result.raw_result == "loaded 3 configs"
+    # Raw text is preserved; the echoed line is dim-styled.
+    expected = click.style("loaded 3 configs", dim=True)
+    assert echo.lines == [expected]
+    assert result.output == expected
+
+
+def test_dispatch_skip_display_writes_nothing_to_transcript(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(
+        registry,
+        "silent",
+        lambda *_a, **_k: on_done("private state", display="skip"),
+    )
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/silent")
+
+    assert result.display == "skip"
+    # raw_result still carries the value so callers/loggers can use it.
+    assert result.raw_result == "private state"
+    assert result.output is None
+    assert echo.lines == []
+
+
+def test_dispatch_skip_display_still_emits_meta_messages(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(
+        registry,
+        "with_meta",
+        lambda *_a, **_k: on_done(
+            None, display="skip", meta_messages=["session restored", "2 pending"]
+        ),
+    )
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/with_meta")
+
+    assert result.output is None
+    assert result.meta_messages == ("session restored", "2 pending")
+    assert echo.lines == [
+        click.style("session restored", dim=True),
+        click.style("2 pending", dim=True),
+    ]
+
+
+def test_dispatch_should_query_flag_is_surfaced(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(
+        registry,
+        "ask",
+        lambda *_a, **_k: on_done(
+            "explain this traceback", display="user", should_query=True
+        ),
+    )
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/ask")
+
+    assert result.should_query is True
+    assert result.raw_result == "explain this traceback"
+
+
+def test_dispatch_bare_string_return_is_user_display(
+    echo: _EchoCapture,
+) -> None:
+    """Legacy handlers returning str remain valid — normalized to display='user'."""
+    registry = build_builtin_registry()
+    _register(registry, "legacy", lambda *_a, **_k: "legacy output")
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/legacy")
+
+    assert result.display == "user"
+    assert result.should_query is False
+    assert result.meta_messages == ()
+    assert result.raw_result == "legacy output"
+    assert echo.lines == ["legacy output"]
+
+
+def test_dispatch_bare_none_return_is_skip_display(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(registry, "noop", lambda *_a, **_k: None)
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/noop")
+
+    assert result.display == "skip"
+    assert result.output is None
+    assert result.raw_result is None
+    assert echo.lines == []
+
+
+def test_dispatch_rejects_unsupported_return_type(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(registry, "bad", lambda *_a, **_k: 42)  # type: ignore[arg-type]
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/bad")
+
+    # The TypeError from normalization is caught by the generic error path
+    # so the loop stays alive and the user sees a useful message.
+    assert result.handled is True
+    assert result.error is not None
+    assert "unsupported type" in result.error
+    assert result.display == "system"
+
+
+def test_dispatch_meta_messages_follow_user_result(
+    echo: _EchoCapture,
+) -> None:
+    registry = build_builtin_registry()
+    _register(
+        registry,
+        "report",
+        lambda *_a, **_k: on_done(
+            "headline",
+            display="user",
+            meta_messages=["footnote one", "footnote two"],
+        ),
+    )
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/report")
+
+    assert echo.lines == [
+        "headline",
+        click.style("footnote one", dim=True),
+        click.style("footnote two", dim=True),
+    ]
+    assert result.output == "headline"
+    assert result.meta_messages == ("footnote one", "footnote two")
+
+
+def test_dispatch_handler_exception_surfaces_as_system_line(
+    echo: _EchoCapture,
+) -> None:
+    """Handler errors are routed through the system display so the loop stays alive."""
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("oops")
+
+    registry = build_builtin_registry()
+    _register(registry, "boom2", _boom)
+    ctx = SlashContext(echo=echo, registry=registry)
+    result = dispatch(ctx, "/boom2")
+
+    assert result.error == "oops"
+    assert result.display == "system"
+    assert "Error running /boom2" in (result.output or "")
+
+
+def test_help_handler_goes_through_on_done(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """The /help handler was ported to return on_done() explicitly (T05b)."""
+    result = dispatch(ctx, "/help")
+    assert result.display == "user"
+    assert result.should_query is False
+    assert result.meta_messages == ()
+    assert result.raw_result is not None
+    assert "/help" in result.raw_result

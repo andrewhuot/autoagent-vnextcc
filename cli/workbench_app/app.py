@@ -18,6 +18,7 @@ from typing import Any, Callable, Iterable
 import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
+from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
 
 
 InputProvider = Callable[[str], str]
@@ -42,27 +43,16 @@ class StubAppResult:
     exited_via: str  # "/exit", "eof", "interrupt"
 
 
-def build_status_line(workspace: Any | None) -> str:
+def build_status_line(workspace: Any | None, *, color: bool = True) -> str:
     """Render the one-line status shown under the banner.
 
-    This is the stub version; T06 replaces it with a reactive status bar.
-    Kept here (not in ``cli/repl.py``) so the workbench app has no reverse
-    dependency on the legacy shell.
+    Thin wrapper around :mod:`cli.workbench_app.status_bar` that the banner
+    uses for its one-shot render. Long-lived callers should hold a
+    :class:`StatusBar` instance and call :meth:`StatusBar.render` so state
+    can be patched reactively as events arrive.
     """
-    parts: list[str] = []
-    if workspace is None:
-        parts.append(click.style("no workspace", fg="yellow"))
-    else:
-        label = getattr(workspace, "workspace_label", None) or "workspace"
-        parts.append(click.style(label, fg="cyan", bold=True))
-        try:
-            active = workspace.resolve_active_config()
-        except Exception:
-            active = None
-        if active is not None:
-            parts.append(f"v{active.version:03d}")
-    parts.append(f"agentlab {get_agentlab_version()}")
-    return " | ".join(parts)
+    snapshot = snapshot_from_workspace(workspace)
+    return render_snapshot(snapshot, color=color)
 
 
 def _default_input_provider(prompt: str) -> str:
