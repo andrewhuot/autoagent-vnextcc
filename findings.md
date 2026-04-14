@@ -72,6 +72,51 @@
   - Touched-file tests: 219 passed.
   - Related Workbench/CLI suite: 736 passed, 2 expected classic-mode deprecation warnings.
   - Broader CLI/Workbench/cost suite: 920 passed, 2 expected classic-mode deprecation warnings.
+## Coordinator-Worker Builder Pattern - Codex YOLO 2026-04-14
+
+### Mission
+
+- Work in `/Users/andrew/Desktop/agentlab-coordinator-worker-builder-codex-yolo` on branch `feat/coordinator-worker-builder-codex-yolo`.
+- Plan and implement a coordinator-worker multi-agent builder pattern into AgentLab.
+- Use `https://github.com/codeaashu/claude-code` as a reference for architecture ideas only.
+- Do not push or open a PR. End with a local conventional commit and completion event.
+
+### Initial Findings
+
+- Worktree started clean before planning-file creation.
+- Branch was already `feat/coordinator-worker-builder-codex-yolo`.
+- Project-local `findings.md` contains prior AgentLab Workbench/harness work, including durable Workbench runs, handoffs, skill context, and Build -> Eval -> Optimize bridge notes.
+- The reference repo identifies itself as an archive of leaked source; this pass used it only for high-level architecture patterns and avoided code copying.
+
+### Reference Patterns Worth Borrowing
+
+- Coordinator owns synthesis, task decomposition, continuation decisions, and final user-facing summary.
+- Workers should have typed capability/tool boundaries rather than open-ended recursive orchestration rights.
+- Task and worker activity should be durable, inspectable, and provenance-rich.
+- Worker skills/tools should be declared through allowlists and permission scopes.
+- Full async team runtimes, mailboxes, and recursive agents are not a safe first slice for AgentLab.
+
+### AgentLab Architecture Findings
+
+- `builder/orchestrator.py` already routed requests to specialists and tracked handoffs, but it did not yet own a task graph or capability registry.
+- `builder/specialists.py` already provided a roster, but did not include product-facing build, prompt, optimize, and deployment workers.
+- `builder/types.py` already had durable task metadata, parent tasks, artifacts, eval bundles, release candidates, and skill fields.
+- `builder/execution.py` already supported delegated task mode, worktree records, lifecycle transitions, progress events, and evidence clamps.
+- `builder/workbench.py` and `builder/harness.py` are already complex, durable model harness surfaces; this pass avoided inserting a new worker runtime into Workbench streaming.
+- `core/skills` and `optimizer/skill_engine.py` already distinguish build-time and runtime skills; coordinator plans should surface skill candidates, not apply mutations directly.
+
+### Selected Implementation Slice
+
+- Add product-aligned worker roles while preserving existing specialist enum values.
+- Add a worker capability registry derived from specialist definitions.
+- Add deterministic coordinator-owned plans with task nodes, dependencies, selected tools, skill candidates, permission scopes, expected artifacts, and provenance.
+- Add optional materialization of planned workers into child `BuilderTask` records.
+- Enrich specialist invocation payloads with worker capability and routing provenance.
+- Add `POST /api/builder/coordinator/plan` for API clients to view or materialize worker plans.
+
+### Verification Notes
+
+- `.venv/bin/python -m pytest tests/test_builder_orchestrator.py tests/test_builder_api.py -q` now reports 65 passed.
 
 ## Live UI Integration Merge - Codex
 

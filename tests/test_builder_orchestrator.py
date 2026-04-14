@@ -5,7 +5,7 @@ import pytest
 
 from builder.orchestrator import BuilderOrchestrator, HandoffRecord
 from builder.store import BuilderStore
-from builder.types import BuilderSession, BuilderTask, ExecutionMode, SpecialistRole
+from builder.types import BuilderProject, BuilderSession, BuilderTask, ExecutionMode, SpecialistRole
 
 
 @pytest.fixture
@@ -50,6 +50,22 @@ class TestSessionInit:
 
 
 class TestIntentDetection:
+    def test_detect_build_intent(self, orchestrator):
+        role = orchestrator.detect_specialist("implement the customer support agent build")
+        assert role == SpecialistRole.BUILD_ENGINEER
+
+    def test_detect_prompt_intent(self, orchestrator):
+        role = orchestrator.detect_specialist("tighten the prompt instructions and examples")
+        assert role == SpecialistRole.PROMPT_ENGINEER
+
+    def test_detect_optimization_intent(self, orchestrator):
+        role = orchestrator.detect_specialist("optimize the agent after eval failures")
+        assert role == SpecialistRole.OPTIMIZATION_ENGINEER
+
+    def test_detect_deployment_intent(self, orchestrator):
+        role = orchestrator.detect_specialist("deploy the canary and prepare rollback")
+        assert role == SpecialistRole.DEPLOYMENT_ENGINEER
+
     def test_detect_eval_intent(self, orchestrator):
         role = orchestrator.detect_specialist("write evaluation tests for the agent")
         assert role == SpecialistRole.EVAL_AUTHOR
@@ -119,6 +135,21 @@ class TestInvokeSpecialist:
         assert "tools" in result
         assert "context" in result
 
+    def test_invoke_returns_worker_capability_and_provenance(self, orchestrator, session, task):
+        orchestrator.start_session(session)
+        result = orchestrator.invoke_specialist(
+            task=task,
+            message="optimize prompt quality from eval failures",
+            explicit_role=SpecialistRole.OPTIMIZATION_ENGINEER,
+        )
+
+        assert result["specialist"] == "optimization_engineer"
+        assert result["worker_capability"]["role"] == "optimization_engineer"
+        assert result["worker_capability"]["skill_layer"] == "build"
+        assert "skill_engine" in result["recommended_tools"]
+        assert result["provenance"]["routed_by"] == "builder_orchestrator"
+        assert result["provenance"]["routing_reason"] == "explicit"
+
     def test_invoke_updates_task_specialist(self, orchestrator, store, session, task):
         orchestrator.start_session(session)
         orchestrator.invoke_specialist(
@@ -134,10 +165,12 @@ class TestRoster:
     def test_list_roster_returns_all_specialists(self, orchestrator, session):
         orchestrator.start_session(session)
         roster = orchestrator.list_roster(session.session_id)
-        assert len(roster) == 9  # All 9 specialists
+        assert len(roster) == len(SpecialistRole)
         roles = {entry["role"] for entry in roster}
+        assert "build_engineer" in roles
+        assert "optimization_engineer" in roles
         assert "eval_author" in roles
-        assert "release_manager" in roles
+        assert "deployment_engineer" in roles
 
     def test_roster_marks_active(self, orchestrator, session):
         orchestrator.start_session(session)
@@ -168,3 +201,86 @@ class TestHandoffHistory:
         assert isinstance(h["from_role"], str)
         assert isinstance(h["to_role"], str)
         assert isinstance(h["timestamp"], float)
+
+
+class TestWorkerCapabilityRegistry:
+    def test_list_worker_capabilities_includes_product_roles_and_boundaries(self, orchestrator):
+        capabilities = orchestrator.list_worker_capabilities()
+        by_role = {entry["role"]: entry for entry in capabilities}
+
+        assert by_role["build_engineer"]["skill_layer"] == "build"
+        assert "source_diff" in by_role["build_engineer"]["expected_artifacts"]
+        assert "eval" in by_role["eval_author"]["trigger_keywords"]
+        assert "deployment" in by_role["deployment_engineer"]["permission_scope"]
+        assert by_role["optimization_engineer"]["can_call_skills"] is True
+
+
+class TestCoordinatorPlan:
+    def test_plan_work_build_eval_optimize_deploy_goal_creates_worker_graph(
+        self,
+        orchestrator,
+        store,
+        session,
+        task,
+    ):
+        project = BuilderProject(
+            project_id="proj-1",
+            name="Customer FAQ agent",
+            buildtime_skills=["prompt_hardening", "eval_failure_clustering"],
+            runtime_skills=["faq_search"],
+        )
+        store.save_project(project)
+        orchestrator.start_session(session)
+
+        plan = orchestrator.plan_work(
+            task=task,
+            goal=(
+                "Build a support agent, tune the prompt, add evals, optimize failures, "
+                "and deploy a canary"
+            ),
+        )
+
+        roles = [entry["worker_role"] for entry in plan["tasks"]]
+        assert roles[0] == "orchestrator"
+        assert "build_engineer" in roles
+        assert "prompt_engineer" in roles
+        assert "eval_author" in roles
+        assert "optimization_engineer" in roles
+        assert "deployment_engineer" in roles
+
+        worker_tasks = [entry for entry in plan["tasks"] if entry["worker_role"] != "orchestrator"]
+        assert all(entry["depends_on"] for entry in worker_tasks)
+        assert all(entry["provenance"]["routed_by"] == "builder_orchestrator" for entry in worker_tasks)
+        assert "prompt_hardening" in plan["skill_context"]["buildtime_skills"]
+        assert "faq_search" in plan["skill_context"]["runtime_skills"]
+        assert plan["synthesis"]["next_step"] == "Start with the first planned worker task."
+
+        reloaded = store.get_task(task.task_id)
+        assert reloaded.metadata["coordinator_plan"]["plan_id"] == plan["plan_id"]
+
+    def test_plan_work_can_materialize_child_worker_tasks(
+        self,
+        orchestrator,
+        store,
+        session,
+        task,
+    ):
+        orchestrator.start_session(session)
+
+        plan = orchestrator.plan_work(
+            task=task,
+            goal="Build an agent and add evals",
+            materialize_tasks=True,
+        )
+
+        materialized = [entry for entry in plan["tasks"] if entry.get("materialized_task_id")]
+        assert materialized
+        for entry in materialized:
+            child = store.get_task(entry["materialized_task_id"])
+            assert child is not None
+            assert child.parent_task_id == task.task_id
+            assert child.active_specialist.value == entry["worker_role"]
+            assert child.metadata["coordinator_plan_id"] == plan["plan_id"]
+
+        updated_session = store.get_session(session.session_id)
+        assert all(entry["materialized_task_id"] in updated_session.task_ids for entry in materialized)

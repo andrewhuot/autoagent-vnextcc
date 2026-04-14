@@ -64,13 +64,17 @@ class SpecialistRole(str, Enum):
     """Specialist subagent roles used by the builder orchestrator."""
 
     ORCHESTRATOR = "orchestrator"
+    BUILD_ENGINEER = "build_engineer"
     REQUIREMENTS_ANALYST = "requirements_analyst"
+    PROMPT_ENGINEER = "prompt_engineer"
     ADK_ARCHITECT = "adk_architect"
     TOOL_ENGINEER = "tool_engineer"
     SKILL_AUTHOR = "skill_author"
     GUARDRAIL_AUTHOR = "guardrail_author"
     EVAL_AUTHOR = "eval_author"
+    OPTIMIZATION_ENGINEER = "optimization_engineer"
     TRACE_ANALYST = "trace_analyst"
+    DEPLOYMENT_ENGINEER = "deployment_engineer"
     RELEASE_MANAGER = "release_manager"
 
 

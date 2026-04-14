@@ -35,6 +35,16 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
             "Goal: coordinate specialists and keep changes reviewable."
         ),
     ),
+    SpecialistRole.BUILD_ENGINEER: SpecialistDefinition(
+        role=SpecialistRole.BUILD_ENGINEER,
+        display_name="Build Engineer",
+        description="Implements agent configuration, source, scaffold, and integration changes.",
+        tools=["code_search", "code_edit", "artifact_builder", "test_runner"],
+        permission_scope=["read", "source_write"],
+        context_template=(
+            "Implement the planned builder change, preserve existing flows, and attach tests."
+        ),
+    ),
     SpecialistRole.REQUIREMENTS_ANALYST: SpecialistDefinition(
         role=SpecialistRole.REQUIREMENTS_ANALYST,
         display_name="Requirements Analyst",
@@ -43,6 +53,16 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         permission_scope=["read"],
         context_template=(
             "Read project instructions, summarize requirements, and produce acceptance criteria."
+        ),
+    ),
+    SpecialistRole.PROMPT_ENGINEER: SpecialistDefinition(
+        role=SpecialistRole.PROMPT_ENGINEER,
+        display_name="Prompt Engineer",
+        description="Improves prompts, XML instructions, examples, and response policies.",
+        tools=["instruction_editor", "prompt_linter", "xml_instruction_tools", "example_curator"],
+        permission_scope=["read", "source_write"],
+        context_template=(
+            "Revise prompts and instructions with targeted diffs and regression evidence."
         ),
     ),
     SpecialistRole.ADK_ARCHITECT: SpecialistDefinition(
@@ -87,6 +107,16 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         permission_scope=["read", "source_write"],
         context_template="Generate eval bundles and summarize before/after quality deltas.",
     ),
+    SpecialistRole.OPTIMIZATION_ENGINEER: SpecialistDefinition(
+        role=SpecialistRole.OPTIMIZATION_ENGINEER,
+        display_name="Optimization Engineer",
+        description="Turns eval evidence into targeted optimizer experiments and reviewable changes.",
+        tools=["optimizer", "skill_engine", "experiment_runner", "change_card_writer"],
+        permission_scope=["read", "source_write", "benchmark_spend"],
+        context_template=(
+            "Use eval evidence and build-time skills to propose measured optimization changes."
+        ),
+    ),
     SpecialistRole.TRACE_ANALYST: SpecialistDefinition(
         role=SpecialistRole.TRACE_ANALYST,
         display_name="Trace Analyst",
@@ -94,6 +124,16 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         tools=["trace_search", "span_timeline", "blame_mapper"],
         permission_scope=["read"],
         context_template="Analyze traces, isolate root causes, and attach evidence chains.",
+    ),
+    SpecialistRole.DEPLOYMENT_ENGINEER: SpecialistDefinition(
+        role=SpecialistRole.DEPLOYMENT_ENGINEER,
+        display_name="Deployment Engineer",
+        description="Plans deploy, canary, rollback, and environment readiness work.",
+        tools=["deploy_planner", "canary_checker", "rollback_planner", "release_health_check"],
+        permission_scope=["read", "deployment"],
+        context_template=(
+            "Prepare deployment steps with canary evidence, rollback plan, and release gates."
+        ),
     ),
     SpecialistRole.RELEASE_MANAGER: SpecialistDefinition(
         role=SpecialistRole.RELEASE_MANAGER,
@@ -107,6 +147,14 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
 
 
 _INTENT_KEYWORDS: dict[SpecialistRole, tuple[str, ...]] = {
+    SpecialistRole.BUILD_ENGINEER: (
+        "build",
+        "implement",
+        "implementation",
+        "scaffold",
+        "code",
+        "create agent",
+    ),
     SpecialistRole.REQUIREMENTS_ANALYST: (
         "requirements",
         "spec",
@@ -114,12 +162,36 @@ _INTENT_KEYWORDS: dict[SpecialistRole, tuple[str, ...]] = {
         "clarify",
         "assumption",
     ),
+    SpecialistRole.PROMPT_ENGINEER: (
+        "prompt",
+        "instruction",
+        "instructions",
+        "system prompt",
+        "examples",
+        "few-shot",
+    ),
     SpecialistRole.ADK_ARCHITECT: ("adk", "graph", "topology", "architecture"),
     SpecialistRole.TOOL_ENGINEER: ("tool", "integration", "api", "connector", "endpoint"),
     SpecialistRole.SKILL_AUTHOR: ("skill", "runtime skill", "buildtime skill", "manifest"),
     SpecialistRole.GUARDRAIL_AUTHOR: ("guardrail", "policy", "safety", "pii"),
     SpecialistRole.EVAL_AUTHOR: ("eval", "benchmark", "quality", "regression", "test"),
+    SpecialistRole.OPTIMIZATION_ENGINEER: (
+        "optimize",
+        "optimization",
+        "improve",
+        "improvement",
+        "failure",
+        "experiment",
+    ),
     SpecialistRole.TRACE_ANALYST: ("trace", "span", "failure", "why", "blame"),
+    SpecialistRole.DEPLOYMENT_ENGINEER: (
+        "deploy",
+        "deployment",
+        "canary",
+        "rollback",
+        "environment",
+        "ship",
+    ),
     SpecialistRole.RELEASE_MANAGER: ("release", "deploy", "rollback", "promote"),
 }
 
@@ -134,6 +206,12 @@ def list_specialists() -> list[SpecialistDefinition]:
     """Return all specialist definitions in deterministic role order."""
 
     return [SPECIALISTS[role] for role in SpecialistRole]
+
+
+def get_specialist_keywords(role: SpecialistRole) -> tuple[str, ...]:
+    """Return intent keywords registered for a specialist role."""
+
+    return _INTENT_KEYWORDS.get(role, ())
 
 
 def detect_specialist_by_intent(message: str) -> SpecialistRole:

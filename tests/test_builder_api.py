@@ -396,10 +396,12 @@ class TestSpecialistsAPI:
         resp = client.get("/api/builder/specialists")
         assert resp.status_code == 200
         data = resp.json()
-        assert len(data) == 9
+        assert len(data) >= 13
         roles = [s["role"] for s in data]
+        assert "build_engineer" in roles
+        assert "optimization_engineer" in roles
         assert "eval_author" in roles
-        assert "release_manager" in roles
+        assert "deployment_engineer" in roles
 
     def test_invoke_specialist(self, client, test_app):
         project_id = client.post("/api/builder/projects", json={"name": "P"}).json()["project_id"]
@@ -415,3 +417,39 @@ class TestSpecialistsAPI:
         )
         assert resp.status_code == 200
         assert resp.json()["specialist"] == "eval_author"
+        assert resp.json()["worker_capability"]["role"] == "eval_author"
+
+    def test_create_coordinator_plan(self, client):
+        project_id = client.post(
+            "/api/builder/projects",
+            json={
+                "name": "P",
+                "buildtime_skills": ["prompt_hardening"],
+                "runtime_skills": ["order_lookup"],
+            },
+        ).json()["project_id"]
+        session_id = client.post("/api/builder/sessions", json={"project_id": project_id}).json()["session_id"]
+        task_id = client.post("/api/builder/tasks", json={
+            "project_id": project_id,
+            "session_id": session_id,
+            "title": "T",
+            "description": "D",
+            "mode": "ask",
+        }).json()["task_id"]
+
+        resp = client.post(
+            "/api/builder/coordinator/plan",
+            json={
+                "task_id": task_id,
+                "goal": "Build, evaluate, optimize, and deploy a support agent",
+                "materialize_tasks": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mode"] == "coordinator_worker"
+        assert data["root_task_id"] == task_id
+        assert any(entry["worker_role"] == "eval_author" for entry in data["tasks"])
+        assert any(entry.get("materialized_task_id") for entry in data["tasks"])
+        assert data["skill_context"]["buildtime_skills"] == ["prompt_hardening"]

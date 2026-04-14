@@ -4,7 +4,13 @@ from builder.artifacts import ArtifactCardFactory
 from builder.events import BuilderEvent, BuilderEventType, EventBroker, event_to_dict, serialize_sse_event
 from builder.execution import BuilderExecutionEngine
 from builder.metrics import BuilderMetricsService, BuilderMetricsSnapshot
-from builder.orchestrator import BuilderOrchestrator, HandoffRecord
+from builder.orchestrator import (
+    BuilderOrchestrator,
+    CoordinatorPlan,
+    CoordinatorTask,
+    HandoffRecord,
+    WorkerCapability,
+)
 from builder.permissions import (
     ActionLogEntry,
     PermissionGrant,
@@ -63,6 +69,8 @@ __all__ = [
     "BuilderSession",
     "BuilderStore",
     "BuilderTask",
+    "CoordinatorPlan",
+    "CoordinatorTask",
     "EvalBundle",
     "EventBroker",
     "ExecutionMode",
@@ -78,6 +86,7 @@ __all__ = [
     "TakeoverState",
     "TaskStatus",
     "TraceBookmark",
+    "WorkerCapability",
     "WorktreeRef",
     "detect_specialist_by_intent",
     "event_to_dict",

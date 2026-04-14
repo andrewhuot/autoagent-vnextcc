@@ -39,6 +39,9 @@ class CreateProjectRequest(BaseModel):
     description: str = ""
     root_path: str = "."
     master_instruction: str = ""
+    buildtime_skills: list[str] = Field(default_factory=list)
+    runtime_skills: list[str] = Field(default_factory=list)
+    deployment_targets: list[str] = Field(default_factory=list)
 
 
 class UpdateProjectRequest(BaseModel):
@@ -98,6 +101,14 @@ class PermissionGrantRequest(BaseModel):
 class SpecialistInvokeRequest(BaseModel):
     task_id: str
     message: str
+    extra_context: dict[str, Any] | None = None
+
+
+class CoordinatorPlanRequest(BaseModel):
+    task_id: str
+    goal: str = Field(min_length=1)
+    requested_roles: list[SpecialistRole] | None = None
+    materialize_tasks: bool = False
     extra_context: dict[str, Any] | None = None
 
 
@@ -254,6 +265,9 @@ async def create_project(request: Request, body: CreateProjectRequest) -> dict[s
         description=body.description,
         root_path=body.root_path,
         master_instruction=body.master_instruction,
+        buildtime_skills=body.buildtime_skills,
+        runtime_skills=body.runtime_skills,
+        deployment_targets=body.deployment_targets,
     )
     return _jsonable(project)
 
@@ -658,8 +672,30 @@ async def get_metrics(request: Request, project_id: str | None = None) -> dict[s
 
 
 # ---------------------------------------------------------------------------
-# Specialists
+# Coordinator and specialists
 # ---------------------------------------------------------------------------
+
+
+@router.post("/coordinator/plan")
+async def create_coordinator_plan(
+    request: Request,
+    body: CoordinatorPlanRequest,
+) -> dict[str, Any]:
+    store = _state(request, "builder_store")
+    orchestrator = _state(request, "builder_orchestrator")
+    task = store.get_task(body.task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    return _jsonable(
+        orchestrator.plan_work(
+            task=task,
+            goal=body.goal,
+            requested_roles=body.requested_roles,
+            materialize_tasks=body.materialize_tasks,
+            extra_context=body.extra_context,
+        )
+    )
 
 
 @router.get("/specialists")
