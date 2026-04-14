@@ -1,13 +1,15 @@
-"""Stub entry point for the Claude-Code-style workbench REPL.
+"""Entry point for the Claude-Code-style workbench REPL.
 
-T04: banner, status line, input prompt — echo-only. Later tasks wire slash
-commands (T05), status bar (T06), transcript pane (T07), tool-call blocks
-(T08), and screens (T08b) onto this loop.
+T04 started as a banner/status/input echo-only stub. This module now wires
+the slash-command registry (T05) into the loop so ``/help``, ``/status``,
+``/build`` etc. dispatch real handlers instead of echoing the raw line —
+closing the "Claude-Code-style" promise.
 
 The loop is intentionally minimal but exposes the seams downstream tasks
 need: an injectable ``input_provider`` and ``echo`` so tests drive it
-without a TTY, and a ``run_workbench_app`` signature stable enough to wire
-into ``cli/workbench.py``.
+without a TTY, an injectable ``registry`` so tests can swap command sets,
+and a ``run_workbench_app`` signature stable enough to wire into
+``cli/workbench.py``.
 """
 
 from __future__ import annotations
@@ -18,13 +20,16 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import click
 
-from cli.branding import get_agentlab_version, render_startup_banner
+from cli.branding import get_agentlab_version
+from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
 
 if TYPE_CHECKING:
     from cli.sessions import Session, SessionStore
+    from cli.workbench_app.commands import CommandRegistry
+    from cli.workbench_app.slash import SlashContext
 
 
 InputProvider = Callable[[str], str]
@@ -37,7 +42,7 @@ built-in ``input()`` contract). Tests inject a generator-backed provider.
 EchoFn = Callable[[str], None]
 """Write one line to the transcript. Defaults to :func:`click.echo`."""
 
-DEFAULT_PROMPT = "agentlab> "
+DEFAULT_PROMPT = "› "
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q"})
 RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 """Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
@@ -45,7 +50,7 @@ RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 
 @dataclass(frozen=True)
 class StubAppResult:
-    """Return value for the stub loop — useful for assertions in tests."""
+    """Return value for the workbench loop — useful for assertions in tests."""
 
     lines_read: int
     exited_via: str  # "/exit", "eof", "interrupt"
@@ -68,6 +73,42 @@ def _default_input_provider(prompt: str) -> str:
     return input(prompt)
 
 
+def _safe_cwd() -> str:
+    """Return the current working directory, or a sentinel on failure.
+
+    Banner rendering runs during startup so any OS-level exception here
+    (e.g. the cwd was deleted under us) must not crash the REPL.
+    """
+    import os
+
+    try:
+        return os.getcwd()
+    except OSError:
+        return "?"
+
+
+def _permission_mode_for_workspace(workspace: Any | None) -> str:
+    """Return the active permission mode without letting settings break launch."""
+    root = getattr(workspace, "root", None)
+    try:
+        return PermissionManager(root=root).mode
+    except Exception:  # pragma: no cover - defensive startup path
+        return DEFAULT_PERMISSION_MODE
+
+
+def _render_turn_footer(echo: EchoFn, workspace: Any | None = None) -> None:
+    """Emit a compact Claude Code-style footer line after each user turn.
+
+    Mirrors Claude Code's bottom-of-input status chrome: a small chevron,
+    the current permission mode, and lightweight activity counters. We
+    expose it as a separate helper so tests can assert the format without
+    standing up the rest of the loop.
+    """
+    mode = _permission_mode_for_workspace(workspace)
+    echo(theme.meta("─" * 72))
+    echo(theme.warning(f"⏵ {mode} permissions on · 0 shells, 0 tasks"))
+
+
 def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
     """Wrap an iterable so it can stand in for ``input()`` in tests."""
     iterator = iter(lines)
@@ -82,12 +123,25 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
 
 
 def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
-    echo(render_startup_banner(get_agentlab_version()))
+    """Render the compact Claude Code-style banner.
+
+    The heavy AgentLab ASCII art is intentionally suppressed here — the
+    workbench REPL favours the minimal "sparkle + welcome + status" pattern
+    Claude Code uses, so the transcript doesn't eat a whole screen on each
+    launch. The ASCII-art banner still lives in :func:`render_startup_banner`
+    for one-shot CLI surfaces that want the full branding.
+    """
+    version = get_agentlab_version()
+    cwd = _safe_cwd()
+    echo(theme.workspace(f"  ✻ Welcome to AgentLab Workbench  v{version}"))
     echo("")
-    echo(theme.workspace("  AgentLab Workbench"))
-    echo(f"  [{build_status_line(workspace)}]")
-    echo("  Type /help for commands, /exit to leave. (stub)")
+    echo(theme.meta(f"    cwd: {cwd}"))
+    echo(f"    [{build_status_line(workspace)}]")
+    echo(theme.meta(f"    {_permission_mode_for_workspace(workspace)} permissions on · ? for shortcuts"))
     echo("")
+    echo("  Type /help for commands, /exit to leave.")
+    echo("")
+    _render_turn_footer(echo, workspace)
 
 
 def _format_age(seconds: float) -> str:
@@ -147,14 +201,16 @@ def run_workbench_app(
     cancellation: CancellationToken | None = None,
     session_store: "SessionStore | None" = None,
     session: "Session | None" = None,
+    registry: "CommandRegistry | None" = None,
+    slash_context: "SlashContext | None" = None,
 ) -> StubAppResult:
-    """Run the echo-only workbench stub loop.
+    """Run the interactive workbench loop.
 
     Parameters
     ----------
     workspace:
-        Active :class:`AgentLabWorkspace` or ``None``. Only used to render
-        the status line — the stub does not yet run commands against it.
+        Active :class:`AgentLabWorkspace` or ``None``. Used to render status
+        chrome and as context for slash commands.
     input_provider:
         Callable returning the next input line. Accepts an iterable as a
         convenience for tests: ``run_workbench_app(input_provider=["hi"])``.
@@ -183,6 +239,39 @@ def run_workbench_app(
             out("")
 
     token = cancellation if cancellation is not None else CancellationToken()
+
+    # Build a SlashContext so ``/command`` input dispatches through the
+    # registry instead of being echoed back. Callers that pass their own
+    # context / registry win — tests rely on that to stub handlers. When
+    # neither is supplied, we lazily build the built-in registry so the
+    # default REPL still reacts to ``/help``, ``/status``, and friends.
+    ctx = slash_context
+    active_registry = registry
+    if ctx is None and active_registry is None:
+        from cli.workbench_app.slash import build_builtin_registry
+
+        try:
+            active_registry = build_builtin_registry()
+        except Exception:  # pragma: no cover — defensive; registry build is cheap
+            active_registry = None
+    if ctx is None and active_registry is not None:
+        from cli.workbench_app.slash import SlashContext
+
+        ctx = SlashContext(
+            workspace=workspace,
+            session=session,
+            session_store=session_store,
+            echo=out,
+            registry=active_registry,
+            cancellation=token,
+        )
+    elif ctx is not None:
+        # Keep the caller-supplied context in sync with the loop's echo /
+        # cancellation so transcript output and ctrl-c both route correctly.
+        ctx.echo = out
+        if ctx.cancellation is None:
+            ctx.cancellation = token
+
     lines_read = 0
     interrupts = 0
     exited_via = "eof"
@@ -232,8 +321,24 @@ def run_workbench_app(
             out(theme.meta("  Goodbye."))
             break
 
-        # Echo-only stub: future tasks dispatch into the slash registry.
-        out(f"  echo: {line}")
+        # Route ``/command`` input through the slash registry when one is
+        # bound. Non-slash input has no model integration yet, so we echo
+        # it as a received-turn acknowledgement until the model layer lands.
+        handled_as_slash = False
+        if ctx is not None and line.startswith("/"):
+            from cli.workbench_app.slash import dispatch
+
+            result = dispatch(ctx, line)
+            if result.handled:
+                if ctx.exit_requested:
+                    exited_via = "/exit"
+                    break
+                handled_as_slash = True
+
+        if not handled_as_slash:
+            out(theme.user(f"  AgentLab received: {line}", bold=False))
+
+        _render_turn_footer(out, workspace)
 
     return StubAppResult(
         lines_read=lines_read,
@@ -258,6 +363,7 @@ def launch_workbench(
     not a precondition for launching.
     """
     from cli.sessions import Session, SessionStore
+    from cli.workbench_app.slash import SlashContext, build_builtin_registry
 
     store: SessionStore | None = None
     session: Session | None = None
@@ -275,6 +381,13 @@ def launch_workbench(
             started_at=time.time(),
             updated_at=time.time(),
         )
+    registry = build_builtin_registry()
+    ctx = SlashContext(
+        workspace=workspace,
+        session=session,
+        session_store=store,
+        registry=registry,
+    )
     return run_workbench_app(
         workspace,
         show_banner=show_banner,
@@ -282,6 +395,8 @@ def launch_workbench(
         echo=echo,
         session_store=store,
         session=session,
+        registry=registry,
+        slash_context=ctx,
     )
 
 

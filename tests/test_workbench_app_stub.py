@@ -92,7 +92,7 @@ def test_stub_loop_echoes_input_and_exits_on_exit_token() -> None:
     assert isinstance(result, StubAppResult)
     assert result.lines_read == 2
     assert result.exited_via == "/exit"
-    assert any("echo: hello world" in line for line in lines)
+    assert any("hello world" in click.unstyle(line) for line in lines)
     assert any("Goodbye" in line for line in lines)
 
 
@@ -105,8 +105,8 @@ def test_stub_loop_skips_blank_lines() -> None:
         show_banner=False,
     )
     assert result.lines_read == 2  # "ping" + "/exit"
-    echoed = [line for line in lines if "echo:" in line]
-    assert echoed == ["  echo: ping"]
+    echoed = [click.unstyle(line) for line in lines if "ping" in click.unstyle(line)]
+    assert echoed == ["  AgentLab received: ping"]
 
 
 def test_stub_loop_exits_on_eof() -> None:
@@ -149,8 +149,9 @@ def test_stub_loop_renders_banner_by_default() -> None:
     )
     joined = "\n".join(lines)
     assert "AgentLab Workbench" in joined
-    # The branded ASCII banner contains the "Experiment. Evaluate. Refine." tagline.
-    assert "Experiment. Evaluate. Refine." in joined
+    assert "Experiment. Evaluate. Refine." not in joined
+    assert "Type /help for commands" in joined
+    assert "permissions on" in click.unstyle(joined)
 
 
 def test_stub_loop_recognizes_all_exit_tokens() -> None:
@@ -166,8 +167,41 @@ def test_stub_loop_recognizes_all_exit_tokens() -> None:
 
 
 def test_stub_loop_default_prompt_string() -> None:
-    # Ensure the prompt token we'll later feed to prompt_toolkit is stable.
-    assert DEFAULT_PROMPT.endswith("> ")
+    """The live prompt should match Claude Code's single-chevron input."""
+    assert DEFAULT_PROMPT == "› "
+
+
+def test_stub_loop_dispatches_slash_commands_instead_of_echoing() -> None:
+    """Regression: /help should invoke the slash registry, not print echo text."""
+    lines, echo = _capture_echo()
+    result = run_workbench_app(
+        workspace=None,
+        input_provider=iter(["/help", "/exit"]),
+        echo=echo,
+        show_banner=False,
+    )
+
+    joined = click.unstyle("\n".join(lines))
+    assert result.exited_via == "/exit"
+    assert "Slash Commands" in joined
+    assert "/status" in joined
+    assert "echo: /help" not in joined
+
+
+def test_stub_loop_renders_claude_style_footer_after_turns() -> None:
+    """Each turn leaves a compact Claude-style status/footer near the prompt."""
+    lines, echo = _capture_echo()
+    run_workbench_app(
+        workspace=None,
+        input_provider=iter(["hello", "/exit"]),
+        echo=echo,
+        show_banner=False,
+    )
+
+    plain = [click.unstyle(line) for line in lines]
+    assert any(line.startswith("⏵ ") for line in plain)
+    assert any("default permissions on" in line for line in plain)
+    assert any("0 shells, 0 tasks" in line for line in plain)
 
 
 # ---------------------------------------------------------------------------
