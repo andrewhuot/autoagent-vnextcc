@@ -66,12 +66,11 @@ class Palette:
     plan_mode: str = "cyan"
     accept_mode: str = "green"
     danger_mode: str = "red"
-    # Amber accent used for the rounded input chevron and Claude-Code-style
-    # chrome that should stand out from workspace cyan. Stored as a 256-colour
-    # index so 256-colour and 16M-colour terminals both render it cleanly; the
-    # int routes through ``click.style(fg=208)`` which Click forwards as an
-    # SGR ``38;5;208`` sequence.
-    prompt_accent: int = 208
+    # Bright turquoise-blue accent used for the rounded input chevron and
+    # Claude-Code-style chrome. Stored as a 256-colour index so 256-colour and
+    # 16M-colour terminals both render it cleanly; the int routes through
+    # ``click.style(fg=45)`` which Click forwards as an SGR ``38;5;45`` sequence.
+    prompt_accent: int = 45
     # Dimmed grey used for the rounded box chrome (welcome card, input border).
     # Rendered via ``stylize(dim=True)``; kept as a field so a future theme
     # can override without touching call sites.
@@ -195,11 +194,11 @@ def danger_mode(text: str, *, color: bool = True) -> str:
 
 
 def accent(text: str, *, bold: bool = True, color: bool = True) -> str:
-    """Amber accent used for the rounded input chevron and key chrome.
+    """Turquoise-blue accent used for the rounded input chevron and key chrome.
 
-    Mirrors Claude Code's orange ``>`` prompt. The palette uses a 256-colour
-    index (``208``) so the result stays amber-ish even when the terminal
-    only advertises 256-colour support.
+    Mirrors the blue highlight on the ``claude-code-ui-overhaul`` branch
+    theming cue. The palette uses a 256-colour index (``45``) so the result
+    stays readable even on terminals that only advertise 256-colour support.
     """
 
     return stylize(text, fg=PALETTE.prompt_accent, bold=bold, color=color)
