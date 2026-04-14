@@ -696,12 +696,20 @@ def build_builtin_registry(
         build_checkpoints_command,
         build_rewind_command,
     )
+    from cli.workbench_app.config_diff_slash import (
+        build_accept_command,
+        build_diff_command,
+        build_reject_command,
+    )
 
     registry.register(build_model_command())
     registry.register(build_tasks_command())
     registry.register(build_checkpoint_command())
     registry.register(build_rewind_command())
     registry.register(build_checkpoints_command())
+    registry.register(build_diff_command())
+    registry.register(build_accept_command())
+    registry.register(build_reject_command())
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,
