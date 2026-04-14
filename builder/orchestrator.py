@@ -426,7 +426,10 @@ class BuilderOrchestrator:
 
         normalized_goal = " ".join(str(goal or task.description or task.title).split())
         project = self._store.get_project(task.project_id)
-        verb = str((extra_context or {}).get("command_intent") or "").strip().lower()
+        ctx = extra_context or {}
+        verb = str(ctx.get("command_intent") or "").strip().lower()
+        prior_turns = list(ctx.get("prior_turns") or [])
+        latest_synthesis = dict(ctx.get("latest_synthesis") or {})
         roles = self._select_worker_roles(
             normalized_goal,
             requested_roles=requested_roles,
@@ -442,7 +445,9 @@ class BuilderOrchestrator:
                 task=task,
                 goal=normalized_goal,
                 skill_context=skill_context,
-                extra_context=extra_context or {},
+                extra_context=ctx,
+                prior_turns=prior_turns,
+                latest_synthesis=latest_synthesis,
             )
         ]
         for index, role in enumerate(roles, start=1):
@@ -454,7 +459,7 @@ class BuilderOrchestrator:
                     task=task,
                     goal=normalized_goal,
                     project=project,
-                    extra_context=extra_context or {},
+                    extra_context=ctx,
                     skill_context=skill_context,
                 )
             )
@@ -600,6 +605,8 @@ class BuilderOrchestrator:
         goal: str,
         skill_context: dict[str, Any],
         extra_context: dict[str, Any],
+        prior_turns: list[dict[str, Any]] | None = None,
+        latest_synthesis: dict[str, Any] | None = None,
     ) -> CoordinatorTask:
         """Create the root coordination node for a plan."""
 
@@ -626,6 +633,8 @@ class BuilderOrchestrator:
                 "project_runtime_skills": skill_context["runtime_skills"],
                 "extra_context_keys": sorted(extra_context),
                 "source_task_id": task.task_id,
+                "prior_turns": [dict(entry) for entry in (prior_turns or [])],
+                "latest_synthesis": dict(latest_synthesis or {}),
             },
         )
 

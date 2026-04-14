@@ -35,6 +35,8 @@ from cli.workbench_app.coordinator_render import format_coordinator_event
 class CoordinatorSession:
     """Own one Workbench coordinator session and its active plan/run state."""
 
+    MAX_TURN_HISTORY: int = 5
+
     def __init__(
         self,
         *,
@@ -59,6 +61,7 @@ class CoordinatorSession:
         self.active_plan_id: str | None = None
         self.latest_run_id: str | None = None
         self._latest_synthesis: dict[str, Any] = {}
+        self._turn_history: list[dict[str, Any]] = []
         self._active_run_count = 0
         self._cancel_requested = False
 
@@ -128,6 +131,12 @@ class CoordinatorSession:
         emitted = tuple(self.execute(str(plan["plan_id"])))
         run = self._require_latest_run()
         transcript_lines = tuple(self._render_transcript_lines(plan=plan, run=run, events=emitted))
+        self._record_turn_history(
+            intent=intent,
+            goal=cleaned,
+            plan=plan,
+            run=run,
+        )
         return CoordinatorTurnResult(
             message=cleaned,
             command_intent=intent,
@@ -188,6 +197,9 @@ class CoordinatorSession:
             "workbench_surface": "cli",
             **dict(context or {}),
         }
+        session_context = self._build_session_context()
+        for key, value in session_context.items():
+            extra_context.setdefault(key, value)
         plan = self._orchestrator.plan_work(
             task=task,
             goal=cleaned,
@@ -298,6 +310,77 @@ class CoordinatorSession:
                 for run in runs
             ],
         }
+
+    def _build_session_context(self) -> dict[str, Any]:
+        """Return prior-turn history for planning/worker prompts."""
+        history = self._turn_history[-self.MAX_TURN_HISTORY:]
+        return {
+            "prior_turns": [dict(entry) for entry in history],
+            "latest_synthesis": dict(self._latest_synthesis),
+        }
+
+    def _record_turn_history(
+        self,
+        *,
+        intent: str,
+        goal: str,
+        plan: dict[str, Any],
+        run: CoordinatorExecutionRun,
+    ) -> None:
+        """Append a trimmed record of this turn to ``_turn_history``."""
+        worker_summaries: list[dict[str, str]] = []
+        for state in run.worker_states:
+            summary_text = ""
+            if state.result is not None:
+                summary_text = state.result.summary or ""
+            if not summary_text:
+                summary_text = state.blocker_reason or state.error or ""
+            worker_summaries.append(
+                {
+                    "worker_role": state.worker_role.value,
+                    "status": state.status.value,
+                    "summary": self._trim_worker_summary(summary_text),
+                }
+            )
+        synthesis = run.coordinator_synthesis or {}
+        entry = {
+            "intent": intent,
+            "goal": goal,
+            "plan_id": str(plan.get("plan_id") or ""),
+            "run_id": run.run_id,
+            "status": run.status.value,
+            "worker_summaries": worker_summaries,
+            "next_step": synthesis.get("next_step"),
+            "created_at": now_ts(),
+        }
+        self._turn_history.append(entry)
+        if len(self._turn_history) > self.MAX_TURN_HISTORY:
+            # Drop oldest entries so we stay within the cap.
+            overflow = len(self._turn_history) - self.MAX_TURN_HISTORY
+            del self._turn_history[:overflow]
+
+    @staticmethod
+    def _trim_worker_summary(summary: str) -> str:
+        """Return the first 3 sentences or 280 chars, whichever is shorter."""
+        text = " ".join(str(summary or "").split())
+        if not text:
+            return ""
+        # First split up to the first 3 sentence boundaries.
+        sentences: list[str] = []
+        buffer: list[str] = []
+        for char in text:
+            buffer.append(char)
+            if char in ".!?":
+                sentences.append("".join(buffer).strip())
+                buffer = []
+                if len(sentences) == 3:
+                    break
+        if buffer:
+            sentences.append("".join(buffer).strip())
+        trimmed = " ".join(part for part in sentences if part).strip() or text
+        if len(trimmed) > 280:
+            trimmed = trimmed[:277].rstrip() + "..."
+        return trimmed
 
     def _get_or_create_project(self, *, message: str) -> BuilderProject:
         """Return the bound project, latest project, or a new CLI project."""

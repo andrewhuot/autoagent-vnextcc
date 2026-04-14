@@ -284,6 +284,7 @@ class CoordinatorWorkerRuntime:
     ) -> dict[str, Any]:
         project = self._store.get_project(task.project_id)
         skill_descriptors = self._resolve_skill_descriptors(plan, node)
+        prior_turns, latest_synthesis = self._prior_turn_context(plan)
         return {
             "context_boundary": "fresh_worker_context",
             "run_id": run.run_id,
@@ -319,7 +320,27 @@ class CoordinatorWorkerRuntime:
             "deploy": dict(task.metadata.get("deploy") or {}),
             "skills": dict(task.metadata.get("skills") or {}),
             "command_intent": task.metadata.get("command_intent"),
+            "prior_turns": prior_turns,
+            "latest_synthesis": latest_synthesis,
         }
+
+    def _prior_turn_context(
+        self,
+        plan: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        """Return ``(prior_turns, latest_synthesis)`` from the root node."""
+        for node in plan.get("tasks", []):
+            if not isinstance(node, dict):
+                continue
+            if node.get("worker_role") != "orchestrator":
+                continue
+            provenance = node.get("provenance") or {}
+            prior = provenance.get("prior_turns") or []
+            synthesis = provenance.get("latest_synthesis") or {}
+            prior_list = [dict(entry) for entry in prior if isinstance(entry, dict)]
+            synthesis_dict = dict(synthesis) if isinstance(synthesis, dict) else {}
+            return prior_list, synthesis_dict
+        return [], {}
 
     def _resolve_skill_descriptors(
         self,
