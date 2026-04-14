@@ -737,9 +737,68 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       deploy_slash / skills_slash / model_slash / cancellation /
       sessions); ``repl.py`` / ``shell_commands`` compatibility suite
       still green (27 tests).*
-- [ ] **T18** — Add theming: dim meta lines, cyan for workspace, green for completed,
+- [x] **T18** — Add theming: dim meta lines, cyan for workspace, green for completed,
       yellow for warnings, red for errors. Read palette from
-      `cli/workbench_app/theme.py`.
+      `cli/workbench_app/theme.py`. *Landed `cli/workbench_app/theme.py` with a
+      frozen :class:`Palette` dataclass pinning the role → Click colour
+      mapping (workspace=cyan, user=cyan, success=green, warning=yellow,
+      error=red, assistant=None, command_name=cyan) plus named helpers
+      (:func:`meta`, :func:`workspace`, :func:`user`, :func:`assistant`,
+      :func:`success`, :func:`warning`, :func:`error`,
+      :func:`command_name`, :func:`heading`) and a shared
+      :func:`stylize` core that collapses ``bold=False`` / ``dim=False``
+      to ``None`` so the rendered ANSI stays tight (no spurious
+      off-codes). Every helper honours ``color=False`` for ANSI-free
+      output, matching the existing ``render_snapshot(color=False)``
+      contract in :mod:`cli.workbench_app.status_bar`. Palette is
+      immutable so no caller can repaint at runtime — future themes
+      swap by rebinding :data:`PALETTE`. Refactored every high-value
+      call site in :mod:`cli.workbench_app` to route through the new
+      helpers: (a) ``transcript.format_entry`` now dispatches
+      user/system/meta/error/warning/assistant entries through the
+      matching theme function; (b) ``app._render_banner`` and the
+      ctrl-c / idle-tip / goodbye paths in :func:`run_workbench_app`
+      swap cyan-bold banner + yellow warnings + dim goodbye onto
+      theme helpers; (c) ``status_bar.render_snapshot`` uses
+      :func:`theme.workspace` / :func:`theme.warning` /
+      :func:`theme.meta` (dropped the defunct ``import click``); (d)
+      slash `/help` heading, `meta_messages` echoing, and the system-
+      display branch of `_render_and_echo` now call
+      :func:`theme.heading` and :func:`theme.meta`; (e) every
+      streaming handler (`/eval`, `/optimize`, `/build`, `/deploy`)
+      routes the cyan starting banner, red error summary token,
+      red failure lines (`KeyboardInterrupt`, `*CommandError`,
+      `FileNotFoundError`), green / red bold summary line, and yellow
+      cancelled line through the palette; `/build` also routes its
+      "requires a brief" guard message through :func:`theme.error`;
+      (f) every screen (`base.header_lines`, `skills`, `resume`,
+      `doctor`) uses :func:`theme.workspace` / :func:`theme.meta` /
+      :func:`theme.error`. Dropped `click` imports from
+      `eval_slash.py`, `optimize_slash.py`, `build_slash.py`, and
+      `status_bar.py` since they no longer called `click.style`;
+      left `click` imports in `deploy_slash.py` (for
+      :func:`click.confirm`), `slash.py` (for :func:`click.echo`
+      default + :class:`click.testing.CliRunner`), `transcript.py`
+      (for :func:`click.unstyle`), `app.py` (for :func:`click.echo`
+      default), and the screens (marked with ``# noqa: F401``
+      where the module itself no longer calls into click but tests
+      or downstream callers may). Coverage:
+      `tests/test_workbench_theme.py` (22 tests) — palette is frozen
+      (mutation raises), default role colours pin the advertised
+      mapping, every helper: applies the right ANSI code (cyan /
+      green / yellow / red / dim / bold), round-trips through
+      ``click.unstyle``, and returns plain text under ``color=False``;
+      :func:`theme.stylize` returns text verbatim when no flags and
+      short-circuits on ``color=False`` even with flags set. No
+      existing test suite asserted byte-for-byte ANSI output for the
+      refactored lines — they compare plain text via
+      :func:`click.unstyle` / ``_strip_ansi`` — so no downstream
+      tests needed to change. Full workbench surface green (445
+      tests across theme / transcript / status_bar / screens /
+      slash / eval_slash / optimize_slash / build_slash /
+      deploy_slash / skills_slash / model_slash / tool_call_block /
+      commands / app_stub / cancellation); broader workbench / cli
+      subset (601 tests) all green.*
 - [ ] **T18b** — Add an effort indicator + ctrl-O expand/collapse for long outputs
       (port the mirror's `EffortIndicator` and `CtrlOToExpand`). Long tool-call output
       collapses to a summary line with token count; ctrl-O toggles full view. Effort

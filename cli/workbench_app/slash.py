@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 import click
 
 from cli.sessions import Session, SessionStore
+from cli.workbench_app import theme
 from cli.workbench_app.commands import (
     CommandRegistry,
     DisplayMode,
@@ -180,7 +181,7 @@ def _handle_help(ctx: SlashContext, *_: str) -> OnDoneResult:
     registry = ctx.registry
     if registry is None:
         return on_done("  /help unavailable: no command registry bound.")
-    lines = [click.style("\n  Slash Commands", bold=True)]
+    lines = [theme.heading("\n  Slash Commands")]
     for name, description in registry.help_table().items():
         lines.append(f"    {name:<12} {description}")
     lines.append("")
@@ -594,7 +595,7 @@ def _dispatch_local_jsx(
 
     meta = tuple(getattr(screen_result, "meta_messages", ()) or ())
     for line in meta:
-        ctx.echo(click.style(line, dim=True))
+        ctx.echo(theme.meta(line))
 
     value = getattr(screen_result, "value", None)
     raw = value if isinstance(value, str) else None
@@ -646,14 +647,14 @@ def _render_and_echo(ctx: SlashContext, result: OnDoneResult) -> str | None:
     if result.display == "skip" or text is None:
         rendered = None
     elif result.display == "system":
-        rendered = click.style(text, dim=True)
+        rendered = theme.meta(text)
         ctx.echo(rendered)
     else:  # "user"
         rendered = text
         ctx.echo(rendered)
 
     for meta in result.meta_messages:
-        ctx.echo(click.style(meta, dim=True))
+        ctx.echo(theme.meta(meta))
 
     return rendered
 

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable
 import click
 
 from cli.branding import get_agentlab_version, render_startup_banner
+from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
 
@@ -83,7 +84,7 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
 def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     echo(render_startup_banner(get_agentlab_version()))
     echo("")
-    echo(click.style("  AgentLab Workbench", fg="cyan", bold=True))
+    echo(theme.workspace("  AgentLab Workbench"))
     echo(f"  [{build_status_line(workspace)}]")
     echo("  Type /help for commands, /exit to leave. (stub)")
     echo("")
@@ -178,7 +179,7 @@ def run_workbench_app(
         _render_banner(out, workspace)
         hint = resume_hint(session_store, current=session)
         if hint is not None:
-            out(click.style(hint, dim=True))
+            out(theme.meta(hint))
             out("")
 
     token = cancellation if cancellation is not None else CancellationToken()
@@ -201,22 +202,18 @@ def run_workbench_app(
                 token.cancel()
                 interrupts += 1
                 out("")
-                out(click.style(
-                    "  (cancelled active tool call — press ctrl-c again to exit)",
-                    fg="yellow",
+                out(theme.warning(
+                    "  (cancelled active tool call — press ctrl-c again to exit)"
                 ))
                 continue
             interrupts += 1
             if interrupts >= 2:
                 exited_via = "interrupt"
                 out("")
-                out(click.style("  (interrupted)", fg="yellow"))
+                out(theme.warning("  (interrupted)"))
                 break
             out("")
-            out(click.style(
-                "  (press ctrl-c again to exit, or /exit)",
-                fg="yellow",
-            ))
+            out(theme.warning("  (press ctrl-c again to exit, or /exit)"))
             continue
 
         # A successful read resets the interrupt streak so the user can
@@ -232,7 +229,7 @@ def run_workbench_app(
 
         if line.lower() in EXIT_TOKENS:
             exited_via = "/exit"
-            out(click.style("  Goodbye.", dim=True))
+            out(theme.meta("  Goodbye."))
             break
 
         # Echo-only stub: future tasks dispatch into the slash registry.

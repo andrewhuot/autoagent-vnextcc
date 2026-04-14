@@ -28,6 +28,7 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import click
 
+from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
@@ -246,13 +247,10 @@ def _format_summary(summary: DeploySummary) -> str:
     if summary.warnings:
         parts.append(f"{summary.warnings} warnings")
     if summary.errors:
-        parts.append(click.style(f"{summary.errors} errors", fg="red"))
+        parts.append(theme.error(f"{summary.errors} errors", bold=False))
     status = "failed" if summary.errors else "complete"
-    return click.style(
-        f"  /deploy {status} — {', '.join(parts)}",
-        fg=("red" if summary.errors else "green"),
-        bold=True,
-    )
+    line = f"  /deploy {status} — {', '.join(parts)}"
+    return theme.error(line) if summary.errors else theme.success(line, bold=True)
 
 
 # ---------------------------------------------------------------------------
@@ -283,16 +281,13 @@ def make_deploy_handler(
             except (KeyboardInterrupt, EOFError):
                 confirmed = False
             if not confirmed:
-                cancelled = click.style(
-                    "  /deploy cancelled — no changes made.", fg="yellow"
-                )
+                cancelled = theme.warning("  /deploy cancelled — no changes made.")
                 echo(cancelled)
                 return on_done(result=cancelled, display="skip")
             stream_args.append("-y")
 
-        echo(click.style(
+        echo(theme.command_name(
             f"  /deploy starting — agentlab deploy {shlex.join(stream_args)}".rstrip(),
-            fg="cyan",
         ))
 
         cancellation = ctx.cancellation
@@ -316,19 +311,19 @@ def make_deploy_handler(
             if cancellation is not None and cancellation.cancelled:
                 cancelled = True
             else:
-                echo(click.style(f"  /deploy failed: {exc}", fg="red", bold=True))
+                echo(theme.error(f"  /deploy failed: {exc}"))
                 return on_done(
                     result=f"  /deploy failed: {exc}",
                     display="skip",
                     meta_messages=(str(exc),),
                 )
         except FileNotFoundError as exc:
-            echo(click.style(f"  /deploy failed: {exc}", fg="red", bold=True))
+            echo(theme.error(f"  /deploy failed: {exc}"))
             return on_done(result=None, display="skip")
 
         if cancelled:
             message = "  /deploy cancelled — ctrl-c; rollout aborted."
-            echo(click.style(message, fg="yellow"))
+            echo(theme.warning(message))
             return on_done(result=message, display="skip")
 
         summary_line = _format_summary(final_summary)

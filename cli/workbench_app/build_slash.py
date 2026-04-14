@@ -30,8 +30,7 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
-import click
-
+from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
@@ -249,7 +248,7 @@ def _format_summary(summary: BuildSummary) -> str:
     if summary.warnings:
         parts.append(f"{summary.warnings} warnings")
     if summary.errors:
-        parts.append(click.style(f"{summary.errors} errors", fg="red"))
+        parts.append(theme.error(f"{summary.errors} errors", bold=False))
 
     failed = summary.run_status in ("failed", "cancelled") or summary.errors > 0
     if summary.run_status == "cancelled":
@@ -261,11 +260,8 @@ def _format_summary(summary: BuildSummary) -> str:
     if summary.run_version and not failed:
         status = f"{status} (v{summary.run_version})"
 
-    return click.style(
-        f"  /build {status} — {', '.join(parts)}",
-        fg=("red" if failed else "green"),
-        bold=True,
-    )
+    line = f"  /build {status} — {', '.join(parts)}"
+    return theme.error(line) if failed else theme.success(line, bold=True)
 
 
 # ---------------------------------------------------------------------------
@@ -285,14 +281,13 @@ def make_build_handler(
                 "  /build requires a brief, e.g. "
                 "/build \"Add a flight status tool\""
             )
-            ctx.echo(click.style(message, fg="red", bold=True))
+            ctx.echo(theme.error(message))
             return on_done(result=message, display="skip")
 
         stream_args = _parse_args(args)
         echo = ctx.echo
-        echo(click.style(
+        echo(theme.command_name(
             f"  /build starting — agentlab workbench build {shlex.join(stream_args)}".rstrip(),
-            fg="cyan",
         ))
 
         cancellation = ctx.cancellation
@@ -316,19 +311,19 @@ def make_build_handler(
             if cancellation is not None and cancellation.cancelled:
                 cancelled = True
             else:
-                echo(click.style(f"  /build failed: {exc}", fg="red", bold=True))
+                echo(theme.error(f"  /build failed: {exc}"))
                 return on_done(
                     result=f"  /build failed: {exc}",
                     display="skip",
                     meta_messages=(str(exc),),
                 )
         except FileNotFoundError as exc:
-            echo(click.style(f"  /build failed: {exc}", fg="red", bold=True))
+            echo(theme.error(f"  /build failed: {exc}"))
             return on_done(result=None, display="skip")
 
         if cancelled:
             message = "  /build cancelled — ctrl-c; candidate not materialized."
-            echo(click.style(message, fg="yellow"))
+            echo(theme.warning(message))
             return on_done(result=message, display="skip")
 
         summary_line = _format_summary(final_summary)

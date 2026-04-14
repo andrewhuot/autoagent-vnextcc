@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, Ma
 
 import click
 
+from cli.workbench_app import theme
 from cli.workbench_render import format_workbench_event
 
 if TYPE_CHECKING:
@@ -109,19 +110,17 @@ def format_entry(entry: TranscriptEntry, *, color: bool = True) -> str:
         return click.unstyle(text)
 
     if entry.role == "user":
-        return click.style(text, fg="cyan", bold=True)
-    if entry.role == "system":
-        return click.style(text, dim=True)
-    if entry.role == "meta":
-        return click.style(text, dim=True)
+        return theme.user(text)
+    if entry.role == "system" or entry.role == "meta":
+        return theme.meta(text)
     if entry.role == "error":
-        return click.style(text, fg="red", bold=True)
+        return theme.error(text)
     if entry.role == "warning":
-        return click.style(text, fg="yellow")
+        return theme.warning(text)
     # "assistant" and "tool" keep their own styling (tool lines are produced
     # by pre-styled renderers; assistant text is expected to already include
     # any formatting the caller wants).
-    return text
+    return theme.assistant(text) if entry.role == "assistant" else text
 
 
 class Transcript:
