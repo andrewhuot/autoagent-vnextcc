@@ -5,6 +5,42 @@ a single persistent REPL with a live status line, streaming transcript,
 slash-command surface, and first-class skill authoring. As of this
 release it is the default `agentlab` entry point.
 
+## First-time launch (zero setup)
+
+If you just cloned the repo and have never run AgentLab before, do this:
+
+```bash
+# 1. Change into the repo you cloned.
+cd /path/to/agentlab
+
+# 2. Launch the Workbench using the Python binary inside the project's venv.
+#    (This is the safest way — it does not depend on anything being on
+#    your system PATH.)
+.venv/bin/agentlab
+```
+
+You should see:
+
+1. The **AgentLab ASCII logo** ("Experiment. Evaluate. Refine.").
+2. A **rounded welcome card** (`╭── ✻ Welcome to AgentLab Workbench ──╮`)
+   showing your working directory, workspace status, and the shortcut hints.
+3. A **rounded input box** at the bottom with a turquoise `›` chevron — this
+   is where you type. Under it, a toolbar says `Default permissions on ·
+   shift+tab to cycle` on one line and `? for shortcuts · / for commands ·
+   ctrl+t toggles transcript` on the next.
+
+Try `?` for shortcuts, `/help` for the full command list, and `/exit` (or
+ctrl-d) to leave.
+
+> **Don't have a `.venv/`?** Create one and install the package in editable
+> mode before launching: `python3 -m venv .venv && .venv/bin/pip install -e .`
+> (Python 3.11+ required.)
+
+## Shortcuts once it's on your PATH
+
+If you've activated the venv (`source .venv/bin/activate`) or installed
+AgentLab globally, the shorter forms work:
+
 ```bash
 agentlab            # launches the interactive Workbench (default)
 agentlab --classic  # opt out: run the legacy shell REPL
