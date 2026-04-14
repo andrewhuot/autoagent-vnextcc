@@ -238,8 +238,53 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       updated extras test in `tests/test_workbench_slash.py` (using `/optimize`
       since `/eval` now occupies the default extras slot). Full workbench surface
       green (197 tests).*
-- [ ] **T10** — Add `/optimize [--cycles N] [--mode …]` slash command bound to the
-      `optimize` CLI. Stream progress per cycle.
+- [x] **T10** — Add `/optimize [--cycles N] [--mode …]` slash command bound to the
+      `optimize` CLI. Stream progress per cycle. *Landed
+      `cli/workbench_app/optimize_slash.py` mirroring the T09 `/eval` design:
+      frozen `OptimizeSummary` adds a `cycles_completed` counter on top of
+      the shared phase/artifact/warning/error counters, populated by
+      counting `phase_completed` events with `phase == "optimize-cycle"`
+      (the label `runner.optimize` already emits at ~line 4426 for each
+      finished cycle). The injectable `StreamRunner` default shells out to
+      `python -m runner optimize --output-format stream-json` and line-
+      buffers stdout/stderr through `format_workbench_event` — no new
+      renderers are needed because optimize's stream-json vocabulary
+      (`phase_started`, `phase_completed`, `artifact_written`,
+      `next_action`, `warning`, `error`) already landed via T09.
+      `_parse_args` is a verbatim pass-through because `--cycles`,
+      `--mode`, `--continuous`, `--config`, `--full-auto`, `--eval-run-id`
+      are already native flags. The handler echoes a cyan start banner,
+      streams events, and ends with an `on_done(...)` summary: green
+      `"/optimize complete — N events, M cycles"` on clean runs (singular
+      `"1 cycle"` aware), red `"/optimize failed"` if any `error` event
+      arrived or the subprocess exited non-zero, with the final
+      `next_action` surfaced as `"Suggested next: …"` and the last three
+      artifact paths as additional meta lines. `OptimizeCommandError`
+      (non-zero exit) and `FileNotFoundError` (missing binary) both render
+      a red failure line and return `display="skip"` so dispatch doesn't
+      double-print; unparseable subprocess output is rescued as a
+      synthetic `warning` event. `build_builtin_registry()` now registers
+      `/optimize` alongside `/eval` under the `include_streaming=True`
+      toggle so tests that want just the ten ported built-ins can still
+      opt out. Updated `tests/test_workbench_slash.py`: expected set gains
+      `"optimize"`, the extras-registry test switched its fixture name
+      from `optimize` to `custom` (since the built-in now claims the
+      slot), and the streaming-disabled guard asserts `"optimize" not in
+      registry.names()` too. Coverage:
+      `tests/test_workbench_optimize_slash.py` (26 tests) — arg parsing
+      pass-through for `--cycles`/`--mode`/`--continuous`/empty/mixed,
+      `_render_event` for `phase_started` / cycle `phase_completed` /
+      missing-name / unknown-event, `_summarise` counting cycles vs non-
+      cycle phases, artifact-without-path fallback, empty-stream, ignore
+      non-cycle `phase_completed` for `cycles_completed`;
+      `_format_summary` green clean / singular "1 cycle" / red errors /
+      warnings + artifacts; handler integration through `dispatch()` —
+      streams events + summary, forwards `--cycles`/`--mode` verbatim,
+      reports `OptimizeCommandError` as skip-display, reports
+      `FileNotFoundError` with no raw_result, surfaces mixed warnings/
+      errors, default runner wiring, meta-message artifact truncation to
+      last 3, registry wiring, summary-dataclass frozen guard. Full
+      workbench surface green (307 tests).*
 - [ ] **T11** — Add `/build [target]` slash command bound to
       `workbench build`/`workbench save` so users can iterate candidates inline.
 - [ ] **T12** — Add `/deploy [--strategy canary|immediate]` slash command bound to

@@ -297,8 +297,10 @@ def build_builtin_registry(
         # Imported lazily to avoid pulling subprocess machinery into the
         # import path of callers that only want the basic registry.
         from cli.workbench_app.eval_slash import build_eval_command
+        from cli.workbench_app.optimize_slash import build_optimize_command
 
         registry.register(build_eval_command())
+        registry.register(build_optimize_command())
     for command in extra:
         registry.register(command)
     return registry

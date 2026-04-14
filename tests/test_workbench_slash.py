@@ -142,9 +142,10 @@ def test_parse_slash_line_falls_back_on_unbalanced_quotes() -> None:
 
 
 def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -> None:
-    # T09 adds ``/eval`` to the default registry. Tests that want just the
-    # ten ported built-ins construct the registry with ``include_streaming
-    # =False`` — see ``test_builtin_registry_without_streaming``.
+    # T09 adds ``/eval`` and T10 adds ``/optimize`` to the default registry.
+    # Tests that want just the ten ported built-ins construct the registry
+    # with ``include_streaming=False`` — see
+    # ``test_builtin_registry_without_streaming``.
     expected = {
         "help",
         "status",
@@ -157,6 +158,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "resume",
         "exit",
         "eval",
+        "optimize",
     }
     assert set(registry.names()) == expected
 
@@ -164,6 +166,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
 def test_builtin_registry_without_streaming() -> None:
     registry = build_builtin_registry(include_streaming=False)
     assert "eval" not in registry.names()
+    assert "optimize" not in registry.names()
     assert "help" in registry.names()
 
 
@@ -177,14 +180,14 @@ def test_builtin_registry_help_table_has_descriptions(
 
 def test_builtin_registry_accepts_extra_commands() -> None:
     extra = LocalCommand(
-        name="optimize",
-        description="Run optimize",
-        handler=lambda *_a, **_k: "optimize ran",
+        name="custom",
+        description="Run custom",
+        handler=lambda *_a, **_k: "custom ran",
     )
     registry = build_builtin_registry(extra=[extra])
-    assert registry.get("/optimize") is extra
-    # 10 ported built-ins + /eval (T09) + /optimize (extra) = 12
-    assert len(registry) == 12
+    assert registry.get("/custom") is extra
+    # 10 ported built-ins + /eval (T09) + /optimize (T10) + /custom (extra) = 13
+    assert len(registry) == 13
 
 
 # ---------------------------------------------------------------------------
