@@ -47,27 +47,23 @@ Starting in 5s... (Ctrl+C to cancel)
 
 [1m[0;36m── Iteration 9 / 25 ──[0m
 [0;34m[20:06:45][0m Starting...
-[0;32m[20:13:37][0m Iteration 9 done (412s) — [0;32m10 done[0m, [1;33m21 remaining[0m
+[0;32m[20:13:37][0m Iteration 9 done (412s) — [0;32m10 done[0m, [1;33f21 remaining[0m
 
 [1m[0;36m── Iteration 10 / 25 ──[0m
 [0;34m[20:13:40][0m Starting...
-[0;32m[20:22:18][0m Iteration 10 done (519s) — [0;32m11 done[0m, [1;33m20 remaining[0m
+[0;32m[20:22:18][0m Iteration 10 done (519s) — [0;32m11 done[0m, [1;33f20 remaining[0m
 
 [1m[0;36m── Iteration 11 / 25 ──[0m
 [0;34m[20:22:20][0m Starting...
-[0;32m[20:32:05][0m Iteration 11 done (585s) — [0;32m12 done[0m, [1;33m19 remaining[0m
+[0;32m[20:32:05][0m Iteration 11 done (585s) — [0;32m12 done[0m, [1;33f19 remaining[0m
 
 [1m[0;36m── Iteration 12 / 25 ──[0m
 [0;34m[20:32:07][0m Starting...
-[0;32m[20:38:24][0m Iteration 12 done (377s) — [0;32m13 done[0m, [1;33m18 remaining[0m
+[0;32m[20:38:24][0m Iteration 12 done (377s) — [0;32m13 done[0m, [1;33f18 remaining[0m
 
 [1m[0;36m── Iteration 13 / 25 ──[0m
 [0;34m[20:38:26][0m Starting...
-[0;32m[20:49:55][0m Iteration 13 done (689s) — [0;32m14 done[0m, [1;33m17 remaining[0m
+[0;32m[20:49:55][0m Iteration 13 done (689s) — [0;32m14 done[0m, [1;33f17 remaining[0m
 
 [1m[0;36m── Iteration 14 / 25 ──[0m
 [0;34m[20:49:57][0m Starting...
-[0;32m[20:55:52][0m Iteration 14 done (355s) — [0;32m15 done[0m, [1;33m16 remaining[0m
-
-[1m[0;36m── Iteration 15 / 25 ──[0m
-[0;34m[20:55:54][0m Starting...
