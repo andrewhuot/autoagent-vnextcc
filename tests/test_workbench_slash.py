@@ -186,6 +186,9 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "checkpoint",
         "rewind",
         "checkpoints",
+        "diff",
+        "accept",
+        "reject",
     }
     assert set(registry.names()) == expected
 
@@ -232,8 +235,8 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
     # Existing built-ins + /shortcuts, /sessions, /cost, /tasks,
-    # /checkpoint, /rewind, /checkpoints, and /custom.
-    assert len(registry) == 27
+    # /checkpoint, /rewind, /checkpoints, /diff, /accept, /reject, and /custom.
+    assert len(registry) == 30
 
 
 # ---------------------------------------------------------------------------
