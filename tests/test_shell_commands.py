@@ -153,8 +153,8 @@ def test_shell_status_slash_command_runs_embedded_cli(tmp_path: Path, monkeypatc
     assert "unexpected keyword argument 'mix_stderr'" not in result.output
 
 
-def test_shell_free_text_build_routes_to_build_command(tmp_path: Path, monkeypatch) -> None:
-    """Free-text build requests should execute the build command with the full prompt preserved."""
+def test_shell_free_text_build_routes_to_coordinator_workbench(tmp_path: Path, monkeypatch) -> None:
+    """Free-text build requests should now run through the Workbench coordinator."""
     workspace = tmp_path / "ws"
     runner = CliRunner()
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
@@ -168,13 +168,14 @@ def test_shell_free_text_build_routes_to_build_command(tmp_path: Path, monkeypat
     )
 
     assert result.exit_code == 0, result.output
-    assert "AgentLab Build" in result.output
-    assert "Prompt: build a customer support agent for refunds and cancellations" in result.output
+    assert "AgentLab Workbench" in result.output
+    assert "Coordinator plan" in result.output
+    assert "build engineer" in result.output
     assert "unexpected keyword argument 'mix_stderr'" not in result.output
 
 
-def test_shell_free_text_deploy_routes_to_deploy_status(tmp_path: Path, monkeypatch) -> None:
-    """Free-text deploy requests should show the deploy surface instead of becoming a no-op."""
+def test_shell_free_text_deploy_routes_to_coordinator_workbench(tmp_path: Path, monkeypatch) -> None:
+    """Free-text deploy requests should prepare deploy gates through the coordinator."""
     workspace = tmp_path / "ws"
     runner = CliRunner()
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
@@ -184,4 +185,5 @@ def test_shell_free_text_deploy_routes_to_deploy_status(tmp_path: Path, monkeypa
     result = runner.invoke(cli, ["shell"], input="deploy\n/exit\n")
 
     assert result.exit_code == 0, result.output
-    assert "Deployment status" in result.output
+    assert "Coordinator plan" in result.output
+    assert "deployment engineer" in result.output

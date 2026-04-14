@@ -115,6 +115,8 @@ class DispatchResult:
     should_query: bool = False
     meta_messages: tuple[str, ...] = ()
     raw_result: str | None = None
+    next_input: str | None = None
+    submit_next_input: bool = False
 
 
 class UnknownSlashCommandError(KeyError):
@@ -238,6 +240,10 @@ def _render_command_detail(command: SlashCommand) -> str:
     lines.append(f"  Source: {command.source}")
     if command.when_to_use:
         lines.append(f"  When to use: {command.when_to_use}")
+    if command.availability != "enabled":
+        lines.append(f"  Availability: {command.availability}")
+    if command.enabled_reason:
+        lines.append(f"  Enabled reason: {command.enabled_reason}")
     if command.context != "inline":
         lines.append(f"  Context: {command.context}")
     if command.effort:
@@ -659,9 +665,10 @@ def build_builtin_registry(
 
     ``extra`` allows callers (and tests) to register additional commands
     during construction without needing a second ``.register`` pass.
-    ``include_streaming`` opts in streaming commands that shell out to the
-    root CLI (``/eval``, later `/optimize` etc). Tests that want a pure
-    in-process registry can disable it; production callers keep the default.
+    ``include_streaming`` is the historical flag name for workflow commands;
+    when enabled, `/build`, `/eval`, `/optimize`, `/deploy`, and `/skills`
+    register as coordinator-backed commands. Tests that want only core
+    built-ins can disable it; production callers keep the default.
     """
     registry = CommandRegistry()
     for spec in _BUILTIN_SPECS:
@@ -682,22 +689,17 @@ def build_builtin_registry(
     # lister) — registered outside ``_BUILTIN_SPECS`` so tests that need a
     # stub lister can re-register via ``extra=``.
     from cli.workbench_app.model_slash import build_model_command
+    from cli.workbench_app.coordinator_slash import build_tasks_command
 
     registry.register(build_model_command())
+    registry.register(build_tasks_command())
     if include_streaming:
-        # Imported lazily to avoid pulling subprocess machinery into the
-        # import path of callers that only want the basic registry.
-        from cli.workbench_app.build_slash import build_build_command
-        from cli.workbench_app.deploy_slash import build_deploy_command
-        from cli.workbench_app.eval_slash import build_eval_command
-        from cli.workbench_app.optimize_slash import build_optimize_command
-        from cli.workbench_app.skills_slash import build_skills_command
+        from cli.workbench_app.coordinator_slash import (
+            build_coordinator_command,
+        )
 
-        registry.register(build_eval_command())
-        registry.register(build_optimize_command())
-        registry.register(build_build_command())
-        registry.register(build_deploy_command())
-        registry.register(build_skills_command())
+        for intent in ("eval", "optimize", "build", "deploy", "skills"):
+            registry.register(build_coordinator_command(intent))
     for command in extra:
         registry.register(command)
     return registry
@@ -821,6 +823,8 @@ def dispatch(
             should_query=normalized.should_query,
             meta_messages=normalized.meta_messages,
             raw_result=normalized.result,
+            next_input=normalized.next_input,
+            submit_next_input=normalized.submit_next_input,
         )
     finally:
         ctx.registry = previous_registry

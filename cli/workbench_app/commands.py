@@ -72,6 +72,8 @@ class OnDoneResult:
     display: DisplayMode = "user"
     should_query: bool = False
     meta_messages: tuple[str, ...] = ()
+    next_input: str | None = None
+    submit_next_input: bool = False
 
 
 def on_done(
@@ -80,6 +82,8 @@ def on_done(
     display: DisplayMode = "user",
     should_query: bool = False,
     meta_messages: Sequence[str] | None = None,
+    next_input: str | None = None,
+    submit_next_input: bool = False,
 ) -> OnDoneResult:
     """Construct an :class:`OnDoneResult` with sensible defaults.
 
@@ -96,6 +100,8 @@ def on_done(
         display=display,
         should_query=should_query,
         meta_messages=tuple(meta_messages or ()),
+        next_input=next_input,
+        submit_next_input=submit_next_input,
     )
 
 
@@ -158,6 +164,8 @@ class _CommandMeta:
     aliases: tuple[str, ...] = ()
     argument_hint: str | None = None
     when_to_use: str | None = None
+    availability: str = "enabled"
+    enabled_reason: str | None = None
     hidden: bool = False
     immediate: bool = False
     sensitive: bool = False

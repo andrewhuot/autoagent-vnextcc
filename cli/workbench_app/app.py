@@ -3,7 +3,7 @@
 T04 started as a banner/status/input echo-only stub. This module now wires
 the slash-command registry (T05) into the loop so ``/help``, ``/status``,
 ``/build`` etc. dispatch real handlers instead of echoing the raw line —
-closing the "Claude-Code-style" promise.
+and routes natural-language turns into the builder coordinator runtime.
 
 The loop is intentionally minimal but exposes the seams downstream tasks
 need: an injectable ``input_provider`` and ``echo`` so tests drive it
@@ -238,6 +238,7 @@ def run_workbench_app(
     registry: "CommandRegistry | None" = None,
     slash_context: "SlashContext | None" = None,
     prompt_state: Any | None = None,
+    agent_runtime: Any | None = None,
 ) -> StubAppResult:
     """Run the interactive workbench loop.
 
@@ -318,6 +319,17 @@ def run_workbench_app(
         if ctx.cancellation is None:
             ctx.cancellation = token
 
+    active_agent_runtime = agent_runtime
+    if active_agent_runtime is None and workspace is not None:
+        try:
+            from cli.workbench_app.runtime import build_default_agent_runtime
+
+            active_agent_runtime = build_default_agent_runtime(workspace)
+        except Exception:  # pragma: no cover - defensive startup path
+            active_agent_runtime = None
+    if ctx is not None and active_agent_runtime is not None:
+        ctx.meta["agent_runtime"] = active_agent_runtime
+
     lines_read = 0
     interrupts = 0
     exited_via = "eof"
@@ -379,8 +391,8 @@ def run_workbench_app(
             continue
 
         # Route ``/command`` input through the slash registry when one is
-        # bound. Non-slash input has no model integration yet, so we echo
-        # it as a received-turn acknowledgement until the model layer lands.
+        # bound. Non-slash input uses the coordinator runtime when available;
+        # the echo fallback remains only for tests/embedders without a runtime.
         handled_as_slash = False
         if ctx is not None and line.startswith("/"):
             from cli.workbench_app.slash import dispatch
@@ -390,6 +402,12 @@ def run_workbench_app(
                 if ctx.exit_requested:
                     exited_via = "/exit"
                     break
+                _run_follow_up_turns(
+                    runtime=active_agent_runtime,
+                    ctx=ctx,
+                    result=result,
+                    echo=out,
+                )
                 handled_as_slash = True
 
         if not handled_as_slash:
@@ -399,7 +417,15 @@ def run_workbench_app(
                 session=session,
                 line=line,
             )
-            out(theme.user(f"  AgentLab received: {line}", bold=False))
+            if active_agent_runtime is not None:
+                _run_agent_turn(
+                    runtime=active_agent_runtime,
+                    ctx=ctx,
+                    line=line,
+                    echo=out,
+                )
+            else:
+                out(theme.user(f"  AgentLab received: {line}", bold=False))
 
         _render_turn_footer(
             out,
@@ -459,6 +485,57 @@ def _persist_user_turn(
         store.append_entry(active_session, "user", line)
     except Exception:  # pragma: no cover - defensive persistence path
         pass
+
+
+def _run_agent_turn(
+    *,
+    runtime: Any,
+    ctx: "SlashContext | None",
+    line: str,
+    echo: EchoFn,
+    command_intent: str | None = None,
+) -> None:
+    """Route one user turn into the coordinator and echo its transcript lines."""
+    try:
+        result = runtime.process_turn(line, ctx=ctx, command_intent=command_intent)
+    except Exception as exc:
+        echo(theme.error(f"  Coordinator error: {exc}", bold=False))
+        return
+    try:
+        from cli.workbench_app.runtime import remember_turn_result
+
+        remember_turn_result(ctx, result)
+    except Exception:  # pragma: no cover - metadata sync is best effort
+        pass
+    for transcript_line in tuple(getattr(result, "transcript_lines", ()) or ()):
+        echo(str(transcript_line))
+
+
+def _run_follow_up_turns(
+    *,
+    runtime: Any | None,
+    ctx: "SlashContext | None",
+    result: Any,
+    echo: EchoFn,
+) -> None:
+    """Process command-requested follow-up prompts through the coordinator."""
+    if runtime is None:
+        return
+    if getattr(result, "submit_next_input", False) and getattr(result, "next_input", None):
+        _run_agent_turn(
+            runtime=runtime,
+            ctx=ctx,
+            line=str(result.next_input),
+            echo=echo,
+        )
+        return
+    if getattr(result, "should_query", False) and getattr(result, "raw_result", None):
+        _run_agent_turn(
+            runtime=runtime,
+            ctx=ctx,
+            line=str(result.raw_result),
+            echo=echo,
+        )
 
 
 def launch_workbench(

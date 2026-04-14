@@ -21,6 +21,12 @@ from builder.types import (
     WorkerExecutionStatus,
     now_ts,
 )
+from builder.worker_adapters import (
+    DeterministicWorkerAdapter,
+    WorkerAdapter,
+    WorkerAdapterContext,
+    normalize_worker_adapters,
+)
 
 
 class CoordinatorWorkerRuntime:
@@ -31,10 +37,14 @@ class CoordinatorWorkerRuntime:
         store: BuilderStore,
         orchestrator: BuilderOrchestrator,
         events: EventBroker,
+        worker_adapters: dict[SpecialistRole, WorkerAdapter] | None = None,
+        default_worker_adapter: WorkerAdapter | None = None,
     ) -> None:
         self._store = store
         self._orchestrator = orchestrator
         self._events = events
+        self._worker_adapters = normalize_worker_adapters(worker_adapters)
+        self._default_worker_adapter = default_worker_adapter or DeterministicWorkerAdapter()
 
     def execute_plan(self, task_id: str, plan_id: str | None = None) -> CoordinatorExecutionRun:
         """Execute a previously persisted coordinator plan for a root task."""
@@ -133,7 +143,7 @@ class CoordinatorWorkerRuntime:
                         "context_boundary": context["context_boundary"],
                     },
                 )
-                result = self._act(state, context, routed, run)
+                result = self._act(task, state, context, routed, run)
 
                 self._transition_worker(
                     run,
@@ -283,47 +293,23 @@ class CoordinatorWorkerRuntime:
 
     def _act(
         self,
+        task: BuilderTask,
         state: WorkerExecutionState,
         context: dict[str, Any],
         routed: dict[str, Any],
         run: CoordinatorExecutionRun,
     ) -> WorkerExecutionResult:
-        artifacts = {
-            artifact: {
-                "artifact_type": artifact,
-                "worker_role": state.worker_role.value,
-                "source_node_id": state.node_id,
-                "summary": f"{state.worker_role.value} prepared {artifact} for {context['goal']}",
-            }
-            for artifact in context["expected_artifacts"]
-        }
-        summary = (
-            f"{routed['display_name']} completed gather/action/verify work for "
-            f"{len(artifacts)} expected artifact{'s' if len(artifacts) != 1 else ''}."
-        )
-        return WorkerExecutionResult(
-            node_id=state.node_id,
-            worker_role=state.worker_role,
-            summary=summary,
-            artifacts=artifacts,
-            context_used={
-                "context_boundary": context["context_boundary"],
-                "selected_tools": list(context["selected_tools"]),
-                "skill_candidates": list(context["skill_candidates"]),
-                "dependency_summaries": dict(context["dependency_summaries"]),
-            },
-            output_payload={
-                "specialist": routed["specialist"],
-                "recommended_tools": list(routed.get("recommended_tools", [])),
-                "permission_scope": list(routed.get("permission_scope", [])),
-            },
-            provenance={
-                "run_id": run.run_id,
-                "plan_id": run.plan_id,
-                "node_id": state.node_id,
-                "routed_by": routed.get("provenance", {}).get("routed_by"),
-                "routing_reason": routed.get("provenance", {}).get("routing_reason"),
-            },
+        adapter = self._worker_adapters.get(state.worker_role, self._default_worker_adapter)
+        return adapter.execute(
+            WorkerAdapterContext(
+                task=task,
+                run=run,
+                state=state,
+                context=context,
+                routed=routed,
+                store=self._store,
+                events=self._events,
+            )
         )
 
     def _verify_result(self, result: WorkerExecutionResult, context: dict[str, Any]) -> dict[str, Any]:

@@ -2300,11 +2300,17 @@ def advanced_commands(ctx: click.Context) -> None:
 )
 @click.pass_context
 def shell_command(ctx: click.Context, ui: str | None) -> None:
-    """Launch the interactive AgentLab shell."""
-    from cli.repl import run_shell
+    """Launch the interactive AgentLab Workbench shell."""
 
     workspace = ctx.obj.get("workspace")
-    run_shell(workspace, ui=ui)
+    if ui and ui.lower() == "classic":
+        from cli.repl import run_shell
+
+        run_shell(workspace, ui=ui)
+        return
+    from cli.workbench_app.app import launch_workbench
+
+    launch_workbench(workspace)
 
 
 # ---------------------------------------------------------------------------

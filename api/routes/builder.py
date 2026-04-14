@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from builder.chat_service import BuilderChatService
+from builder.coordinator_turn import CoordinatorTurnService
 from builder.events import BuilderEventType, event_to_dict, serialize_sse_event
 from builder.specialists import list_specialists
 from builder.types import (
@@ -146,6 +147,14 @@ class CreateReleaseRequest(BaseModel):
 class CoordinatorExecuteRequest(BaseModel):
     task_id: str
     plan_id: str | None = None
+
+
+class CoordinatorTurnRequest(BaseModel):
+    message: str = Field(min_length=1)
+    project_id: str | None = None
+    session_id: str | None = None
+    command_intent: str | None = None
+    permission_mode: str | None = None
 
 
 class PromoteReleaseRequest(BaseModel):
@@ -702,6 +711,35 @@ async def create_coordinator_plan(
             extra_context=body.extra_context,
         )
     )
+
+
+@router.post("/coordinator/turn")
+async def process_coordinator_turn(
+    request: Request,
+    body: CoordinatorTurnRequest,
+) -> dict[str, Any]:
+    """Process one Workbench-style user turn through the coordinator."""
+    store = _state(request, "builder_store")
+    orchestrator = _state(request, "builder_orchestrator")
+    events = _state(request, "builder_events")
+    runtime = _state(request, "builder_coordinator_runtime")
+    service = CoordinatorTurnService(
+        store=store,
+        orchestrator=orchestrator,
+        events=events,
+        runtime=runtime,
+    )
+    try:
+        result = service.process_turn(
+            body.message,
+            project_id=body.project_id,
+            session_id=body.session_id,
+            command_intent=body.command_intent,
+            permission_mode=body.permission_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _jsonable(result)
 
 
 @router.post("/coordinator/execute")

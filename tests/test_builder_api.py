@@ -468,6 +468,21 @@ class TestSpecialistsAPI:
 # ---------------------------------------------------------------------------
 
 class TestCoordinatorRuntimeAPI:
+    def test_coordinator_turn_creates_plan_and_execution_run(self, client):
+        resp = client.post(
+            "/api/builder/coordinator/turn",
+            json={"message": "I want to build my agent"},
+        )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["command_intent"] == "build"
+        assert data["task_id"]
+        assert data["plan_id"]
+        assert data["run_id"]
+        assert data["status"] == "completed"
+        assert any("Coordinator plan" in line for line in data["transcript_lines"])
+
     def test_execute_and_inspect_coordinator_run(self, client):
         project_id = client.post(
             "/api/builder/projects",

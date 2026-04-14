@@ -33,8 +33,8 @@ predictably.
   fixed-width fractional progress bar without changing plain progress
   events.
 - **Slash commands** — the entire workflow (`/eval`, `/optimize`,
-  `/build`, `/deploy`, `/skills`, and session utilities) available
-  inline with live stream-json progress.
+  `/build`, `/deploy`, `/skills`, `/tasks`, and session utilities)
+  available inline through the coordinator-worker harness.
 - **Autocomplete** — typing `/` pops a list of matching commands with
   descriptions, argument hints, aliases, and command source. Matches
   rank names, aliases, and descriptive text so discovery works even
@@ -52,6 +52,28 @@ predictably.
   exits the app.
 - **Themed output** — cyan workspace, green success, yellow warning,
   red error, dim meta. Overridden for `--no-color` / non-TTY output.
+
+---
+
+## Natural-language turns
+
+Free text is no longer echoed back as a placeholder. Workbench treats a
+plain-language request as a coordinator turn:
+
+```text
+› I want to build my agent
+  Coordinator plan coord-... created for 5 workers.
+  • requirements analyst: completed ...
+  • build engineer: completed ...
+  • eval author: completed ...
+```
+
+The coordinator creates a Builder project/session/task when needed,
+plans specialist worker roles, executes bounded workers, persists the
+plan/run ids, and leaves reviewable artifacts plus next actions in the
+transcript. Follow-up turns reuse the active Builder project/session so
+`evaluate it`, `optimize from those failures`, and `prepare deploy`
+continue the same agent-building thread.
 
 ---
 
@@ -73,6 +95,7 @@ registry ships the following commands:
 | `/mcp` | Show MCP integration status. |
 | `/model [key\|reset]` | Without args: list configured models, marking the session-active one. With a provider/model key: switch the active model for the session (persisted to session state). `reset`/`clear` drops the override. |
 | `/cost` | Show recorded session cost totals when model calls have populated them; otherwise says no cost data is recorded yet. |
+| `/tasks` | Show the latest coordinator task, plan id, run id, worker roster, active-task count, queued input count, and next actions. Alias: `/task`. |
 | `/compact` | Summarize the current session into `.agentlab/memory/latest_session.md`. |
 | `/sessions [count]` | List recent persisted sessions with `/resume <session_id>` hints. |
 | `/shortcuts` | Show keyboard shortcuts and input affordances. Bare `?` opens the same view. |
@@ -81,24 +104,29 @@ registry ships the following commands:
 | `/resume [session_id]` | Restore the latest session's transcript (or the explicit `session_id`). Alias: `/r`. |
 | `/exit` | Exit the Workbench. Aliases: `/quit`, `/q`. |
 
-### Workflow (streaming)
+### Workflow (coordinator-worker)
 
-These commands shell out to the root CLI with `--output-format
-stream-json` and pipe events into the transcript in real time.
+These commands seed explicit coordinator turns. They create a persisted
+plan, execute the relevant specialist workers, render a compact worker
+summary, and store the latest task/plan/run ids for `/tasks`.
 
-| Command | Wraps | Notes |
-|---------|-------|-------|
-| `/eval [--config VERSION\|--run-id ID] [...]` | `agentlab eval run` | `--run-id` is sugar for `--config` so the documented `/eval` surface matches Claude-style references. |
-| `/optimize [--cycles N] [--mode MODE] [--continuous] [...]` | `agentlab optimize` | Counts `phase_completed` events labeled `optimize-cycle` and reports `M cycles` in the final summary. |
-| `/build <brief> [...]` | `agentlab workbench build` | Requires a brief. Summary surfaces the new candidate project id and suggests `/save`. |
-| `/save [...]` | `agentlab workbench save` | Materializes the active candidate into the workspace config path. |
-| `/deploy [canary\|immediate] [...]` | `agentlab deploy` | Prompts `Deploy with strategy=<s>? (y/N)` unless `--dry-run` or `-y`/`--yes` is passed. Cancelling at the prompt never spawns the subprocess. |
+| Command | Coordinator intent | Notes |
+|---------|--------------------|-------|
+| `/build [brief]` | Build | Plans requirements, build, prompt, architecture, and eval-author workers. With no brief, it refines the active agent. |
+| `/eval [target]` | Eval | Plans eval-author and trace-analysis workers against the active candidate/config. |
+| `/optimize [request]` | Optimize | Plans trace, optimization, prompt, and guardrail workers. Outputs review-required change cards instead of silently applying changes. |
+| `/deploy [request]` | Deploy | Plans deployment and release-manager workers with canary-first and rollback evidence. Approval gates remain required before irreversible deploys. |
+| `/skills [request]` | Skills | Plans skill-author work to recommend or attach build-time skills with review. |
+| `/save [...]` | Save | Materializes the active Workbench candidate into the workspace config path. |
 
 ### Skills
 
-| Command | What it does |
-|---------|--------------|
-| `/skills` | Opens a full-screen navigable list of configured skills. Arrow keys or `j/k` navigate. Action keys: `l` list, `s` show (detail), `a` add (opens `$EDITOR` with a starter YAML), `e` edit selected, `r` remove selected (with confirm). `q`/`esc` exits back to the transcript. |
+`/skills [request]` now participates in the same coordinator-worker loop
+as build/eval/optimize/deploy. Use it conversationally for build-time
+skill recommendations or attachments. The older full-screen browser code
+remains available to direct screen callers, but the default Workbench
+command favors the coordinator so skill changes are planned, reviewed,
+and tied to the active Builder project.
 
 All completed slash-command output lands on the transcript with the
 appropriate role coloring, and the final summary surfaces as a dim meta
@@ -160,10 +188,10 @@ runner registers its child on `CancellationToken` and unregisters in a
 ## Classic REPL
 
 The pre-Workbench `agentlab` shell is still available for one release
-via `agentlab --classic`. It emits a `DeprecationWarning` on entry and
-points at this doc. Queued input while the harness is busy still lives
-only in the classic shell; Workbench now owns prompt permission cycling,
-slash discovery, shortcut help, and session visibility.
+  via `agentlab --classic` or `agentlab shell --ui classic`. `agentlab
+shell` without `--ui classic` is now a compatibility alias for the
+Workbench. Classic emits a `DeprecationWarning` on entry and points at
+this doc.
 
 ---
 
