@@ -1,0 +1,245 @@
+{
+  "events": [
+    {
+      "event_id": "evt-0000",
+      "event_type": "coordinator.execution.started",
+      "payload": {
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "running",
+        "worker_count": 2,
+        "worker_role": null
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000000.0
+    },
+    {
+      "event_id": "evt-0001",
+      "event_type": "worker.gathering_context",
+      "payload": {
+        "context_keys": [
+          "context_boundary",
+          "dependency_summaries",
+          "depends_on",
+          "expected_artifacts",
+          "goal",
+          "node_id",
+          "permission_scope",
+          "plan_id",
+          "project",
+          "provenance",
+          "run_id",
+          "selected_tools",
+          "skill_candidates",
+          "skill_layer",
+          "task",
+          "worker_role"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "gathering_context",
+        "worker_role": "deployment_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000001.0
+    },
+    {
+      "event_id": "evt-0002",
+      "event_type": "worker.acting",
+      "payload": {
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "selected_tools": [
+          "deploy_planner",
+          "canary_checker",
+          "rollback_planner",
+          "release_health_check"
+        ],
+        "status": "acting",
+        "worker_role": "deployment_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000002.0
+    },
+    {
+      "event_id": "evt-0003",
+      "event_type": "worker.verifying",
+      "payload": {
+        "expected_artifacts": [
+          "deployment_plan",
+          "canary_check",
+          "rollback_plan"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "verifying",
+        "worker_role": "deployment_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000003.0
+    },
+    {
+      "event_id": "evt-0004",
+      "event_type": "worker.completed",
+      "payload": {
+        "artifacts": [
+          "canary_check",
+          "deployment_plan",
+          "rollback_plan"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Deployment Engineer produced 3 reviewable artifacts for the coordinator.",
+        "worker_role": "deployment_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000004.0
+    },
+    {
+      "event_id": "evt-0005",
+      "event_type": "worker.gathering_context",
+      "payload": {
+        "context_keys": [
+          "context_boundary",
+          "dependency_summaries",
+          "depends_on",
+          "expected_artifacts",
+          "goal",
+          "node_id",
+          "permission_scope",
+          "plan_id",
+          "project",
+          "provenance",
+          "run_id",
+          "selected_tools",
+          "skill_candidates",
+          "skill_layer",
+          "task",
+          "worker_role"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "gathering_context",
+        "worker_role": "release_manager"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000005.0
+    },
+    {
+      "event_id": "evt-0006",
+      "event_type": "worker.acting",
+      "payload": {
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "selected_tools": [
+          "release_packager",
+          "deploy_executor",
+          "rollback_planner"
+        ],
+        "status": "acting",
+        "worker_role": "release_manager"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000006.0
+    },
+    {
+      "event_id": "evt-0007",
+      "event_type": "worker.verifying",
+      "payload": {
+        "expected_artifacts": [
+          "release_candidate",
+          "promotion_evidence"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "verifying",
+        "worker_role": "release_manager"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000007.0
+    },
+    {
+      "event_id": "evt-0008",
+      "event_type": "worker.completed",
+      "payload": {
+        "artifacts": [
+          "promotion_evidence",
+          "release_candidate"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Release Manager produced 2 reviewable artifacts for the coordinator.",
+        "worker_role": "release_manager"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000008.0
+    },
+    {
+      "event_id": "evt-0009",
+      "event_type": "coordinator.synthesis.completed",
+      "payload": {
+        "completed_worker_count": 2,
+        "next_step": "Review worker artifacts, then decide whether to apply or route a follow-up task.",
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Coordinator executed workers and synthesized 2 completed results.",
+        "worker_count": 2,
+        "worker_role": null,
+        "worker_summaries": [
+          {
+            "node_id": "coord-52cadfd8-6440-492d-9b85-1c8d0b7b82bb:worker-1",
+            "summary": "Deployment Engineer produced 3 reviewable artifacts for the coordinator.",
+            "worker_role": "deployment_engineer"
+          },
+          {
+            "node_id": "coord-52cadfd8-6440-492d-9b85-1c8d0b7b82bb:worker-2",
+            "summary": "Release Manager produced 2 reviewable artifacts for the coordinator.",
+            "worker_role": "release_manager"
+          }
+        ]
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000009.0
+    },
+    {
+      "event_id": "evt-0010",
+      "event_type": "coordinator.execution.completed",
+      "payload": {
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "worker_count": 2,
+        "worker_role": null
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000010.0
+    }
+  ],
+  "schema_version": 1,
+  "verb": "deploy"
+}

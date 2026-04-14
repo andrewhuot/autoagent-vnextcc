@@ -7,11 +7,11 @@ command-palette UX: bare ``/`` opens with the full list grouped by source,
 ``/ev`` narrows to matching prefixes, each row shows a one-line description
 as ``display_meta``.
 
-The completer only fires while the caret is inside the first whitespace
-token of the buffer — completing command names, not their arguments. Arg
-completion is intentionally out of scope for T19; a future task can extend
-this class with per-command argument completers keyed on
-:attr:`SlashCommand.paths` globs.
+The completer fires while the caret is inside the first whitespace token
+of the buffer — completing command names, not their arguments. An ``@``
+token anywhere in the line opens a workspace-relative file-reference
+popup (Claude Code parity): typing ``@src/`` surfaces files under
+``src/`` ranked by typed prefix.
 
 The module is kept free of prompt_toolkit-specific imports at module scope
 so the rest of :mod:`cli.workbench_app` (which runs in headless tests) does
@@ -22,7 +22,9 @@ function bodies.
 from __future__ import annotations
 
 import difflib
+import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Iterable, Iterator
 
 from cli.workbench_app.commands import CommandRegistry, SlashCommand
@@ -162,6 +164,133 @@ def _score_command(command: SlashCommand, token: str) -> int | None:
     return None
 
 
+MAX_FILE_COMPLETIONS = 20
+"""Cap the file-ref popup so large repos don't drown the terminal."""
+
+_IGNORED_DIR_NAMES = frozenset({
+    ".git",
+    ".hg",
+    ".svn",
+    ".venv",
+    "venv",
+    "__pycache__",
+    "node_modules",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+    ".tox",
+    ".idea",
+    ".vscode",
+})
+
+
+@dataclass(frozen=True)
+class FileReferenceCompletion:
+    """Framework-agnostic file-reference completion record."""
+
+    path: str
+    start_position: int
+    is_dir: bool = False
+    display_meta: str = ""
+
+
+def extract_file_ref_token(text_before_cursor: str) -> str | None:
+    """Return the active ``@``-prefixed token under the caret, or ``None``.
+
+    The caret must sit on a token starting with ``@`` that has no embedded
+    whitespace. Returns the text *after* the leading ``@``. ``"@"`` alone
+    returns ``""`` (the popup should list root-level entries).
+    """
+    if not text_before_cursor:
+        return None
+    # Walk backwards to find the start of the current non-whitespace run.
+    for offset, ch in enumerate(reversed(text_before_cursor)):
+        if ch.isspace():
+            start = len(text_before_cursor) - offset
+            break
+    else:
+        start = 0
+    token = text_before_cursor[start:]
+    if not token.startswith("@"):
+        return None
+    return token[1:]
+
+
+def iter_file_completions(
+    root: Path | str | None,
+    text_before_cursor: str,
+    *,
+    limit: int = MAX_FILE_COMPLETIONS,
+) -> Iterator[FileReferenceCompletion]:
+    """Yield workspace-relative file matches for an ``@``-prefixed token.
+
+    Directory matches come first and end in ``/`` so the caret lands
+    inside the folder, matching shell-style path completion. Hidden
+    entries (starting with ``.``) are surfaced only when the query itself
+    begins with ``.``.
+    """
+    token = extract_file_ref_token(text_before_cursor)
+    if token is None:
+        return
+    base = Path(root) if root is not None else Path.cwd()
+    try:
+        base = base.resolve()
+    except OSError:
+        return
+
+    search_dir, query_prefix = _split_query_path(token)
+    absolute = base / search_dir if str(search_dir) else base
+    try:
+        entries = sorted(os.scandir(absolute), key=lambda entry: entry.name.lower())
+    except OSError:
+        return
+
+    start_position = -(len(token) + 1)
+    yielded = 0
+    include_hidden = query_prefix.startswith(".")
+    for entry in entries:
+        name = entry.name
+        if not include_hidden and name.startswith("."):
+            continue
+        if name in _IGNORED_DIR_NAMES:
+            continue
+        if query_prefix and not name.lower().startswith(query_prefix.lower()):
+            continue
+        rel = _join_relative(search_dir, name)
+        is_dir = entry.is_dir(follow_symlinks=False)
+        display = f"@{rel}{'/' if is_dir else ''}"
+        yield FileReferenceCompletion(
+            path=rel + ("/" if is_dir else ""),
+            start_position=start_position,
+            is_dir=is_dir,
+            display_meta=f"{'dir' if is_dir else 'file'}  {display}",
+        )
+        yielded += 1
+        if yielded >= limit:
+            return
+
+
+def _split_query_path(token: str) -> tuple[str, str]:
+    """Return ``(directory_part, prefix_part)`` for an ``@``-token."""
+    if not token:
+        return "", ""
+    if token.endswith("/"):
+        return token.rstrip("/"), ""
+    if "/" in token:
+        head, _, tail = token.rpartition("/")
+        return head, tail
+    return "", token
+
+
+def _join_relative(directory: str, name: str) -> str:
+    """Compose a workspace-relative display path for a completion row."""
+    if directory:
+        return f"{directory}/{name}"
+    return name
+
+
 class SlashCommandCompleter:
     """prompt_toolkit ``Completer`` backed by a :class:`CommandRegistry`.
 
@@ -170,14 +299,27 @@ class SlashCommandCompleter:
     tests can import :mod:`cli.workbench_app.completer` without pulling the
     UI stack. The ``__init_subclass__`` trick is not used here — we just
     import lazily in ``__init__``.
+
+    When ``workspace_root`` is bound, the completer also serves workspace-
+    relative file-reference completions for ``@``-prefixed tokens.
     """
 
-    def __init__(self, registry: CommandRegistry) -> None:
+    def __init__(
+        self,
+        registry: CommandRegistry,
+        *,
+        workspace_root: Path | str | None = None,
+    ) -> None:
         self._registry = registry
+        self._workspace_root = Path(workspace_root) if workspace_root else None
 
     @property
     def registry(self) -> CommandRegistry:
         return self._registry
+
+    @property
+    def workspace_root(self) -> Path | None:
+        return self._workspace_root
 
     def get_completions(
         self,
@@ -187,7 +329,22 @@ class SlashCommandCompleter:
         from prompt_toolkit.completion import Completion
 
         del complete_event  # unused — every invocation completes unconditionally
-        for record in iter_completions(self._registry, document.text_before_cursor):
+        text_before_cursor = document.text_before_cursor
+
+        token = extract_file_ref_token(text_before_cursor)
+        if token is not None:
+            for file_record in iter_file_completions(
+                self._workspace_root, text_before_cursor
+            ):
+                yield Completion(
+                    text=f"@{file_record.path}",
+                    start_position=file_record.start_position,
+                    display=f"@{file_record.path}",
+                    display_meta=file_record.display_meta,
+                )
+            return
+
+        for record in iter_completions(self._registry, text_before_cursor):
             yield Completion(
                 text=record.name,
                 start_position=record.start_position,
@@ -196,14 +353,22 @@ class SlashCommandCompleter:
             )
 
 
-def build_completer(registry: CommandRegistry) -> SlashCommandCompleter:
+def build_completer(
+    registry: CommandRegistry,
+    *,
+    workspace_root: Path | str | None = None,
+) -> SlashCommandCompleter:
     """Convenience factory mirroring the other ``build_*`` helpers."""
-    return SlashCommandCompleter(registry)
+    return SlashCommandCompleter(registry, workspace_root=workspace_root)
 
 
 __all__ = [
+    "FileReferenceCompletion",
+    "MAX_FILE_COMPLETIONS",
     "SlashCommandCompleter",
     "SlashCompletion",
     "build_completer",
+    "extract_file_ref_token",
     "iter_completions",
+    "iter_file_completions",
 ]

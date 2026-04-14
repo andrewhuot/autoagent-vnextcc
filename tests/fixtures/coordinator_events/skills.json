@@ -1,0 +1,245 @@
+{
+  "events": [
+    {
+      "event_id": "evt-0000",
+      "event_type": "coordinator.execution.started",
+      "payload": {
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "running",
+        "worker_count": 2,
+        "worker_role": null
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000000.0
+    },
+    {
+      "event_id": "evt-0001",
+      "event_type": "worker.gathering_context",
+      "payload": {
+        "context_keys": [
+          "context_boundary",
+          "dependency_summaries",
+          "depends_on",
+          "expected_artifacts",
+          "goal",
+          "node_id",
+          "permission_scope",
+          "plan_id",
+          "project",
+          "provenance",
+          "run_id",
+          "selected_tools",
+          "skill_candidates",
+          "skill_layer",
+          "task",
+          "worker_role"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "gathering_context",
+        "worker_role": "build_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000001.0
+    },
+    {
+      "event_id": "evt-0002",
+      "event_type": "worker.acting",
+      "payload": {
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "selected_tools": [
+          "code_search",
+          "code_edit",
+          "artifact_builder",
+          "test_runner"
+        ],
+        "status": "acting",
+        "worker_role": "build_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000002.0
+    },
+    {
+      "event_id": "evt-0003",
+      "event_type": "worker.verifying",
+      "payload": {
+        "expected_artifacts": [
+          "source_diff",
+          "config_draft",
+          "test_evidence"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "verifying",
+        "worker_role": "build_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000003.0
+    },
+    {
+      "event_id": "evt-0004",
+      "event_type": "worker.completed",
+      "payload": {
+        "artifacts": [
+          "config_draft",
+          "source_diff",
+          "test_evidence"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Build Engineer produced 3 reviewable artifacts for the coordinator.",
+        "worker_role": "build_engineer"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000004.0
+    },
+    {
+      "event_id": "evt-0005",
+      "event_type": "worker.gathering_context",
+      "payload": {
+        "context_keys": [
+          "context_boundary",
+          "dependency_summaries",
+          "depends_on",
+          "expected_artifacts",
+          "goal",
+          "node_id",
+          "permission_scope",
+          "plan_id",
+          "project",
+          "provenance",
+          "run_id",
+          "selected_tools",
+          "skill_candidates",
+          "skill_layer",
+          "task",
+          "worker_role"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "gathering_context",
+        "worker_role": "skill_author"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000005.0
+    },
+    {
+      "event_id": "evt-0006",
+      "event_type": "worker.acting",
+      "payload": {
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "selected_tools": [
+          "skill_registry",
+          "manifest_editor",
+          "skill_linter"
+        ],
+        "status": "acting",
+        "worker_role": "skill_author"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000006.0
+    },
+    {
+      "event_id": "evt-0007",
+      "event_type": "worker.verifying",
+      "payload": {
+        "expected_artifacts": [
+          "skill_manifest",
+          "skill_validation"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "verifying",
+        "worker_role": "skill_author"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000007.0
+    },
+    {
+      "event_id": "evt-0008",
+      "event_type": "worker.completed",
+      "payload": {
+        "artifacts": [
+          "skill_manifest",
+          "skill_validation"
+        ],
+        "node_id": "node_id-0002",
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Skill Author produced 2 reviewable artifacts for the coordinator.",
+        "worker_role": "skill_author"
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000008.0
+    },
+    {
+      "event_id": "evt-0009",
+      "event_type": "coordinator.synthesis.completed",
+      "payload": {
+        "completed_worker_count": 2,
+        "next_step": "Review worker artifacts, then decide whether to apply or route a follow-up task.",
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "summary": "Coordinator executed workers and synthesized 2 completed results.",
+        "worker_count": 2,
+        "worker_role": null,
+        "worker_summaries": [
+          {
+            "node_id": "coord-7ac59f44-a1ba-446e-b308-c875e2eaff62:worker-1",
+            "summary": "Build Engineer produced 3 reviewable artifacts for the coordinator.",
+            "worker_role": "build_engineer"
+          },
+          {
+            "node_id": "coord-7ac59f44-a1ba-446e-b308-c875e2eaff62:worker-2",
+            "summary": "Skill Author produced 2 reviewable artifacts for the coordinator.",
+            "worker_role": "skill_author"
+          }
+        ]
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000009.0
+    },
+    {
+      "event_id": "evt-0010",
+      "event_type": "coordinator.execution.completed",
+      "payload": {
+        "node_id": null,
+        "plan_id": "plan_id-0001",
+        "run_id": "run_id-0000",
+        "status": "completed",
+        "worker_count": 2,
+        "worker_role": null
+      },
+      "session_id": "fixture-session",
+      "task_id": "fixture-task",
+      "timestamp": 1700000010.0
+    }
+  ],
+  "schema_version": 1,
+  "verb": "skills"
+}

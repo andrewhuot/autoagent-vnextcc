@@ -30,6 +30,7 @@ from cli.permissions import (
 from cli.workbench_app import theme
 from cli.workbench_app.commands import CommandRegistry
 from cli.workbench_app.completer import SlashCommandCompleter
+from cli.workbench_app.output_collapse import TranscriptViewState
 
 InputProvider = Callable[[str], str]
 EchoFn = Callable[[str], None]
@@ -57,6 +58,8 @@ class WorkbenchPromptState:
     workspace: Any | None = None
     mode: str = DEFAULT_PERMISSION_MODE
     cycle_count: int = 0
+    transcript_view: TranscriptViewState = field(default_factory=TranscriptViewState)
+    transcript_view_cycles: int = 0
     _persisted_failed: bool = field(default=False, repr=False)
 
     def persist(self) -> None:
@@ -131,7 +134,12 @@ def build_prompt_input_provider(
     except ImportError as exc:  # pragma: no cover — prompt_toolkit is a hard dep
         raise RuntimeError("prompt_toolkit is required for the interactive prompt") from exc
 
-    completer = SlashCommandCompleter(registry)
+    workspace_root = None
+    try:
+        workspace_root = getattr(state.workspace, "root", None)
+    except Exception:  # pragma: no cover - defensive attribute access
+        workspace_root = None
+    completer = SlashCommandCompleter(registry, workspace_root=workspace_root)
     history = InMemoryHistory()
     bindings = KeyBindings()
 
@@ -140,6 +148,12 @@ def build_prompt_input_provider(
         state.mode = cycle_permission_mode(state.mode)
         state.cycle_count += 1
         state.persist()
+        event.app.invalidate()
+
+    @bindings.add("c-t")
+    def _toggle_transcript(event: Any) -> None:  # pragma: no cover — requires real PT app
+        state.transcript_view.toggle()
+        state.transcript_view_cycles += 1
         event.app.invalidate()
 
     @bindings.add("/")
