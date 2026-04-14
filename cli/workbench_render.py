@@ -6,7 +6,8 @@ Claude branch renderer split and enhanced with Codex summary/save renderers.
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, replace
+from typing import Any, Iterable, Iterator, Literal, Mapping
 
 import click
 
@@ -16,12 +17,23 @@ import click
 # ---------------------------------------------------------------------------
 
 
-def render_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
-    """Render a single streaming event as a terminal line. Returns None to suppress."""
+def format_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
+    """Format a streaming event as a single terminal line without any side effects.
+
+    Returns ``None`` when no renderer is registered for ``event_name`` or the
+    renderer suppressed output (e.g. heartbeat pings). The workbench transcript
+    pane (``cli/workbench_app/transcript.py``) uses this to capture event lines
+    without the implicit ``click.echo`` of :func:`render_workbench_event`.
+    """
     renderer = _EVENT_RENDERERS.get(event_name)
     if renderer is None:
         return None
-    line = renderer(data)
+    return renderer(data)
+
+
+def render_workbench_event(event_name: str, data: dict[str, Any]) -> str | None:
+    """Render a single streaming event as a terminal line. Returns None to suppress."""
+    line = format_workbench_event(event_name, data)
     if line is not None:
         click.echo(line)
     return line
@@ -71,7 +83,287 @@ _EVENT_RENDERERS: dict[str, Any] = {
     "error": lambda d: click.style(
         f"[error] {d.get('message', 'Unknown error')}", fg="red",
     ),
+    # Stream-json progress events (cli/progress.py). Emitted by every Click
+    # command that supports --output-format stream-json, including
+    # `agentlab eval run`, `optimize`, `build`, `deploy`. The renderers below
+    # let the workbench transcript render those subprocess outputs inline.
+    "phase_started": lambda d: click.style(
+        f"[{d.get('phase', 'phase')}] starting: {d.get('message', '')}".rstrip(": "),
+        fg="cyan",
+    ),
+    "phase_completed": lambda d: click.style(
+        f"[{d.get('phase', 'phase')}] done: {d.get('message', '')}".rstrip(": "),
+        fg="green",
+    ),
+    "artifact_written": lambda d: (
+        f"[artifact] {d.get('artifact', 'artifact')}: {d.get('path', d.get('message', ''))}"
+    ),
+    "next_action": lambda d: click.style(
+        f"[next] {d.get('message', '')}", dim=True,
+    ),
+    "warning": lambda d: click.style(
+        f"[warning] {d.get('message', '')}", fg="yellow",
+    ),
 }
+
+
+# ---------------------------------------------------------------------------
+# Tool-call block renderer (T08)
+# ---------------------------------------------------------------------------
+#
+# Groups ``task.started`` / ``task.progress`` / ``task.completed`` (and the
+# rare ``task.failed``) events that share a ``task_id`` into a single visually
+# bounded block — header, indented body, footer — modelled on Claude Code's
+# tool-call transcript block. Non-task events in the stream pass through the
+# ordinary :func:`format_workbench_event` renderer so the block output is a
+# drop-in replacement for the streaming transcript (T16 onwards).
+#
+# Layout (styled)::
+#
+#     ⏺ <title>                    # cyan + bold
+#       ⎿ <progress note 1>        # dim
+#       ⎿ <progress note 2>
+#       ✓ done [generation_source] # green
+#
+# Failed tasks close with ``✗ failed: <reason>`` in red. Events for an unknown
+# task_id open a new block on the fly (defensive — if ``task.started`` was
+# dropped by a reconnecting stream, we still want a header).
+
+
+_BLOCK_HEADER_GLYPH = "⏺"
+_BLOCK_BODY_GLYPH = "⎿"
+_BLOCK_DONE_GLYPH = "✓"
+_BLOCK_FAIL_GLYPH = "✗"
+
+_BlockStatus = Literal["running", "completed", "failed"]
+
+
+@dataclass(frozen=True)
+class ToolCallBlockState:
+    """Snapshot of one tracked task block.
+
+    ``progress_count`` is the number of ``task.progress`` events ingested for
+    the block so far; the notes themselves are not retained because the
+    transcript has already echoed them as they arrived. Retaining only the
+    count keeps the renderer O(1) per task regardless of how chatty progress
+    is, and matches the on-screen invariant ("progress lines are immutable
+    once emitted").
+    """
+
+    task_id: str
+    title: str
+    status: _BlockStatus = "running"
+    progress_count: int = 0
+    source: str | None = None
+    failure_reason: str | None = None
+
+
+def _task_title(data: Mapping[str, Any]) -> str:
+    """Pick the best available human-facing title for a task event."""
+    for key in ("title", "task", "name"):
+        value = data.get(key)
+        if value:
+            return str(value)
+    task_id = data.get("task_id")
+    if task_id:
+        return str(task_id)
+    return "task"
+
+
+def _task_key(data: Mapping[str, Any]) -> str:
+    """Stable dict key for grouping events — falls back to title if no id."""
+    task_id = data.get("task_id")
+    if task_id:
+        return str(task_id)
+    return _task_title(data)
+
+
+def _format_header(title: str) -> str:
+    return click.style(f"{_BLOCK_HEADER_GLYPH} {title}", fg="cyan", bold=True)
+
+
+def _format_progress(note: str) -> str:
+    return click.style(f"  {_BLOCK_BODY_GLYPH} {note}", dim=True)
+
+
+def _format_completed(source: str | None) -> str:
+    suffix = f" [{source}]" if source else ""
+    return click.style(f"  {_BLOCK_DONE_GLYPH} done{suffix}", fg="green")
+
+
+def _format_failed(reason: str | None) -> str:
+    detail = f": {reason}" if reason else ""
+    return click.style(f"  {_BLOCK_FAIL_GLYPH} failed{detail}", fg="red", bold=True)
+
+
+class ToolCallBlockRenderer:
+    """Stateful aggregator that turns a task.* event stream into block lines.
+
+    The renderer is intentionally synchronous and pure — every mutation is
+    driven by :meth:`feed`, which returns the ordered list of terminal lines
+    to emit for that single event. The enclosing transport (the transcript
+    pane in T07, prompt_toolkit's streaming view in T16) owns the actual
+    echo / persistence side effects.
+
+    Multiple concurrent task_ids are tracked independently so interleaved
+    events render correctly. Non-task events fall through to
+    :func:`format_workbench_event` so callers can route the entire stream
+    through one object.
+    """
+
+    def __init__(self) -> None:
+        self._open: dict[str, ToolCallBlockState] = {}
+        self._completed: list[ToolCallBlockState] = []
+
+    # ------------------------------------------------------------------ read
+
+    @property
+    def open_blocks(self) -> Mapping[str, ToolCallBlockState]:
+        """Currently-running task blocks keyed by task_id / title."""
+        return dict(self._open)
+
+    @property
+    def completed_blocks(self) -> tuple[ToolCallBlockState, ...]:
+        """Terminal snapshots of every block closed so far (completed+failed)."""
+        return tuple(self._completed)
+
+    # ------------------------------------------------------------------ write
+
+    def feed(
+        self, event_name: str, data: Mapping[str, Any] | None = None
+    ) -> list[str]:
+        """Consume one event and return the lines to emit (possibly empty).
+
+        The return value is a list — not an iterator — so callers can easily
+        ``extend`` a transcript buffer or serialize the batch. Order within
+        the list is the order the lines should appear on screen (header
+        before progress, progress before footer).
+        """
+        payload: Mapping[str, Any] = data or {}
+
+        if event_name == "task.started":
+            return self._on_started(payload)
+        if event_name == "task.progress":
+            return self._on_progress(payload)
+        if event_name == "task.completed":
+            return self._on_completed(payload)
+        if event_name == "task.failed":
+            return self._on_failed(payload)
+
+        # Fall through: emit the event via the standard renderer so the
+        # caller doesn't need a separate dispatcher for non-task events.
+        line = format_workbench_event(event_name, dict(payload))
+        return [line] if line is not None else []
+
+    def close_all(self, *, reason: str | None = "cancelled") -> list[str]:
+        """Emit failure footers for any still-open blocks.
+
+        Useful when a run is cancelled (ctrl-c) or the stream ends abruptly
+        — the open blocks would otherwise hang without visual closure. Each
+        closed block is moved to ``completed_blocks`` with ``status="failed"``
+        and the supplied reason.
+        """
+        lines: list[str] = []
+        for key in list(self._open.keys()):
+            state = self._open.pop(key)
+            closed = replace(
+                state, status="failed", failure_reason=reason
+            )
+            self._completed.append(closed)
+            lines.append(_format_failed(reason))
+        return lines
+
+    # ------------------------------------------------------------------ handlers
+
+    def _on_started(self, data: Mapping[str, Any]) -> list[str]:
+        key = _task_key(data)
+        title = _task_title(data)
+        # Duplicate task.started (resume, reconnect) — don't emit a second
+        # header, but refresh the title in case the second event carries a
+        # nicer label than the first.
+        existing = self._open.get(key)
+        if existing is not None:
+            self._open[key] = replace(existing, title=title)
+            return []
+        self._open[key] = ToolCallBlockState(task_id=key, title=title)
+        return [_format_header(title)]
+
+    def _on_progress(self, data: Mapping[str, Any]) -> list[str]:
+        note = str(data.get("note") or data.get("message") or "").strip()
+        if not note:
+            return []
+        key = _task_key(data)
+        state = self._open.get(key)
+        lines: list[str] = []
+        if state is None:
+            # Implicit open — no prior task.started for this id.
+            title = _task_title(data)
+            state = ToolCallBlockState(task_id=key, title=title)
+            lines.append(_format_header(title))
+        self._open[key] = replace(state, progress_count=state.progress_count + 1)
+        lines.append(_format_progress(note))
+        return lines
+
+    def _on_completed(self, data: Mapping[str, Any]) -> list[str]:
+        key = _task_key(data)
+        source = data.get("source")
+        source_str = str(source) if source else None
+        state = self._open.pop(key, None)
+        lines: list[str] = []
+        if state is None:
+            # task.completed without a prior task.started — emit a synthetic
+            # header so the footer still reads as a block rather than an
+            # orphan line.
+            title = _task_title(data)
+            lines.append(_format_header(title))
+            state = ToolCallBlockState(task_id=key, title=title)
+        closed = replace(state, status="completed", source=source_str)
+        self._completed.append(closed)
+        lines.append(_format_completed(source_str))
+        return lines
+
+    def _on_failed(self, data: Mapping[str, Any]) -> list[str]:
+        key = _task_key(data)
+        reason = (
+            data.get("reason")
+            or data.get("failure_reason")
+            or data.get("message")
+        )
+        reason_str = str(reason) if reason else None
+        state = self._open.pop(key, None)
+        lines: list[str] = []
+        if state is None:
+            title = _task_title(data)
+            lines.append(_format_header(title))
+            state = ToolCallBlockState(task_id=key, title=title)
+        closed = replace(
+            state, status="failed", failure_reason=reason_str
+        )
+        self._completed.append(closed)
+        lines.append(_format_failed(reason_str))
+        return lines
+
+
+def render_tool_call_block(
+    event_stream: Iterable[tuple[str, Mapping[str, Any]]],
+    *,
+    close_unfinished: bool = True,
+) -> Iterator[str]:
+    """Render a full event stream as tool-call block lines.
+
+    ``event_stream`` is any iterable of ``(event_name, data)`` pairs. Each
+    yielded string is a single terminal line, already styled with ANSI — pass
+    through ``click.unstyle`` for plain text. When the stream ends with open
+    blocks, ``close_unfinished=True`` synthesizes failure footers so the
+    visual output is always balanced.
+    """
+    renderer = ToolCallBlockRenderer()
+    for name, data in event_stream:
+        for line in renderer.feed(name, data):
+            yield line
+    if close_unfinished:
+        for line in renderer.close_all(reason="stream ended"):
+            yield line
 
 
 # ---------------------------------------------------------------------------

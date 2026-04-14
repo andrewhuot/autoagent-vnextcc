@@ -402,8 +402,17 @@ def _enter_discovered_workspace(command_name: str | None) -> AgentLabWorkspace |
 
 
 def _is_tty() -> bool:
-    """Return True when stdin is connected to an interactive terminal."""
-    return hasattr(sys.stdin, "isatty") and sys.stdin.isatty()
+    """Return True only when both stdin and stdout are interactive terminals.
+
+    Checking both is required because `agentlab | tee log.txt` leaves stdin a
+    TTY while stdout is a pipe — launching the interactive Workbench in that
+    shape would render ANSI to the pipe and hang on an `input()` call that
+    never surfaces a prompt the user can see.
+    """
+    for stream in (sys.stdin, sys.stdout):
+        if not hasattr(stream, "isatty") or not stream.isatty():
+            return False
+    return True
 
 
 def _require_workspace(command_name: str | None = None) -> AgentLabWorkspace:
@@ -519,11 +528,10 @@ def _create_workspace(
 def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
     """Resolve bootstrap mode using API-key presence when the caller left it default.
 
-    WHY: The CLI is live-first. When a user has a provider key in their
-    environment, we should not silently coerce `auto` to `mock`. When no key is
-    present and the caller passed `mode=auto` (default), keep the legacy
-    safe-default of `mock` so non-interactive scripts don't blow up on a
-    missing key.
+    WHY: The CLI is live-first. A fresh workspace should try real providers by
+    default, while provider runtime can still fall back gracefully when a key is
+    not configured yet. Explicit `--mode auto` keeps the older detection path
+    for callers that intentionally request environment-based mode resolution.
     """
     source = ctx.get_parameter_source("mode")
     if mode != "auto":
@@ -531,10 +539,7 @@ def _resolve_workspace_bootstrap_mode(ctx: click.Context, mode: str) -> str:
     if source is not ParameterSource.DEFAULT:
         return "auto"
 
-    from cli.workspace_env import hydrate_provider_key_aliases, PROVIDER_API_KEY_ENV_VARS
-    hydrate_provider_key_aliases()
-    has_key = any(os.environ.get(name) for name in PROVIDER_API_KEY_ENV_VARS)
-    return "live" if has_key else "mock"
+    return "live"
 
 
 def _doctor_fix_workspace(workspace: AgentLabWorkspace) -> list[str]:
@@ -1337,6 +1342,42 @@ def _print_cli_plan(title: str, steps: list[str]) -> None:
         click.echo(f"  {idx}. {step}")
 
 
+def _harness_session(
+    *,
+    title: str,
+    stage: str,
+    tasks: list[dict[str, str]],
+    output_format: str,
+    ui: str | None,
+) -> Any | None:
+    """Create and render a Claude-style harness session when requested."""
+    from cli.auto_harness import HarnessEvent, HarnessRenderer, HarnessSession, resolve_cli_ui
+    from cli.permissions import PermissionManager
+
+    resolved_ui = resolve_cli_ui(output_format, requested_ui=ui)
+    if resolved_ui != "claude":
+        return None
+
+    session = HarnessSession(permission_mode=PermissionManager().mode)
+    session.emit(HarnessEvent("session.started", message=title))
+    session.emit(HarnessEvent("stage.started", message=stage))
+    session.emit(HarnessEvent("plan.ready", payload={"tasks": tasks}))
+    click.echo(HarnessRenderer().render(session.snapshot()))
+    click.echo("")
+    return session
+
+
+def _emit_harness_event(harness: Any | None, event: Any) -> None:
+    """Apply and print a harness event without affecting classic/JSON output."""
+    if harness is None:
+        return
+    from cli.auto_harness import HarnessRenderer
+
+    harness.emit(event)
+    click.echo(HarnessRenderer().render(harness.snapshot()))
+    click.echo("")
+
+
 def _print_next_actions(actions: list[str]) -> None:
     """Print runnable next actions with command-style formatting."""
     if not actions:
@@ -2131,9 +2172,15 @@ def _load_versioned_config(configs_dir: str, config_version: int | None) -> tupl
 
 @click.group(cls=AgentLabGroup, invoke_without_command=True)
 @click.version_option(version=AGENTLAB_VERSION, prog_name="agentlab")
+@click.option(
+    "--classic",
+    is_flag=True,
+    default=False,
+    help="Launch the classic REPL shell instead of the new Workbench UI.",
+)
 @_banner_flag_options
 @click.pass_context
-def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
+def cli(ctx: click.Context, classic: bool, quiet: bool, no_banner: bool) -> None:
     """AgentLab VNextCC — agent optimization platform.
 
     A product-grade platform for iterating ADK agent quality.
@@ -2141,14 +2188,20 @@ def cli(ctx: click.Context, quiet: bool, no_banner: bool) -> None:
     """
     del quiet, no_banner
     ctx.obj = ctx.obj or {}
+    ctx.obj["classic"] = classic
     ctx.obj["workspace"] = _enter_discovered_workspace(ctx.invoked_subcommand)
     if ctx.invoked_subcommand is None and not ctx.resilient_parsing:
         workspace = ctx.obj.get("workspace")
         if _is_tty():
             if workspace is not None:
-                from cli.repl import run_shell
+                if classic:
+                    from cli.repl import run_shell
 
-                run_shell(workspace)
+                    run_shell(workspace)
+                else:
+                    from cli.workbench_app.app import launch_workbench
+
+                    launch_workbench(workspace)
             else:
                 from cli.onboarding import run_onboarding
 
@@ -2235,13 +2288,20 @@ def advanced_commands(ctx: click.Context) -> None:
 # ---------------------------------------------------------------------------
 
 @cli.command("shell")
+@click.option(
+    "--ui",
+    type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
+    default=None,
+    show_default="auto",
+    help="Interactive UI mode.",
+)
 @click.pass_context
-def shell_command(ctx: click.Context) -> None:
+def shell_command(ctx: click.Context, ui: str | None) -> None:
     """Launch the interactive AgentLab shell."""
     from cli.repl import run_shell
 
     workspace = ctx.obj.get("workspace")
-    run_shell(workspace)
+    run_shell(workspace, ui=ui)
 
 
 # ---------------------------------------------------------------------------
@@ -2657,9 +2717,17 @@ def provider_group(ctx: click.Context) -> None:
 )
 @click.option("--model", default=None, help="Model name to store. Prompts when omitted.")
 @click.option("--api-key-env", default=None, help="API key environment variable. Prompts when omitted.")
-def provider_configure(provider_name: str | None, model: str | None, api_key_env: str | None) -> None:
+@click.option("--api-key", default=None, help="Provider API key to save to .agentlab/.env.")
+def provider_configure(
+    provider_name: str | None,
+    model: str | None,
+    api_key_env: str | None,
+    api_key: str | None,
+) -> None:
     """Interactively configure a workspace provider profile."""
     workspace = _require_workspace("provider")
+    from cli.workspace_env import hydrate_provider_key_aliases, write_workspace_env_values
+
     resolved_provider = provider_name or click.prompt(
         "Provider",
         type=click.Choice(["openai", "anthropic", "google"], case_sensitive=False),
@@ -2672,11 +2740,16 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
         show_default=True,
     )
     normalized_model = normalize_model_name(resolved_provider, resolved_model)
-    resolved_env = api_key_env or click.prompt(
-        "API key env var",
-        default=default_api_key_env_for(resolved_provider),
-        show_default=True,
-    )
+    if api_key_env:
+        resolved_env = api_key_env
+    elif api_key is not None and api_key.strip():
+        resolved_env = default_api_key_env_for(resolved_provider)
+    else:
+        resolved_env = click.prompt(
+            "API key env var",
+            default=default_api_key_env_for(resolved_provider),
+            show_default=True,
+        )
 
     registry_path = providers_file_path(workspace)
     upsert_provider(
@@ -2695,7 +2768,14 @@ def provider_configure(provider_name: str | None, model: str | None, api_key_env
     click.echo(click.style(f"Applied: provider {resolved_provider}:{normalized_model}", fg="green"))
     click.echo(f"  Registry: {registry_path}")
     click.echo(f"  Runtime:  {workspace.runtime_config_path}")
-    click.echo(f"  Next:     export {resolved_env}=... && agentlab provider test")
+    if api_key is not None and api_key.strip():
+        write_workspace_env_values({resolved_env: api_key}, workspace.agentlab_dir / ".env")
+        os.environ[resolved_env] = api_key.strip()
+        hydrate_provider_key_aliases()
+        click.echo(f"  Saved {resolved_env} to .agentlab/.env")
+        click.echo("  Next:     agentlab provider test --live")
+    else:
+        click.echo(f"  Next:     export {resolved_env}=... && agentlab provider test")
 
 
 @provider_group.command("list")
@@ -3809,15 +3889,68 @@ def _run_optimize_cycle(
     eval_run_id: str | None = None,
     require_eval_evidence: bool = False,
     spinner: "PhaseSpinner | None" = None,
+    harness: Any | None = None,
 ) -> tuple[dict, float]:
     """Run one optimize iteration and persist a matching experiment-log entry."""
 
     def _phase(label: str) -> None:
         if spinner is not None:
             spinner.update(label)
+        if harness is not None:
+            from cli.auto_harness import HarnessEvent
+
+            _emit_harness_event(harness, HarnessEvent("stage.started", message=label))
+
+    def _task(event: str, task_id: str, task: str, **payload: Any) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(event, task_id=task_id, task=task, payload=payload),
+        )
+
+    def _tool_started(label: str) -> float:
+        started = time.monotonic()
+        if harness is not None:
+            from cli.auto_harness import HarnessEvent
+
+            _emit_harness_event(
+                harness,
+                HarnessEvent("tool.started", tool=label, message=label),
+            )
+        return started
+
+    def _tool_completed(
+        label: str,
+        started: float,
+        *,
+        output: str = "",
+        exit_code: int = 0,
+    ) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(
+                "tool.completed",
+                tool=label,
+                payload={
+                    "command": label,
+                    "output": output,
+                    "exit_code": exit_code,
+                    "elapsed_seconds": time.monotonic() - started,
+                },
+            ),
+        )
 
     try:
         _phase(f"Cycle {display_cycle} — loading eval evidence")
+        _task("task.started", "load-evidence", "Load eval evidence")
+        evidence_started = _tool_started("load eval evidence")
         workspace = discover_workspace()
         active_config = workspace.resolve_active_config() if workspace is not None and config_path is None else None
         scoped_config_path = config_path or (active_config.path if active_config is not None else None)
@@ -3828,6 +3961,11 @@ def _run_optimize_cycle(
             )
         else:
             latest_eval_path, latest_eval_data = _latest_eval_payload_for_active_config(scoped_config_path)
+        _tool_completed(
+            "load eval evidence",
+            evidence_started,
+            output=str(latest_eval_path or "no eval evidence"),
+        )
         if latest_eval_path is None or latest_eval_data is None:
             if eval_run_id:
                 description = f"Eval results not found for run id {eval_run_id}."
@@ -3844,7 +3982,8 @@ def _run_optimize_cycle(
                 score_after=None,
             )
             append_experiment_log_entry(entry, path=log_path)
-            if not json_output and not continuous and display_total is not None:
+            _task("task.failed" if blocked else "task.completed", "load-evidence", "Load eval evidence", detail=description)
+            if not json_output and not continuous and display_total is not None and harness is None:
                 click.echo(
                     f"\n  Cycle {display_cycle}/{display_total} — {description}"
                 )
@@ -3864,9 +4003,11 @@ def _run_optimize_cycle(
             )
 
         report = _health_report_from_eval(latest_eval_data)
+        _task("task.completed", "load-evidence", "Load eval evidence")
 
         if not report.needs_optimization:
-            if not json_output and not continuous and display_total is not None:
+            _task("task.completed", "decide", "Decide outcome", detail="Latest eval passed")
+            if not json_output and not continuous and display_total is not None and harness is None:
                 click.echo(
                     f"\n  Cycle {display_cycle}/{display_total} — Latest eval passed; no optimization needed."
                 )
@@ -3897,11 +4038,15 @@ def _run_optimize_cycle(
         failure_samples = _build_eval_failure_samples(latest_eval_data)
         current_config = _load_optimize_current_config(deployer=deployer, config_path=config_path)
         _phase(f"Cycle {display_cycle} — proposing candidate config")
+        _task("task.started", "propose", "Propose candidate config")
+        optimize_started = _tool_started("optimizer.optimize")
         new_config, opt_status = optimizer.optimize(
             report,
             current_config,
             failure_samples=failure_samples,
         )
+        _tool_completed("optimizer.optimize", optimize_started, output=opt_status)
+        _task("task.completed", "propose", "Propose candidate config", detail=opt_status)
 
         latest_attempts = memory.recent(limit=1)
         latest = latest_attempts[0] if latest_attempts else None
@@ -3920,7 +4065,7 @@ def _run_optimize_cycle(
         if proposal_desc and new_config is None and opt_status:
             description = f"{proposal_desc} ({opt_status})"
 
-        if not json_output and not continuous and display_total is not None:
+        if not json_output and not continuous and display_total is not None and harness is None:
             _stream_cycle_output(
                 cycle_num=display_cycle,
                 total=display_total,
@@ -3949,14 +4094,39 @@ def _run_optimize_cycle(
             from optimizer.change_card import ChangeCardStore
 
             _phase(f"Cycle {display_cycle} — evaluating candidate")
+            _task("task.started", "evaluate", "Evaluate candidate config")
+            eval_started = _tool_started("eval_runner.run")
             score = eval_runner.run(config=new_config)
+            _tool_completed(
+                "eval_runner.run",
+                eval_started,
+                output=f"composite={score.composite:.4f}",
+            )
+            _task("task.completed", "evaluate", "Evaluate candidate config")
             _phase(f"Cycle {display_cycle} — deciding outcome")
+            _task("task.started", "decide", "Decide outcome")
             candidate_scores = _score_to_dict(score)
+            persist_started = _tool_started("persist candidate config")
             candidate_version, candidate_path = _persist_candidate_config(
                 deployer,
                 candidate_config=new_config,
                 candidate_scores=candidate_scores,
             )
+            _tool_completed(
+                "persist candidate config",
+                persist_started,
+                output=str(candidate_path),
+            )
+            if harness is not None:
+                from cli.auto_harness import HarnessEvent
+
+                _emit_harness_event(
+                    harness,
+                    HarnessEvent(
+                        "artifact.updated",
+                        message=f"candidate v{candidate_version:03d} updated",
+                    ),
+                )
             latest = memory.recent(limit=1)[0]
             entry_timestamp = experiment_log_utc_timestamp()
             preview_entry = make_experiment_log_entry(
@@ -3987,13 +4157,15 @@ def _run_optimize_cycle(
                 timestamp=entry_timestamp,
             )
 
-            if not json_output and not continuous:
+            if not json_output and not continuous and harness is None:
                 click.echo(f"  Review: saved {change_card.card_id} for v{candidate_version:03d}")
             if full_auto:
                 promoted = _promote_latest_version(deployer)
-                if not json_output and not continuous and promoted is not None:
+                if not json_output and not continuous and harness is None and promoted is not None:
                     click.echo(click.style(f"  FULL AUTO: promoted v{promoted:03d} to active", fg="yellow"))
+            _task("task.completed", "decide", "Decide outcome", detail=entry.status)
         else:
+            _task("task.started", "decide", "Decide outcome")
             entry = make_experiment_log_entry(
                 cycle=cycle_number,
                 status=normalized_status,
@@ -4001,6 +4173,7 @@ def _run_optimize_cycle(
                 score_before=score_before,
                 score_after=score_after,
             )
+            _task("task.completed", "decide", "Decide outcome", detail=entry.status)
         append_experiment_log_entry(entry, path=log_path)
 
         return (
@@ -4078,6 +4251,13 @@ def _run_optimize_cycle(
     show_default=True,
     help="Render text, a final JSON envelope, or stream JSON progress events.",
 )
+@click.option(
+    "--ui",
+    type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
+    default=None,
+    show_default="auto",
+    help="Interactive UI mode for text output.",
+)
 def optimize(
     cycles: int,
     continuous: bool,
@@ -4094,6 +4274,8 @@ def optimize(
     json_output: bool = False,
     max_budget_usd: float | None = None,
     output_format: str = "text",
+    ui: str | None = None,
+    harness: Any | None = None,
 ) -> None:
     """Run optimization cycles to improve agent config.
 
@@ -4110,10 +4292,23 @@ def optimize(
     from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
 
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+    if harness is None:
+        harness = _harness_session(
+            title="AgentLab Optimize",
+            stage="Running optimization cycle(s)",
+            tasks=[
+                {"id": "load-evidence", "title": "Load eval evidence"},
+                {"id": "propose", "title": "Propose candidate config"},
+                {"id": "evaluate", "title": "Evaluate candidate config"},
+                {"id": "decide", "title": "Decide outcome"},
+            ],
+            output_format=resolved_output_format,
+            ui=ui,
+        )
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("optimize", message="Run optimization cycle(s)")
 
-    if resolved_output_format == "text":
+    if resolved_output_format == "text" and harness is None:
         click.echo(click.style(f"\n✦ {_soul_line('optimize')}", fg="cyan"))
         if full_auto:
             click.echo(click.style("⚠ FULL AUTO ENABLED: skipping manual promotion gates.", fg="yellow"))
@@ -4139,7 +4334,7 @@ def optimize(
         mode_enum = OptimizationMode(mode)
         mode_config = ModeConfig(mode=mode_enum)
         resolved = ModeRouter().resolve(mode_config)
-        if resolved_output_format == "text":
+        if resolved_output_format == "text" and harness is None:
             click.echo(f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
                        f"candidates={resolved.max_candidates})")
 
@@ -4158,6 +4353,7 @@ def optimize(
             "require_eval_evidence": require_eval_evidence,
             "memory_db": memory_db,
             "max_budget_usd": max_budget_usd,
+            "ui": ui,
         }
         if resolved_output_format == "json":
             click.echo(json_response("ok", preview, next_cmd="agentlab optimize"))
@@ -4237,16 +4433,13 @@ def optimize(
     skipped_count = 0
     display_cycle = 1
 
-    if continuous and resolved_output_format == "text":
+    if continuous and resolved_output_format == "text" and harness is None:
         click.echo("Starting continuous optimization. Press Ctrl+C to stop.")
 
     try:
         while True:
             cost_before = _proposer_total_cost(proposer)
-            with PhaseSpinner(
-                f"Cycle {display_cycle} — starting",
-                output_format=resolved_output_format,
-            ) as cycle_spinner:
+            if harness is not None:
                 cycle_result, all_time_best = _run_optimize_cycle(
                     cycle_number=next_cycle_number,
                     display_cycle=display_cycle,
@@ -4266,10 +4459,48 @@ def optimize(
                     config_path=resolved_config_path,
                     eval_run_id=eval_run_id,
                     require_eval_evidence=require_eval_evidence,
-                    spinner=cycle_spinner,
+                    spinner=None,
+                    harness=harness,
                 )
-                cycle_spinner.update(
-                    f"Cycle {cycle_result['experiment_cycle']} — {cycle_result['status']}"
+            else:
+                with PhaseSpinner(
+                    f"Cycle {display_cycle} — starting",
+                    output_format=resolved_output_format,
+                ) as cycle_spinner:
+                    cycle_result, all_time_best = _run_optimize_cycle(
+                        cycle_number=next_cycle_number,
+                        display_cycle=display_cycle,
+                        display_total=None if continuous else cycles,
+                        continuous=continuous,
+                        json_output=(resolved_output_format == "json"),
+                        full_auto=full_auto,
+                        store=store,
+                        observer=observer,
+                        optimizer=optimizer,
+                        deployer=deployer,
+                        memory=memory,
+                        eval_runner=eval_runner,
+                        best_score_file=best_score_file,
+                        all_time_best=all_time_best,
+                        log_path=log_path,
+                        config_path=resolved_config_path,
+                        eval_run_id=eval_run_id,
+                        require_eval_evidence=require_eval_evidence,
+                        spinner=cycle_spinner,
+                    )
+                    cycle_spinner.update(
+                        f"Cycle {cycle_result['experiment_cycle']} — {cycle_result['status']}"
+                    )
+            if harness is not None:
+                from cli.auto_harness import HarnessEvent
+
+                _emit_harness_event(
+                    harness,
+                    HarnessEvent(
+                        "metrics.updated",
+                        message=f"Cycle {cycle_result['experiment_cycle']} {cycle_result['status']}",
+                        payload={"status": cycle_result["status"]},
+                    ),
                 )
             cost_after = _proposer_total_cost(proposer)
             cycle_cost = max(0.0, round(cost_after - cost_before, 8))
@@ -4304,7 +4535,7 @@ def optimize(
                     click.echo(json_response("ok", cycle_result))
                 elif resolved_output_format == "stream-json":
                     progress.next_action("agentlab status")
-                else:
+                elif harness is None:
                     click.echo(
                         _continuous_status_line(
                             cycle=cycle_result["experiment_cycle"],
@@ -5800,10 +6031,18 @@ def loop_group() -> None:
     show_default=True,
     help="Render text or stream JSON progress events.",
 )
+@click.option(
+    "--ui",
+    type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
+    default=None,
+    show_default="auto",
+    help="Interactive UI mode for text output.",
+)
 def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
              interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
              resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str,
-             max_budget_usd: float | None = None, output_format: str = "text") -> None:
+             max_budget_usd: float | None = None, output_format: str = "text",
+             ui: str | None = None, harness: Any | None = None) -> None:
     """Run the continuous autoresearch loop.
 
     Observes agent health, proposes improvements, evaluates them, and deploys
@@ -5813,17 +6052,85 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
       agentlab loop
       agentlab loop --max-cycles 100 --stop-on-plateau
     """
-    click.echo(click.style(
-        "Tip: use `agentlab optimize --continuous` for the same result.",
-        fg="yellow",
-    ))
     from cli.output import resolve_output_format
     from cli.progress import ProgressRenderer
     from cli.usage import enforce_workspace_budget
 
     resolved_output_format = resolve_output_format(output_format)
+    if harness is None:
+        harness = _harness_session(
+            title="AgentLab Loop",
+            stage="Running autoresearch loop",
+            tasks=[
+                {"id": "observe", "title": "Observe agent health"},
+                {"id": "propose", "title": "Propose improvement"},
+                {"id": "evaluate", "title": "Evaluate candidate"},
+                {"id": "deploy", "title": "Deploy or skip"},
+                {"id": "canary", "title": "Check canary and resources"},
+            ],
+            output_format=resolved_output_format,
+            ui=ui,
+        )
+    if resolved_output_format == "text" and harness is None:
+        click.echo(click.style(
+            "Tip: use `agentlab optimize --continuous` for the same result.",
+            fg="yellow",
+        ))
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("loop", message="Start optimization loop")
+
+    def _loop_task(event: str, task_id: str, task: str, **payload: Any) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(event, task_id=task_id, task=task, payload=payload),
+        )
+
+    def _loop_stage(message: str) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(harness, HarnessEvent("stage.started", message=message))
+
+    def _loop_tool_started(label: str) -> float:
+        started = time.monotonic()
+        if harness is not None:
+            from cli.auto_harness import HarnessEvent
+
+            _emit_harness_event(
+                harness,
+                HarnessEvent("tool.started", tool=label, message=label),
+            )
+        return started
+
+    def _loop_tool_completed(
+        label: str,
+        started: float,
+        *,
+        output: str = "",
+        exit_code: int = 0,
+    ) -> None:
+        if harness is None:
+            return
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent(
+                "tool.completed",
+                tool=label,
+                payload={
+                    "command": label,
+                    "output": output,
+                    "exit_code": exit_code,
+                    "elapsed_seconds": time.monotonic() - started,
+                },
+            ),
+        )
 
     budget_ok, budget_message, _ = enforce_workspace_budget(max_budget_usd)
     if not budget_ok:
@@ -5894,7 +6201,7 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             plateau_count = max(0, checkpoint.plateau_count)
             completed_cycles = max(0, checkpoint.completed_cycles)
 
-    if resolved_output_format == "text":
+    if resolved_output_format == "text" and harness is None:
         click.echo(f"Starting autoresearch loop (max {max_cycles} cycles)")
         click.echo(f"  Schedule: {effective_schedule}")
         if effective_schedule == "interval":
@@ -5924,15 +6231,27 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             )
 
             progress.phase_started("loop-cycle", message=f"Cycle {cycle}/{max_cycles}")
-            if resolved_output_format == "text":
+            _loop_stage(f"Cycle {cycle}/{max_cycles}")
+            if resolved_output_format == "text" and harness is None:
                 click.echo(f"\n{'═' * 50}")
                 click.echo(f" Cycle {cycle}/{max_cycles}")
                 click.echo(f"{'═' * 50}")
 
             improved = False
             try:
+                _loop_task("task.started", "observe", "Observe agent health")
+                observe_started = _loop_tool_started("observer.observe")
                 report = observer.observe()
-                if resolved_output_format == "text":
+                _loop_tool_completed(
+                    "observer.observe",
+                    observe_started,
+                    output=(
+                        f"success={report.metrics.success_rate:.2%}\n"
+                        f"errors={report.metrics.error_rate:.2%}"
+                    ),
+                )
+                _loop_task("task.completed", "observe", "Observe agent health")
+                if resolved_output_format == "text" and harness is None:
                     click.echo(
                         f"  Health: success={report.metrics.success_rate:.2%}, "
                         f"errors={report.metrics.error_rate:.2%}"
@@ -5941,34 +6260,70 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 if report.needs_optimization:
                     current_config = _ensure_active_config(deployer)
                     failure_samples = _build_failure_samples(store)
+                    _loop_task("task.started", "propose", "Propose improvement")
+                    optimize_started = _loop_tool_started("optimizer.optimize")
                     new_config, status = optimizer.optimize(
                         report,
                         current_config,
                         failure_samples=failure_samples,
                     )
-                    if resolved_output_format == "text":
+                    _loop_tool_completed(
+                        "optimizer.optimize",
+                        optimize_started,
+                        output=status,
+                    )
+                    _loop_task("task.completed", "propose", "Propose improvement", detail=status)
+                    if resolved_output_format == "text" and harness is None:
                         click.echo(f"  Optimizer: {status}")
                     if new_config is not None:
                         improved = True
+                        _loop_task("task.started", "evaluate", "Evaluate candidate")
+                        eval_started = _loop_tool_started("eval_runner.run")
                         score = eval_runner.run(config=new_config)
+                        _loop_tool_completed(
+                            "eval_runner.run",
+                            eval_started,
+                            output=f"composite={score.composite:.4f}",
+                        )
+                        _loop_task("task.completed", "evaluate", "Evaluate candidate")
+                        _loop_task("task.started", "deploy", "Deploy or skip")
+                        deploy_started = _loop_tool_started("deployer.deploy")
                         deploy_result = deployer.deploy(new_config, _score_to_dict(score))
-                        if resolved_output_format == "text":
+                        _loop_tool_completed(
+                            "deployer.deploy",
+                            deploy_started,
+                            output=str(deploy_result),
+                        )
+                        _loop_task("task.completed", "deploy", "Deploy or skip", detail=str(deploy_result))
+                        if resolved_output_format == "text" and harness is None:
                             click.echo(f"  Deploy: {deploy_result}")
                         if full_auto:
                             promoted = _promote_latest_version(deployer)
-                            if promoted is not None and resolved_output_format == "text":
+                            if promoted is not None and resolved_output_format == "text" and harness is None:
                                 click.echo(click.style(
                                     f"  FULL AUTO: promoted v{promoted:03d} to active",
                                     fg="yellow",
                                 ))
-                        if resolved_output_format == "text":
+                        if resolved_output_format == "text" and harness is None:
                             click.echo(f"  Score: {score.composite:.4f}")
+                    else:
+                        _loop_task("task.completed", "deploy", "Deploy or skip", detail="No candidate to deploy")
                 else:
-                    if resolved_output_format == "text":
+                    _loop_task("task.completed", "propose", "Propose improvement", detail="Healthy")
+                    _loop_task("task.completed", "deploy", "Deploy or skip", detail="Skipped")
+                    if resolved_output_format == "text" and harness is None:
                         click.echo("  Healthy; skipping optimization.")
 
+                _loop_task("task.started", "canary", "Check canary and resources")
+                canary_started = _loop_tool_started("deployer.check_and_act")
                 canary_result = deployer.check_and_act()
-                if resolved_output_format == "text":
+                _loop_tool_completed(
+                    "deployer.check_and_act",
+                    canary_started,
+                    output=str(canary_result),
+                )
+                _loop_task("task.completed", "canary", "Check canary and resources", detail=str(canary_result))
+                if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Canary: {canary_result}")
             except Exception as exc:
                 tb = traceback.format_exc()
@@ -5978,7 +6333,8 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     error=str(exc),
                     traceback_text=tb,
                 )
-                if resolved_output_format == "text":
+                _loop_task("task.failed", "canary", "Check canary and resources", detail=str(exc))
+                if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Cycle failed; queued in dead letter queue: {exc}")
                 log.error(
                     "loop_cycle_failed",
@@ -5995,7 +6351,7 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 else:
                     plateau_count += 1
                     if plateau_count >= plateau_threshold:
-                        if resolved_output_format == "text":
+                        if resolved_output_format == "text" and harness is None:
                             click.echo(f"\nPlateau detected ({plateau_threshold} cycles with no improvement). Stopping.")
                         checkpoint_store.save(
                             LoopCheckpoint(
@@ -6012,7 +6368,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             snapshot = resource_monitor.sample()
             if snapshot.memory_mb > runtime.loop.resource_warn_memory_mb:
                 warning = f"Memory usage high: {snapshot.memory_mb:.2f}MB"
-                if resolved_output_format == "text":
+                if harness is not None:
+                    from cli.auto_harness import HarnessEvent
+
+                    _emit_harness_event(harness, HarnessEvent("warning", message=warning))
+                if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_memory",
@@ -6021,7 +6381,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 progress.warning(message=warning, phase="loop-cycle")
             if snapshot.cpu_percent > runtime.loop.resource_warn_cpu_percent:
                 warning = f"CPU usage high: {snapshot.cpu_percent:.2f}%"
-                if resolved_output_format == "text":
+                if harness is not None:
+                    from cli.auto_harness import HarnessEvent
+
+                    _emit_harness_event(harness, HarnessEvent("warning", message=warning))
+                if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Warning: {warning}")
                 log.warning(
                     "resource_warning_cpu",
@@ -6039,7 +6403,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                     payload={"cycle": cycle},
                     error=stall_error,
                 )
-                if resolved_output_format == "text":
+                if harness is not None:
+                    from cli.auto_harness import HarnessEvent
+
+                    _emit_harness_event(harness, HarnessEvent("warning", message=stall_error))
+                if resolved_output_format == "text" and harness is None:
                     click.echo(f"  Watchdog: {stall_error}")
                 log.warning("watchdog_stall", extra={"event": "watchdog_stall", "cycle": cycle})
                 progress.warning(message=stall_error, phase="loop-cycle")
@@ -6058,7 +6426,7 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
             )
 
             if shutdown.stop_requested:
-                if resolved_output_format == "text":
+                if resolved_output_format == "text" and harness is None:
                     click.echo("\nGraceful shutdown requested. Exiting after current cycle.")
                 break
 
@@ -6070,7 +6438,7 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
                 )
                 _sleep_interruptibly(wait_seconds, shutdown)
                 if shutdown.stop_requested:
-                    if resolved_output_format == "text":
+                    if resolved_output_format == "text" and harness is None:
                         click.echo("\nGraceful shutdown requested during wait. Exiting.")
                     break
 
@@ -6086,7 +6454,11 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
     )
     progress.phase_completed("loop", message=f"{completed_cycles} cycle(s) executed ({final_status})")
     progress.next_action("agentlab status")
-    if resolved_output_format == "text":
+    if harness is not None:
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(harness, HarnessEvent("stage.completed", message=f"Loop complete: {final_status}"))
+    if resolved_output_format == "text" and harness is None:
         click.echo(f"\nLoop complete. {completed_cycles} cycles executed ({final_status}).")
 
 
@@ -9240,8 +9612,21 @@ def scorer_test(name: str, trace_id: str, db: str) -> None:
               help="Continuous loop cycles after optimize.")
 @click.option("--yes", "acknowledge", is_flag=True, default=False,
               help="Acknowledge dangerous mode and skip permission-style gates.")
+@click.option(
+    "--ui",
+    type=click.Choice(["auto", "claude", "classic"], case_sensitive=False),
+    default=None,
+    show_default="auto",
+    help="Interactive UI mode for text output.",
+)
 @click.pass_context
-def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge: bool) -> None:
+def full_auto(
+    ctx: click.Context,
+    cycles: int,
+    max_loop_cycles: int,
+    acknowledge: bool,
+    ui: str | None,
+) -> None:
     """Run optimization + loop in dangerous full-auto mode.
 
     Similar intent to 'dangerously skip permissions': auto-promotes accepted
@@ -9257,16 +9642,39 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         ))
         raise SystemExit(1)
 
-    click.echo(click.style("\n⚠ FULL AUTO MODE ENABLED", fg="yellow", bold=True))
-    click.echo("This mode auto-promotes accepted configs with minimal friction.")
-    _print_cli_plan(
-        "Full-auto plan",
-        [
-            f"Run optimize for {cycles} cycles with --full-auto",
-            f"Run loop for {max_loop_cycles} cycles with --full-auto",
-            "Keep shipping winning configs unless plateau/limits stop it",
+    harness = _harness_session(
+        title="AgentLab Full Auto",
+        stage="Running optimize + loop in full-auto mode",
+        tasks=[
+            {"id": "load-evidence", "title": "Load eval evidence"},
+            {"id": "propose", "title": "Propose candidate config"},
+            {"id": "evaluate", "title": "Evaluate candidate config"},
+            {"id": "decide", "title": "Decide outcome"},
+            {"id": "observe", "title": "Observe loop health"},
+            {"id": "deploy", "title": "Deploy or skip"},
+            {"id": "canary", "title": "Check canary and resources"},
         ],
+        output_format="text",
+        ui=ui,
     )
+    if harness is None:
+        click.echo(click.style("\n⚠ FULL AUTO MODE ENABLED", fg="yellow", bold=True))
+        click.echo("This mode auto-promotes accepted configs with minimal friction.")
+        _print_cli_plan(
+            "Full-auto plan",
+            [
+                f"Run optimize for {cycles} cycles with --full-auto",
+                f"Run loop for {max_loop_cycles} cycles with --full-auto",
+                "Keep shipping winning configs unless plateau/limits stop it",
+            ],
+        )
+    else:
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent("stage.started", message=f"Optimize stage: {cycles} cycle(s)"),
+        )
 
     ctx.invoke(
         optimize,
@@ -9282,7 +9690,16 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         json_output=False,
         max_budget_usd=None,
         output_format="text",
+        ui=ui,
+        harness=harness,
     )
+    if harness is not None:
+        from cli.auto_harness import HarnessEvent
+
+        _emit_harness_event(
+            harness,
+            HarnessEvent("stage.started", message=f"Loop stage: {max_loop_cycles} cycle(s)"),
+        )
     ctx.invoke(
         loop_run,
         max_cycles=max_loop_cycles,
@@ -9299,6 +9716,8 @@ def full_auto(ctx: click.Context, cycles: int, max_loop_cycles: int, acknowledge
         memory_db=MEMORY_DB,
         max_budget_usd=None,
         output_format="text",
+        ui=ui,
+        harness=harness,
     )
 
 

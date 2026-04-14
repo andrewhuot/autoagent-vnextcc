@@ -1,0 +1,19 @@
+› is it still running?
+● Bash ps aux | grep ralph (2.0s, 3 lines, exit 0; showing all 3 lines)
+  ralph.sh
+  claude child
+  shell
+Letting it run
+
+✱ Letting it run (4s)
+  ■ Monitor existing run
+
+› yeah let it run
+
+Shells and tasks
+  Active: Letting it run
+  Task: Monitor existing run [active]
+  Queued: yeah let it run
+
+────────────────────────────────────────────────────────────────────────
+⏵ bypass permissions on · 1 shell, 1 monitor, 1 queued · ↓ to manage

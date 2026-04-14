@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from cli.repl import (
     _build_status_bar,
     _compact_session,
     _handle_slash_command,
+    run_shell,
 )
 from cli.sessions import Session
 
@@ -170,3 +172,34 @@ def test_all_slash_commands_documented() -> None:
         "/exit",
     }
     assert set(SLASH_COMMANDS.keys()) == expected
+
+
+def test_run_shell_emits_deprecation_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """T25: classic shell is deprecated and must surface a warning.
+
+    The workbench app is the new default entry point; ``--classic``
+    stays functional for one release but must signal the migration.
+    """
+    workspace = MagicMock()
+    workspace.root = tmp_path
+    workspace.workspace_label = "ws"
+    workspace.agentlab_dir = tmp_path / ".agentlab"
+    workspace.resolve_active_config.return_value = None
+    workspace.change_cards_db = tmp_path / "nope.db"
+    workspace.best_score_file = tmp_path / "nope.txt"
+
+    monkeypatch.setattr("cli.repl.resolve_settings", lambda **_: {})
+    monkeypatch.setattr("cli.repl.resolve_cli_ui", lambda *_a, **_kw: "text")
+    monkeypatch.setattr("builtins.input", lambda *_a, **_kw: (_ for _ in ()).throw(EOFError()))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_shell(workspace)
+
+    deprecations = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert deprecations, "run_shell must emit a DeprecationWarning"
+    message = str(deprecations[0].message)
+    assert "cli.repl.run_shell" in message
+    assert "workbench" in message.lower()
