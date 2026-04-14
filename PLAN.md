@@ -900,8 +900,77 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       app_stub / screens / tool_call_block / commands); full
       test suite green (4571 passed, 1 unrelated pre-existing
       doctor-test failure not touched by this task).*
-- [ ] **T19** — Add slash-command autocomplete popup (show matching commands as user
-      types `/`). Use the chosen rendering stack's completer.
+- [x] **T19** — Add slash-command autocomplete popup (show matching commands as user
+      types `/`). Use the chosen rendering stack's completer. *Landed
+      `cli/workbench_app/completer.py` with a pure
+      :func:`iter_completions(registry, text_before_cursor)` helper plus a
+      :class:`SlashCommandCompleter` that adapts it to the prompt_toolkit
+      ``Completer`` contract chosen in the T03 ADR. Rules: the completer
+      only fires when the buffer starts with ``/`` **and** the caret is
+      still inside the first whitespace token — once the user types a
+      space we bail out (``/eval `` / ``/eval --run-id 42`` → no rows)
+      so arg completion (future work) doesn't accidentally replace
+      typed flags. ``iter_completions`` strips the leading ``/`` and
+      delegates to :meth:`CommandRegistry.match_prefix`, which already
+      handles case-insensitive prefix matching and alias→primary
+      deduplication (``/r`` offers the single underlying ``resume``
+      row rather than one per alias). Each match is yielded as a
+      frozen :class:`SlashCompletion(name, description, source,
+      start_position)` with ``start_position = -len(prefix_after_slash)``
+      so prompt_toolkit replaces only the typed portion of the command
+      token (the leading ``/`` stays in the buffer). A bare ``/`` sets
+      ``start_position = 0`` so the user-typed slash is preserved.
+      :class:`SlashCommandCompleter` subclasses prompt_toolkit's
+      ``Completer`` lazily (import happens inside ``get_completions``)
+      so the module can be imported in headless tests without pulling
+      the TUI stack at module scope, and wraps each
+      :class:`SlashCompletion` in a ``Completion(text=name,
+      start_position=…, display="/" + name,
+      display_meta=description)`` so the popup shows the slash-prefixed
+      label and a one-line description column — mirroring Claude
+      Code's command-palette layout. The completer intentionally uses
+      ``document.text_before_cursor`` so a cursor parked mid-buffer in
+      ``/expand foo`` (cursor at position 3) still offers matches for
+      ``ex`` (``exit``/``expand``) instead of bailing on the trailing
+      space. :func:`build_completer(registry)` convenience factory
+      mirrors the other ``build_*`` helpers in this package and is
+      what T20's real prompt_toolkit ``PromptSession`` wiring will
+      call. Exported both helpers plus :class:`SlashCompletion` from
+      :mod:`cli.workbench_app` so downstream callers don't need to
+      reach into the submodule. No changes to ``run_workbench_app`` —
+      the T04 stub loop still uses plain ``input()`` because T20 will
+      swap the whole input layer to ``PromptSession`` in one coherent
+      move; dropping the completer onto the existing stub is a
+      wasteful half-step since plain ``input()`` can't render a
+      popup. Coverage: ``tests/test_workbench_completer.py`` (24
+      tests) — ``iter_completions``: empty buffer, plain text, bare
+      ``/`` returns all commands in canonical (alphabetical) order,
+      prefix filtering (``/ex`` → ``exit``/``expand``), single match
+      (``/he`` → ``help``), no matches (``/zzz``), case-insensitive
+      prefix (``/EX``), generator type, alias dedup (``resume`` +
+      ``r`` alias yields single row for ``/r``), argument-space
+      bailout (``/eval `` and ``/eval --run-id 42`` both empty),
+      ``start_position`` covers typed prefix (``-2`` for ``/ex``),
+      ``start_position=0`` on bare ``/``, metadata (description +
+      source) carried through; ``SlashCommandCompleter``: wraps
+      records as prompt_toolkit ``Completion``, ``display`` includes
+      the ``/`` prefix, ``display_meta`` shows description,
+      ``start_position`` matches pure helper, non-slash buffer → no
+      rows, cursor-mid-buffer (text=``/expand foo``, cursor=3) still
+      matches on ``ex``, ``registry`` property exposed;
+      ``build_completer`` returns ``SlashCommandCompleter`` carrying
+      the same registry; integration with the real
+      ``build_builtin_registry()`` offers the canonical command set
+      (``help``, ``status``, ``eval``, ``optimize``, ``build``,
+      ``deploy``, ``skills``, ``exit``) for ``/``, narrows ``/ev`` to
+      a single ``eval`` row; ``SlashCompletion`` frozen invariant
+      (mutation raises). Full workbench surface green (596 tests
+      across completer / slash / transcript / status / screens /
+      app_stub / commands / tool_call_block / eval_slash /
+      optimize_slash / build_slash / deploy_slash / skills_slash /
+      model_slash / cancellation / theme / effort / output_collapse
+      / hardening / live / api / streaming / multi_turn / harness_eng
+      / eval_optimize_bridge / cli_workbench / p0_hardening).*
 - [ ] **T20** — Make workbench the default: `agentlab` with no args launches
       `workbench_app`. Add `--classic` flag to opt out. Update `runner.py` entry logic.
 - [ ] **T21** — Unit tests: `tests/cli/test_workbench_slash.py` covering dispatch,
