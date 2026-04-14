@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from builder.worker_mode import WorkerMode
+    from optimizer.providers import LLMRouter
 
 from builder.coordinator_runtime import CoordinatorWorkerRuntime
 from builder.events import EventBroker
@@ -341,20 +345,119 @@ class CoordinatorTurnService:
         return cards
 
 
-def detect_command_intent(message: str) -> str:
-    """Infer the slash-command workflow that should own a free-text turn."""
-    text = message.lower()
-    if any(word in text for word in ("deploy", "release", "ship", "canary")):
-        return "deploy"
-    if any(word in text for word in ("optimize", "improve", "tune", "loss pattern")):
-        return "optimize"
-    if any(word in text for word in ("eval", "evaluate", "benchmark", "test it")):
-        return "eval"
-    if any(word in text for word in ("skill", "skills")):
-        return "skills"
-    if any(word in text for word in ("build", "agent", "create", "make")):
+_KEYWORD_INTENT_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("deploy", ("deploy", "release", "ship", "canary")),
+    ("optimize", ("optimize", "improve", "tune", "loss pattern")),
+    ("eval", ("eval", "evaluate", "benchmark", "test it")),
+    ("skills", ("skill", "skills")),
+    ("build", ("build", "agent", "create", "make")),
+)
+
+_VALID_INTENTS = {"build", "eval", "optimize", "deploy", "skills", "ask"}
+
+
+def _keyword_intent_match(text: str) -> tuple[str, list[str]]:
+    """Return ``(intent, matched_keywords)`` for a lowercase ``text``."""
+    matches: list[str] = []
+    selected = "build"
+    selected_set = False
+    for intent, keywords in _KEYWORD_INTENT_GROUPS:
+        hits = [kw for kw in keywords if kw in text]
+        if hits and not selected_set:
+            selected = intent
+            matches = hits
+            selected_set = True
+        elif hits:
+            matches.extend(hits)
+    return selected, matches
+
+
+def detect_command_intent(
+    message: str,
+    *,
+    worker_mode: "WorkerMode | None" = None,
+    router: "LLMRouter | None" = None,
+) -> str:
+    """Infer the slash-command workflow that should own a free-text turn.
+
+    Keyword matching is the default and remains the only path used in CI.
+    When ``worker_mode == WorkerMode.LLM`` and the keyword match is
+    ambiguous (no strong hit), an optional LLM classifier can refine the
+    intent. The LLM path is best-effort: parse failures or provider errors
+    fall back to the keyword result so callers always get a valid intent.
+    """
+    text = " ".join(str(message or "").lower().split())
+    if not text:
         return "build"
-    return "build"
+    keyword_intent, matches = _keyword_intent_match(text)
+
+    from builder.worker_mode import WorkerMode as _WorkerMode
+
+    use_llm = worker_mode == _WorkerMode.LLM and router is not None and len(matches) <= 1
+    if not use_llm:
+        return keyword_intent
+
+    classified = _classify_intent_with_llm(message, router=router, fallback=keyword_intent)
+    return classified if classified in _VALID_INTENTS else keyword_intent
+
+
+def _classify_intent_with_llm(
+    message: str,
+    *,
+    router: "LLMRouter",
+    fallback: str,
+) -> str:
+    """Best-effort LLM classifier; returns ``fallback`` on any failure."""
+    from optimizer.providers import LLMRequest
+
+    request = LLMRequest(
+        prompt=(
+            "Classify the user's free-text request into exactly one workflow.\n"
+            "Choices: build, eval, optimize, deploy, skills, ask.\n"
+            "- build: create or modify an agent, prompt, tool, or guardrail.\n"
+            "- eval: run or design evaluations, benchmarks, regression tests.\n"
+            "- optimize: improve an existing agent from eval evidence.\n"
+            "- deploy: ship, release, canary, or roll back an agent.\n"
+            "- skills: author, list, or attach build-time skills.\n"
+            "- ask: read-only question that should not mutate config.\n\n"
+            f'User request: """{message.strip()}"""\n\n'
+            'Respond with a single JSON object: {"intent": "<choice>"}.'
+        ),
+        system=(
+            "You are AgentLab's free-text intent classifier. "
+            "Return only valid JSON; do not add commentary."
+        ),
+        temperature=0.0,
+        max_tokens=64,
+        metadata={"purpose": "intent_classification"},
+    )
+    try:
+        response = router.generate(request)
+    except Exception:
+        return fallback
+    return _parse_intent_response(response.text, fallback=fallback)
+
+
+def _parse_intent_response(text: str, *, fallback: str) -> str:
+    """Extract ``intent`` from a classifier response, with a safe fallback."""
+    import json
+
+    stripped = (text or "").strip()
+    if stripped.startswith("```"):
+        stripped = stripped.strip("`")
+        if stripped.lower().startswith("json"):
+            stripped = stripped[4:]
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return fallback
+    if not isinstance(parsed, dict):
+        return fallback
+    intent = parsed.get("intent")
+    if not isinstance(intent, str):
+        return fallback
+    intent = intent.strip().lower()
+    return intent if intent in _VALID_INTENTS else fallback
 
 
 def roles_for_intent(intent: str, message: str) -> list[SpecialistRole]:

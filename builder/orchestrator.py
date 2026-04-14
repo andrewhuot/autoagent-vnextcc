@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from builder.specialists import (
     SpecialistDefinition,
@@ -14,6 +14,9 @@ from builder.specialists import (
 )
 from builder.store import BuilderStore
 from builder.types import BuilderProject, BuilderSession, BuilderTask, SpecialistRole, new_id, now_ts
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from builder.skill_runtime import BuildtimeSkillRegistry
 
 
 COORDINATOR_WORKER_ORDER: tuple[SpecialistRole, ...] = (
@@ -204,10 +207,20 @@ class CoordinatorPlan:
 class BuilderOrchestrator:
     """Routes task intent to specialists and tracks handoff state."""
 
-    def __init__(self, store: BuilderStore) -> None:
+    def __init__(
+        self,
+        store: BuilderStore,
+        skill_registry: "BuildtimeSkillRegistry | None" = None,
+    ) -> None:
         self._store = store
         self._active_specialist_by_session: dict[str, SpecialistRole] = {}
         self._handoffs_by_session: dict[str, list[HandoffRecord]] = {}
+        self._skill_registry = skill_registry
+
+    @property
+    def skill_registry(self) -> "BuildtimeSkillRegistry | None":
+        """Return the bound build-time skill registry, if any."""
+        return self._skill_registry
 
     def start_session(self, session: BuilderSession) -> None:
         """Initialize orchestrator runtime state for the provided session."""
@@ -341,7 +354,7 @@ class BuilderOrchestrator:
         project = self._store.get_project(task.project_id)
         roles = self._select_worker_roles(normalized_goal, requested_roles=requested_roles)
         plan_id = f"coord-{new_id()}"
-        skill_context = self._build_skill_context(project)
+        skill_context = self._build_skill_context(project, goal=normalized_goal)
 
         root_node_id = f"{plan_id}:coordinator"
         tasks = [
@@ -363,6 +376,7 @@ class BuilderOrchestrator:
                     goal=normalized_goal,
                     project=project,
                     extra_context=extra_context or {},
+                    skill_context=skill_context,
                 )
             )
 
@@ -526,6 +540,7 @@ class BuilderOrchestrator:
         goal: str,
         project: BuilderProject | None,
         extra_context: dict[str, Any],
+        skill_context: dict[str, Any] | None = None,
     ) -> CoordinatorTask:
         """Create one worker node with tool, skill, and provenance boundaries."""
 
@@ -548,7 +563,11 @@ class BuilderOrchestrator:
             depends_on=[root_node_id],
             selected_tools=capability.tools,
             skill_layer=capability.skill_layer,
-            skill_candidates=self._skill_candidates_for_role(project, capability),
+            skill_candidates=self._skill_candidates_for_role(
+                project,
+                capability,
+                skill_context=skill_context,
+            ),
             permission_scope=capability.permission_scope,
             expected_artifacts=capability.expected_artifacts,
             routing_reason=routing_reason,
@@ -562,30 +581,71 @@ class BuilderOrchestrator:
             },
         )
 
-    def _build_skill_context(self, project: BuilderProject | None) -> dict[str, Any]:
-        """Return project skill context safe to include in coordinator plans."""
+    def _build_skill_context(
+        self,
+        project: BuilderProject | None,
+        *,
+        goal: str = "",
+    ) -> dict[str, Any]:
+        """Return project skill context safe to include in coordinator plans.
 
+        When a :class:`BuildtimeSkillRegistry` is bound to the orchestrator,
+        we surface goal-matched build-time skill descriptors here so the
+        runtime can inject them into worker context.
+        """
+
+        registry_descriptors: list[dict[str, Any]] = []
+        registry_matches: list[str] = []
+        if self._skill_registry is not None and goal:
+            try:
+                registry_descriptors = self._skill_registry.descriptors_for_goal(goal)
+            except Exception:
+                registry_descriptors = []
+            registry_matches = [
+                str(item.get("name") or item.get("skill_id") or "")
+                for item in registry_descriptors
+                if item.get("name") or item.get("skill_id")
+            ]
         return {
             "buildtime_skills": list(project.buildtime_skills if project else []),
             "runtime_skills": list(project.runtime_skills if project else []),
             "skill_store_loaded": project is not None,
+            "buildtime_registry_matches": registry_matches,
+            "buildtime_registry_descriptors": registry_descriptors,
         }
 
     def _skill_candidates_for_role(
         self,
         project: BuilderProject | None,
         capability: WorkerCapability,
+        *,
+        skill_context: dict[str, Any] | None = None,
     ) -> list[str]:
-        """Select project skill names that a worker may consider, without applying them."""
+        """Select skill names that a worker may consider, without applying them.
 
+        For build-layer roles, the result is the union of project-declared
+        build-time skill names and the registry's goal-matched names so the
+        coordinator can recommend skills the project hasn't yet adopted.
+        """
+
+        registry_matches: list[str] = []
+        if skill_context is not None:
+            raw = skill_context.get("buildtime_registry_matches")
+            if isinstance(raw, list):
+                registry_matches = [str(item) for item in raw if item]
         if project is None:
+            if capability.skill_layer == "build":
+                return list(dict.fromkeys(registry_matches))
             return []
         if capability.skill_layer == "build":
-            return list(project.buildtime_skills)
+            return list(
+                dict.fromkeys([*project.buildtime_skills, *registry_matches])
+            )
         if capability.skill_layer == "runtime":
             return list(project.runtime_skills)
         if capability.skill_layer == "mixed":
-            return list(dict.fromkeys([*project.buildtime_skills, *project.runtime_skills]))
+            combined = [*project.buildtime_skills, *project.runtime_skills, *registry_matches]
+            return list(dict.fromkeys(combined))
         return []
 
     def _build_plan_synthesis(

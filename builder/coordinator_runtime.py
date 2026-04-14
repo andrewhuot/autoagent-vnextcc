@@ -11,6 +11,7 @@ from typing import Any
 
 from builder.events import BuilderEventType, EventBroker
 from builder.orchestrator import BuilderOrchestrator
+from builder.skill_runtime import BuildtimeSkillRegistry
 from builder.store import BuilderStore
 from builder.types import (
     BuilderTask,
@@ -48,12 +49,14 @@ class CoordinatorWorkerRuntime:
         default_worker_adapter: WorkerAdapter | None = None,
         worker_mode: WorkerMode | None = None,
         checkpoint_manager: Any | None = None,
+        skill_registry: BuildtimeSkillRegistry | None = None,
     ) -> None:
         self._store = store
         self._orchestrator = orchestrator
         self._events = events
         self._worker_adapters = normalize_worker_adapters(worker_adapters)
         self._checkpoint_manager = checkpoint_manager
+        self._skill_registry = skill_registry or getattr(orchestrator, "skill_registry", None)
         requested_mode = worker_mode
         env_mode = str(os.environ.get("AGENTLAB_WORKER_MODE", "")).strip().lower()
         env_requested_mode = requested_mode is None and env_mode in {WorkerMode.LLM.value, WorkerMode.HYBRID.value}
@@ -278,6 +281,7 @@ class CoordinatorWorkerRuntime:
         run: CoordinatorExecutionRun,
     ) -> dict[str, Any]:
         project = self._store.get_project(task.project_id)
+        skill_descriptors = self._resolve_skill_descriptors(plan, node)
         return {
             "context_boundary": "fresh_worker_context",
             "run_id": run.run_id,
@@ -301,6 +305,7 @@ class CoordinatorWorkerRuntime:
             "permission_scope": list(node.get("permission_scope", [])),
             "skill_layer": node.get("skill_layer"),
             "skill_candidates": list(node.get("skill_candidates", [])),
+            "buildtime_skill_descriptors": skill_descriptors,
             "expected_artifacts": list(node.get("expected_artifacts", [])),
             "depends_on": list(node.get("depends_on", [])),
             "dependency_summaries": {
@@ -310,6 +315,47 @@ class CoordinatorWorkerRuntime:
             },
             "provenance": dict(node.get("provenance", {})),
         }
+
+    def _resolve_skill_descriptors(
+        self,
+        plan: dict[str, Any],
+        node: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Return rich descriptors for build-time skills relevant to a node.
+
+        Prefers descriptors already baked into the plan (orchestrator -> registry
+        match path). Falls back to a fresh registry lookup keyed on the node's
+        ``skill_candidates`` so worker context always has descriptions, not
+        just opaque ids.
+        """
+        plan_skill_context = plan.get("skill_context")
+        descriptors: list[dict[str, Any]] = []
+        if isinstance(plan_skill_context, dict):
+            raw = plan_skill_context.get("buildtime_registry_descriptors")
+            if isinstance(raw, list):
+                descriptors = [item for item in raw if isinstance(item, dict)]
+
+        if descriptors or self._skill_registry is None:
+            return descriptors
+
+        candidates = node.get("skill_candidates")
+        if not isinstance(candidates, list):
+            return []
+        skill_layer = node.get("skill_layer")
+        if skill_layer not in {"build", "mixed"}:
+            return []
+        out: list[dict[str, Any]] = []
+        for candidate in candidates:
+            if not isinstance(candidate, str) or not candidate:
+                continue
+            try:
+                skill = self._skill_registry.store.get_by_name(candidate)
+            except Exception:
+                skill = None
+            if skill is None or not skill.is_build_time():
+                continue
+            out.append(self._skill_registry.describe(skill))
+        return out
 
     def _worker_message(self, node: dict[str, Any], goal: str) -> str:
         return (
