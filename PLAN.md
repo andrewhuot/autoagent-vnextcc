@@ -350,8 +350,60 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       workbench surface green (269 tests across build_slash/
       optimize_slash/eval_slash/slash/transcript/status_bar/screens/
       tool_call_block/commands/app_stub).*
-- [ ] **T12** — Add `/deploy [--strategy canary|immediate]` slash command bound to
-      `deploy`. Require explicit confirm ("y/N") before execution.
+- [x] **T12** — Add `/deploy [--strategy canary|immediate]` slash command bound to
+      `deploy`. Require explicit confirm ("y/N") before execution. *Landed
+      `cli/workbench_app/deploy_slash.py` mirroring the T10 `/optimize`
+      streaming pattern, with two new seams: a `Prompter` callable
+      (defaults to `click.confirm`) and a handler-level confirmation gate
+      that runs **before** the subprocess spawns. Rule: prompt `"Deploy
+      with strategy=<s>? (y/N)"` unless the user passed `-y`/`--yes` or
+      `--dry-run` (dry-run is read-only; `-y` is an explicit opt-out).
+      `_infer_strategy(args)` mirrors `runner.deploy`'s positional-vs-flag
+      resolution — positional `canary`/`immediate` wins over `--strategy`,
+      and the legacy `release` workflow maps to `immediate` — so the
+      confirmation banner reflects what's actually about to happen. On
+      confirmation the handler appends `-y` to the stream args so
+      `runner.deploy`'s own `PermissionManager.require` doesn't re-prompt;
+      cancelled prompts echo yellow `"/deploy cancelled — no changes
+      made."` and return `display="skip"` without launching the runner.
+      `KeyboardInterrupt`/`EOFError` from the prompter are swallowed as
+      cancels so ctrl-c at the y/N gate doesn't crash the loop.
+      Subprocess command line: `python -m runner deploy <args>
+      --output-format stream-json` via `subprocess.Popen(bufsize=1,
+      text=True, stderr→stdout)`, unparseable stdout is rescued as a
+      synthetic `warning` event. Frozen `DeploySummary` tracks
+      events/phases/artifacts/warnings/errors/next_action + the
+      resolved `strategy`, and `_format_summary` renders green
+      `"/deploy complete — N events, strategy=<s>, M phase"` (singular
+      vs plural phase label honoured) or red `"/deploy failed"` when
+      any `error` event arrived. Meta messages surface the final
+      `next_action` as `"Suggested next: …"` and the last three
+      artifact paths. `DeployCommandError` (non-zero exit) and
+      `FileNotFoundError` (missing binary) both render red failure
+      lines and return `display="skip"` so dispatch doesn't
+      double-print. `build_builtin_registry()` now wires `/deploy`
+      under `include_streaming=True` (15 built-ins + 1 extras slot =
+      16). Updated `tests/test_workbench_slash.py` registry
+      assertions accordingly. Coverage:
+      `tests/test_workbench_deploy_slash.py` (31 tests) —
+      `_parse_args` pass-through; `_infer_strategy` default + flag w/
+      space + `--strategy=X` + positional `canary`/`immediate`/`release`
+      + positional-overrides-default; `_is_preconfirmed` for `-y`/
+      `--yes`/absent; `_is_dry_run`; `_render_event` happy path +
+      orphan; `_summarise` counters + strategy threading + empty
+      stream + artifact-without-path fallback; `_format_summary`
+      green clean / singular phase / red on errors / warnings +
+      artifacts listing; handler integration via `dispatch()` — prompt
+      + `-y` append on confirm, cancel-on-`False` path (no subprocess
+      call, skip display), `KeyboardInterrupt` → cancel, `-y` on args
+      skips prompt + no double append, `--dry-run` skips prompt + no
+      `-y` appended, `DeployCommandError` → skip with raw result,
+      `FileNotFoundError` → skip with `raw_result is None`, errors
+      surfaced in summary, artifact meta capped at last three,
+      default-seams wiring, registry wiring, frozen-dataclass guard.
+      Full workbench surface green (406 tests across deploy_slash/
+      build_slash/optimize_slash/eval_slash/slash/transcript/
+      status_bar/screens/tool_call_block/commands/app_stub/cli_workbench).*
 - [ ] **T13** — Implement `/skills` as a `local-jsx`-style screen (`SkillsScreen` from
       T08b) modeled on the mirror's `SkillsMenu`. Arrow-key navigable list with
       `list / show / add / edit / remove` actions; `$EDITOR` opens for add/edit; delegates
