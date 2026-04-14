@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from api.routes.builder import router
+from builder.coordinator_runtime import CoordinatorWorkerRuntime
 from builder.events import EventBroker
 from builder.execution import BuilderExecutionEngine
 from builder.metrics import BuilderMetricsService
@@ -38,6 +39,12 @@ def test_app(tmp_path):
     )
     metrics_service = BuilderMetricsService(store=store, permissions=permissions)
 
+    coordinator_runtime = CoordinatorWorkerRuntime(
+        store=store,
+        orchestrator=orchestrator,
+        events=events,
+    )
+
     app.state.builder_store = store
     app.state.builder_events = events
     app.state.builder_orchestrator = orchestrator
@@ -45,6 +52,7 @@ def test_app(tmp_path):
     app.state.builder_project_manager = project_manager
     app.state.builder_execution = execution
     app.state.builder_metrics = metrics_service
+    app.state.builder_coordinator_runtime = coordinator_runtime
 
     return app
 
@@ -459,113 +467,72 @@ class TestSpecialistsAPI:
 # Coordinator execution
 # ---------------------------------------------------------------------------
 
-class TestCoordinatorExecutionAPI:
-    def _setup_task_with_plan(self, client):
-        project_resp = client.post(
+class TestCoordinatorRuntimeAPI:
+    def test_execute_and_inspect_coordinator_run(self, client):
+        project_id = client.post(
             "/api/builder/projects",
-            json={"name": "Exec Project", "buildtime_skills": ["prompt_hardening"]},
-        )
-        project_id = project_resp.json()["project_id"]
-        session_resp = client.post(
-            "/api/builder/sessions",
-            json={"project_id": project_id, "title": "exec session"},
-        )
-        session_id = session_resp.json()["session_id"]
-        task_resp = client.post(
-            "/api/builder/tasks",
             json={
-                "session_id": session_id,
-                "project_id": project_id,
-                "title": "build and eval",
-                "description": "build and eval",
+                "name": "P",
+                "buildtime_skills": ["prompt_hardening"],
+                "runtime_skills": ["order_lookup"],
             },
-        )
-        task_id = task_resp.json()["task_id"]
+        ).json()["project_id"]
+        session_id = client.post("/api/builder/sessions", json={"project_id": project_id}).json()["session_id"]
+        task_id = client.post("/api/builder/tasks", json={
+            "project_id": project_id,
+            "session_id": session_id,
+            "title": "T",
+            "description": "Build, evaluate, and deploy a support agent",
+            "mode": "ask",
+        }).json()["task_id"]
 
-        client.post(
+        plan_resp = client.post(
             "/api/builder/coordinator/plan",
             json={
                 "task_id": task_id,
-                "goal": "Build an agent and add evals",
+                "goal": "Build, evaluate, and deploy a support agent",
+                "materialize_tasks": True,
             },
         )
-        return task_id
+        plan_id = plan_resp.json()["plan_id"]
 
-    def test_execute_plan_returns_completed_run(self, client):
-        task_id = self._setup_task_with_plan(client)
-        resp = client.post(
+        execute_resp = client.post(
             "/api/builder/coordinator/execute",
-            json={"task_id": task_id},
+            json={"task_id": task_id, "plan_id": plan_id},
         )
 
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "completed"
-        assert data["task_id"] == task_id
-        assert len(data["worker_states"]) > 0
-        assert data["synthesis"]["completed_count"] > 0
+        assert execute_resp.status_code == 200
+        run = execute_resp.json()
+        assert run["status"] == "completed"
+        assert run["plan_id"] == plan_id
+        assert any(worker["worker_role"] == "eval_author" for worker in run["worker_states"])
+        assert run["coordinator_synthesis"]["status"] == "completed"
 
-    def test_get_execution_after_execute(self, client):
-        task_id = self._setup_task_with_plan(client)
-        client.post(
-            "/api/builder/coordinator/execute",
-            json={"task_id": task_id},
-        )
+        list_resp = client.get(f"/api/builder/coordinator/runs?task_id={task_id}")
+        assert list_resp.status_code == 200
+        assert [entry["run_id"] for entry in list_resp.json()] == [run["run_id"]]
 
-        resp = client.get(f"/api/builder/coordinator/execution/{task_id}")
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "completed"
+        get_resp = client.get(f"/api/builder/coordinator/runs/{run['run_id']}")
+        assert get_resp.status_code == 200
+        assert get_resp.json()["worker_states"][0]["phase_history"]
 
-    def test_get_execution_404_without_execution(self, client):
-        project_resp = client.post(
-            "/api/builder/projects", json={"name": "P"}
-        )
-        project_id = project_resp.json()["project_id"]
-        session_resp = client.post(
-            "/api/builder/sessions",
-            json={"project_id": project_id},
-        )
-        session_id = session_resp.json()["session_id"]
-        task_resp = client.post(
-            "/api/builder/tasks",
-            json={
-                "session_id": session_id,
-                "project_id": project_id,
-                "title": "no plan",
-                "description": "no plan",
-            },
-        )
-        task_id = task_resp.json()["task_id"]
-
-        resp = client.get(f"/api/builder/coordinator/execution/{task_id}")
-        assert resp.status_code == 404
+        events_resp = client.get(f"/api/builder/events?session_id={session_id}")
+        event_types = [entry["event_type"] for entry in events_resp.json()]
+        assert "coordinator.execution.started" in event_types
+        assert "worker.gathering_context" in event_types
+        assert "coordinator.synthesis.completed" in event_types
 
     def test_execute_without_plan_400(self, client):
-        project_resp = client.post(
-            "/api/builder/projects", json={"name": "P"}
-        )
-        project_id = project_resp.json()["project_id"]
-        session_resp = client.post(
-            "/api/builder/sessions",
-            json={"project_id": project_id},
-        )
-        session_id = session_resp.json()["session_id"]
-        task_resp = client.post(
-            "/api/builder/tasks",
-            json={
-                "session_id": session_id,
-                "project_id": project_id,
-                "title": "no plan",
-                "description": "no plan",
-            },
-        )
-        task_id = task_resp.json()["task_id"]
+        project_id = client.post("/api/builder/projects", json={"name": "P"}).json()["project_id"]
+        session_id = client.post("/api/builder/sessions", json={"project_id": project_id}).json()["session_id"]
+        task_id = client.post("/api/builder/tasks", json={
+            "session_id": session_id,
+            "project_id": project_id,
+            "title": "no plan",
+            "description": "no plan",
+        }).json()["task_id"]
 
-        resp = client.post(
-            "/api/builder/coordinator/execute",
-            json={"task_id": task_id},
-        )
+        resp = client.post("/api/builder/coordinator/execute", json={"task_id": task_id})
         assert resp.status_code == 400
 
     def test_execute_with_nonexistent_task_404(self, client):

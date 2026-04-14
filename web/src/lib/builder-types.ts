@@ -289,6 +289,98 @@ export interface ActionLogEntry {
   details: Record<string, unknown>;
 }
 
+export type WorkerExecutionStatus =
+  | 'pending'
+  | 'gathering_context'
+  | 'acting'
+  | 'verifying'
+  | 'completed'
+  | 'failed'
+  | 'blocked';
+
+export type CoordinatorExecutionStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'blocked';
+
+export interface WorkerExecutionResult {
+  node_id: string;
+  worker_role: SpecialistRole;
+  summary: string;
+  artifacts: Record<string, unknown>;
+  verification: Record<string, unknown>;
+  context_used: Record<string, unknown>;
+  output_payload: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+  created_at: number;
+}
+
+export interface WorkerExecutionState {
+  node_id: string;
+  worker_role: SpecialistRole;
+  status: WorkerExecutionStatus;
+  title: string;
+  depends_on: string[];
+  context_snapshot: Record<string, unknown>;
+  result: WorkerExecutionResult | null;
+  phase_history: Array<{ status: WorkerExecutionStatus; timestamp: number }>;
+  blocker_reason: string | null;
+  error: string | null;
+  started_at: number | null;
+  updated_at: number;
+  completed_at: number | null;
+}
+
+export interface CoordinatorExecutionRun {
+  run_id: string;
+  plan_id: string;
+  root_task_id: string;
+  session_id: string;
+  project_id: string;
+  goal: string;
+  status: CoordinatorExecutionStatus;
+  worker_states: WorkerExecutionState[];
+  coordinator_synthesis: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+  started_at: number | null;
+  completed_at: number | null;
+  error: string | null;
+}
+
+export interface CoordinatorTaskNode {
+  task_id: string;
+  title: string;
+  description: string;
+  worker_role: SpecialistRole;
+  depends_on: string[];
+  selected_tools: string[];
+  skill_layer: string;
+  skill_candidates: string[];
+  permission_scope: string[];
+  expected_artifacts: string[];
+  routing_reason: string;
+  status: string;
+  provenance: Record<string, unknown>;
+  materialized_task_id?: string;
+}
+
+export interface CoordinatorPlan {
+  plan_id: string;
+  mode: 'coordinator_worker';
+  root_task_id: string;
+  session_id: string;
+  project_id: string;
+  goal: string;
+  tasks: CoordinatorTaskNode[];
+  worker_registry: Array<Record<string, unknown>>;
+  skill_context: Record<string, unknown>;
+  synthesis: Record<string, unknown>;
+  created_at: number;
+}
+
 export type BuilderEventType =
   | 'message.delta'
   | 'task.started'
@@ -300,79 +392,31 @@ export type BuilderEventType =
   | 'approval.requested'
   | 'task.completed'
   | 'task.failed'
-  | 'execution.started'
-  | 'worker.phase_changed'
-  | 'execution.completed';
+  | 'session.opened'
+  | 'session.closed'
+  | 'coordinator.execution.started'
+  | 'worker.gathering_context'
+  | 'worker.acting'
+  | 'worker.verifying'
+  | 'worker.completed'
+  | 'worker.failed'
+  | 'worker.blocked'
+  | 'coordinator.synthesis.completed'
+  | 'coordinator.execution.completed'
+  | 'coordinator.execution.failed'
+  | 'coordinator.execution.blocked';
 
-export type WorkerNodePhase =
-  | 'pending'
-  | 'gathering_context'
-  | 'acting'
-  | 'verifying'
-  | 'completed'
-  | 'failed'
-  | 'blocked';
-
-export type ExecutionRunStatus = 'pending' | 'running' | 'completed' | 'failed';
-
-export interface WorkerExecutionResult {
-  node_id: string;
-  worker_role: string;
-  phase: WorkerNodePhase;
-  context_summary: string;
-  outputs: Record<string, unknown>;
-  artifacts_produced: string[];
-  summary: string;
-  error: string | null;
-  started_at: number | null;
-  completed_at: number | null;
-}
-
-export interface CoordinatorExecutionRun {
-  run_id: string;
-  plan_id: string;
+export interface CoordinatorPlanRequest {
   task_id: string;
-  session_id: string;
-  project_id: string;
   goal: string;
-  status: ExecutionRunStatus;
-  worker_states: Record<string, WorkerExecutionResult>;
-  synthesis: Record<string, unknown>;
-  started_at: number | null;
-  completed_at: number | null;
-  created_at: number;
-  updated_at: number;
+  requested_roles?: SpecialistRole[];
+  materialize_tasks?: boolean;
+  extra_context?: Record<string, unknown>;
 }
 
-export interface CoordinatorPlan {
-  plan_id: string;
-  mode: string;
-  root_task_id: string;
-  session_id: string;
-  project_id: string;
-  goal: string;
-  tasks: CoordinatorPlanNode[];
-  worker_registry: Record<string, unknown>[];
-  skill_context: Record<string, unknown>;
-  synthesis: Record<string, unknown>;
-  created_at: number;
-}
-
-export interface CoordinatorPlanNode {
+export interface CoordinatorExecuteRequest {
   task_id: string;
-  title: string;
-  description: string;
-  worker_role: string;
-  depends_on: string[];
-  selected_tools: string[];
-  skill_layer: string;
-  skill_candidates: string[];
-  permission_scope: string[];
-  expected_artifacts: string[];
-  routing_reason: string;
-  status: string;
-  provenance: Record<string, unknown>;
-  materialized_task_id?: string;
+  plan_id?: string;
 }
 
 export interface BuilderEvent<T = Record<string, unknown>> {

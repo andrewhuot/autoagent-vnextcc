@@ -2,6 +2,7 @@
 
 from builder.artifacts import ArtifactCardFactory
 from builder.events import BuilderEvent, BuilderEventType, EventBroker, event_to_dict, serialize_sse_event
+from builder.coordinator_runtime import CoordinatorWorkerRuntime
 from builder.execution import BuilderExecutionEngine
 from builder.metrics import BuilderMetricsService, BuilderMetricsSnapshot
 from builder.orchestrator import (
@@ -35,6 +36,8 @@ from builder.types import (
     BuilderProposal,
     BuilderSession,
     BuilderTask,
+    CoordinatorExecutionRun,
+    CoordinatorExecutionStatus,
     EvalBundle,
     ExecutionMode,
     PrivilegedAction,
@@ -44,6 +47,9 @@ from builder.types import (
     SpecialistRole,
     TaskStatus,
     TraceBookmark,
+    WorkerExecutionResult,
+    WorkerExecutionState,
+    WorkerExecutionStatus,
     WorktreeRef,
     new_id,
     now_ts,
@@ -69,6 +75,9 @@ __all__ = [
     "BuilderSession",
     "BuilderStore",
     "BuilderTask",
+    "CoordinatorExecutionRun",
+    "CoordinatorExecutionStatus",
+    "CoordinatorWorkerRuntime",
     "CoordinatorPlan",
     "CoordinatorTask",
     "EvalBundle",
@@ -86,6 +95,9 @@ __all__ = [
     "TakeoverState",
     "TaskStatus",
     "TraceBookmark",
+    "WorkerExecutionResult",
+    "WorkerExecutionState",
+    "WorkerExecutionStatus",
     "WorkerCapability",
     "WorktreeRef",
     "detect_specialist_by_intent",

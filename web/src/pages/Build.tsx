@@ -64,7 +64,7 @@ import type {
   TranscriptReport,
   TranscriptReportSummary,
 } from '../lib/types';
-import type { ArtifactRef, CoordinatorExecutionRun, WorkerExecutionResult } from '../lib/builder-types';
+import type { ArtifactRef, CoordinatorExecutionRun, WorkerExecutionState } from '../lib/builder-types';
 import { builderApi } from '../lib/builder-api';
 import { classNames, statusLabel } from '../lib/utils';
 
@@ -3815,31 +3815,39 @@ const PHASE_COLORS: Record<string, string> = {
   blocked: 'bg-orange-100 text-orange-700',
 };
 
-function WorkerNodeCard({ result }: { result: WorkerExecutionResult }) {
+function WorkerNodeCard({ worker }: { worker: WorkerExecutionState }) {
+  const phaseHistory = worker.phase_history.map((p) => p.status).join(' \u2192 ');
+  const artifacts = worker.result?.artifacts ? Object.keys(worker.result.artifacts) : [];
   return (
     <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-semibold text-gray-900">
-          {result.worker_role.replace(/_/g, ' ')}
+          {String(worker.worker_role).replace(/_/g, ' ')}
         </span>
         <span
           className={classNames(
             'rounded-full px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
-            PHASE_COLORS[result.phase] ?? 'bg-gray-100 text-gray-600'
+            PHASE_COLORS[worker.status] ?? 'bg-gray-100 text-gray-600'
           )}
         >
-          {PHASE_LABELS[result.phase] ?? result.phase}
+          {PHASE_LABELS[worker.status] ?? worker.status}
         </span>
       </div>
-      {result.summary && (
-        <p className="mt-2 text-sm leading-relaxed text-gray-600">{result.summary}</p>
+      {phaseHistory && (
+        <p className="mt-1 text-xs text-gray-400">{phaseHistory}</p>
       )}
-      {result.error && (
-        <p className="mt-2 text-sm text-red-600">Error: {result.error}</p>
+      {worker.result?.summary && (
+        <p className="mt-2 text-sm leading-relaxed text-gray-600">{worker.result.summary}</p>
       )}
-      {result.artifacts_produced.length > 0 && (
+      {worker.error && (
+        <p className="mt-2 text-sm text-red-600">Error: {worker.error}</p>
+      )}
+      {worker.blocker_reason && (
+        <p className="mt-2 text-sm text-orange-600">{worker.blocker_reason}</p>
+      )}
+      {artifacts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
-          {result.artifacts_produced.map((artifact) => (
+          {artifacts.map((artifact) => (
             <span
               key={artifact}
               className="rounded-md bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700"
@@ -3864,7 +3872,7 @@ function CoordinatorExecutionPanel() {
     setLoading(true);
     setError(null);
     try {
-      const run = await builderApi.coordinator.execute(taskId.trim());
+      const run = await builderApi.coordinator.execute({ task_id: taskId.trim() });
       setExecution(run);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Execution failed');
@@ -3878,8 +3886,12 @@ function CoordinatorExecutionPanel() {
     setLoading(true);
     setError(null);
     try {
-      const run = await builderApi.coordinator.getExecution(taskId.trim());
-      setExecution(run);
+      const runs = await builderApi.coordinator.listRuns({ taskId: taskId.trim() });
+      if (runs.length > 0) {
+        setExecution(runs[0]);
+      } else {
+        setError('No execution found for this task');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No execution found');
     } finally {
@@ -3887,10 +3899,8 @@ function CoordinatorExecutionPanel() {
     }
   }
 
-  const workerResults = execution
-    ? Object.values(execution.worker_states)
-    : [];
-  const synthesis = execution?.synthesis as Record<string, unknown> | undefined;
+  const workerStates = execution?.worker_states ?? [];
+  const synthesis = execution?.coordinator_synthesis as Record<string, unknown> | undefined;
 
   return (
     <div className="space-y-6">
@@ -3920,7 +3930,7 @@ function CoordinatorExecutionPanel() {
             disabled={loading || !taskId.trim()}
             className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:opacity-50"
           >
-            {loading ? 'Running…' : 'Execute Plan'}
+            {loading ? 'Running\u2026' : 'Execute Plan'}
           </button>
           <button
             type="button"
@@ -3954,7 +3964,9 @@ function CoordinatorExecutionPanel() {
                     ? 'bg-green-100 text-green-700'
                     : execution.status === 'failed'
                       ? 'bg-red-100 text-red-700'
-                      : 'bg-blue-100 text-blue-700'
+                      : execution.status === 'blocked'
+                        ? 'bg-orange-100 text-orange-700'
+                        : 'bg-blue-100 text-blue-700'
                 )}
               >
                 {execution.status}
@@ -3966,10 +3978,10 @@ function CoordinatorExecutionPanel() {
 
           <div className="space-y-3">
             <h4 className="text-sm font-semibold text-gray-700">
-              Worker Results ({workerResults.length})
+              Workers ({workerStates.length})
             </h4>
-            {workerResults.map((result) => (
-              <WorkerNodeCard key={result.node_id} result={result} />
+            {workerStates.map((worker) => (
+              <WorkerNodeCard key={worker.node_id} worker={worker} />
             ))}
           </div>
 
@@ -3977,26 +3989,26 @@ function CoordinatorExecutionPanel() {
             <div className="rounded-[28px] border border-sky-100 bg-sky-50/50 p-6 shadow-sm">
               <h4 className="text-sm font-semibold text-sky-900">Coordinator Synthesis</h4>
               <p className="mt-2 text-sm text-sky-800">
-                {String(synthesis.status ?? '')}
+                {String(synthesis.summary ?? synthesis.status ?? '')}
               </p>
               <div className="mt-3 grid grid-cols-3 gap-3 text-center">
                 <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
                   <p className="text-lg font-bold text-green-600">
-                    {String(synthesis.completed_count ?? 0)}
+                    {String(synthesis.completed_worker_count ?? 0)}
                   </p>
                   <p className="text-[11px] font-medium text-gray-500">Completed</p>
                 </div>
                 <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
                   <p className="text-lg font-bold text-red-600">
-                    {String(synthesis.failed_count ?? 0)}
+                    {String(Number(synthesis.worker_count ?? 0) - Number(synthesis.completed_worker_count ?? 0))}
                   </p>
-                  <p className="text-[11px] font-medium text-gray-500">Failed</p>
+                  <p className="text-[11px] font-medium text-gray-500">Other</p>
                 </div>
                 <div className="rounded-xl bg-white px-3 py-2 shadow-sm">
-                  <p className="text-lg font-bold text-orange-600">
-                    {String(synthesis.blocked_count ?? 0)}
+                  <p className="text-lg font-bold text-sky-600">
+                    {String(synthesis.worker_count ?? 0)}
                   </p>
-                  <p className="text-[11px] font-medium text-gray-500">Blocked</p>
+                  <p className="text-[11px] font-medium text-gray-500">Total</p>
                 </div>
               </div>
               {synthesis.next_step ? (

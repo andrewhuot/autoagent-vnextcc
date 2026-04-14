@@ -11,13 +11,13 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from builder.chat_service import BuilderChatService
-from builder.coordinator_runtime import CoordinatorRuntime
 from builder.events import BuilderEventType, event_to_dict, serialize_sse_event
 from builder.specialists import list_specialists
 from builder.types import (
     ApprovalScope,
     ArtifactType,
     BuilderSession,
+    CoordinatorExecutionStatus,
     ExecutionMode,
     PrivilegedAction,
     RELEASE_TRANSITIONS,
@@ -143,8 +143,9 @@ class CreateReleaseRequest(BaseModel):
     changelog: str = ""
 
 
-class ExecutePlanRequest(BaseModel):
+class CoordinatorExecuteRequest(BaseModel):
     task_id: str
+    plan_id: str | None = None
 
 
 class PromoteReleaseRequest(BaseModel):
@@ -706,42 +707,51 @@ async def create_coordinator_plan(
 @router.post("/coordinator/execute")
 async def execute_coordinator_plan(
     request: Request,
-    body: ExecutePlanRequest,
+    body: CoordinatorExecuteRequest,
 ) -> dict[str, Any]:
-    """Execute a coordinator plan that was previously created on a task."""
-    store = _state(request, "builder_store")
-    events = _state(request, "builder_events")
-    task = store.get_task(body.task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    plan = task.metadata.get("coordinator_plan")
-    if plan is None:
-        raise HTTPException(status_code=400, detail="Task has no coordinator plan to execute")
-
-    runtime = CoordinatorRuntime(store=store, events=events)
-    run = runtime.execute_plan(task=task, plan=plan)
-    return _jsonable(runtime._serialize_run(run))
+    """Run a persisted coordinator plan and return durable runtime truth."""
+    runtime = _state(request, "builder_coordinator_runtime")
+    try:
+        run = runtime.execute_plan(task_id=body.task_id, plan_id=body.plan_id)
+    except ValueError as exc:
+        message = str(exc)
+        status_code = 404 if "not found" in message.lower() else 400
+        raise HTTPException(status_code=status_code, detail=message) from exc
+    return _jsonable(run)
 
 
-@router.get("/coordinator/execution/{task_id}")
-async def get_coordinator_execution(
+@router.get("/coordinator/runs")
+async def list_coordinator_runs(
     request: Request,
-    task_id: str,
-) -> dict[str, Any]:
-    """Retrieve the latest coordinator execution run for a task."""
+    task_id: str | None = None,
+    plan_id: str | None = None,
+    session_id: str | None = None,
+    status: str | None = None,
+) -> list[dict[str, Any]]:
+    """List persisted coordinator runs for plan, task, session, or status inspection."""
     store = _state(request, "builder_store")
-    events = _state(request, "builder_events")
-    task = store.get_task(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+    try:
+        parsed_status = CoordinatorExecutionStatus(status) if status else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid coordinator run status: {status}") from exc
+    runs = store.list_coordinator_runs(
+        plan_id=plan_id,
+        root_task_id=task_id,
+        session_id=session_id,
+        status=parsed_status,
+        limit=1000,
+    )
+    return [_jsonable(run) for run in runs]
 
-    runtime = CoordinatorRuntime(store=store, events=events)
-    run = runtime.get_execution(task)
+
+@router.get("/coordinator/runs/{run_id}")
+async def get_coordinator_run(request: Request, run_id: str) -> dict[str, Any]:
+    """Fetch one coordinator run with worker states, results, and synthesis."""
+    store = _state(request, "builder_store")
+    run = store.get_coordinator_run(run_id)
     if run is None:
-        raise HTTPException(status_code=404, detail="No execution found for this task")
-
-    return _jsonable(runtime._serialize_run(run))
+        raise HTTPException(status_code=404, detail="Coordinator run not found")
+    return _jsonable(run)
 
 
 @router.get("/specialists")

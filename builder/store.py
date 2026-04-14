@@ -19,6 +19,8 @@ from builder.types import (
     BuilderProposal,
     BuilderSession,
     BuilderTask,
+    CoordinatorExecutionRun,
+    CoordinatorExecutionStatus,
     EvalBundle,
     ExecutionMode,
     PrivilegedAction,
@@ -28,6 +30,9 @@ from builder.types import (
     SpecialistRole,
     TaskStatus,
     TraceBookmark,
+    WorkerExecutionResult,
+    WorkerExecutionState,
+    WorkerExecutionStatus,
     WorktreeRef,
 )
 
@@ -172,6 +177,71 @@ def _hydrate_release(payload: dict[str, Any]) -> ReleaseCandidate:
     return model
 
 
+def _hydrate_worker_result(payload: dict[str, Any]) -> WorkerExecutionResult:
+    model = WorkerExecutionResult(
+        node_id=str(payload.get("node_id") or ""),
+        worker_role=_enum(
+            SpecialistRole,
+            payload.get("worker_role", SpecialistRole.ORCHESTRATOR.value),
+            SpecialistRole.ORCHESTRATOR,
+        ),  # type: ignore[arg-type]
+    )
+    for key, value in payload.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    model.worker_role = _enum(
+        SpecialistRole,
+        payload.get("worker_role", model.worker_role),
+        model.worker_role,
+    )  # type: ignore[assignment]
+    return model
+
+
+def _hydrate_worker_state(payload: dict[str, Any]) -> WorkerExecutionState:
+    model = WorkerExecutionState(
+        node_id=str(payload.get("node_id") or ""),
+        worker_role=_enum(
+            SpecialistRole,
+            payload.get("worker_role", SpecialistRole.ORCHESTRATOR.value),
+            SpecialistRole.ORCHESTRATOR,
+        ),  # type: ignore[arg-type]
+    )
+    for key, value in payload.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    model.worker_role = _enum(
+        SpecialistRole,
+        payload.get("worker_role", model.worker_role),
+        model.worker_role,
+    )  # type: ignore[assignment]
+    model.status = _enum(
+        WorkerExecutionStatus,
+        payload.get("status", model.status),
+        model.status,
+    )  # type: ignore[assignment]
+    result = payload.get("result")
+    model.result = _hydrate_worker_result(result) if isinstance(result, dict) else None
+    return model
+
+
+def _hydrate_coordinator_run(payload: dict[str, Any]) -> CoordinatorExecutionRun:
+    model = CoordinatorExecutionRun()
+    for key, value in payload.items():
+        if hasattr(model, key):
+            setattr(model, key, value)
+    model.status = _enum(
+        CoordinatorExecutionStatus,
+        payload.get("status", model.status),
+        model.status,
+    )  # type: ignore[assignment]
+    model.worker_states = [
+        _hydrate_worker_state(worker)
+        for worker in payload.get("worker_states", [])
+        if isinstance(worker, dict)
+    ]
+    return model
+
+
 class BuilderStore:
     """SQLite store for all Builder first-class objects."""
 
@@ -310,6 +380,24 @@ class BuilderStore:
                     updated_at REAL NOT NULL,
                     payload TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS builder_coordinator_runs (
+                    run_id TEXT PRIMARY KEY,
+                    plan_id TEXT NOT NULL,
+                    root_task_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    project_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    updated_at REAL NOT NULL,
+                    payload TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_builder_coord_runs_plan
+                    ON builder_coordinator_runs(plan_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_builder_coord_runs_task
+                    ON builder_coordinator_runs(root_task_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_builder_coord_runs_session
+                    ON builder_coordinator_runs(session_id, created_at DESC);
                 """
             )
             conn.commit()
@@ -926,6 +1014,76 @@ class BuilderStore:
 
     def delete_release(self, release_id: str) -> bool:
         return self._delete_one("builder_release_candidates", "release_id", release_id)
+
+    # ------------------------------------------------------------------
+    # Coordinator runs
+    # ------------------------------------------------------------------
+
+    def save_coordinator_run(self, run: CoordinatorExecutionRun) -> None:
+        """Persist a coordinator run so worker lifecycle state survives restarts."""
+        with _connect(self.db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO builder_coordinator_runs
+                    (run_id, plan_id, root_task_id, session_id, project_id, status, created_at, updated_at, payload)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.run_id,
+                    run.plan_id,
+                    run.root_task_id,
+                    run.session_id,
+                    run.project_id,
+                    run.status.value,
+                    run.created_at,
+                    run.updated_at,
+                    _serialize(run),
+                ),
+            )
+            conn.commit()
+
+    def get_coordinator_run(self, run_id: str) -> CoordinatorExecutionRun | None:
+        """Load one coordinator run for API inspection."""
+        row = self._get_one("builder_coordinator_runs", "run_id", run_id)
+        if row is None:
+            return None
+        return _hydrate_coordinator_run(_deserialize(row["payload"]))
+
+    def list_coordinator_runs(
+        self,
+        plan_id: str | None = None,
+        root_task_id: str | None = None,
+        session_id: str | None = None,
+        status: CoordinatorExecutionStatus | None = None,
+        limit: int = 100,
+    ) -> list[CoordinatorExecutionRun]:
+        """Return persisted coordinator runs scoped by plan, task, session, or status."""
+        clauses: list[str] = []
+        params: list[Any] = []
+        if plan_id is not None:
+            clauses.append("plan_id = ?")
+            params.append(plan_id)
+        if root_task_id is not None:
+            clauses.append("root_task_id = ?")
+            params.append(root_task_id)
+        if session_id is not None:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with _connect(self.db_path) as conn:
+            rows = conn.execute(
+                f"SELECT payload FROM builder_coordinator_runs {where} ORDER BY created_at DESC LIMIT ?",
+                tuple(params),
+            ).fetchall()
+        return [_hydrate_coordinator_run(_deserialize(row["payload"])) for row in rows]
+
+    def delete_coordinator_run(self, run_id: str) -> bool:
+        """Delete one coordinator run."""
+        return self._delete_one("builder_coordinator_runs", "run_id", run_id)
 
     # ------------------------------------------------------------------
     # Internal helpers

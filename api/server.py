@@ -322,6 +322,14 @@ async def lifespan(app: FastAPI):
     builder_metrics = BuilderMetricsService(builder_store, builder_permissions)
     builder_artifacts = ArtifactCardFactory()
 
+    from builder.coordinator_runtime import CoordinatorWorkerRuntime
+
+    builder_coordinator_runtime = CoordinatorWorkerRuntime(
+        store=builder_store,
+        orchestrator=builder_orchestrator,
+        events=builder_events,
+    )
+
     # Eagerly create the builder chat service with SQLite persistence
     from builder.chat_service import BuilderChatService
 
@@ -370,6 +378,7 @@ async def lifespan(app: FastAPI):
     app.state.builder_execution = builder_execution
     app.state.builder_metrics = builder_metrics
     app.state.builder_artifacts = builder_artifacts
+    app.state.builder_coordinator_runtime = builder_coordinator_runtime
     app.state.workbench_store = WorkbenchStore(
         os.environ.get("AGENTLAB_WORKBENCH_STORE", ".agentlab/workbench_projects.json")
     )

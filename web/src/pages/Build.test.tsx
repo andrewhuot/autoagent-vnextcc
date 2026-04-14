@@ -869,36 +869,55 @@ describe('Coordinator tab', () => {
     const mockRun = {
       run_id: 'run-abc123',
       plan_id: 'plan-xyz',
-      task_id: 'task-1',
+      root_task_id: 'task-1',
       session_id: 'sess-1',
       project_id: 'proj-1',
       goal: 'Build an agent',
       status: 'completed',
-      worker_states: {
-        'worker-1': {
+      worker_states: [
+        {
           node_id: 'worker-1',
           worker_role: 'build_engineer',
-          phase: 'completed',
-          context_summary: 'gathered context',
-          outputs: {},
-          artifacts_produced: ['source_diff'],
-          summary: 'Build Engineer completed successfully',
+          status: 'completed',
+          title: 'Build Engineer',
+          depends_on: [],
+          context_snapshot: {},
+          result: {
+            node_id: 'worker-1',
+            worker_role: 'build_engineer',
+            summary: 'Build Engineer completed successfully',
+            artifacts: { source_diff: {} },
+            verification: { verified: true },
+            context_used: {},
+            output_payload: {},
+            provenance: {},
+            created_at: 1000,
+          },
+          phase_history: [
+            { status: 'gathering_context', timestamp: 1000 },
+            { status: 'acting', timestamp: 1000.1 },
+            { status: 'verifying', timestamp: 1000.2 },
+            { status: 'completed', timestamp: 1001 },
+          ],
+          blocker_reason: null,
           error: null,
           started_at: 1000,
+          updated_at: 1001,
           completed_at: 1001,
         },
-      },
-      synthesis: {
-        status: 'all workers completed',
-        completed_count: 1,
-        failed_count: 0,
-        blocked_count: 0,
-        next_step: 'Review artifacts and proceed.',
+      ],
+      coordinator_synthesis: {
+        status: 'completed',
+        worker_count: 1,
+        completed_worker_count: 1,
+        summary: 'Coordinator executed workers and synthesized 1 completed result.',
+        next_step: 'Review worker artifacts, then decide whether to apply or route a follow-up task.',
       },
       started_at: 1000,
       completed_at: 1001,
       created_at: 1000,
       updated_at: 1001,
+      error: null,
     };
 
     const fetchMock = vi.fn((url: string) => {
@@ -922,6 +941,6 @@ describe('Coordinator tab', () => {
     expect(screen.getByText(/Build an agent/)).toBeInTheDocument();
     expect(screen.getByText('build engineer')).toBeInTheDocument();
     expect(screen.getByText('source_diff')).toBeInTheDocument();
-    expect(screen.getByText('all workers completed')).toBeInTheDocument();
+    expect(screen.getByText(/Coordinator executed workers/)).toBeInTheDocument();
   });
 });

@@ -41,9 +41,17 @@ class BuilderEventType(str, Enum):
     TASK_FAILED = "task.failed"
     SESSION_OPENED = "session.opened"
     SESSION_CLOSED = "session.closed"
-    EXECUTION_STARTED = "execution.started"
-    WORKER_PHASE_CHANGED = "worker.phase_changed"
-    EXECUTION_COMPLETED = "execution.completed"
+    COORDINATOR_EXECUTION_STARTED = "coordinator.execution.started"
+    WORKER_GATHERING_CONTEXT = "worker.gathering_context"
+    WORKER_ACTING = "worker.acting"
+    WORKER_VERIFYING = "worker.verifying"
+    WORKER_COMPLETED = "worker.completed"
+    WORKER_FAILED = "worker.failed"
+    WORKER_BLOCKED = "worker.blocked"
+    COORDINATOR_SYNTHESIS_COMPLETED = "coordinator.synthesis.completed"
+    COORDINATOR_EXECUTION_COMPLETED = "coordinator.execution.completed"
+    COORDINATOR_EXECUTION_FAILED = "coordinator.execution.failed"
+    COORDINATOR_EXECUTION_BLOCKED = "coordinator.execution.blocked"
 
 
 # Event types that represent significant lifecycle transitions and should
@@ -56,9 +64,14 @@ LIFECYCLE_EVENT_TYPES = frozenset({
     BuilderEventType.SESSION_CLOSED,
     BuilderEventType.EVAL_STARTED,
     BuilderEventType.EVAL_COMPLETED,
-    BuilderEventType.EXECUTION_STARTED,
-    BuilderEventType.WORKER_PHASE_CHANGED,
-    BuilderEventType.EXECUTION_COMPLETED,
+    BuilderEventType.COORDINATOR_EXECUTION_STARTED,
+    BuilderEventType.WORKER_COMPLETED,
+    BuilderEventType.WORKER_FAILED,
+    BuilderEventType.WORKER_BLOCKED,
+    BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED,
+    BuilderEventType.COORDINATOR_EXECUTION_COMPLETED,
+    BuilderEventType.COORDINATOR_EXECUTION_FAILED,
+    BuilderEventType.COORDINATOR_EXECUTION_BLOCKED,
 })
 
 

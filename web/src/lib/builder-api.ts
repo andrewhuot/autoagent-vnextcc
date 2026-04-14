@@ -10,8 +10,10 @@ import type {
   BuilderProposal,
   BuilderSession,
   BuilderTask,
+  CoordinatorExecuteRequest,
   CoordinatorExecutionRun,
   CoordinatorPlan,
+  CoordinatorPlanRequest,
   CreateProjectRequest,
   CreateSessionRequest,
   CreateTaskRequest,
@@ -272,20 +274,34 @@ export const builderApi = {
   },
 
   coordinator: {
-    plan(payload: { task_id: string; goal: string; requested_roles?: string[]; materialize_tasks?: boolean }): Promise<CoordinatorPlan> {
+    plan(payload: CoordinatorPlanRequest): Promise<CoordinatorPlan> {
       return request('/coordinator/plan', {
         method: 'POST',
         body: JSON.stringify(payload),
       });
     },
-    execute(taskId: string): Promise<CoordinatorExecutionRun> {
+    execute(payload: CoordinatorExecuteRequest): Promise<CoordinatorExecutionRun> {
       return request('/coordinator/execute', {
         method: 'POST',
-        body: JSON.stringify({ task_id: taskId }),
+        body: JSON.stringify(payload),
       });
     },
-    getExecution(taskId: string): Promise<CoordinatorExecutionRun> {
-      return request(`/coordinator/execution/${taskId}`);
+    listRuns(params?: {
+      taskId?: string;
+      planId?: string;
+      sessionId?: string;
+      status?: string;
+    }): Promise<CoordinatorExecutionRun[]> {
+      const query = new URLSearchParams();
+      if (params?.taskId) query.set('task_id', params.taskId);
+      if (params?.planId) query.set('plan_id', params.planId);
+      if (params?.sessionId) query.set('session_id', params.sessionId);
+      if (params?.status) query.set('status', params.status);
+      const suffix = query.toString() ? `?${query.toString()}` : '';
+      return request(`/coordinator/runs${suffix}`);
+    },
+    getRun(runId: string): Promise<CoordinatorExecutionRun> {
+      return request(`/coordinator/runs/${runId}`);
     },
   },
 };

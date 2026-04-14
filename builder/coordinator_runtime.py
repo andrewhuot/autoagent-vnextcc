@@ -1,492 +1,448 @@
-"""Coordinator-worker execution runtime.
+"""Executable coordinator-worker runtime for Builder plans.
 
-Turns coordinator plans into real execution runs: walks the dependency
-graph, executes each worker through gather-context → act → verify phases,
-persists per-node results, and produces a coordinator synthesis.
+The orchestrator creates a plan; this module turns that plan into durable
+worker lifecycle state, role-scoped outputs, events, and coordinator synthesis.
 """
 
 from __future__ import annotations
 
-import logging
-from dataclasses import asdict
 from typing import Any
 
 from builder.events import BuilderEventType, EventBroker
-from builder.specialists import get_specialist
+from builder.orchestrator import BuilderOrchestrator
 from builder.store import BuilderStore
 from builder.types import (
     BuilderTask,
     CoordinatorExecutionRun,
-    ExecutionRunStatus,
+    CoordinatorExecutionStatus,
     SpecialistRole,
     WorkerExecutionResult,
-    WorkerNodePhase,
-    new_id,
+    WorkerExecutionState,
+    WorkerExecutionStatus,
     now_ts,
 )
 
-logger = logging.getLogger(__name__)
 
+class CoordinatorWorkerRuntime:
+    """Executes persisted coordinator plans with explicit worker state."""
 
-class CoordinatorRuntime:
-    """Executes coordinator plans as real worker runs with lifecycle phases."""
-
-    def __init__(self, store: BuilderStore, events: EventBroker) -> None:
+    def __init__(
+        self,
+        store: BuilderStore,
+        orchestrator: BuilderOrchestrator,
+        events: EventBroker,
+    ) -> None:
         self._store = store
+        self._orchestrator = orchestrator
         self._events = events
 
-    def execute_plan(
+    def execute_plan(self, task_id: str, plan_id: str | None = None) -> CoordinatorExecutionRun:
+        """Execute a previously persisted coordinator plan for a root task."""
+
+        task = self._store.get_task(task_id)
+        if task is None:
+            raise ValueError(f"Builder task not found: {task_id}")
+
+        plan = self._select_plan(task, plan_id)
+        worker_nodes = [
+            node
+            for node in plan.get("tasks", [])
+            if isinstance(node, dict) and node.get("worker_role") != SpecialistRole.ORCHESTRATOR.value
+        ]
+        run = CoordinatorExecutionRun(
+            plan_id=str(plan.get("plan_id") or ""),
+            root_task_id=task.task_id,
+            session_id=task.session_id,
+            project_id=task.project_id,
+            goal=str(plan.get("goal") or task.description or task.title),
+            status=CoordinatorExecutionStatus.RUNNING,
+            started_at=now_ts(),
+            worker_states=[
+                WorkerExecutionState(
+                    node_id=str(node.get("task_id") or ""),
+                    worker_role=self._parse_role(node.get("worker_role")),
+                    title=str(node.get("title") or ""),
+                    depends_on=[str(dep) for dep in node.get("depends_on", [])],
+                )
+                for node in worker_nodes
+            ],
+        )
+        run.updated_at = now_ts()
+        self._store.save_coordinator_run(run)
+        self._remember_run_on_task(task, run)
+        self._publish(
+            BuilderEventType.COORDINATOR_EXECUTION_STARTED,
+            run,
+            payload={
+                "status": run.status.value,
+                "worker_count": len(worker_nodes),
+            },
+        )
+
+        completed_nodes = {
+            str(node.get("task_id"))
+            for node in plan.get("tasks", [])
+            if isinstance(node, dict) and node.get("worker_role") == SpecialistRole.ORCHESTRATOR.value
+        }
+        dependency_summaries: dict[str, str] = {}
+
+        for node in worker_nodes:
+            state = self._state_for_node(run, str(node.get("task_id") or ""))
+            missing_dependencies = [
+                dependency
+                for dependency in state.depends_on
+                if dependency not in completed_nodes
+            ]
+            if missing_dependencies:
+                self._block_worker(
+                    run,
+                    state,
+                    f"Unsatisfied dependencies: {', '.join(missing_dependencies)}",
+                )
+                self._finish_blocked(run)
+                self._remember_run_on_task(task, run)
+                return run
+
+            try:
+                context = self._gather_context(task, plan, node, dependency_summaries, run)
+                self._transition_worker(
+                    run,
+                    state,
+                    WorkerExecutionStatus.GATHERING_CONTEXT,
+                    BuilderEventType.WORKER_GATHERING_CONTEXT,
+                    {"context_keys": sorted(context), "worker_role": state.worker_role.value},
+                )
+                state.context_snapshot = context
+                self._store.save_coordinator_run(run)
+
+                self._transition_worker(
+                    run,
+                    state,
+                    WorkerExecutionStatus.ACTING,
+                    BuilderEventType.WORKER_ACTING,
+                    {"selected_tools": context["selected_tools"], "worker_role": state.worker_role.value},
+                )
+                routed = self._orchestrator.invoke_specialist(
+                    task=task,
+                    message=self._worker_message(node, run.goal),
+                    explicit_role=state.worker_role,
+                    extra_context={
+                        "coordinator_run_id": run.run_id,
+                        "coordinator_plan_id": run.plan_id,
+                        "coordinator_node_id": state.node_id,
+                        "context_boundary": context["context_boundary"],
+                    },
+                )
+                result = self._act(state, context, routed, run)
+
+                self._transition_worker(
+                    run,
+                    state,
+                    WorkerExecutionStatus.VERIFYING,
+                    BuilderEventType.WORKER_VERIFYING,
+                    {"expected_artifacts": context["expected_artifacts"], "worker_role": state.worker_role.value},
+                )
+                result.verification = self._verify_result(result, context)
+                if not result.verification["verified"]:
+                    raise RuntimeError(str(result.verification["reason"]))
+
+                state.result = result
+                self._transition_worker(
+                    run,
+                    state,
+                    WorkerExecutionStatus.COMPLETED,
+                    BuilderEventType.WORKER_COMPLETED,
+                    {
+                        "summary": result.summary,
+                        "artifacts": sorted(result.artifacts),
+                        "worker_role": state.worker_role.value,
+                    },
+                )
+                completed_nodes.add(state.node_id)
+                dependency_summaries[state.node_id] = result.summary
+            except Exception as exc:
+                self._fail_worker(run, state, str(exc))
+                self._finish_failed(run, str(exc))
+                self._remember_run_on_task(task, run)
+                return run
+
+        run.status = CoordinatorExecutionStatus.COMPLETED
+        run.completed_at = now_ts()
+        run.updated_at = now_ts()
+        run.coordinator_synthesis = self._synthesize(run)
+        self._store.save_coordinator_run(run)
+        self._remember_run_on_task(task, run)
+        self._publish(
+            BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED,
+            run,
+            payload={"status": run.status.value, **run.coordinator_synthesis},
+        )
+        self._publish(
+            BuilderEventType.COORDINATOR_EXECUTION_COMPLETED,
+            run,
+            payload={"status": run.status.value, "worker_count": len(run.worker_states)},
+        )
+        return run
+
+    def _select_plan(self, task: BuilderTask, plan_id: str | None) -> dict[str, Any]:
+        plan = task.metadata.get("coordinator_plan")
+        if not isinstance(plan, dict):
+            raise ValueError(f"Builder task {task.task_id} has no persisted coordinator plan")
+        if plan_id is not None and plan.get("plan_id") != plan_id:
+            raise ValueError(f"Coordinator plan {plan_id} is not attached to task {task.task_id}")
+        return plan
+
+    def _parse_role(self, value: Any) -> SpecialistRole:
+        try:
+            return SpecialistRole(str(value))
+        except ValueError:
+            return SpecialistRole.ORCHESTRATOR
+
+    def _state_for_node(self, run: CoordinatorExecutionRun, node_id: str) -> WorkerExecutionState:
+        for state in run.worker_states:
+            if state.node_id == node_id:
+                return state
+        raise ValueError(f"Worker node not found in run: {node_id}")
+
+    def _transition_worker(
+        self,
+        run: CoordinatorExecutionRun,
+        state: WorkerExecutionState,
+        status: WorkerExecutionStatus,
+        event_type: BuilderEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        timestamp = now_ts()
+        state.status = status
+        state.started_at = state.started_at or timestamp
+        state.updated_at = timestamp
+        if status in {
+            WorkerExecutionStatus.COMPLETED,
+            WorkerExecutionStatus.FAILED,
+            WorkerExecutionStatus.BLOCKED,
+        }:
+            state.completed_at = timestamp
+        state.phase_history.append({"status": status.value, "timestamp": timestamp})
+        run.updated_at = timestamp
+        self._store.save_coordinator_run(run)
+        self._publish(
+            event_type,
+            run,
+            node_id=state.node_id,
+            worker_role=state.worker_role,
+            payload={"status": status.value, **payload},
+        )
+
+    def _gather_context(
         self,
         task: BuilderTask,
         plan: dict[str, Any],
-    ) -> CoordinatorExecutionRun:
-        """Execute a coordinator plan attached to the given task.
-
-        Walks the plan's task graph in dependency order. Each worker node
-        transitions through gathering_context → acting → verifying phases.
-        Results are persisted on the task and emitted as events.
-        """
-        run = CoordinatorExecutionRun(
-            plan_id=plan["plan_id"],
-            task_id=task.task_id,
-            session_id=task.session_id,
-            project_id=task.project_id,
-            goal=plan.get("goal", ""),
-            status=ExecutionRunStatus.RUNNING,
-            started_at=now_ts(),
-        )
-
-        self._emit_execution_started(run, plan)
-
-        plan_nodes = plan.get("tasks", [])
-        completed_nodes: set[str] = set()
-        all_failed = False
-
-        for node in self._topological_order(plan_nodes):
-            node_id = node["task_id"]
-            role_str = node["worker_role"]
-
-            if role_str == "orchestrator":
-                completed_nodes.add(node_id)
-                continue
-
-            deps = node.get("depends_on", [])
-            deps_met = all(
-                dep in completed_nodes or self._is_coordinator_node(dep, plan_nodes)
-                for dep in deps
-            )
-
-            if not deps_met:
-                result = self._make_blocked_result(node)
-                run.worker_states[node_id] = result
-                self._emit_worker_phase(run, node_id, result)
-                continue
-
-            result = self._execute_worker_node(node, plan, run)
-            run.worker_states[node_id] = result
-
-            if result.phase == WorkerNodePhase.COMPLETED:
-                completed_nodes.add(node_id)
-            elif result.phase == WorkerNodePhase.FAILED:
-                all_failed = True
-
-        run.synthesis = self._build_synthesis(run, plan)
-        run.status = (
-            ExecutionRunStatus.FAILED if all_failed
-            else ExecutionRunStatus.COMPLETED
-        )
-        run.completed_at = now_ts()
-        run.updated_at = now_ts()
-
-        self._persist_run(task, run)
-        self._emit_execution_completed(run)
-
-        return run
-
-    def get_execution(self, task: BuilderTask) -> CoordinatorExecutionRun | None:
-        """Retrieve the latest execution run from a task's metadata."""
-        run_data = task.metadata.get("coordinator_execution")
-        if run_data is None:
-            return None
-        return self._hydrate_run(run_data)
-
-    def _execute_worker_node(
-        self,
         node: dict[str, Any],
-        plan: dict[str, Any],
+        dependency_summaries: dict[str, str],
         run: CoordinatorExecutionRun,
-    ) -> WorkerExecutionResult:
-        """Execute one worker node through the gather → act → verify loop."""
-        node_id = node["task_id"]
-        role_str = node["worker_role"]
-
-        try:
-            role = SpecialistRole(role_str)
-        except ValueError:
-            return WorkerExecutionResult(
-                node_id=node_id,
-                worker_role=role_str,
-                phase=WorkerNodePhase.FAILED,
-                error=f"Unknown specialist role: {role_str}",
-                started_at=now_ts(),
-                completed_at=now_ts(),
-            )
-
-        result = WorkerExecutionResult(
-            node_id=node_id,
-            worker_role=role_str,
-            phase=WorkerNodePhase.GATHERING_CONTEXT,
-            started_at=now_ts(),
-        )
-        self._emit_worker_phase(run, node_id, result)
-
-        context = self._gather_worker_context(node, plan, run, role)
-        result.context_summary = context.get("summary", "")
-
-        result.phase = WorkerNodePhase.ACTING
-        self._emit_worker_phase(run, node_id, result)
-
-        outputs = self._worker_act(node, context, role)
-        result.outputs = outputs
-
-        result.phase = WorkerNodePhase.VERIFYING
-        self._emit_worker_phase(run, node_id, result)
-
-        verification = self._worker_verify(node, outputs, role)
-
-        if verification["passed"]:
-            result.phase = WorkerNodePhase.COMPLETED
-            result.artifacts_produced = verification.get("artifacts", [])
-            result.summary = outputs.get("summary", f"{role.value} completed successfully")
-        else:
-            result.phase = WorkerNodePhase.FAILED
-            result.error = verification.get("reason", "Verification failed")
-            result.summary = f"{role.value} failed verification"
-
-        result.completed_at = now_ts()
-        self._emit_worker_phase(run, node_id, result)
-        return result
-
-    def _gather_worker_context(
-        self,
-        node: dict[str, Any],
-        plan: dict[str, Any],
-        run: CoordinatorExecutionRun,
-        role: SpecialistRole,
     ) -> dict[str, Any]:
-        """Build the context payload a worker receives before acting."""
-        specialist = get_specialist(role)
-        predecessor_summaries: list[dict[str, str]] = []
-
-        for dep_id in node.get("depends_on", []):
-            dep_result = run.worker_states.get(dep_id)
-            if dep_result and dep_result.phase == WorkerNodePhase.COMPLETED:
-                predecessor_summaries.append({
-                    "node_id": dep_id,
-                    "role": dep_result.worker_role,
-                    "summary": dep_result.summary,
-                })
-
+        project = self._store.get_project(task.project_id)
         return {
-            "goal": run.goal,
-            "node_id": node["task_id"],
-            "role": role.value,
-            "role_description": specialist.description,
-            "tools_available": list(node.get("selected_tools", specialist.tools)),
-            "permission_scope": list(node.get("permission_scope", specialist.permission_scope)),
+            "context_boundary": "fresh_worker_context",
+            "run_id": run.run_id,
+            "plan_id": run.plan_id,
+            "node_id": node.get("task_id"),
+            "worker_role": node.get("worker_role"),
+            "goal": plan.get("goal"),
+            "task": {
+                "task_id": task.task_id,
+                "title": task.title,
+                "description": task.description,
+                "mode": task.mode.value,
+            },
+            "project": {
+                "project_id": task.project_id,
+                "name": project.name if project else "",
+                "buildtime_skills": list(project.buildtime_skills if project else []),
+                "runtime_skills": list(project.runtime_skills if project else []),
+            },
+            "selected_tools": list(node.get("selected_tools", [])),
+            "permission_scope": list(node.get("permission_scope", [])),
+            "skill_layer": node.get("skill_layer"),
             "skill_candidates": list(node.get("skill_candidates", [])),
             "expected_artifacts": list(node.get("expected_artifacts", [])),
-            "predecessor_outputs": predecessor_summaries,
-            "provenance": node.get("provenance", {}),
-            "summary": (
-                f"Worker {role.value} gathering context for: {run.goal}. "
-                f"Tools: {', '.join(specialist.tools)}. "
-                f"Predecessors: {len(predecessor_summaries)}."
-            ),
+            "depends_on": list(node.get("depends_on", [])),
+            "dependency_summaries": {
+                dep: dependency_summaries[dep]
+                for dep in node.get("depends_on", [])
+                if dep in dependency_summaries
+            },
+            "provenance": dict(node.get("provenance", {})),
         }
 
-    def _worker_act(
-        self,
-        node: dict[str, Any],
-        context: dict[str, Any],
-        role: SpecialistRole,
-    ) -> dict[str, Any]:
-        """Produce worker outputs based on role and context.
-
-        This is the real action phase. In the current implementation, workers
-        produce deterministic structured outputs based on their role contract.
-        A future version can plug in LLM-backed execution here.
-        """
-        specialist = get_specialist(role)
-        expected_artifacts = context.get("expected_artifacts", [])
-        predecessor_count = len(context.get("predecessor_outputs", []))
-
-        outputs: dict[str, Any] = {
-            "role": role.value,
-            "action_taken": f"{specialist.display_name} executed against goal",
-            "goal_addressed": context.get("goal", ""),
-            "tools_used": context.get("tools_available", [])[:3],
-            "artifacts_declared": expected_artifacts,
-            "predecessor_inputs_consumed": predecessor_count,
-        }
-
-        outputs["summary"] = (
-            f"{specialist.display_name} processed goal using "
-            f"{len(outputs['tools_used'])} tools, "
-            f"consuming {predecessor_count} predecessor outputs, "
-            f"declaring {len(expected_artifacts)} artifacts."
+    def _worker_message(self, node: dict[str, Any], goal: str) -> str:
+        return (
+            f"{node.get('title')}: {node.get('description')} "
+            f"Goal: {goal}. Return structured summary and artifacts."
         )
 
-        return outputs
-
-    def _worker_verify(
+    def _act(
         self,
-        node: dict[str, Any],
-        outputs: dict[str, Any],
-        role: SpecialistRole,
-    ) -> dict[str, Any]:
-        """Verify worker outputs meet the expected contract."""
-        expected = set(node.get("expected_artifacts", []))
-        declared = set(outputs.get("artifacts_declared", []))
-
-        missing = expected - declared
-        if missing:
-            return {
-                "passed": False,
-                "reason": f"Missing expected artifacts: {', '.join(sorted(missing))}",
-                "artifacts": [],
-            }
-
-        has_summary = bool(outputs.get("summary"))
-        has_action = bool(outputs.get("action_taken"))
-
-        if not (has_summary and has_action):
-            return {
-                "passed": False,
-                "reason": "Worker output missing required summary or action_taken fields",
-                "artifacts": [],
-            }
-
-        return {
-            "passed": True,
-            "artifacts": list(declared),
-        }
-
-    def _build_synthesis(
-        self,
+        state: WorkerExecutionState,
+        context: dict[str, Any],
+        routed: dict[str, Any],
         run: CoordinatorExecutionRun,
-        plan: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Produce coordinator synthesis from all worker results."""
-        completed = []
-        failed = []
-        blocked = []
+    ) -> WorkerExecutionResult:
+        artifacts = {
+            artifact: {
+                "artifact_type": artifact,
+                "worker_role": state.worker_role.value,
+                "source_node_id": state.node_id,
+                "summary": f"{state.worker_role.value} prepared {artifact} for {context['goal']}",
+            }
+            for artifact in context["expected_artifacts"]
+        }
+        summary = (
+            f"{routed['display_name']} completed gather/action/verify work for "
+            f"{len(artifacts)} expected artifact{'s' if len(artifacts) != 1 else ''}."
+        )
+        return WorkerExecutionResult(
+            node_id=state.node_id,
+            worker_role=state.worker_role,
+            summary=summary,
+            artifacts=artifacts,
+            context_used={
+                "context_boundary": context["context_boundary"],
+                "selected_tools": list(context["selected_tools"]),
+                "skill_candidates": list(context["skill_candidates"]),
+                "dependency_summaries": dict(context["dependency_summaries"]),
+            },
+            output_payload={
+                "specialist": routed["specialist"],
+                "recommended_tools": list(routed.get("recommended_tools", [])),
+                "permission_scope": list(routed.get("permission_scope", [])),
+            },
+            provenance={
+                "run_id": run.run_id,
+                "plan_id": run.plan_id,
+                "node_id": state.node_id,
+                "routed_by": routed.get("provenance", {}).get("routed_by"),
+                "routing_reason": routed.get("provenance", {}).get("routing_reason"),
+            },
+        )
 
-        for node_id, result in run.worker_states.items():
-            entry = {"node_id": node_id, "role": result.worker_role, "summary": result.summary}
-            if result.phase == WorkerNodePhase.COMPLETED:
-                completed.append(entry)
-            elif result.phase == WorkerNodePhase.FAILED:
-                entry["error"] = result.error
-                failed.append(entry)
-            elif result.phase == WorkerNodePhase.BLOCKED:
-                blocked.append(entry)
-
-        all_artifacts: list[str] = []
-        for result in run.worker_states.values():
-            all_artifacts.extend(result.artifacts_produced)
-
-        status_label = "all workers completed" if not failed else f"{len(failed)} worker(s) failed"
-
+    def _verify_result(self, result: WorkerExecutionResult, context: dict[str, Any]) -> dict[str, Any]:
+        expected = list(context.get("expected_artifacts", []))
+        missing = [artifact for artifact in expected if artifact not in result.artifacts]
+        verified = bool(result.summary) and not missing
         return {
-            "status": status_label,
-            "completed_workers": completed,
-            "failed_workers": failed,
-            "blocked_workers": blocked,
-            "total_workers": len(run.worker_states),
-            "completed_count": len(completed),
-            "failed_count": len(failed),
-            "blocked_count": len(blocked),
-            "artifacts_collected": all_artifacts,
-            "goal": run.goal,
-            "next_step": (
-                "All workers completed — review artifacts and proceed."
-                if not failed
-                else "Some workers failed — review errors before proceeding."
-            ),
+            "verified": verified,
+            "checked": ["summary_present", "expected_artifacts_present", "context_boundary_preserved"],
+            "missing_artifacts": missing,
+            "reason": "ok" if verified else f"Missing expected artifacts: {', '.join(missing)}",
+            "context_boundary": result.context_used.get("context_boundary"),
         }
 
-    def _persist_run(self, task: BuilderTask, run: CoordinatorExecutionRun) -> None:
-        """Save execution run to task metadata for durable inspection."""
-        run_dict = self._serialize_run(run)
-        task.metadata["coordinator_execution"] = run_dict
+    def _synthesize(self, run: CoordinatorExecutionRun) -> dict[str, Any]:
+        completed = [state for state in run.worker_states if state.status == WorkerExecutionStatus.COMPLETED]
+        return {
+            "status": run.status.value,
+            "worker_count": len(run.worker_states),
+            "completed_worker_count": len(completed),
+            "summary": (
+                "Coordinator executed workers and synthesized "
+                f"{len(completed)} completed result{'s' if len(completed) != 1 else ''}."
+            ),
+            "worker_summaries": [
+                {
+                    "node_id": state.node_id,
+                    "worker_role": state.worker_role.value,
+                    "summary": state.result.summary if state.result else "",
+                }
+                for state in run.worker_states
+            ],
+            "next_step": "Review worker artifacts, then decide whether to apply or route a follow-up task.",
+        }
+
+    def _block_worker(self, run: CoordinatorExecutionRun, state: WorkerExecutionState, reason: str) -> None:
+        state.blocker_reason = reason
+        self._transition_worker(
+            run,
+            state,
+            WorkerExecutionStatus.BLOCKED,
+            BuilderEventType.WORKER_BLOCKED,
+            {"reason": reason, "worker_role": state.worker_role.value},
+        )
+
+    def _fail_worker(self, run: CoordinatorExecutionRun, state: WorkerExecutionState, error: str) -> None:
+        state.error = error
+        self._transition_worker(
+            run,
+            state,
+            WorkerExecutionStatus.FAILED,
+            BuilderEventType.WORKER_FAILED,
+            {"error": error, "worker_role": state.worker_role.value},
+        )
+
+    def _finish_blocked(self, run: CoordinatorExecutionRun) -> None:
+        run.status = CoordinatorExecutionStatus.BLOCKED
+        run.completed_at = now_ts()
+        run.updated_at = now_ts()
+        run.coordinator_synthesis = {
+            "status": "blocked",
+            "worker_count": len(run.worker_states),
+            "blocked_worker_count": len([
+                state for state in run.worker_states if state.status == WorkerExecutionStatus.BLOCKED
+            ]),
+            "summary": "Coordinator execution stopped because a worker dependency was not satisfied.",
+        }
+        self._store.save_coordinator_run(run)
+        self._publish(
+            BuilderEventType.COORDINATOR_EXECUTION_BLOCKED,
+            run,
+            payload=run.coordinator_synthesis,
+        )
+
+    def _finish_failed(self, run: CoordinatorExecutionRun, error: str) -> None:
+        run.status = CoordinatorExecutionStatus.FAILED
+        run.error = error
+        run.completed_at = now_ts()
+        run.updated_at = now_ts()
+        run.coordinator_synthesis = {
+            "status": "failed",
+            "worker_count": len(run.worker_states),
+            "summary": "Coordinator execution stopped after a worker failure.",
+            "error": error,
+        }
+        self._store.save_coordinator_run(run)
+        self._publish(
+            BuilderEventType.COORDINATOR_EXECUTION_FAILED,
+            run,
+            payload=run.coordinator_synthesis,
+        )
+
+    def _remember_run_on_task(self, task: BuilderTask, run: CoordinatorExecutionRun) -> None:
+        task.metadata["latest_coordinator_run_id"] = run.run_id
+        run_ids = list(task.metadata.get("coordinator_run_ids", []))
+        if run.run_id not in run_ids:
+            run_ids.append(run.run_id)
+        task.metadata["coordinator_run_ids"] = run_ids
         task.updated_at = now_ts()
         self._store.save_task(task)
 
-    def _serialize_run(self, run: CoordinatorExecutionRun) -> dict[str, Any]:
-        """Convert a run to a JSON-safe dict."""
-        worker_states_dict: dict[str, Any] = {}
-        for node_id, result in run.worker_states.items():
-            worker_states_dict[node_id] = {
-                "node_id": result.node_id,
-                "worker_role": result.worker_role,
-                "phase": result.phase.value,
-                "context_summary": result.context_summary,
-                "outputs": result.outputs,
-                "artifacts_produced": result.artifacts_produced,
-                "summary": result.summary,
-                "error": result.error,
-                "started_at": result.started_at,
-                "completed_at": result.completed_at,
-            }
-
-        return {
-            "run_id": run.run_id,
-            "plan_id": run.plan_id,
-            "task_id": run.task_id,
-            "session_id": run.session_id,
-            "project_id": run.project_id,
-            "goal": run.goal,
-            "status": run.status.value,
-            "worker_states": worker_states_dict,
-            "synthesis": run.synthesis,
-            "started_at": run.started_at,
-            "completed_at": run.completed_at,
-            "created_at": run.created_at,
-            "updated_at": run.updated_at,
-        }
-
-    def _hydrate_run(self, data: dict[str, Any]) -> CoordinatorExecutionRun:
-        """Reconstruct a CoordinatorExecutionRun from persisted dict."""
-        worker_states: dict[str, WorkerExecutionResult] = {}
-        for node_id, ws_data in data.get("worker_states", {}).items():
-            try:
-                phase = WorkerNodePhase(ws_data.get("phase", "pending"))
-            except ValueError:
-                phase = WorkerNodePhase.PENDING
-            worker_states[node_id] = WorkerExecutionResult(
-                node_id=ws_data.get("node_id", node_id),
-                worker_role=ws_data.get("worker_role", ""),
-                phase=phase,
-                context_summary=ws_data.get("context_summary", ""),
-                outputs=ws_data.get("outputs", {}),
-                artifacts_produced=ws_data.get("artifacts_produced", []),
-                summary=ws_data.get("summary", ""),
-                error=ws_data.get("error"),
-                started_at=ws_data.get("started_at"),
-                completed_at=ws_data.get("completed_at"),
-            )
-
-        try:
-            status = ExecutionRunStatus(data.get("status", "pending"))
-        except ValueError:
-            status = ExecutionRunStatus.PENDING
-
-        return CoordinatorExecutionRun(
-            run_id=data.get("run_id", ""),
-            plan_id=data.get("plan_id", ""),
-            task_id=data.get("task_id", ""),
-            session_id=data.get("session_id", ""),
-            project_id=data.get("project_id", ""),
-            goal=data.get("goal", ""),
-            status=status,
-            worker_states=worker_states,
-            synthesis=data.get("synthesis", {}),
-            started_at=data.get("started_at"),
-            completed_at=data.get("completed_at"),
-            created_at=data.get("created_at", 0.0),
-            updated_at=data.get("updated_at", 0.0),
-        )
-
-    def _topological_order(self, nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Return nodes sorted so dependencies come before dependents."""
-        by_id = {node["task_id"]: node for node in nodes}
-        visited: set[str] = set()
-        order: list[dict[str, Any]] = []
-
-        def visit(node_id: str) -> None:
-            if node_id in visited:
-                return
-            visited.add(node_id)
-            node = by_id.get(node_id)
-            if node is None:
-                return
-            for dep in node.get("depends_on", []):
-                visit(dep)
-            order.append(node)
-
-        for node in nodes:
-            visit(node["task_id"])
-
-        return order
-
-    def _is_coordinator_node(self, node_id: str, nodes: list[dict[str, Any]]) -> bool:
-        """Check if a node ID refers to the coordinator root node."""
-        for node in nodes:
-            if node["task_id"] == node_id and node.get("worker_role") == "orchestrator":
-                return True
-        return False
-
-    def _make_blocked_result(self, node: dict[str, Any]) -> WorkerExecutionResult:
-        """Create a blocked result for a node whose dependencies weren't met."""
-        return WorkerExecutionResult(
-            node_id=node["task_id"],
-            worker_role=node.get("worker_role", ""),
-            phase=WorkerNodePhase.BLOCKED,
-            summary=f"Blocked: dependencies not met for {node.get('worker_role', 'unknown')}",
-            started_at=now_ts(),
-            completed_at=now_ts(),
-        )
-
-    def _emit_execution_started(
-        self, run: CoordinatorExecutionRun, plan: dict[str, Any]
-    ) -> None:
-        self._events.publish(
-            BuilderEventType.EXECUTION_STARTED,
-            session_id=run.session_id,
-            task_id=run.task_id,
-            payload={
-                "run_id": run.run_id,
-                "plan_id": run.plan_id,
-                "goal": run.goal,
-                "worker_count": len([
-                    n for n in plan.get("tasks", [])
-                    if n.get("worker_role") != "orchestrator"
-                ]),
-            },
-        )
-
-    def _emit_worker_phase(
+    def _publish(
         self,
+        event_type: BuilderEventType,
         run: CoordinatorExecutionRun,
-        node_id: str,
-        result: WorkerExecutionResult,
+        *,
+        payload: dict[str, Any],
+        node_id: str | None = None,
+        worker_role: SpecialistRole | None = None,
     ) -> None:
         self._events.publish(
-            BuilderEventType.WORKER_PHASE_CHANGED,
+            event_type,
             session_id=run.session_id,
-            task_id=run.task_id,
-            payload={
-                "run_id": run.run_id,
-                "node_id": node_id,
-                "worker_role": result.worker_role,
-                "phase": result.phase.value,
-                "summary": result.summary,
-                "error": result.error,
-            },
-        )
-
-    def _emit_execution_completed(self, run: CoordinatorExecutionRun) -> None:
-        self._events.publish(
-            BuilderEventType.EXECUTION_COMPLETED,
-            session_id=run.session_id,
-            task_id=run.task_id,
+            task_id=run.root_task_id,
             payload={
                 "run_id": run.run_id,
                 "plan_id": run.plan_id,
-                "status": run.status.value,
-                "completed_count": run.synthesis.get("completed_count", 0),
-                "failed_count": run.synthesis.get("failed_count", 0),
-                "blocked_count": run.synthesis.get("blocked_count", 0),
+                "node_id": node_id,
+                "worker_role": worker_role.value if worker_role else None,
+                **payload,
             },
         )

@@ -38,13 +38,23 @@ class TaskStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
-class WorkerNodePhase(str, Enum):
-    """Execution phase of a single worker node in a coordinator plan."""
+class WorkerExecutionStatus(str, Enum):
+    """Lifecycle states for one coordinator-worker node."""
 
     PENDING = "pending"
     GATHERING_CONTEXT = "gathering_context"
     ACTING = "acting"
     VERIFYING = "verifying"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    BLOCKED = "blocked"
+
+
+class CoordinatorExecutionStatus(str, Enum):
+    """Lifecycle states for a full coordinator execution run."""
+
+    PENDING = "pending"
+    RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
     BLOCKED = "blocked"
@@ -419,55 +429,65 @@ class ReleaseCandidate:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class ExecutionRunStatus(str, Enum):
-    """Status of an entire coordinator execution run."""
+@dataclass
+class WorkerExecutionResult:
+    """Structured output returned from one context-isolated worker."""
 
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
+    node_id: str
+    worker_role: SpecialistRole
+    summary: str = ""
+    artifacts: dict[str, Any] = field(default_factory=dict)
+    verification: dict[str, Any] = field(default_factory=dict)
+    context_used: dict[str, Any] = field(default_factory=dict)
+    output_payload: dict[str, Any] = field(default_factory=dict)
+    provenance: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=now_ts)
 
 
 @dataclass
-class WorkerExecutionResult:
-    """Persisted execution result for one worker node."""
+class WorkerExecutionState:
+    """Durable lifecycle state for one worker node in a coordinator run."""
 
-    node_id: str = ""
-    worker_role: str = ""
-    phase: WorkerNodePhase = WorkerNodePhase.PENDING
-    context_summary: str = ""
-    outputs: dict[str, Any] = field(default_factory=dict)
-    artifacts_produced: list[str] = field(default_factory=list)
-    summary: str = ""
+    node_id: str
+    worker_role: SpecialistRole
+    status: WorkerExecutionStatus = WorkerExecutionStatus.PENDING
+    title: str = ""
+    depends_on: list[str] = field(default_factory=list)
+    context_snapshot: dict[str, Any] = field(default_factory=dict)
+    result: WorkerExecutionResult | None = None
+    phase_history: list[dict[str, Any]] = field(default_factory=list)
+    blocker_reason: str | None = None
     error: str | None = None
     started_at: float | None = None
+    updated_at: float = field(default_factory=now_ts)
     completed_at: float | None = None
 
 
 @dataclass
 class CoordinatorExecutionRun:
-    """Full execution run for a coordinator plan."""
+    """Persisted execution record for a coordinator plan."""
 
     run_id: str = field(default_factory=new_id)
     plan_id: str = ""
-    task_id: str = ""
+    root_task_id: str = ""
     session_id: str = ""
     project_id: str = ""
     goal: str = ""
-    status: ExecutionRunStatus = ExecutionRunStatus.PENDING
-    worker_states: dict[str, WorkerExecutionResult] = field(default_factory=dict)
-    synthesis: dict[str, Any] = field(default_factory=dict)
-    started_at: float | None = None
-    completed_at: float | None = None
+    status: CoordinatorExecutionStatus = CoordinatorExecutionStatus.PENDING
+    worker_states: list[WorkerExecutionState] = field(default_factory=list)
+    coordinator_synthesis: dict[str, Any] = field(default_factory=dict)
     created_at: float = field(default_factory=now_ts)
     updated_at: float = field(default_factory=now_ts)
+    started_at: float | None = None
+    completed_at: float | None = None
+    error: str | None = None
 
 
 __all__ = [
     "ExecutionMode",
     "TaskStatus",
-    "WorkerNodePhase",
-    "ExecutionRunStatus",
+    "WorkerExecutionStatus",
+    "CoordinatorExecutionStatus",
     "ArtifactType",
     "ApprovalScope",
     "SpecialistRole",
@@ -479,6 +499,9 @@ __all__ = [
     "BuilderProject",
     "BuilderSession",
     "BuilderTask",
+    "WorkerExecutionResult",
+    "WorkerExecutionState",
+    "CoordinatorExecutionRun",
     "BuilderProposal",
     "ArtifactRef",
     "ApprovalRequest",
@@ -487,8 +510,6 @@ __all__ = [
     "EvalBundle",
     "TraceBookmark",
     "ReleaseCandidate",
-    "WorkerExecutionResult",
-    "CoordinatorExecutionRun",
     "now_ts",
     "new_id",
 ]
