@@ -30,6 +30,7 @@ Typical usage::
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Iterable
 
 from cli.workbench_app import theme
@@ -38,8 +39,60 @@ from cli.workbench_app import theme
 __all__ = [
     "DEFAULT_COLLAPSE_THRESHOLD",
     "CollapsibleOutput",
+    "TranscriptView",
+    "TranscriptViewState",
     "format_summary",
+    "toggle_transcript_view",
 ]
+
+
+class TranscriptView(str, Enum):
+    """Which transcript view the REPL should show for coordinator runs.
+
+    The Workbench renders every coordinator event as a transcript line by
+    default, collapsing worker output blocks via :class:`CollapsibleOutput`.
+    Power users can press Ctrl-T to flip to the raw-event view, which
+    expands every block and turns off summary folding so every
+    ``BuilderEvent`` is visible inline.
+    """
+
+    COLLAPSED = "collapsed"
+    RAW = "raw"
+
+
+@dataclass
+class TranscriptViewState:
+    """Mutable transcript-view flag shared by the REPL and key bindings.
+
+    Ctrl-T mutates this state; the coordinator renderer reads
+    :meth:`TranscriptViewState.is_raw` at render time to decide whether to
+    emit raw events or the summary view.
+    """
+
+    view: TranscriptView = TranscriptView.COLLAPSED
+
+    def toggle(self) -> TranscriptView:
+        """Flip between collapsed and raw transcript views."""
+        self.view = (
+            TranscriptView.RAW
+            if self.view is TranscriptView.COLLAPSED
+            else TranscriptView.COLLAPSED
+        )
+        return self.view
+
+    @property
+    def is_raw(self) -> bool:
+        return self.view is TranscriptView.RAW
+
+    @property
+    def label(self) -> str:
+        """Operator-facing label for status-line rendering."""
+        return "raw events" if self.is_raw else "collapsed"
+
+
+def toggle_transcript_view(state: TranscriptViewState) -> TranscriptView:
+    """Flip ``state`` between collapsed and raw views and return the new mode."""
+    return state.toggle()
 
 
 DEFAULT_COLLAPSE_THRESHOLD = 10

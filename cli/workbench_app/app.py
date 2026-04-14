@@ -392,6 +392,46 @@ def run_workbench_app(
             )
             continue
 
+        # `!cmd` — shell-mode passthrough, gated by permission mode.
+        if line.startswith("!"):
+            current_mode = (
+                getattr(prompt_state, "mode", None)
+                or _permission_mode_for_workspace(workspace)
+            )
+            _run_shell_turn(
+                ctx=ctx,
+                workspace=workspace,
+                line=line,
+                permission_mode=current_mode,
+                echo=out,
+                reader=reader,
+            )
+            _render_turn_footer(
+                out,
+                workspace,
+                mode_override=getattr(prompt_state, "mode", None),
+                active_shells=_meta_int(ctx, "active_shells"),
+                active_tasks=_meta_int(ctx, "active_tasks"),
+            )
+            continue
+
+        # `&cmd` — dispatch the remainder as a background coordinator turn.
+        if line.startswith("&"):
+            _run_background_turn(
+                runtime=active_agent_runtime,
+                ctx=ctx,
+                line=line[1:].strip(),
+                echo=out,
+            )
+            _render_turn_footer(
+                out,
+                workspace,
+                mode_override=getattr(prompt_state, "mode", None),
+                active_shells=_meta_int(ctx, "active_shells"),
+                active_tasks=_meta_int(ctx, "active_tasks"),
+            )
+            continue
+
         # Route ``/command`` input through the slash registry when one is
         # bound. Non-slash input uses the coordinator runtime when available;
         # the echo fallback remains only for tests/embedders without a runtime.
@@ -604,6 +644,93 @@ def _run_plan_gated_turn(
             pass
         for transcript_line in tuple(getattr(outcome.result, "transcript_lines", ()) or ()):
             echo(str(transcript_line))
+
+
+def _run_shell_turn(
+    *,
+    ctx: "SlashContext | None",
+    workspace: Any | None,
+    line: str,
+    permission_mode: str,
+    echo: EchoFn,
+    reader: InputProvider,
+) -> None:
+    """Run a ``!`` shell-mode line via :func:`shell_mode.run_shell_turn`.
+
+    Maintains ``ctx.meta["active_shells"]`` while the subprocess executes so
+    the truthful footer reflects the running work.
+    """
+    try:
+        from cli.workbench_app.shell_mode import run_shell_turn
+    except Exception as exc:  # pragma: no cover - defensive import
+        echo(theme.error(f"  Shell mode error: {exc}", bold=False))
+        return
+
+    root: Any | None = getattr(workspace, "root", None)
+    if ctx is not None:
+        ctx.meta["active_shells"] = _meta_int(ctx, "active_shells") + 1
+    try:
+        run_shell_turn(
+            line,
+            permission_mode=permission_mode,
+            echo=echo,
+            input_provider=reader,
+            workspace_root=root,
+        )
+    finally:
+        if ctx is not None:
+            remaining = max(0, _meta_int(ctx, "active_shells") - 1)
+            ctx.meta["active_shells"] = remaining
+
+
+def _run_background_turn(
+    *,
+    runtime: Any | None,
+    ctx: "SlashContext | None",
+    line: str,
+    echo: EchoFn,
+) -> None:
+    """Spawn a coordinator turn marked as background work.
+
+    Background dispatch runs the coordinator turn synchronously here but
+    adds the request to ``ctx.meta["background_queue"]`` and bumps
+    ``ctx.meta["active_tasks"]`` so the truthful footer reflects the queued
+    work. The counter is adjusted again after the turn returns so the
+    footer reads ``idle`` once nothing is left to do.
+    """
+    text = line.strip()
+    if not text:
+        echo(theme.warning("  Background mode: provide a request after '&'."))
+        return
+    if runtime is None:
+        echo(theme.warning(
+            "  Background mode: coordinator runtime is not available."
+        ))
+        return
+
+    if ctx is not None:
+        ctx.meta["active_tasks"] = _meta_int(ctx, "active_tasks") + 1
+        queue = list(ctx.meta.get("background_queue") or [])
+        queue.append(text)
+        ctx.meta["background_queue"] = queue
+
+    echo(theme.meta(f"  Dispatched background task: {text}"))
+    try:
+        _run_agent_turn(
+            runtime=runtime, ctx=ctx, line=text, echo=echo,
+            command_intent="background",
+        )
+    finally:
+        if ctx is not None:
+            queue = list(ctx.meta.get("background_queue") or [])
+            if queue and queue[-1] == text:
+                queue.pop()
+            ctx.meta["background_queue"] = queue
+            # After the synchronous turn completes, leave only queued work
+            # visible in the footer. `_run_agent_turn` may have overwritten
+            # ``active_tasks`` via ``remember_turn_result``; align it with
+            # the actual queue length so the footer stays truthful.
+            ctx.meta["active_tasks"] = len(queue)
 
 
 def _default_workflow_message(command_name: str) -> str:
