@@ -164,6 +164,9 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "build",
         "deploy",
         "skills",
+        "model",
+        "clear",
+        "new",
     }
     assert set(registry.names()) == expected
 
@@ -177,6 +180,9 @@ def test_builtin_registry_without_streaming() -> None:
     assert "skills" not in registry.names()
     assert "save" in registry.names()  # /save is ported, not streaming
     assert "help" in registry.names()
+    assert "model" in registry.names()  # T14 /model is inline, not streaming
+    assert "clear" in registry.names()  # T15 /clear is inline
+    assert "new" in registry.names()  # T15 /new is inline
 
 
 def test_builtin_registry_help_table_has_descriptions(
@@ -195,9 +201,10 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     )
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
-    # 11 ported built-ins (incl. /save T11) + /eval (T09) + /optimize (T10)
-    # + /build (T11) + /deploy (T12) + /skills (T13) + /custom (extra) = 17
-    assert len(registry) == 17
+    # 11 ported built-ins (incl. /save T11) + /clear + /new (T15) + /model
+    # (T14) + /eval (T09) + /optimize (T10) + /build (T11) + /deploy (T12)
+    # + /skills (T13) + /custom (extra) = 20
+    assert len(registry) == 20
 
 
 # ---------------------------------------------------------------------------
@@ -778,3 +785,200 @@ def test_help_handler_goes_through_on_done(
     assert result.meta_messages == ()
     assert result.raw_result is not None
     assert "/help" in result.raw_result
+
+
+# ---------------------------------------------------------------------------
+# T15 — /clear and /new
+# ---------------------------------------------------------------------------
+
+
+def test_clear_handler_without_transcript_is_a_noop(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    result = dispatch(ctx, "/clear")
+    assert result.handled is True
+    assert result.display == "system"
+    assert result.raw_result is not None
+    assert "No transcript bound" in result.raw_result
+    # System display → dim-styled line; only the main line, no meta.
+    assert echo.lines == [click.style(result.raw_result, dim=True)]
+
+
+def test_clear_handler_wipes_transcript_entries(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("hello")
+    transcript.append_assistant("hi there")
+    transcript.append_system("note")
+    assert len(transcript) == 3
+
+    ctx = SlashContext(echo=echo, registry=registry, transcript=transcript)
+    result = dispatch(ctx, "/clear")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert len(transcript) == 0
+    assert "Transcript cleared" in (result.raw_result or "")
+    assert result.meta_messages == ("Removed 3 entries; session kept.",)
+    # Main line + one meta line, both dim-styled.
+    assert echo.lines[0] == click.style(result.raw_result, dim=True)
+    assert click.unstyle(echo.lines[1]) == "Removed 3 entries; session kept."
+
+
+def test_clear_handler_uses_singular_noun_for_one_entry(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("only line")
+
+    ctx = SlashContext(echo=echo, registry=registry, transcript=transcript)
+    result = dispatch(ctx, "/clear")
+
+    assert result.meta_messages == ("Removed 1 entry; session kept.",)
+
+
+def test_clear_handler_keeps_session_intact(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    session = store.create(title="keep-me")
+    store.append_entry(session, "user", "persisted line")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("in-memory line")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=session,
+        session_store=store,
+        transcript=transcript,
+    )
+    dispatch(ctx, "/clear")
+
+    # Session pointer unchanged and on-disk transcript untouched.
+    assert ctx.session is session
+    reloaded = store.get(session.session_id)
+    assert reloaded is not None
+    assert len(reloaded.transcript) == 1
+    assert reloaded.transcript[0].content == "persisted line"
+    # In-memory transcript wiped.
+    assert len(transcript) == 0
+
+
+def test_new_handler_without_store_reports_and_keeps_session(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    prior = Session(session_id="abc", title="before")
+    ctx = SlashContext(echo=echo, registry=registry, session=prior)
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert "not persisted" in (result.raw_result or "")
+    # Session pointer untouched.
+    assert ctx.session is prior
+
+
+def test_new_handler_creates_session_and_swaps_on_context(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    previous = store.create(title="old")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=previous,
+        session_store=store,
+    )
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert ctx.session is not previous
+    assert ctx.session is not None
+    assert ctx.session.session_id != previous.session_id
+    # New session persisted to disk.
+    assert store.get(ctx.session.session_id) is not None
+    # Default-title session still surfaces the auto-generated title meta.
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    assert any(f"Previous session: {previous.session_id}" == m for m in plain_meta)
+    assert any(f"New session: {ctx.session.session_id}" == m for m in plain_meta)
+
+
+def test_new_handler_accepts_title_from_positional_args(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    dispatch(ctx, "/new regression sweep")
+
+    assert ctx.session is not None
+    assert ctx.session.title == "regression sweep"
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    assert any("Title: regression sweep" == m for m in plain_meta)
+
+
+def test_new_handler_clears_transcript_when_bound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    from cli.workbench_app.transcript import Transcript
+
+    store = SessionStore(tmp_path)
+    previous = store.create(title="keep-on-disk")
+    transcript = Transcript(echo=lambda _line: None, color=False)
+    transcript.append_user("line one")
+    transcript.append_user("line two")
+
+    ctx = SlashContext(
+        echo=echo,
+        registry=registry,
+        session=previous,
+        session_store=store,
+        transcript=transcript,
+    )
+    dispatch(ctx, "/new")
+
+    assert len(transcript) == 0
+    # Prior session file still exists on disk.
+    assert store.get(previous.session_id) is not None
+
+
+def test_new_handler_surfaces_store_failure_as_system_line(
+    echo: _EchoCapture, registry: CommandRegistry
+) -> None:
+    class _BrokenStore:
+        def create(self, title: str = "") -> Session:
+            raise RuntimeError("disk full")
+
+    ctx = SlashContext(
+        echo=echo, registry=registry, session_store=_BrokenStore()  # type: ignore[arg-type]
+    )
+    result = dispatch(ctx, "/new")
+
+    assert result.handled is True
+    assert result.display == "system"
+    assert "disk full" in (result.raw_result or "")
+    assert ctx.session is None
+
+
+def test_new_handler_omits_previous_meta_when_no_session_bound(
+    echo: _EchoCapture, registry: CommandRegistry, tmp_path: Path
+) -> None:
+    store = SessionStore(tmp_path)
+    ctx = SlashContext(echo=echo, registry=registry, session_store=store)
+
+    dispatch(ctx, "/new")
+
+    plain_meta = [click.unstyle(line) for line in echo.lines[1:]]
+    # No "Previous session" line when ctx.session started as None.
+    assert not any(line.startswith("Previous session:") for line in plain_meta)
+    assert any(line.startswith("New session:") for line in plain_meta)

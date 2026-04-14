@@ -479,10 +479,119 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       workbench surface green (329 tests across skills_slash/slash/
       transcript/status/screens/app_stub/commands/tool_call_block/
       eval_slash/optimize_slash/build_slash/deploy_slash).*
-- [ ] **T14** — Add `/model` slash command that lists configured models and switches the
-      active one for the session (persist to session state).
-- [ ] **T15** — Add `/clear` (wipe transcript, keep session) and `/new` (start fresh
-      session) slash commands.
+- [x] **T14** — Add `/model` slash command that lists configured models and switches the
+      active one for the session (persist to session state). *Landed
+      `cli/workbench_app/model_slash.py` as an inline `LocalCommand`
+      (not streaming) with three modes: (a) `/model` lists every entry
+      from `cli.model.list_available_models(workspace.root)`, marking
+      the session-active one with `●` (green) and annotating credential
+      status via `_credential_note` (`key set` / `missing ENV_VAR` /
+      `no credentials`); (b) `/model <key>` resolves `<key>` against
+      full `provider:model` keys first, falling back to unique bare
+      model names (ambiguous short names intentionally fail with
+      "Unknown model: …" to avoid silent miss-selection); (c)
+      `/model reset|clear|none|default|unset` drops the override. The
+      session-local override is stored in
+      `session.settings_overrides["model"]` and persisted via
+      `session_store.save(session)` so `/resume` carries it forward —
+      the status bar already accepts a `model_override` parameter on
+      `snapshot_from_workspace` (T06) that downstream refresh code
+      reads from `session.settings_overrides.get("model")`. An
+      injectable `ModelLister` seam (default shells out to
+      `cli.model.list_available_models`) keeps tests hermetic — they
+      never need a real `agentlab.yaml` on disk. `build_model_command
+      (*, lister=None)` is the factory; it's registered in
+      `build_builtin_registry` outside `_BUILTIN_SPECS` so it lands in
+      both the streaming-on (default) and streaming-off configurations
+      — `/model` is inline, not subprocess-based. Error-path matrix:
+      lister raises → red "Could not load models: <exc>"; empty
+      model list → plain "No models configured"; unknown key → red
+      "Unknown model: <raw>…" + no session mutation; no session bound
+      → yellow "No active session — cannot persist model override.";
+      no store bound → in-memory mutation succeeds + meta line
+      "Not persisted — no session store bound."; `store.save` raises
+      → yellow warning naming the exception with a "applies for this
+      run only" meta (in-memory mutation kept so subsequent dispatches
+      see it); reset with nothing to clear → "No session model
+      override to clear.". Defensive coercion in `_set_override`
+      replaces a non-dict `settings_overrides` with a fresh dict so
+      freshly-constructed Session objects (missing field) behave
+      sensibly. Updated `build_builtin_registry` to import
+      `build_model_command` lazily (mirrors the streaming factories)
+      and register it unconditionally. Coverage:
+      `tests/test_workbench_model_slash.py` (33 tests) — helpers:
+      `_resolve_root` with/without workspace, with missing `.root`,
+      `_session_override` tolerates non-dict + missing session,
+      `_match_model` exact-key/case-insensitive/unique-short/
+      ambiguous-short/empty-string, `_credential_note` env-set/
+      env-missing/no-env, `_format_list` marker placement; surface:
+      `build_model_command` returns `LocalCommand(kind="local",
+      source="builtin", name="model", description=…)`; listing:
+      happy-path rendering, meta "No session override" when none,
+      meta "Session override: <key>" when set, `●` marker only on
+      active row, empty model list, lister-exception surfaced;
+      setting: full-key persists + reload-from-disk survives, short
+      name resolves, unknown key leaves session + disk clean, no
+      session → warning, no store → in-memory + "Not persisted" meta,
+      `store.save` raises → yellow warning with exception text,
+      meta mentions `/model reset`; resetting: clears + persists with
+      previous value echoed, `clear` alias works, reset-when-none
+      is idempotent, reset-without-session is a noop, best-effort
+      persistence tolerates `store.save` failure; wiring: default
+      registry + `include_streaming=False` registry both contain
+      `/model`. Plus three edits to `tests/test_workbench_slash.py`:
+      `expected` set for `test_builtin_registry_contains_all_ten_commands`
+      adds `"model"`, `test_builtin_registry_without_streaming` gains
+      `assert "model" in registry.names()`, extras-count bumps from 17
+      to 18. Full workbench surface green (631 tests across
+      model_slash/slash/status/screens/transcript/tool_call_block/
+      skills_slash/build_slash/optimize_slash/eval_slash/deploy_slash/
+      commands/app_stub/cli_workbench and every sibling suite).*
+- [x] **T15** — Add `/clear` (wipe transcript, keep session) and `/new` (start fresh
+      session) slash commands. *Landed two inline `LocalCommand` handlers in
+      `cli/workbench_app/slash.py` plus a new `transcript: Transcript | None`
+      field on `SlashContext` (guarded with `TYPE_CHECKING` to avoid a runtime
+      import cycle). `/clear` — if the context carries a `Transcript`, calls
+      `transcript.clear()`, returns `on_done("  Transcript cleared.",
+      display="system", meta_messages=(f"Removed N entr{'y'|'ies'};
+      session kept.",))`; with no transcript bound, returns a dim
+      "No transcript bound — nothing to clear." line and does nothing. The
+      on-disk `Session` pointer and its persisted `.agentlab/sessions/*.json`
+      are deliberately untouched, so `/clear` is non-destructive and mirrors
+      Claude Code's context-reset semantics. `/new` — requires a
+      `SessionStore`; calls `store.create(title=args joined)` and swaps the
+      new session onto `ctx.session` (previous file is left on disk, not
+      deleted). When `ctx.transcript` is bound, it is cleared too so the
+      visible pane matches the fresh session. Meta messages surface the
+      previous session id (only when it existed and differs), the new
+      session id, and — when a title was supplied — "Title: <title>". The
+      auto-generated title from `SessionStore.create(title="")` is omitted
+      from the meta list because empty-string titles collapse to a
+      timestamp banner that adds no signal. Store failures
+      (`RuntimeError`, etc.) are caught and returned as a dim system line so
+      the loop stays alive. Both commands registered in `_BUILTIN_SPECS`
+      (inline; no streaming dependency), so `build_builtin_registry
+      (include_streaming=False)` still exposes them. Updated the
+      registry-size assertions: the default built-in registry now carries 19
+      commands (11 originally ported + /clear + /new + /model + /eval +
+      /optimize + /build + /deploy + /skills); the +extras test lands at 20.
+      Coverage: 10 new tests in `tests/test_workbench_slash.py`
+      (`test_clear_handler_without_transcript_is_a_noop`,
+      `test_clear_handler_wipes_transcript_entries`,
+      `test_clear_handler_uses_singular_noun_for_one_entry`,
+      `test_clear_handler_keeps_session_intact` — verifies the persisted
+      session file is untouched and only the in-memory transcript is wiped,
+      `test_new_handler_without_store_reports_and_keeps_session`,
+      `test_new_handler_creates_session_and_swaps_on_context`,
+      `test_new_handler_accepts_title_from_positional_args`,
+      `test_new_handler_clears_transcript_when_bound`,
+      `test_new_handler_surfaces_store_failure_as_system_line` — uses a
+      stub `_BrokenStore.create` that raises, and
+      `test_new_handler_omits_previous_meta_when_no_session_bound`). Full
+      workbench surface green (376 tests across slash / transcript /
+      status / screens / commands / eval_slash / optimize_slash /
+      build_slash / deploy_slash / skills_slash / model_slash /
+      tool_call_block / app_stub).*
 - [ ] **T16** — Implement ctrl-c / esc handling: first press cancels the current
       streaming tool call, second press aborts the app. Ensure no orphan subprocesses.
 - [ ] **T17** — Wire session persistence: every transcript entry and slash command

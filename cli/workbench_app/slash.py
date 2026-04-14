@@ -27,7 +27,7 @@ import shlex
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 import click
 
@@ -42,6 +42,9 @@ from cli.workbench_app.commands import (
     SlashCommand,
     on_done,
 )
+
+if TYPE_CHECKING:
+    from cli.workbench_app.transcript import Transcript
 
 EchoFn = Callable[[str], None]
 """Writes one line to the transcript — defaults to :func:`click.echo`."""
@@ -65,6 +68,7 @@ class SlashContext:
     echo: EchoFn = click.echo
     click_invoker: ClickInvoker | None = None
     registry: CommandRegistry | None = None
+    transcript: "Transcript | None" = None
     exit_requested: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
 
@@ -266,6 +270,63 @@ def _handle_compact(ctx: SlashContext, *_: str) -> str:
     return f"  Session summary saved to {summary_path}"
 
 
+def _handle_clear(ctx: SlashContext, *_: str) -> OnDoneResult:
+    """Wipe the in-memory transcript without touching the active session.
+
+    Mirrors Claude Code's ``/clear`` (reset the visible context while keeping
+    the conversation file intact). Persisted session state is untouched — the
+    caller can still ``/resume`` it or ``/compact`` it on demand.
+    """
+    transcript = ctx.transcript
+    if transcript is None:
+        return on_done(
+            "  No transcript bound — nothing to clear.",
+            display="system",
+        )
+    count = len(transcript)
+    transcript.clear()
+    noun = "entry" if count == 1 else "entries"
+    meta = (f"Removed {count} {noun}; session kept.",)
+    return on_done("  Transcript cleared.", display="system", meta_messages=meta)
+
+
+def _handle_new(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Start a fresh session, swap it onto the context, and clear the transcript.
+
+    Optional positional args are joined as the new session title, matching the
+    ``SessionStore.create(title=…)`` contract. The previous session is left on
+    disk (not deleted); we only move the pointer on ``ctx.session``.
+    """
+    store = ctx.session_store
+    if store is None:
+        return on_done(
+            "  Sessions are not persisted — cannot start a new one.",
+            display="system",
+        )
+    title = " ".join(args).strip()
+    try:
+        session = store.create(title=title)
+    except Exception as exc:  # Store failures shouldn't crash the loop.
+        return on_done(f"  Failed to start new session: {exc}", display="system")
+
+    previous = ctx.session
+    ctx.session = session
+    if ctx.transcript is not None:
+        ctx.transcript.clear()
+
+    meta: list[str] = []
+    if previous is not None and previous.session_id != session.session_id:
+        meta.append(f"Previous session: {previous.session_id}")
+    meta.append(f"New session: {session.session_id}")
+    if session.title:
+        meta.append(f"Title: {session.title}")
+    return on_done(
+        "  Started new session.",
+        display="system",
+        meta_messages=meta,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry construction.
 # ---------------------------------------------------------------------------
@@ -282,6 +343,8 @@ _BUILTIN_SPECS: tuple[tuple[str, str, Callable[..., str | None]], ...] = (
     ("save", "Materialize the active Workbench candidate", _handle_save),
     ("compact", "Summarize session to .agentlab/memory/latest_session.md", _handle_compact),
     ("resume", "Resume the most recent session", _handle_resume),
+    ("clear", "Wipe the transcript but keep the active session", _handle_clear),
+    ("new", "Start a fresh session (and clear the transcript)", _handle_new),
     ("exit", "Exit the shell", _handle_exit),
 )
 
@@ -307,6 +370,12 @@ def build_builtin_registry(
                 source="builtin",
             )
         )
+    # ``/model`` is an inline built-in with a factory (injectable model
+    # lister) — registered outside ``_BUILTIN_SPECS`` so tests that need a
+    # stub lister can re-register via ``extra=``.
+    from cli.workbench_app.model_slash import build_model_command
+
+    registry.register(build_model_command())
     if include_streaming:
         # Imported lazily to avoid pulling subprocess machinery into the
         # import path of callers that only want the basic registry.
