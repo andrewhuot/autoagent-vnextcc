@@ -799,10 +799,107 @@ Key patterns we're borrowing (TS→Python translation, not code copy):
       deploy_slash / skills_slash / model_slash / tool_call_block /
       commands / app_stub / cancellation); broader workbench / cli
       subset (601 tests) all green.*
-- [ ] **T18b** — Add an effort indicator + ctrl-O expand/collapse for long outputs
+- [x] **T18b** — Add an effort indicator + ctrl-O expand/collapse for long outputs
       (port the mirror's `EffortIndicator` and `CtrlOToExpand`). Long tool-call output
       collapses to a summary line with token count; ctrl-O toggles full view. Effort
       indicator shows a spinner + elapsed time + cost for any running tool call > 2s.
+      *Landed two pure state-machine primitives (the prompt_toolkit
+      key-binding layer lives in T19; these modules own the logic the
+      binding will drive). (1) `cli/workbench_app/effort.py` ships a
+      frozen :class:`EffortSnapshot` (``spinner_frame``, ``elapsed_seconds``,
+      optional ``token_count``/``cost_usd``, ``finished``) plus an
+      :class:`EffortIndicator` state machine with injectable
+      ``clock: Callable[[], float]`` (defaults to :func:`time.monotonic`),
+      ``threshold_seconds`` (default ``2.0``) and ``frames`` (default
+      10-frame braille spinner ``⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`` — same family Claude Code
+      uses). ``start()`` is idempotent; ``tick()`` returns ``None`` while
+      under threshold *or* after ``stop()``, so a polling render loop
+      naturally transitions from animating → silent. Once visible, each
+      tick advances the spinner frame (wraps at ``len(frames)``).
+      ``stop()`` is always-visible, idempotent, and uses a ``✓``
+      completion glyph; it tolerates being called without a prior
+      ``start()`` by treating the run as zero-length (elapsed = 0.0s)
+      rather than raising, so mis-ordered callers don't crash rendering.
+      ``set_cost(token_count=…, cost_usd=…)`` allows partial updates
+      (``None`` fields preserve the prior value); ``clear_cost()`` wipes
+      both. Negative values on either field raise
+      :class:`ValueError`. Companion helpers: :func:`format_elapsed(secs)`
+      returns ``M:SS`` zero-padded ("0:04", "1:05", "61:01",
+      clamps negatives to ``0:00``); :func:`format_effort(snap, *, color)`
+      renders ``"  ⠋ · 0:03"`` (or ``"  ✓ · 0:11"`` on finished) with
+      optional ``· 1.2k tok`` and ``· $0.012`` segments, routed through
+      :func:`theme.meta` so the line is dim in colored mode and
+      unstyled under ``color=False``. Token formatting is scale-aware
+      (``999 tok`` / ``1.0k tok`` / ``3.2M tok``); cost pinned to three
+      decimal places to match Claude's ``$0.013`` footer style. (2)
+      `cli/workbench_app/output_collapse.py` ships a :class:`CollapsibleOutput`
+      dataclass with ``collapse_threshold`` (default ``10``, matching
+      Claude Code's default), ``collapsed`` flag, optional
+      ``token_count``, and an internal line buffer. Writes:
+      ``append(line)`` / ``extend(lines)`` are append-only (matches the
+      T08 tool-call block invariant that progress lines are immutable
+      once emitted); ``clear()`` empties the buffer without touching
+      the ``collapsed`` flag; ``set_token_count(n)`` attaches a count
+      that appears in the collapsed summary (``None`` clears, negative
+      raises). Reads: ``lines`` is an immutable tuple snapshot (prior
+      snapshots are unaffected by subsequent appends); ``line_count``,
+      ``is_collapsible`` (strictly greater-than threshold — equal
+      stays expanded), ``is_collapsed`` (collapsible *and* flag set).
+      Mutators: ``toggle()`` flips ``collapsed`` and returns the new
+      value, *no-op on short buffers* (mirrors the Claude UX where
+      pressing Ctrl-O on a short block does nothing); ``expand()`` /
+      ``collapse()`` force one direction. Render: ``render(*, color)``
+      returns a fresh list — full lines when expanded or below
+      threshold, or a single summary line when collapsed. Separate
+      :func:`format_summary(hidden_count, token_count, *, color)` lets
+      the tool-call footer reuse the same wording without touching a
+      buffer instance; the summary reads
+      ``"  … N lines hidden · <tokens> · press Ctrl-O to expand"``,
+      pluralization-aware (``1 line`` / ``2 lines``, ``0`` reads as
+      plural per English convention), routed through :func:`theme.meta`
+      so it's dim in colored mode. Wiring: exported both modules from
+      `cli/workbench_app/__init__.py` (``EffortIndicator``,
+      ``EffortSnapshot``, ``format_effort``, ``format_elapsed``,
+      ``CollapsibleOutput``, ``format_summary``) so downstream callers
+      can import them without reaching into submodules. No existing
+      modules change — these are additive primitives that the T19
+      prompt_toolkit layer, the T08 tool-call block renderer, and the
+      streaming-handler footers will consume when those tasks land.
+      Coverage: `tests/test_workbench_effort.py` (27 tests) using a
+      ``_FakeClock`` fixture so no real time passes — defaults sanity,
+      tick-before-start → None, tick-below-threshold → None,
+      tick-emits-snapshot once visible, spinner-frame-advance + wrap,
+      ``start()`` idempotent, ``stop()`` returns final always-visible,
+      stop-without-start = 0s, tick-after-stop → None,
+      ``stop()`` idempotent (first stop timestamp wins), ``set_cost``
+      attaches tokens + USD, partial updates preserve other field,
+      ``clear_cost()`` drops metadata, negative cost / token rejected,
+      constructor rejects negative threshold / empty frames,
+      ``EffortSnapshot`` frozen (``elapsed_seconds`` mutation raises);
+      ``format_elapsed`` zero-pad / minute-rollover / clamp-negative;
+      ``format_effort`` bare snapshot, finished snapshot uses its own
+      frame glyph, token inclusion at 1.2k scale, scale-formatting
+      sweep (999 tok / 1.0k / 2.5k / 1.0M / 3.2M), cost rendering
+      (``$0.013`` rounding), colored-default unstyles to plain via
+      ``click.unstyle``, ANSI escape present under color=True.
+      `tests/test_workbench_output_collapse.py` (21 tests) — default
+      threshold matches 10, append / extend / clear, is_collapsible
+      requires > threshold (equal is not), short buffers always render
+      full regardless of flag, collapsed long buffer → single summary
+      line, expanded long buffer → full lines, toggle flips on long
+      buffers, toggle is noop on short, expand/collapse forcing,
+      summary includes token count when set, summary omits tok when
+      unset, set_token_count rejects negative + accepts None-to-clear,
+      ``lines`` snapshot is tuple (immutable), ``render`` returns fresh
+      list (not internal reference), colored-default unstyles to
+      plain; ``format_summary`` plural/singular (``1 line`` /
+      ``2 lines``), zero renders as plural, token scales (999 /
+      1.0k / 2.5k / 1.0M), always mentions Ctrl-O, colored is dim.
+      Full workbench surface green (287 tests across effort /
+      output_collapse / slash / theme / transcript / status_bar /
+      app_stub / screens / tool_call_block / commands); full
+      test suite green (4571 passed, 1 unrelated pre-existing
+      doctor-test failure not touched by this task).*
 - [ ] **T19** — Add slash-command autocomplete popup (show matching commands as user
       types `/`). Use the chosen rendering stack's completer.
 - [ ] **T20** — Make workbench the default: `agentlab` with no args launches

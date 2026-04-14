@@ -22,6 +22,16 @@ from cli.workbench_app.commands import (
     SlashCommand,
     SlashCommandKind,
 )
+from cli.workbench_app.effort import (
+    EffortIndicator,
+    EffortSnapshot,
+    format_effort,
+    format_elapsed,
+)
+from cli.workbench_app.output_collapse import (
+    CollapsibleOutput,
+    format_summary,
+)
 from cli.workbench_app.slash import (
     DispatchResult,
     SlashContext,
@@ -43,12 +53,15 @@ from cli.workbench_app.transcript import (
 )
 
 __all__ = [
+    "CollapsibleOutput",
     "CommandContext",
     "CommandEffort",
     "CommandRegistry",
     "CommandSource",
     "DEFAULT_PROMPT",
     "DispatchResult",
+    "EffortIndicator",
+    "EffortSnapshot",
     "LocalCommand",
     "LocalJSXCommand",
     "PromptCommand",
@@ -64,7 +77,10 @@ __all__ = [
     "build_builtin_registry",
     "build_status_line",
     "dispatch",
+    "format_effort",
+    "format_elapsed",
     "format_entry",
+    "format_summary",
     "parse_slash_line",
     "render_snapshot",
     "run_workbench_app",
