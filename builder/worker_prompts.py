@@ -77,6 +77,32 @@ _ROLE_GUIDANCE: dict[SpecialistRole, str] = {
         "(instructions, guardrails, callbacks, tools). Each card must list "
         "the hypothesis, expected delta, and verification plan."
     ),
+    SpecialistRole.EVAL_RUNNER: (
+        "Execute the eval suite directly (no LLM). Return the composite "
+        "scores envelope and the list of failure fingerprints as artifacts."
+    ),
+    SpecialistRole.LOSS_ANALYST: (
+        "Read upstream eval runner output, cluster failing cases by root "
+        "cause, and emit a narrative loss analysis with axis recommendations."
+    ),
+    SpecialistRole.INSTRUCTION_OPTIMIZER: (
+        "Read the loss analyst output from dependency_summaries / upstream "
+        "artifacts. Produce exactly one axis-scoped instructions change "
+        "card: hypothesis, before/after instruction diff, expected delta, "
+        "and verification plan. Do not touch guardrails or callbacks."
+    ),
+    SpecialistRole.GUARDRAIL_OPTIMIZER: (
+        "Read the loss analyst output from dependency_summaries / upstream "
+        "artifacts. Produce exactly one axis-scoped guardrails change card: "
+        "policy delta, failing example, expected delta, and verification "
+        "plan. Do not touch instructions or callbacks."
+    ),
+    SpecialistRole.CALLBACK_OPTIMIZER: (
+        "Read the loss analyst output from dependency_summaries / upstream "
+        "artifacts. Produce exactly one axis-scoped callbacks change card: "
+        "targeted callback / tool-routing edits, expected delta, and "
+        "verification plan. Do not touch instructions or guardrails."
+    ),
     SpecialistRole.TRACE_ANALYST: (
         "Identify the failing spans, cluster similar failures, and propose a "
         "root-cause hypothesis. Return evidence chains, not fixes."

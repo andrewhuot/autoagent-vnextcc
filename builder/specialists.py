@@ -107,6 +107,28 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         permission_scope=["read", "source_write"],
         context_template="Generate eval bundles and summarize before/after quality deltas.",
     ),
+    SpecialistRole.EVAL_RUNNER: SpecialistDefinition(
+        role=SpecialistRole.EVAL_RUNNER,
+        display_name="Eval Runner",
+        description="Executes the eval suite against the active agent config and returns scores.",
+        tools=["eval_runner", "results_store"],
+        permission_scope=["read"],
+        context_template=(
+            "Run the eval harness deterministically and return composite scores, "
+            "per-case outcomes, and failure fingerprints for downstream analysis."
+        ),
+    ),
+    SpecialistRole.LOSS_ANALYST: SpecialistDefinition(
+        role=SpecialistRole.LOSS_ANALYST,
+        display_name="Loss Analyst",
+        description="Clusters eval failures and narrates the dominant loss patterns.",
+        tools=["trace_search", "failure_clusterer", "summary_writer"],
+        permission_scope=["read"],
+        context_template=(
+            "Read eval_runner output, cluster failing cases by root cause, and produce "
+            "a narrative loss analysis with targeted hypotheses the optimizer can act on."
+        ),
+    ),
     SpecialistRole.OPTIMIZATION_ENGINEER: SpecialistDefinition(
         role=SpecialistRole.OPTIMIZATION_ENGINEER,
         display_name="Optimization Engineer",
@@ -115,6 +137,39 @@ SPECIALISTS: dict[SpecialistRole, SpecialistDefinition] = {
         permission_scope=["read", "source_write", "benchmark_spend"],
         context_template=(
             "Use eval evidence and build-time skills to propose measured optimization changes."
+        ),
+    ),
+    SpecialistRole.INSTRUCTION_OPTIMIZER: SpecialistDefinition(
+        role=SpecialistRole.INSTRUCTION_OPTIMIZER,
+        display_name="Instruction Optimizer",
+        description="Proposes axis-scoped prompt / instruction edits grounded in loss analysis.",
+        tools=["instruction_editor", "prompt_linter", "change_card_writer"],
+        permission_scope=["read", "source_write"],
+        context_template=(
+            "Read the loss analyst output and emit a single instructions axis change card "
+            "with hypothesis, targeted diff, expected delta, and verification plan."
+        ),
+    ),
+    SpecialistRole.GUARDRAIL_OPTIMIZER: SpecialistDefinition(
+        role=SpecialistRole.GUARDRAIL_OPTIMIZER,
+        display_name="Guardrail Optimizer",
+        description="Proposes axis-scoped guardrail policy updates grounded in loss analysis.",
+        tools=["guardrail_editor", "policy_tester", "change_card_writer"],
+        permission_scope=["read", "source_write"],
+        context_template=(
+            "Read the loss analyst output and emit a single guardrails axis change card "
+            "with policy deltas, failing example, expected delta, and verification plan."
+        ),
+    ),
+    SpecialistRole.CALLBACK_OPTIMIZER: SpecialistDefinition(
+        role=SpecialistRole.CALLBACK_OPTIMIZER,
+        display_name="Callback Optimizer",
+        description="Proposes axis-scoped callback / tool-routing changes grounded in loss analysis.",
+        tools=["code_edit", "integration_tester", "change_card_writer"],
+        permission_scope=["read", "source_write"],
+        context_template=(
+            "Read the loss analyst output and emit a single callbacks axis change card "
+            "with targeted callback edits, expected delta, and verification plan."
         ),
     ),
     SpecialistRole.TRACE_ANALYST: SpecialistDefinition(
@@ -197,6 +252,14 @@ _INTENT_KEYWORDS: dict[SpecialistRole, tuple[str, ...]] = {
     SpecialistRole.SKILL_AUTHOR: ("skill", "runtime skill", "buildtime skill", "manifest"),
     SpecialistRole.GUARDRAIL_AUTHOR: ("guardrail", "policy", "safety", "pii"),
     SpecialistRole.EVAL_AUTHOR: ("eval", "benchmark", "quality", "regression", "test"),
+    SpecialistRole.EVAL_RUNNER: ("eval run", "run eval", "execute eval", "benchmark run"),
+    SpecialistRole.LOSS_ANALYST: (
+        "loss pattern",
+        "failure cluster",
+        "failure analysis",
+        "loss analysis",
+        "regression analysis",
+    ),
     SpecialistRole.OPTIMIZATION_ENGINEER: (
         "optimize",
         "optimization",
@@ -204,6 +267,24 @@ _INTENT_KEYWORDS: dict[SpecialistRole, tuple[str, ...]] = {
         "improvement",
         "failure",
         "experiment",
+    ),
+    SpecialistRole.INSTRUCTION_OPTIMIZER: (
+        "instruction optimizer",
+        "prompt optimization",
+        "tune prompt",
+        "refine instructions",
+    ),
+    SpecialistRole.GUARDRAIL_OPTIMIZER: (
+        "guardrail optimizer",
+        "tune guardrail",
+        "policy tuning",
+        "refine guardrail",
+    ),
+    SpecialistRole.CALLBACK_OPTIMIZER: (
+        "callback optimizer",
+        "tune callback",
+        "tool routing",
+        "refine callback",
     ),
     SpecialistRole.TRACE_ANALYST: ("trace", "span", "failure", "why", "blame"),
     SpecialistRole.DEPLOYMENT_ENGINEER: (

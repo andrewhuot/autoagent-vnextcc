@@ -1144,3 +1144,68 @@ class EvalRunner:
             return 0.0
         pass_rate = sum(1 for item in last_n_results if item) / len(last_n_results)
         return round(1.0 - pass_rate, 4)
+
+
+def run_for_coordinator(
+    context: dict[str, Any],
+    *,
+    runner: EvalRunner | None = None,
+) -> dict[str, Any]:
+    """Run the eval suite for a coordinator worker and return a plain dict.
+
+    The coordinator worker contract hands us a gathered ``context`` dict (goal,
+    dataset path, split, config payload). This helper constructs an
+    :class:`EvalRunner`, executes a single ``run()`` call, and reshapes the
+    :class:`CompositeScore` into a coordinator-friendly envelope with summary
+    scores, failing case fingerprints, and a short list of failure samples for
+    the loss analyst worker to cluster.
+
+    The helper keeps the worker free of CLI internals: the worker imports only
+    ``evals.runner.run_for_coordinator`` and never touches argparse-shaped
+    wiring.
+    """
+    runner = runner or EvalRunner()
+    eval_context = context.get("eval") if isinstance(context, dict) else None
+    if not isinstance(eval_context, dict):
+        eval_context = {}
+    config_payload: dict | None = eval_context.get("config")
+    dataset_path: str | None = eval_context.get("dataset_path")
+    split: str = str(eval_context.get("split") or "all")
+
+    score = runner.run(
+        config=config_payload,
+        dataset_path=dataset_path,
+        split=split,
+    )
+
+    failing_cases: list[dict[str, Any]] = []
+    for result in score.results or []:
+        if result.passed and result.safety_passed:
+            continue
+        failing_cases.append(
+            {
+                "case_id": result.case_id,
+                "category": result.category,
+                "safety_passed": result.safety_passed,
+                "quality_score": round(float(result.quality_score), 4),
+                "failure_reasons": list(result.failure_reasons),
+                "details": result.details,
+            }
+        )
+
+    return {
+        "summary": {
+            "quality": round(float(score.quality), 4),
+            "safety": round(float(score.safety), 4),
+            "latency": round(float(score.latency), 4),
+            "cost": round(float(score.cost), 4),
+            "composite": round(float(score.composite), 4),
+            "passed_cases": int(score.passed_cases),
+            "total_cases": int(score.total_cases),
+            "safety_failures": int(score.safety_failures),
+        },
+        "failing_cases": failing_cases,
+        "warnings": list(score.warnings or []),
+        "run_id": score.run_id,
+        "provenance": dict(score.provenance or {}),
+    }
