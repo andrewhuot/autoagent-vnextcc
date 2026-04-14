@@ -131,18 +131,39 @@ class _FakeStreamingRuntime:
 
 
 def test_render_progress_line_uses_claude_style_tree_line() -> None:
-    """The live transcript line should use Claude-style tree glyphs, not log prefixes."""
+    """Durable worker results should use Claude-style tree glyphs, not log prefixes."""
     start = 100.0
-    event = _make_event(BuilderEventType.WORKER_ACTING, timestamp=102.0)
+    event = _make_event(
+        BuilderEventType.WORKER_COMPLETED,
+        timestamp=102.0,
+        extra={"summary": "built guardrail"},
+    )
 
     line = render_progress_line(event, start)
 
     assert line is not None
     plain = click.unstyle(line)
-    assert plain.startswith("  ├─ ")
+    assert plain.startswith("  └─ ")
     assert "[2s]" not in plain
+    assert "· 2s" not in plain
     assert "build worker" in plain
-    assert "acting" in line
+    assert "completed" in line
+
+
+def test_render_progress_line_suppresses_transient_worker_phase_noise() -> None:
+    """Gather/act/verify phases belong in the spinner, not the transcript."""
+    assert render_progress_line(
+        _make_event(BuilderEventType.WORKER_GATHERING_CONTEXT),
+        start_ts=0.0,
+    ) is None
+    assert render_progress_line(
+        _make_event(BuilderEventType.WORKER_ACTING),
+        start_ts=0.0,
+    ) is None
+    assert render_progress_line(
+        _make_event(BuilderEventType.WORKER_VERIFYING),
+        start_ts=0.0,
+    ) is None
 
 
 def test_worker_phase_verb_maps_transitions_to_effort_indicator_strings() -> None:
@@ -206,11 +227,11 @@ def test_live_worker_events_echo_before_final_result() -> None:
 
     # Progress lines should appear — one per rendered event — using the
     # Claude-style tree glyphs rather than raw elapsed-time log prefixes.
-    assert "gathering context" in joined
-    assert "acting" in joined
     assert "completed" in joined
     assert any("├─" in click.unstyle(line) or "└─" in click.unstyle(line) for line in captured)
     assert not any("[0s]" in line or "[1s]" in line or "[2s]" in line for line in captured)
+    assert not any("gathering context" in click.unstyle(line) for line in captured)
+    assert not any("acting" in click.unstyle(line) for line in captured)
 
 
 def test_live_rendering_drives_effort_indicator_verb_sequence() -> None:

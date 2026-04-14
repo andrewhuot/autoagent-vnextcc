@@ -93,7 +93,5 @@ def test_build_transcript_snapshot_first_lines() -> None:
     # Lock the Claude-style shape — the rest grows with the recorded roster.
     assert "● Coordinator" in lines[0]
     assert any("├─" in line or "└─" in line for line in lines[1:])
-    assert click.unstyle(lines[-1]) in {
-        "  └─ ✓ Coordinator run completed",
-        "  └─ ! Coordinator run blocked",
-    }
+    assert click.unstyle(lines[-1]).startswith("  └─ ")
+    assert "completed" in click.unstyle(lines[-1]) or "blocked" in click.unstyle(lines[-1])

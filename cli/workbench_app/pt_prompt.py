@@ -141,9 +141,10 @@ def render_bottom_toolbar(mode: str, *, width: int | None = None) -> str:
         f"{label} permissions on",
     )
     for variant in variants:
-        if len(variant) <= resolved_width:
-            return variant
-    return _fit_toolbar(variants[-1], resolved_width)
+        padded = f"  {variant}"
+        if len(padded) <= resolved_width:
+            return padded
+    return _fit_toolbar(f"  {variants[-1]}", resolved_width)
 
 
 def _render_top_border(echo: EchoFn) -> None:
@@ -187,6 +188,7 @@ def build_prompt_input_provider(
         from prompt_toolkit.history import InMemoryHistory
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.shortcuts import CompleteStyle
+        from prompt_toolkit.styles import Style
     except ImportError as exc:  # pragma: no cover — prompt_toolkit is a hard dep
         raise RuntimeError("prompt_toolkit is required for the interactive prompt") from exc
 
@@ -260,6 +262,13 @@ def build_prompt_input_provider(
         mouse_support=False,
         history=history,
         enable_history_search=True,
+        style=Style.from_dict(
+            {
+                "bottom-toolbar": "noreverse",
+                "bottom-toolbar.text": "noreverse",
+                "toolbar": "noreverse ansigray",
+            }
+        ),
     )
 
     def provider(prompt_text: str) -> str:

@@ -69,12 +69,12 @@ def format_coordinator_event(event: BuilderEvent) -> str | None:
             fg="cyan",
             bold=True,
         )
-    if event_type == BuilderEventType.WORKER_GATHERING_CONTEXT:
-        return _worker_line(role, "gathering context")
-    if event_type == BuilderEventType.WORKER_ACTING:
-        return _worker_line(role, "acting")
-    if event_type == BuilderEventType.WORKER_VERIFYING:
-        return _worker_line(role, "verifying artifacts")
+    if event_type in {
+        BuilderEventType.WORKER_GATHERING_CONTEXT,
+        BuilderEventType.WORKER_ACTING,
+        BuilderEventType.WORKER_VERIFYING,
+    }:
+        return None
     if event_type == BuilderEventType.WORKER_MESSAGE_DELTA:
         text = _truncate(str(payload.get("text") or ""), width=120)
         if not text:
@@ -92,12 +92,11 @@ def format_coordinator_event(event: BuilderEvent) -> str | None:
         return _warn(
             f"  {_END_GLYPH} ! {role} blocked: {payload.get('reason') or 'needs approval'}"
         )
-    if event_type == BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED:
-        summary = str(payload.get("summary") or "").strip()
-        text = f"Synthesis complete: {summary}" if summary else "Synthesis complete"
-        return _detail_line(text)
-    if event_type == BuilderEventType.COORDINATOR_EXECUTION_COMPLETED:
-        return _success(f"  {_END_GLYPH} ✓ Coordinator run completed")
+    if event_type in {
+        BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED,
+        BuilderEventType.COORDINATOR_EXECUTION_COMPLETED,
+    }:
+        return None
     if event_type == BuilderEventType.COORDINATOR_EXECUTION_FAILED:
         return _error(
             f"  {_END_GLYPH} ! Coordinator run failed: {payload.get('error') or 'unknown error'}"
@@ -122,6 +121,8 @@ def render_progress_line(
     line = format_coordinator_event(event)
     if line is None:
         return None
+    if event.event_type != BuilderEventType.COORDINATOR_EXECUTION_STARTED:
+        return line
     reference = event.timestamp if event.timestamp else (now if now is not None else now_ts())
     elapsed = max(0, int(reference - start_ts))
     return f"{line}{_dim(f' · {elapsed}s')}"

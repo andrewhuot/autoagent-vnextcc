@@ -76,12 +76,25 @@ def _install_fake_prompt_toolkit(
     shortcuts = ModuleType("prompt_toolkit.shortcuts")
     shortcuts.CompleteStyle = SimpleNamespace(COLUMN="COLUMN")  # type: ignore[attr-defined]
 
+    styles = ModuleType("prompt_toolkit.styles")
+
+    class Style:
+        def __init__(self, rules: dict[str, str]) -> None:
+            self.rules = rules
+
+        @classmethod
+        def from_dict(cls, rules: dict[str, str]) -> "Style":
+            return cls(rules)
+
+    styles.Style = Style  # type: ignore[attr-defined]
+
     monkeypatch.setitem(sys.modules, "prompt_toolkit", prompt_toolkit)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.formatted_text", formatted_text)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.history", history)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.key_binding", key_binding)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.filters", filters)
     monkeypatch.setitem(sys.modules, "prompt_toolkit.shortcuts", shortcuts)
+    monkeypatch.setitem(sys.modules, "prompt_toolkit.styles", styles)
 
 
 def test_cycle_permission_mode_walks_canonical_order() -> None:
@@ -178,12 +191,16 @@ def test_build_prompt_input_provider_registers_slash_and_shift_tab_bindings(
     assert captured_kwargs.get("reserve_space_for_menu", 0) >= 6
     assert captured_kwargs.get("history") is not None
     assert captured_kwargs.get("enable_history_search") is True
+    style = captured_kwargs.get("style")
+    assert getattr(style, "rules", {}).get("bottom-toolbar") == "noreverse"
+    assert "noreverse" in getattr(style, "rules", {}).get("toolbar", "")
 
 
 def test_bottom_toolbar_compacts_to_single_line_on_narrow_width() -> None:
     """The prompt-owned toolbar should not consume two rows in short terminals."""
     toolbar = render_bottom_toolbar("default", width=36)
     assert "\n" not in toolbar
+    assert toolbar.startswith("  ")
     assert "Default permissions on" in toolbar
     assert "shift+tab" in toolbar
     assert len(toolbar) <= 36
