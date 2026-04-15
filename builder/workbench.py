@@ -72,6 +72,119 @@ def _now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+async def _stream_chat_response(
+    *,
+    instructions: str,
+    history: list[dict[str, str]],
+    agent_model: str,
+    agent_name: str,
+    tool_names: list[str],
+    force_mock: bool,
+):
+    """Stream a chat reply from the candidate agent.
+
+    Tries the live Anthropic SDK if ``ANTHROPIC_API_KEY`` is present and
+    ``force_mock`` is False. Otherwise yields a deterministic preview reply
+    so the chat pane stays usable without network or API keys.
+
+    Yields plain text chunks (no SSE wrapping).
+    """
+    use_live = (not force_mock) and bool(os.environ.get("ANTHROPIC_API_KEY"))
+    if use_live:
+        try:
+            async for chunk in _stream_chat_live(
+                instructions=instructions,
+                history=history,
+                model=agent_model,
+            ):
+                yield chunk
+            return
+        except Exception:  # noqa: BLE001 — fall through to mock so chat stays usable
+            pass
+
+    async for chunk in _stream_chat_mock(
+        instructions=instructions,
+        history=history,
+        agent_name=agent_name,
+        tool_names=tool_names,
+    ):
+        yield chunk
+
+
+async def _stream_chat_live(
+    *,
+    instructions: str,
+    history: list[dict[str, str]],
+    model: str,
+):
+    """Stream from the real Anthropic SDK in a worker thread.
+
+    The SDK call is synchronous, so we run it in a thread and bridge events
+    back through an :class:`asyncio.Queue` so the caller can ``async for``.
+    """
+    import anthropic  # type: ignore[import-not-found]
+
+    queue: asyncio.Queue[str | None] = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def _runner() -> None:
+        try:
+            client = anthropic.Anthropic()
+            with client.messages.stream(
+                model=model,
+                max_tokens=1024,
+                system=instructions or "You are a helpful agent.",
+                messages=[
+                    {"role": m["role"], "content": m["content"]}
+                    for m in history
+                ],
+            ) as stream:
+                for text in stream.text_stream:
+                    if text:
+                        loop.call_soon_threadsafe(queue.put_nowait, text)
+        finally:
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+    asyncio.create_task(asyncio.to_thread(_runner))
+    while True:
+        chunk = await queue.get()
+        if chunk is None:
+            break
+        yield chunk
+
+
+async def _stream_chat_mock(
+    *,
+    instructions: str,
+    history: list[dict[str, str]],
+    agent_name: str,
+    tool_names: list[str],
+):
+    """Deterministic preview reply when no live LLM is available."""
+    last_user = next(
+        (m["content"] for m in reversed(history) if m["role"] == "user"),
+        "",
+    )
+    role_line = (instructions.splitlines() or [""])[0].strip() if instructions else ""
+    summary = (
+        f"[{agent_name} preview] I read \"{last_user[:80]}\". "
+        f"In live mode I would respond using my role"
+    )
+    if role_line:
+        summary += f" ({role_line[:80]})"
+    summary += "."
+    if tool_names:
+        first_tools = ", ".join(t for t in tool_names[:3] if t)
+        if first_tools:
+            summary += f" Tools available: {first_tools}."
+    summary += " Set ANTHROPIC_API_KEY to chat with the live model."
+
+    # Stream chunks word-by-word so the UI shows a typewriter effect.
+    for word in summary.split(" "):
+        await asyncio.sleep(0.01)
+        yield word + " "
+
+
 def _parse_iso(value: Any) -> datetime | None:
     """Parse a stored UTC timestamp, returning None for old/malformed values."""
     if not value:
@@ -1376,6 +1489,123 @@ class WorkbenchService:
 
         return _stream()
 
+    async def run_chat_stream(
+        self,
+        *,
+        project_id: str,
+        message: str,
+        force_mock: bool = False,
+    ) -> Any:
+        """Stream a conversational reply from the candidate agent.
+
+        Lets a user "test" the current canonical agent without launching a
+        builder iteration. Replies stream as deltas so the web UI can render
+        a typewriter effect. Transcript persists on the project under
+        ``chat_transcript`` so a page reload keeps the conversation.
+        """
+        project = self._require_project(project_id)
+        model = project.get("model") or {}
+        agents = model.get("agents") or []
+        if not agents:
+            raise ValueError(
+                "Build an agent before chatting — there is no candidate to test yet.",
+            )
+
+        root_agent = agents[0]
+        agent_name = str(root_agent.get("name") or "Agent")
+        instructions = str(root_agent.get("instructions") or root_agent.get("role") or "")
+        agent_model = str(root_agent.get("model") or "claude-sonnet-4-5")
+
+        transcript: list[dict[str, Any]] = list(project.setdefault("chat_transcript", []))
+        user_msg = {
+            "id": f"chat-{new_id()}",
+            "role": "user",
+            "text": message.strip(),
+            "created_at": _now_iso(),
+        }
+        transcript.append(user_msg)
+        project["chat_transcript"] = transcript
+        self.store.save_project(project)
+
+        history_for_llm: list[dict[str, str]] = [
+            {"role": str(m.get("role") or "user"), "content": str(m.get("text") or "")}
+            for m in transcript
+            if m.get("role") in {"user", "assistant"} and (m.get("text") or "").strip()
+        ]
+
+        async def _stream() -> Any:
+            yield {
+                "event": "chat.user",
+                "data": {
+                    "message": user_msg,
+                    "agent_name": agent_name,
+                    "agent_model": agent_model,
+                },
+            }
+
+            assistant_id = f"chat-{new_id()}"
+            yield {
+                "event": "chat.assistant.started",
+                "data": {
+                    "message_id": assistant_id,
+                    "agent_name": agent_name,
+                    "agent_model": agent_model,
+                },
+            }
+
+            full_text = ""
+            tools = model.get("tools") or []
+            try:
+                async for chunk in _stream_chat_response(
+                    instructions=instructions,
+                    history=history_for_llm,
+                    agent_model=agent_model,
+                    agent_name=agent_name,
+                    tool_names=[str(t.get("name") or t.get("id") or "") for t in tools if isinstance(t, dict)],
+                    force_mock=force_mock,
+                ):
+                    full_text += chunk
+                    yield {
+                        "event": "chat.assistant.delta",
+                        "data": {"message_id": assistant_id, "delta": chunk},
+                    }
+            except Exception as exc:  # noqa: BLE001 — surface as event
+                yield {
+                    "event": "chat.error",
+                    "data": {"message": str(exc), "message_id": assistant_id},
+                }
+                return
+
+            assistant_msg = {
+                "id": assistant_id,
+                "role": "assistant",
+                "text": full_text.strip(),
+                "agent_name": agent_name,
+                "agent_model": agent_model,
+                "created_at": _now_iso(),
+            }
+            transcript.append(assistant_msg)
+            project["chat_transcript"] = transcript
+            self.store.save_project(project)
+            yield {
+                "event": "chat.assistant.completed",
+                "data": {"message": assistant_msg},
+            }
+
+        return _stream()
+
+    def get_chat_transcript(self, *, project_id: str) -> list[dict[str, Any]]:
+        """Return the chat transcript for hydration."""
+        project = self._require_project(project_id)
+        return list(project.get("chat_transcript") or [])
+
+    def reset_chat_transcript(self, *, project_id: str) -> list[dict[str, Any]]:
+        """Clear the chat transcript and return the new (empty) one."""
+        project = self._require_project(project_id)
+        project["chat_transcript"] = []
+        self.store.save_project(project)
+        return []
+
     def get_plan_snapshot(self, *, project_id: str) -> dict[str, Any]:
         """Return the current plan + artifacts snapshot for page hydration."""
         project = self._require_project(project_id)
@@ -1405,6 +1635,7 @@ class WorkbenchService:
             "turns": copy.deepcopy(project.get("turns") or []),
             "harness_state": self._harness_state_summary(project),
             "run_summary": self._latest_run_summary(project),
+            "chat_transcript": list(project.get("chat_transcript") or []),
         }
 
     def _latest_run_summary(self, project: dict[str, Any]) -> dict[str, Any] | None:

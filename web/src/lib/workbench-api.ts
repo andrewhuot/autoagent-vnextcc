@@ -237,6 +237,7 @@ export interface WorkbenchPlanSnapshot {
   turns?: WorkbenchTurnRecord[];
   harness_state?: WorkbenchHarnessState;
   run_summary?: RunSummary | null;
+  chat_transcript?: WorkbenchChatMessage[];
 }
 
 export type WorkbenchTarget = 'portable' | 'adk' | 'cx';
@@ -1023,6 +1024,109 @@ export async function* iterateWorkbenchBuild(
     const parsed = parseSseFrame(tail);
     if (parsed) yield parsed;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Chat-with-agent (test the candidate without launching a build)
+// ---------------------------------------------------------------------------
+
+export interface WorkbenchChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  agent_name?: string;
+  agent_model?: string;
+  created_at: string;
+}
+
+export interface ChatStreamEvent {
+  event:
+    | 'chat.user'
+    | 'chat.assistant.started'
+    | 'chat.assistant.delta'
+    | 'chat.assistant.completed'
+    | 'chat.error'
+    | 'message';
+  data: Record<string, unknown>;
+}
+
+/**
+ * Stream a conversational reply from the candidate agent.
+ *
+ * The endpoint persists the transcript on the project, so a page reload
+ * restores the chat. SSE events follow the chat.* family. Falls back to a
+ * deterministic mock reply when no live LLM key is available on the server.
+ */
+export async function* streamWorkbenchChat(
+  body: { project_id: string; message: string; mock?: boolean },
+  options: { signal?: AbortSignal } = {}
+): AsyncIterable<ChatStreamEvent> {
+  const response = await fetch('/api/workbench/chat/stream', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'text/event-stream',
+    },
+    body: JSON.stringify(body),
+    signal: options.signal,
+  });
+
+  if (!response.ok) {
+    let message = `Workbench chat failed (${response.status})`;
+    try {
+      const payload = await response.json();
+      if (payload && typeof payload === 'object' && typeof payload.detail === 'string') {
+        message = payload.detail;
+      }
+    } catch {
+      const text = await response.text().catch(() => '');
+      if (text.trim()) message = text.trim();
+    }
+    throw new WorkbenchApiError(message, response.status);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) throw new WorkbenchApiError('Chat stream has no body', 500);
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let separatorIndex = buffer.indexOf('\n\n');
+    while (separatorIndex !== -1) {
+      const rawFrame = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      const parsed = parseSseFrame(rawFrame);
+      if (parsed) yield parsed as ChatStreamEvent;
+      separatorIndex = buffer.indexOf('\n\n');
+    }
+  }
+  const tail = buffer.trim();
+  if (tail) {
+    const parsed = parseSseFrame(tail);
+    if (parsed) yield parsed as ChatStreamEvent;
+  }
+}
+
+/** Fetch the persisted chat transcript for hydration. */
+export function getWorkbenchChatTranscript(projectId: string): Promise<{
+  project_id: string;
+  chat_transcript: WorkbenchChatMessage[];
+}> {
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/chat`);
+}
+
+/** Reset the chat transcript so the operator can start a fresh test pass. */
+export function resetWorkbenchChatTranscript(projectId: string): Promise<{
+  project_id: string;
+  chat_transcript: WorkbenchChatMessage[];
+}> {
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/chat`, {
+    method: 'DELETE',
+  });
 }
 
 function parseSseFrame(frame: string): BuildStreamEvent | null {

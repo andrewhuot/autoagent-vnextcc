@@ -183,12 +183,12 @@ describe('AgentWorkbench', () => {
       await screen.findByRole('heading', { name: 'Airline Support Workbench' })
     ).toBeInTheDocument();
 
-    // Empty preview copy from the reference mockup.
+    // Hydrated config tab renders the canonical agent name.
     expect(
-      screen.getByText('No artifacts yet')
+      screen.getByText('Airline Support Agent')
     ).toBeInTheDocument();
 
-    // Chat input is rendered.
+    // Composer renders in build mode by default.
     expect(screen.getByLabelText('Build request')).toBeInTheDocument();
 
     const journey = screen.getByRole('region', { name: 'Operator journey' });
@@ -202,7 +202,7 @@ describe('AgentWorkbench', () => {
     renderWorkbench();
 
     // Wait for the initial hydration flow to settle.
-    await screen.findByText('No artifacts yet');
+    await screen.findByRole('heading', { name: 'Airline Support Workbench' });
 
     // Inject a hydrated snapshot — the UI should render plan + artifacts.
     useWorkbenchStore.getState().hydrate({
@@ -342,7 +342,7 @@ describe('AgentWorkbench', () => {
     renderWorkbench();
 
     // Wait for the initial hydrate to finish.
-    await screen.findByText('No artifacts yet');
+    await screen.findByLabelText('Build request');
 
     const textarea = screen.getByLabelText('Build request');
     await user.type(textarea, 'Build me a sales qualification agent{Enter}');
@@ -861,7 +861,7 @@ describe('AgentWorkbench', () => {
     const fetchMock = installMockFetch();
     renderWorkbench();
 
-    await screen.findByText('No artifacts yet');
+    await screen.findByLabelText('Build request');
     useWorkbenchStore.setState({
       projectId: 'wb-test',
       buildStatus: 'done',

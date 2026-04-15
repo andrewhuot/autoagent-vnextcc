@@ -41,6 +41,7 @@ describe('ArtifactViewer', () => {
       ],
     });
     useWorkbenchStore.getState().setActiveArtifact('art-agent');
+    useWorkbenchStore.getState().setActiveWorkspaceTab('artifacts');
   });
 
   it('switches the active artifact to the selected category', async () => {

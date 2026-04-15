@@ -14,13 +14,14 @@
  */
 
 import { Fragment, useEffect, useMemo, useRef } from 'react';
-import { AlertTriangle, CheckCircle2, Info, Loader2, RotateCw } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, Info, Loader2, MessageSquare, RotateCw, User2 } from 'lucide-react';
 import { classNames } from '../../lib/utils';
 import {
   isWorkbenchBuildActive,
   useWorkbenchStore,
   type AssistantMessage,
   type BuildStatus,
+  type ChatMessage,
   type WorkbenchTurn,
 } from '../../lib/workbench-store';
 import { walkTasks } from '../../lib/workbench-plan';
@@ -29,6 +30,7 @@ import { AssistantMessageCard } from './AssistantMessageCard';
 import { ArtifactCard } from './ArtifactCard';
 import { PlanTreeView } from './PlanTreeView';
 import { ReflectionCard } from './ReflectionCard';
+import { WelcomeCard } from './WelcomeCard';
 
 interface ConversationFeedProps {
   /** Called when the user clicks "Apply" on a reflection suggestion. */
@@ -48,6 +50,11 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
   );
   const reflections = useWorkbenchStore((s) => s.reflections);
   const activeRun = useWorkbenchStore((s) => s.activeRun);
+  const composerMode = useWorkbenchStore((s) => s.composerMode);
+  const chatMessages = useWorkbenchStore((s) => s.chatMessages);
+  const chatStatus = useWorkbenchStore((s) => s.chatStatus);
+  const chatError = useWorkbenchStore((s) => s.chatError);
+  const canonicalAgents = useWorkbenchStore((s) => s.canonicalModel?.agents.length ?? 0);
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +70,9 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
     turns.length,
     currentIterationIndex,
     reflections.length,
+    chatMessages.length,
+    chatMessages[chatMessages.length - 1]?.text.length ?? 0,
+    composerMode,
   ]);
 
   const runningTask = plan
@@ -81,6 +91,45 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
   const pendingMessages = useMemo(() => messages.filter((m) => !m.turnId), [messages]);
   const terminalNotice = buildTerminalNotice(buildStatus, error, activeRun);
 
+  // Render the chat-with-agent panel when the operator is in chat mode.
+  if (composerMode === 'chat') {
+    return (
+      <div
+        ref={scrollRef}
+        className="flex-1 overflow-y-auto px-4 py-4"
+        aria-label="Chat with the agent"
+      >
+        <div className="mx-auto flex max-w-2xl flex-col gap-3">
+          <ChatModeHeader canonicalAgents={canonicalAgents} />
+          {chatMessages.length === 0 && canonicalAgents > 0 && (
+            <div className="rounded-md border border-dashed border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-3 py-3 text-[12px] text-[color:var(--wb-text-soft)]">
+              Send a message below to test the candidate agent. Replies stream live.
+              Use <kbd className="rounded bg-[color:var(--wb-bg-hover)] px-1">/build</kbd> to
+              jump back into iteration.
+            </div>
+          )}
+          {chatMessages.map((message) => (
+            <ChatBubble key={message.id} message={message} />
+          ))}
+          {chatStatus === 'streaming' &&
+            chatMessages[chatMessages.length - 1]?.role === 'assistant' &&
+            !chatMessages[chatMessages.length - 1]?.text && (
+              <div className="flex items-center gap-2 text-[12px] text-[color:var(--wb-text-dim)]">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-[color:var(--wb-success)]" />
+                <span>Agent is thinking…</span>
+              </div>
+            )}
+          {chatError && (
+            <div className="flex items-center gap-2 rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-error-weak)] px-3 py-2 text-[12px] text-[color:var(--wb-error)]">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              <span>{chatError}</span>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       ref={scrollRef}
@@ -89,16 +138,7 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
     >
       <div className="mx-auto flex max-w-2xl flex-col gap-4">
         {buildStatus === 'idle' && messages.length === 0 && turns.length === 0 && (
-          <div className="mt-12 text-center">
-            <h2 className="text-[15px] font-semibold text-[color:var(--wb-text)]">
-              Describe the agent you want to build
-            </h2>
-            <p className="mt-2 text-[12px] leading-5 text-[color:var(--wb-text-dim)]">
-              I&rsquo;ll produce a plan, generate tools and guardrails, and render the
-              source code so you can review it — all live on the right. Follow-up
-              messages will refine the same agent across multiple turns.
-            </p>
-          </div>
+          <WelcomeCard />
         )}
 
         {turns.length === 0 && pendingMessages.map((message) => (
@@ -177,6 +217,60 @@ export function ConversationFeed({ onApplySuggestion }: ConversationFeedProps = 
             <span>{terminalNotice.message}</span>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Chat mode rendering
+// ---------------------------------------------------------------------------
+
+function ChatModeHeader({ canonicalAgents }: { canonicalAgents: number }) {
+  return (
+    <div className="rounded-lg border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-3 py-2.5">
+      <div className="flex items-center gap-2 text-[12px] font-semibold text-[color:var(--wb-text)]">
+        <span className="flex h-5 w-5 items-center justify-center rounded bg-[color:var(--wb-success-weak)] text-[color:var(--wb-success)]">
+          <MessageSquare className="h-3 w-3" />
+        </span>
+        Chat with the candidate
+      </div>
+      <p className="mt-1 text-[11px] leading-5 text-[color:var(--wb-text-dim)]">
+        {canonicalAgents > 0
+          ? 'Sandbox conversation with the agent you just built. Transcript is saved with the project.'
+          : 'There is no candidate agent yet. Switch to Build mode and describe what you want to build first.'}
+      </p>
+    </div>
+  );
+}
+
+function ChatBubble({ message }: { message: ChatMessage }) {
+  const isUser = message.role === 'user';
+  return (
+    <div className={classNames('flex w-full', isUser ? 'justify-end' : 'justify-start')}>
+      <div
+        className={classNames(
+          'max-w-[85%] rounded-lg border px-3 py-2 text-[13px] leading-5',
+          isUser
+            ? 'border-[color:var(--wb-accent-border)] bg-[color:var(--wb-accent-weak)] text-[color:var(--wb-text)]'
+            : message.errored
+              ? 'border-[color:var(--wb-error)] bg-[color:var(--wb-error-weak)] text-[color:var(--wb-error)]'
+              : 'border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] text-[color:var(--wb-text)]'
+        )}
+      >
+        <div className="mb-1 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+          {isUser ? <User2 className="h-3 w-3" /> : <MessageSquare className="h-3 w-3" />}
+          <span>{isUser ? 'You' : message.agentName ?? 'Agent'}</span>
+          {message.agentModel && !isUser && (
+            <span className="ml-1 rounded bg-[color:var(--wb-bg-hover)] px-1 font-mono text-[9px] text-[color:var(--wb-text-soft)]">
+              {message.agentModel}
+            </span>
+          )}
+          {message.streaming && (
+            <Loader2 className="ml-1 h-3 w-3 animate-spin text-[color:var(--wb-success)]" />
+          )}
+        </div>
+        <div className="whitespace-pre-wrap">{message.text || (message.streaming ? '…' : '')}</div>
       </div>
     </div>
   );

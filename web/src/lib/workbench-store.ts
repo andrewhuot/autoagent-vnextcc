@@ -10,6 +10,7 @@
 import { create } from 'zustand';
 import type {
   BuildStreamEvent,
+  ChatStreamEvent,
   HarnessMetrics,
   WorkbenchHarnessState,
   IterationEntry,
@@ -19,6 +20,7 @@ import type {
   SkillContext,
   WorkbenchArtifact,
   WorkbenchCanonicalModel,
+  WorkbenchChatMessage,
   WorkbenchCompatibilityDiagnostic,
   WorkbenchConversationMessage,
   WorkbenchExports,
@@ -79,7 +81,26 @@ export type ArtifactCategoryFilter =
   | 'other';
 
 /** Right-side workspace surfaces backed by the latest harness payload. */
-export type WorkspaceTab = 'artifacts' | 'agent' | 'source' | 'evals' | 'trace' | 'activity';
+export type WorkspaceTab = 'config' | 'artifacts' | 'agent' | 'source' | 'evals' | 'trace' | 'activity';
+
+/** Composer mode — build the agent (LLM iteration) vs chat with the agent (test). */
+export type ComposerMode = 'build' | 'chat';
+
+/** A single chat-with-agent message in the test pane. */
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  agentName?: string;
+  agentModel?: string;
+  createdAt: number;
+  /** True while the assistant message is still streaming deltas. */
+  streaming?: boolean;
+  /** Set when the LLM call errored mid-stream. */
+  errored?: boolean;
+}
+
+export type ChatStatus = 'idle' | 'streaming' | 'error';
 
 /** High-level lifecycle of the page-wide build flow. */
 export type BuildStatus =
@@ -205,6 +226,15 @@ interface WorkbenchState {
   // --- skill context from the harness
   /** Skill context summary from the most recent build.completed event. */
   skillContext: SkillContext | null;
+
+  // --- chat-with-agent (test the candidate without running a build)
+  composerMode: ComposerMode;
+  chatMessages: ChatMessage[];
+  chatStatus: ChatStatus;
+  chatError: string | null;
+  chatAbortController: AbortController | null;
+  /** Recently submitted brief / chat message strings, newest last; used for ↑ recall. */
+  composerHistory: string[];
 }
 
 interface WorkbenchActions {
@@ -229,7 +259,17 @@ interface WorkbenchActions {
     conversation?: WorkbenchConversationMessage[];
     turns?: WorkbenchTurnRecord[];
     harnessState?: WorkbenchHarnessState | null;
+    chatTranscript?: WorkbenchChatMessage[];
   }) => void;
+  // --- chat actions
+  setComposerMode: (mode: ComposerMode) => void;
+  setChatAbortController: (controller: AbortController | null) => void;
+  beginChat: (message: string) => string;
+  dispatchChatEvent: (event: ChatStreamEvent) => void;
+  setChatError: (message: string | null) => void;
+  cancelChat: () => void;
+  resetChat: () => void;
+  pushComposerHistory: (entry: string) => void;
   beginBuild: (brief: string) => void;
   setAbortController: (controller: AbortController | null) => void;
   cancelBuild: () => void;
@@ -275,7 +315,7 @@ const INITIAL_STATE: WorkbenchState = {
   activeArtifactId: null,
   activeArtifactView: 'preview',
   activeCategory: 'all',
-  activeWorkspaceTab: 'artifacts',
+  activeWorkspaceTab: 'config',
   userSelectedArtifactAt: 0,
   canonicalModel: null,
   exports: null,
@@ -296,6 +336,12 @@ const INITIAL_STATE: WorkbenchState = {
   lastHeartbeatAt: 0,
   stallCount: 0,
   skillContext: null,
+  composerMode: 'build',
+  chatMessages: [],
+  chatStatus: 'idle',
+  chatError: null,
+  chatAbortController: null,
+  composerHistory: [],
 };
 
 /** Time window during which a user-selected artifact blocks auto-focus. */
@@ -387,6 +433,17 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         activeRun?.summary ??
         state.runSummary;
 
+      const chatMessages: ChatMessage[] = (snapshot.chatTranscript ?? []).map(
+        (m): ChatMessage => ({
+          id: m.id,
+          role: m.role,
+          text: m.text,
+          agentName: m.agent_name,
+          agentModel: m.agent_model,
+          createdAt: Date.parse(m.created_at) || Date.now(),
+        })
+      );
+
       return {
         projectId: snapshot.projectId,
         projectName: snapshot.projectName ?? state.projectName,
@@ -396,6 +453,7 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
         plan: snapshot.plan ?? null,
         artifacts: snapshot.artifacts ?? [],
         messages,
+        chatMessages: chatMessages.length > 0 ? chatMessages : state.chatMessages,
         canonicalModel: snapshot.canonicalModel ?? null,
         exports: snapshot.exports ?? state.exports,
         compatibility: snapshot.compatibility ?? state.compatibility,
@@ -1090,6 +1148,127 @@ export const useWorkbenchStore = create<WorkbenchState & WorkbenchActions>((set,
     set(() => ({
       diffTargetVersion: version,
     })),
+
+  // -------------------------------------------------------------------------
+  // Chat-with-agent actions
+  // -------------------------------------------------------------------------
+
+  setComposerMode: (mode) => set(() => ({ composerMode: mode })),
+
+  setChatAbortController: (controller) =>
+    set(() => ({ chatAbortController: controller })),
+
+  beginChat: (message) => {
+    const id = `chat-user-${Date.now()}`;
+    set((state) => ({
+      chatStatus: 'streaming',
+      chatError: null,
+      chatMessages: [
+        ...state.chatMessages,
+        {
+          id,
+          role: 'user',
+          text: message,
+          createdAt: Date.now(),
+        },
+      ],
+    }));
+    return id;
+  },
+
+  dispatchChatEvent: (event) => {
+    const { event: name, data } = event;
+    if (name === 'chat.assistant.started') {
+      const id = String(data.message_id ?? `chat-assist-${Date.now()}`);
+      set((state) => ({
+        chatMessages: [
+          ...state.chatMessages,
+          {
+            id,
+            role: 'assistant',
+            text: '',
+            agentName: (data.agent_name as string | undefined) ?? undefined,
+            agentModel: (data.agent_model as string | undefined) ?? undefined,
+            createdAt: Date.now(),
+            streaming: true,
+          },
+        ],
+      }));
+      return;
+    }
+
+    if (name === 'chat.assistant.delta') {
+      const id = String(data.message_id ?? '');
+      const delta = String(data.delta ?? '');
+      set((state) => ({
+        chatMessages: state.chatMessages.map((m) =>
+          m.id === id ? { ...m, text: m.text + delta } : m
+        ),
+      }));
+      return;
+    }
+
+    if (name === 'chat.assistant.completed') {
+      const finalMessage = (data.message ?? {}) as Record<string, unknown>;
+      const id = String(finalMessage.id ?? '');
+      const text = String(finalMessage.text ?? '');
+      set((state) => ({
+        chatStatus: 'idle',
+        chatAbortController: null,
+        chatMessages: state.chatMessages.map((m) =>
+          m.id === id ? { ...m, text, streaming: false } : m
+        ),
+      }));
+      return;
+    }
+
+    if (name === 'chat.error') {
+      const message = String((data as { message?: string }).message ?? 'Chat failed.');
+      const id = (data as { message_id?: string }).message_id;
+      set((state) => ({
+        chatStatus: 'error',
+        chatError: message,
+        chatAbortController: null,
+        chatMessages: state.chatMessages.map((m) =>
+          id && m.id === id ? { ...m, streaming: false, errored: true } : m
+        ),
+      }));
+      return;
+    }
+  },
+
+  setChatError: (message) =>
+    set(() => ({
+      chatError: message,
+      chatStatus: message ? 'error' : 'idle',
+    })),
+
+  cancelChat: () => {
+    const controller = get().chatAbortController;
+    if (controller) controller.abort();
+    set(() => ({
+      chatStatus: 'idle',
+      chatAbortController: null,
+    }));
+  },
+
+  resetChat: () =>
+    set(() => ({
+      chatMessages: [],
+      chatStatus: 'idle',
+      chatError: null,
+      chatAbortController: null,
+    })),
+
+  pushComposerHistory: (entry) =>
+    set((state) => {
+      const trimmed = entry.trim();
+      if (!trimmed) return {};
+      const existing = state.composerHistory.filter((h) => h !== trimmed);
+      return {
+        composerHistory: [...existing, trimmed].slice(-50),
+      };
+    }),
 }));
 
 function messageFromApi(message: WorkbenchMessage): AssistantMessage {

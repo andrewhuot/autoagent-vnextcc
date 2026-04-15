@@ -25,6 +25,7 @@ import {
   getWorkbenchPlanSnapshot,
   iterateWorkbenchBuild,
   streamWorkbenchBuild,
+  streamWorkbenchChat,
   type RunSummary,
   type WorkbenchCanonicalModel,
   type WorkbenchImprovementBridge,
@@ -198,6 +199,7 @@ export function AgentWorkbench() {
           activity: payload.project.activity,
           activeRun: payload.project.active_run ?? null,
           messages: payload.project.messages ?? [],
+          chatTranscript: (payload.project as { chat_transcript?: import('../lib/workbench-api').WorkbenchChatMessage[] }).chat_transcript ?? [],
         });
         // Follow-up: load any persisted plan snapshot for this project.
         const snapshot = await getWorkbenchPlanSnapshot(payload.project.project_id);
@@ -225,6 +227,7 @@ export function AgentWorkbench() {
           turns: snapshot.turns,
           harnessState: snapshot.harness_state,
           runSummary: snapshot.run_summary,
+          chatTranscript: snapshot.chat_transcript,
         });
         setHydrated(true);
       } catch (error) {
@@ -383,8 +386,47 @@ export function AgentWorkbench() {
     [consumeStream, environment, handleSubmit, maxIterations, setAbortController, setError, startIteration, target]
   );
 
+  // ---------------------------------------------------------------------------
+  // Chat-with-agent handler
+  // ---------------------------------------------------------------------------
+  const handleChat = useCallback(
+    async (message: string) => {
+      const currentProjectId = useWorkbenchStore.getState().projectId;
+      if (!currentProjectId) {
+        toastError('No agent yet', 'Build an agent in this Workbench before chatting with it.');
+        return;
+      }
+      const store = useWorkbenchStore.getState();
+      store.beginChat(message);
+
+      const controller = new AbortController();
+      store.setChatAbortController(controller);
+      try {
+        const stream = streamWorkbenchChat(
+          { project_id: currentProjectId, message },
+          { signal: controller.signal }
+        );
+        for await (const event of stream) {
+          useWorkbenchStore.getState().dispatchChatEvent(event);
+        }
+      } catch (error) {
+        if ((error as Error).name === 'AbortError') return;
+        useWorkbenchStore
+          .getState()
+          .setChatError(error instanceof Error ? error.message : 'Chat failed');
+      } finally {
+        useWorkbenchStore.getState().setChatAbortController(null);
+      }
+    },
+    []
+  );
+
   const handleCancel = useCallback(async () => {
     const state = useWorkbenchStore.getState();
+    if (state.composerMode === 'chat' && state.chatStatus === 'streaming') {
+      state.cancelChat();
+      return;
+    }
     const runId = state.activeRun?.run_id;
     const currentProjectId = state.projectId;
     if (runId) {
@@ -490,7 +532,9 @@ export function AgentWorkbench() {
       <WorkbenchLayout
         left={<ConversationFeed onApplySuggestion={handleIterate} />}
         right={<ArtifactViewer />}
-        footer={<ChatInput onSubmit={handleSubmit} onCancel={handleCancel} />}
+        footer={
+          <ChatInput onSubmit={handleSubmit} onChat={handleChat} onCancel={handleCancel} />
+        }
         iterationControls={<IterationControls onIterate={handleIterate} />}
       />
     </div>

@@ -138,6 +138,17 @@ class WorkbenchEvalBridgeRequest(BaseModel):
     split: str = Field(default="all", pattern="^(train|test|all)$")
 
 
+class WorkbenchChatRequest(BaseModel):
+    """Request body for chatting with the candidate Workbench agent."""
+
+    project_id: str
+    message: str = Field(min_length=1)
+    mock: bool = Field(
+        default=False,
+        description="Force deterministic mock reply (used by tests).",
+    )
+
+
 def _build_artifact_store(request: Request) -> BuildArtifactStore:
     """Return the shared build artifact store used by Agent Library saves."""
     store = getattr(request.app.state, "build_artifact_store", None)
@@ -432,3 +443,68 @@ async def iterate_build(request: Request, body: WorkbenchIterateRequest) -> Stre
             "Connection": "keep-alive",
         },
     )
+
+
+@router.post("/chat/stream")
+async def stream_chat(request: Request, body: WorkbenchChatRequest) -> StreamingResponse:
+    """Stream a conversational reply from the candidate Workbench agent.
+
+    WHY: Operators need to test the agent they just built without launching a
+    full Eval run. This is the equivalent of the CLI's "chat with the agent"
+    affordance and lets the web Workbench close the build → test → refine loop
+    in a single pane.
+    """
+    service = _service(request)
+
+    async def event_generator() -> AsyncIterator[bytes]:
+        try:
+            stream = await service.run_chat_stream(
+                project_id=body.project_id,
+                message=body.message,
+                force_mock=body.mock,
+            )
+            async for event in stream:
+                yield _format_sse(
+                    str(event.get("event") or "message"),
+                    event.get("data") or {},
+                )
+        except KeyError:
+            yield _format_sse("error", {"message": f"Project {body.project_id} not found"})
+        except ValueError as exc:
+            yield _format_sse("chat.error", {"message": str(exc)})
+        except Exception as exc:  # noqa: BLE001 — surface as an error event
+            yield _format_sse("chat.error", {"message": str(exc)})
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.get("/projects/{project_id}/chat")
+async def get_chat_transcript(project_id: str, request: Request) -> dict[str, Any]:
+    """Return the persisted chat transcript for hydration."""
+    try:
+        return {
+            "project_id": project_id,
+            "chat_transcript": _service(request).get_chat_transcript(project_id=project_id),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench project not found") from exc
+
+
+@router.delete("/projects/{project_id}/chat")
+async def reset_chat_transcript(project_id: str, request: Request) -> dict[str, Any]:
+    """Reset the chat transcript so the operator can start a fresh test."""
+    try:
+        return {
+            "project_id": project_id,
+            "chat_transcript": _service(request).reset_chat_transcript(project_id=project_id),
+        }
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench project not found") from exc

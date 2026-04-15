@@ -38,6 +38,7 @@ const PRIMARY_CATEGORY_IDS = new Set<ArtifactCategoryFilter>([
 ]);
 
 const WORKSPACE_TABS: Array<{ id: WorkspaceTab; label: string }> = [
+  { id: 'config', label: 'Config' },
   { id: 'artifacts', label: 'Artifacts' },
   { id: 'agent', label: 'Agent Card' },
   { id: 'source', label: 'Source Code' },
@@ -100,6 +101,7 @@ export function ArtifactViewer() {
         ))}
       </div>
 
+      {activeWorkspaceTab === 'config' && <ConfigWorkspace />}
       {activeWorkspaceTab === 'artifacts' && <ArtifactsWorkspace />}
       {activeWorkspaceTab === 'agent' && <AgentWorkspace />}
       {activeWorkspaceTab === 'source' && <SourceWorkspace />}
@@ -761,6 +763,250 @@ function languageFromFilename(filename: string): string {
   if (filename.endsWith('.json')) return 'json';
   if (filename.endsWith('.yaml') || filename.endsWith('.yml')) return 'yaml';
   return 'text';
+}
+
+// ---------------------------------------------------------------------------
+// Config workspace — primary, structured view of the canonical agent config.
+// ---------------------------------------------------------------------------
+
+function ConfigWorkspace() {
+  const model = useWorkbenchStore((s) => s.canonicalModel);
+  const version = useWorkbenchStore((s) => s.version);
+  const target = useWorkbenchStore((s) => s.target);
+  const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle');
+
+  const yamlPreview = useMemo(() => modelToReadableYaml(model), [model]);
+
+  if (!model || (model.agents ?? []).length === 0) {
+    return (
+      <EmptyPreview
+        title="No agent config yet"
+        description="Describe what you want to build in the composer below — the canonical config will appear here as the agent generates it."
+      />
+    );
+  }
+
+  const root = model.agents[0];
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(yamlPreview);
+      setCopyState('copied');
+      window.setTimeout(() => setCopyState('idle'), 1500);
+    } catch {
+      setCopyState('idle');
+    }
+  };
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[color:var(--wb-border)] px-3 py-2">
+        <div className="flex items-center gap-2 text-[12px] text-[color:var(--wb-text-soft)]">
+          <span className="font-semibold text-[color:var(--wb-text)]">Canonical config</span>
+          <span className="rounded-md bg-[color:var(--wb-bg-elev)] px-1.5 py-0.5 font-mono text-[10px] text-[color:var(--wb-text-dim)]">
+            v{version}
+          </span>
+          <span className="rounded-md bg-[color:var(--wb-bg-elev)] px-1.5 py-0.5 font-mono text-[10px] uppercase text-[color:var(--wb-text-dim)]">
+            {target}
+          </span>
+        </div>
+        <button
+          type="button"
+          onClick={handleCopy}
+          className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-2 py-1 text-[11px] text-[color:var(--wb-text-soft)] hover:bg-[color:var(--wb-bg-hover)]"
+        >
+          {copyState === 'copied' ? 'Copied!' : 'Copy YAML'}
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <ConfigSummaryCard model={model} root={root} />
+          <ConfigYamlPreview source={yamlPreview} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ConfigSummaryCard({
+  model,
+  root,
+}: {
+  model: NonNullable<ReturnType<typeof useWorkbenchStore.getState>['canonicalModel']>;
+  root: NonNullable<ReturnType<typeof useWorkbenchStore.getState>['canonicalModel']>['agents'][number];
+}) {
+  return (
+    <div className="space-y-4 text-[12px]">
+      <section>
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+          Agent
+        </h3>
+        <p className="mt-1 text-[14px] font-semibold text-[color:var(--wb-text)]">{root.name}</p>
+        <p className="mt-1 text-[12px] leading-5 text-[color:var(--wb-text-soft)]">{root.role}</p>
+        <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[color:var(--wb-text-dim)]">
+          <span className="rounded-md border border-[color:var(--wb-border)] px-2 py-0.5">
+            model: <span className="font-mono text-[color:var(--wb-text-soft)]">{root.model}</span>
+          </span>
+          <span className="rounded-md border border-[color:var(--wb-border)] px-2 py-0.5">
+            sub-agents: {root.sub_agents?.length ?? 0}
+          </span>
+        </div>
+      </section>
+
+      <section>
+        <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+          Instructions
+        </h3>
+        <pre className="mt-1 max-h-[180px] overflow-auto whitespace-pre-wrap rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] p-2 font-sans text-[12px] leading-5 text-[color:var(--wb-text-soft)]">
+          {root.instructions || '— no instructions yet —'}
+        </pre>
+      </section>
+
+      <ConfigSection
+        title={`Tools (${model.tools.length})`}
+        items={model.tools.map((t) => ({
+          id: t.id,
+          name: t.name,
+          detail: `${t.type} · ${t.description?.slice(0, 80) ?? ''}`,
+        }))}
+        emptyHint="No tools yet."
+      />
+
+      <ConfigSection
+        title={`Guardrails (${model.guardrails.length})`}
+        items={model.guardrails.map((g) => ({
+          id: g.id,
+          name: g.name,
+          detail: g.rule,
+        }))}
+        emptyHint="No guardrails yet."
+      />
+
+      <ConfigSection
+        title={`Eval suites (${model.eval_suites.length})`}
+        items={model.eval_suites.map((s) => ({
+          id: s.id,
+          name: s.name,
+          detail: `${s.cases.length} case${s.cases.length === 1 ? '' : 's'}`,
+        }))}
+        emptyHint="No eval suites yet."
+      />
+    </div>
+  );
+}
+
+function ConfigSection({
+  title,
+  items,
+  emptyHint,
+}: {
+  title: string;
+  items: Array<{ id: string; name: string; detail: string }>;
+  emptyHint: string;
+}) {
+  return (
+    <section>
+      <h3 className="text-[10px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+        {title}
+      </h3>
+      {items.length === 0 ? (
+        <p className="mt-1 text-[12px] text-[color:var(--wb-text-dim)]">{emptyHint}</p>
+      ) : (
+        <ul className="mt-1 space-y-1">
+          {items.map((item) => (
+            <li
+              key={item.id}
+              className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)] px-2 py-1.5"
+            >
+              <div className="flex items-baseline justify-between gap-2 text-[12px]">
+                <span className="font-medium text-[color:var(--wb-text)]">{item.name}</span>
+                <span className="font-mono text-[10px] text-[color:var(--wb-text-muted)]">{item.id}</span>
+              </div>
+              <p className="mt-0.5 line-clamp-2 text-[11px] leading-5 text-[color:var(--wb-text-dim)]">
+                {item.detail}
+              </p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function ConfigYamlPreview({ source }: { source: string }) {
+  return (
+    <div className="rounded-md border border-[color:var(--wb-border)] bg-[color:var(--wb-bg-elev)]">
+      <div className="border-b border-[color:var(--wb-border)] px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[color:var(--wb-text-dim)]">
+        agent.yaml
+      </div>
+      <pre className="max-h-[560px] overflow-auto p-3 font-mono text-[11px] leading-5 text-[color:var(--wb-text-soft)]">
+        {source}
+      </pre>
+    </div>
+  );
+}
+
+function modelToReadableYaml(
+  model: ReturnType<typeof useWorkbenchStore.getState>['canonicalModel']
+): string {
+  if (!model) return '';
+  const lines: string[] = [];
+  lines.push(`project:`);
+  lines.push(`  name: ${quoteYaml(model.project?.name ?? '')}`);
+  if (model.project?.description) {
+    lines.push(`  description: ${quoteYaml(model.project.description)}`);
+  }
+  lines.push('agents:');
+  for (const agent of model.agents ?? []) {
+    lines.push(`  - id: ${agent.id}`);
+    lines.push(`    name: ${quoteYaml(agent.name)}`);
+    lines.push(`    model: ${agent.model}`);
+    lines.push(`    role: ${quoteYaml(agent.role)}`);
+    if (agent.instructions) {
+      lines.push('    instructions: |');
+      for (const line of String(agent.instructions).split('\n')) {
+        lines.push(`      ${line}`);
+      }
+    }
+    if (agent.sub_agents?.length) {
+      lines.push('    sub_agents:');
+      for (const sub of agent.sub_agents) {
+        lines.push(`      - ${sub}`);
+      }
+    }
+  }
+  if ((model.tools ?? []).length > 0) {
+    lines.push('tools:');
+    for (const tool of model.tools) {
+      lines.push(`  - id: ${tool.id}`);
+      lines.push(`    name: ${quoteYaml(tool.name)}`);
+      lines.push(`    type: ${tool.type}`);
+      lines.push(`    description: ${quoteYaml(tool.description ?? '')}`);
+    }
+  }
+  if ((model.guardrails ?? []).length > 0) {
+    lines.push('guardrails:');
+    for (const g of model.guardrails) {
+      lines.push(`  - id: ${g.id}`);
+      lines.push(`    name: ${quoteYaml(g.name)}`);
+      lines.push(`    rule: ${quoteYaml(g.rule)}`);
+    }
+  }
+  if ((model.eval_suites ?? []).length > 0) {
+    lines.push('eval_suites:');
+    for (const s of model.eval_suites) {
+      lines.push(`  - id: ${s.id}`);
+      lines.push(`    name: ${quoteYaml(s.name)}`);
+      lines.push(`    cases: ${s.cases.length}`);
+    }
+  }
+  return lines.join('\n');
+}
+
+function quoteYaml(value: string): string {
+  if (!value) return '""';
+  if (/^[\w. ]+$/.test(value) && !value.includes(':')) return value;
+  return JSON.stringify(value);
 }
 
 function ArtifactPreviewBody({

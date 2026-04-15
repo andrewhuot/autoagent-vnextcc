@@ -23,12 +23,12 @@ describe('ChatInput', () => {
     useWorkbenchStore.setState({ buildStatus: 'reflecting' });
     const { onSubmit, onCancel } = renderInput();
 
-    expect(screen.getByRole('button', { name: 'Stop build' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
 
     await user.type(screen.getByLabelText('Build request'), 'Change the guardrail{Enter}');
     expect(onSubmit).not.toHaveBeenCalled();
 
-    await user.click(screen.getByRole('button', { name: 'Stop build' }));
+    await user.click(screen.getByRole('button', { name: 'Stop' }));
     expect(onCancel).toHaveBeenCalledOnce();
   });
 
@@ -39,6 +39,6 @@ describe('ChatInput', () => {
 
     await user.type(screen.getByLabelText('Build request'), 'Ship it{Enter}');
     expect(onSubmit).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Stop build' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeInTheDocument();
   });
 });

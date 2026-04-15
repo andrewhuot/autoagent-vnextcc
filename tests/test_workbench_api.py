@@ -159,3 +159,77 @@ def test_invalid_target_is_reported_in_compatibility_diagnostics(tmp_path: Path)
     assert shell_tool["status"] == "invalid"
     assert shell_tool["target"] == "cx"
     assert "not exportable to CX" in shell_tool["reason"]
+
+
+def test_chat_stream_persists_transcript_on_project(tmp_path: Path) -> None:
+    """Chat endpoint should stream a reply and save the conversation."""
+    client = _make_client(tmp_path)
+    create = client.post(
+        "/api/workbench/projects",
+        json={"brief": "Build a refunds support agent."},
+    )
+    assert create.status_code == 201
+    project_id = create.json()["project"]["project_id"]
+
+    # Use mock=True so the test does not depend on ANTHROPIC_API_KEY.
+    response = client.post(
+        "/api/workbench/chat/stream",
+        json={"project_id": project_id, "message": "What can you help me with?", "mock": True},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "event: chat.user" in body
+    assert "event: chat.assistant.started" in body
+    assert "event: chat.assistant.delta" in body
+    assert "event: chat.assistant.completed" in body
+
+    transcript = client.get(f"/api/workbench/projects/{project_id}/chat").json()
+    assert transcript["project_id"] == project_id
+    assert len(transcript["chat_transcript"]) == 2
+    assert transcript["chat_transcript"][0]["role"] == "user"
+    assert transcript["chat_transcript"][1]["role"] == "assistant"
+    assert "preview" in transcript["chat_transcript"][1]["text"].lower()
+
+
+def test_chat_reset_clears_transcript(tmp_path: Path) -> None:
+    """DELETE on the chat resource should reset the saved transcript."""
+    client = _make_client(tmp_path)
+    project_id = client.post(
+        "/api/workbench/projects",
+        json={"brief": "Build a refunds support agent."},
+    ).json()["project"]["project_id"]
+
+    client.post(
+        "/api/workbench/chat/stream",
+        json={"project_id": project_id, "message": "hi", "mock": True},
+    )
+    assert len(client.get(f"/api/workbench/projects/{project_id}/chat").json()["chat_transcript"]) == 2
+
+    reset = client.delete(f"/api/workbench/projects/{project_id}/chat")
+    assert reset.status_code == 200
+    assert reset.json()["chat_transcript"] == []
+
+
+def test_chat_without_candidate_returns_clear_error(tmp_path: Path) -> None:
+    """Chatting before a candidate exists should surface a friendly error event."""
+    client = _make_client(tmp_path)
+    # Create a project then strip all agents to simulate the no-candidate state.
+    project_id = client.post(
+        "/api/workbench/projects",
+        json={"brief": "Build a refunds support agent."},
+    ).json()["project"]["project_id"]
+
+    store: WorkbenchStore = client.app.state.workbench_store
+    project = store.get_project(project_id)
+    assert project is not None
+    project["model"]["agents"] = []
+    store.save_project(project)
+
+    response = client.post(
+        "/api/workbench/chat/stream",
+        json={"project_id": project_id, "message": "hi", "mock": True},
+    )
+    assert response.status_code == 200
+    body = response.text
+    assert "event: chat.error" in body
+    assert "Build an agent" in body
