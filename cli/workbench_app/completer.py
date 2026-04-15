@@ -25,7 +25,7 @@ import difflib
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, AsyncIterator, Iterable, Iterator
+from typing import TYPE_CHECKING, Any, AsyncIterator, Iterable, Iterator
 
 from cli.workbench_app.commands import CommandRegistry, SlashCommand
 
@@ -66,12 +66,18 @@ class SlashCompletion:
 def iter_completions(
     registry: CommandRegistry,
     text_before_cursor: str,
+    *,
+    skill_registry: Any = None,
 ) -> Iterator[SlashCompletion]:
     """Yield completions for the slash token under the cursor.
 
     Returns nothing when the buffer does not begin with ``/`` or the cursor
     is past the first whitespace token (i.e. the user is already typing
     arguments). Matches are ranked by names, aliases, and descriptive text.
+
+    When ``skill_registry`` is supplied, loaded user skills are surfaced as
+    virtual ``/slug`` completions so ``/commit`` completes even though the
+    skill is dispatched via the ``/skill`` verb under the hood.
     """
     if not text_before_cursor.startswith("/"):
         return
@@ -95,6 +101,50 @@ def iter_completions(
             display_meta=_completion_meta(command),
             argument_hint=command.argument_hint,
         )
+
+    if skill_registry is not None:
+        yield from _iter_skill_completions(skill_registry, prefix, start_position, registry)
+
+
+def _iter_skill_completions(
+    skill_registry: Any,
+    prefix: str,
+    start_position: int,
+    command_registry: CommandRegistry,
+) -> Iterator[SlashCompletion]:
+    """Yield ``/<slug>`` completions for disk-loaded skills.
+
+    We hide skills whose slug already matches a registered command so the
+    popup doesn't show two rows for ``/plan`` when the user happens to have
+    a ``plan.md`` skill file — the built-in command wins."""
+    token = prefix.lstrip("/").lower()
+    try:
+        skills = skill_registry.list()
+    except AttributeError:
+        return
+    for skill in skills:
+        slug = getattr(skill, "slug", "")
+        if not slug or command_registry.get(f"/{slug}") is not None:
+            continue
+        if token and token not in slug.lower() and not _is_subsequence_match(token, slug.lower()):
+            continue
+        description = getattr(skill, "description", "") or ""
+        source = getattr(getattr(skill, "source", None), "value", "skill")
+        yield SlashCompletion(
+            name=slug,
+            description=description,
+            source=f"skill:{source}",
+            start_position=start_position,
+            display_meta=_skill_meta(skill),
+        )
+
+
+def _skill_meta(skill: Any) -> str:
+    description = getattr(skill, "description", "") or "(no description)"
+    allowed = getattr(skill, "allowed_tools", ()) or ()
+    if allowed:
+        return f"{description}  tools: {', '.join(allowed)}  [skill]"
+    return f"{description}  [skill]"
 
 
 def _completion_meta(command: SlashCommand) -> str:
@@ -161,7 +211,27 @@ def _score_command(command: SlashCommand, token: str) -> int | None:
         and difflib.get_close_matches(token, candidates, n=1, cutoff=0.72)
     ):
         return 7
+
+    # Character-subsequence match ("ppr" matches "plan-approve" because
+    # p→p→r appears in order). Requires 3+ char queries to keep two-char
+    # tokens like ``/ev`` from surfacing noisy matches (``review`` would
+    # subsequence-match ``ev`` otherwise).
+    if len(token) >= 3 and _is_subsequence_match(token, name):
+        return 8
+    if len(token) >= 3 and any(_is_subsequence_match(token, alias) for alias in aliases):
+        return 9
+
     return None
+
+
+def _is_subsequence_match(token: str, candidate: str) -> bool:
+    """Return ``True`` when every character of ``token`` appears in order in
+    ``candidate``. Case-insensitive; both inputs are already lowercased
+    by :func:`_score_command`."""
+    if not token:
+        return True
+    it = iter(candidate)
+    return all(char in it for char in token)
 
 
 MAX_FILE_COMPLETIONS = 20

@@ -80,6 +80,118 @@ class Palette:
 PALETTE = Palette()
 
 
+# ---------------------------------------------------------------------------
+# Named themes (Phase-6 port)
+# ---------------------------------------------------------------------------
+#
+# Claude Code ships a handful of named themes the user can swap between via
+# ``/theme``. We mirror the concept with four bundled palettes. Themes are
+# plain :class:`Palette` instances — callers activate one via
+# :func:`apply_theme` which rebinds the module-level ``PALETTE`` so existing
+# role helpers pick up the new mapping without churn.
+
+_BUILTIN_THEMES: dict[str, Palette] = {
+    "default": Palette(),
+    "claudelight": Palette(
+        workspace="blue",
+        success="green",
+        warning="yellow",
+        error="red",
+        user="blue",
+        command_name="blue",
+        plan_mode="blue",
+        accept_mode="green",
+        danger_mode="red",
+        prompt_accent=33,
+    ),
+    "claudedark": Palette(
+        workspace="cyan",
+        success="bright_green",
+        warning="bright_yellow",
+        error="bright_red",
+        user="cyan",
+        assistant="bright_white",
+        command_name="cyan",
+        plan_mode="cyan",
+        accept_mode="bright_green",
+        danger_mode="bright_red",
+        prompt_accent=51,
+    ),
+    "ocean": Palette(
+        workspace="blue",
+        success="cyan",
+        warning="yellow",
+        error="magenta",
+        user="blue",
+        command_name="cyan",
+        plan_mode="blue",
+        accept_mode="cyan",
+        danger_mode="magenta",
+        prompt_accent=39,
+    ),
+    "nord": Palette(
+        workspace="cyan",
+        success="green",
+        warning="yellow",
+        error="red",
+        user="cyan",
+        assistant=None,
+        command_name="cyan",
+        plan_mode="cyan",
+        accept_mode="green",
+        danger_mode="red",
+        prompt_accent=110,
+    ),
+}
+
+
+def available_themes() -> tuple[str, ...]:
+    """Return theme names in canonical display order — default first, then
+    the flavoured themes alphabetised. Tests and the ``/theme`` listing
+    both consume this so changes stay consistent."""
+    rest = sorted(name for name in _BUILTIN_THEMES if name != "default")
+    return ("default", *rest)
+
+
+def get_theme(name: str) -> Palette:
+    """Return the palette for ``name``.
+
+    Raises :class:`KeyError` for unknown themes so callers (the ``/theme``
+    handler) can surface a specific "unknown theme" message rather than
+    silently fall back — drift between docs and runtime is easy to miss
+    when a typo just picks the default."""
+    try:
+        return _BUILTIN_THEMES[name.lower()]
+    except KeyError as exc:
+        raise KeyError(f"Unknown theme: {name!r}. Available: {available_themes()}.") from exc
+
+
+def apply_theme(name: str) -> Palette:
+    """Swap the active palette to the named theme.
+
+    We rebind the module global ``PALETTE`` rather than copy fields onto
+    it so the ``@dataclass(frozen=True)`` guarantee holds — callers can
+    still trust that individual ``Palette`` instances are immutable."""
+    global PALETTE
+    PALETTE = get_theme(name)
+    return PALETTE
+
+
+def current_theme_name() -> str:
+    """Return the name of the active theme, or ``"custom"`` if the user
+    swapped in a :class:`Palette` not in the registry (future extension).
+
+    Compares by object identity first so custom palettes with the same
+    field values don't mis-attribute to a named theme."""
+    for name, palette in _BUILTIN_THEMES.items():
+        if palette is PALETTE:
+            return name
+    for name, palette in _BUILTIN_THEMES.items():
+        if palette == PALETTE:
+            return name
+    return "custom"
+
+
 def stylize(
     text: str,
     *,

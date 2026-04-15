@@ -190,6 +190,28 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "diff",
         "accept",
         "reject",
+        # Phase-2 plan-mode commands.
+        "plan",
+        "plan-approve",
+        "plan-discard",
+        "plan-done",
+        "plan-list",
+        # Phase-3 context/transcript commands.
+        "usage",
+        "transcript-checkpoint",
+        "transcript-rewind",
+        "transcript-checkpoints",
+        # Phase-4 user-skill commands.
+        "skill",
+        "skill-list",
+        "skill-reload",
+        # Phase-5 REPL-polish commands.
+        "background",
+        "background-clear",
+        "init",
+        # Phase-6 personalization commands.
+        "theme",
+        "output-style",
     }
     assert set(registry.names()) == expected
 
@@ -235,9 +257,11 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     )
     registry = build_builtin_registry(extra=[extra])
     assert registry.get("/custom") is extra
-    # Existing built-ins + /shortcuts, /sessions, /cost, /tasks, /context,
-    # /checkpoint, /rewind, /checkpoints, /diff, /accept, /reject, and /custom.
-    assert len(registry) == 31
+    # Existing built-ins + Phase 2–6 additions: the five /plan* commands,
+    # /usage + three transcript-rewind commands, three /skill* commands,
+    # /background + /background-clear, /init, /theme, /output-style, and
+    # the /custom supplied via ``extra``.
+    assert len(registry) == 48
 
 
 # ---------------------------------------------------------------------------

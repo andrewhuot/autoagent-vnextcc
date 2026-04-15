@@ -37,8 +37,21 @@ _MODE_RULES: dict[str, dict[str, list[str]]] = {
             "mcp.*",
             "full_auto.run",
             "model.write",
+            # Tool-call surface: plan mode forbids anything that mutates the
+            # workspace. Read-only tools are allow-listed individually below so
+            # the pattern order (``deny`` before ``allow``) still works.
+            "tool:FileEdit:*",
+            "tool:FileWrite:*",
+            "tool:Bash:*",
+            "tool:ConfigEdit:*",
         ],
-        "allow": ["*"],
+        "allow": [
+            "tool:FileRead:*",
+            "tool:Glob",
+            "tool:Grep",
+            "tool:ConfigRead:*",
+            "*",
+        ],
     },
     "default": {
         "ask": [
@@ -48,12 +61,26 @@ _MODE_RULES: dict[str, dict[str, list[str]]] = {
             "mcp.*",
             "model.write",
             "full_auto.run",
+            # Any tool that mutates the workspace prompts in default mode.
+            # Read-only tools fall through to the ``allow`` rule below so they
+            # never interrupt the user.
+            "tool:FileEdit:*",
+            "tool:FileWrite:*",
+            "tool:Bash:*",
+            "tool:ConfigEdit:*",
         ],
         "allow": ["*"],
     },
     "acceptEdits": {
-        "allow": ["config.write", "memory.write", "model.write"],
-        "ask": ["deploy.*", "review.apply", "mcp.*", "full_auto.run"],
+        "allow": [
+            "config.write",
+            "memory.write",
+            "model.write",
+            "tool:FileEdit:*",
+            "tool:FileWrite:*",
+            "tool:ConfigEdit:*",
+        ],
+        "ask": ["deploy.*", "review.apply", "mcp.*", "full_auto.run", "tool:Bash:*"],
     },
     "dontAsk": {
         "allow": ["*"],
@@ -116,6 +143,25 @@ class PermissionManager:
     def __post_init__(self) -> None:
         self.root = Path(self.root or ".")
         self.settings = load_workspace_settings(self.root)
+        # In-memory session overrides populated by the permission dialog when
+        # the user selects "Approve always (this session)". They take
+        # precedence over both explicit rules and mode defaults but are not
+        # persisted to disk — the user's reload clears them.
+        self._session_allow: list[str] = []
+        self._session_deny: list[str] = []
+        # Optional plan-mode workflow injected by the workbench loop. When
+        # present, drafting plans restrict the tool surface ahead of the
+        # normal mode lookup — see ``decision_for_tool`` below.
+        self._plan_workflow: Any | None = None
+
+    def bind_plan_workflow(self, workflow: Any | None) -> None:
+        """Attach (or clear) a :class:`cli.workbench_app.plan_mode.PlanWorkflow`.
+
+        Kept as a plain setter rather than a constructor argument because the
+        workflow depends on the workspace root that ``__post_init__`` has
+        already resolved — the REPL builds the manager first, then the
+        workflow, then binds them."""
+        self._plan_workflow = workflow
 
     @property
     def mode(self) -> str:
@@ -143,7 +189,25 @@ class PermissionManager:
         return normalized
 
     def decision_for(self, action: str) -> str:
-        """Return `allow`, `ask`, or `deny` for the requested action."""
+        """Return `allow`, `ask`, or `deny` for the requested action.
+
+        Precedence (highest to lowest):
+
+        1. Session overrides (``_session_deny`` before ``_session_allow``) —
+           in-memory decisions added via the permission dialog.
+        2. Explicit rules from ``settings.json::permissions.rules``.
+        3. Mode defaults from :data:`_MODE_RULES`.
+
+        Rationale for the session layer at top: a user who chose
+        "Approve always (this session)" expects the decision to stick even
+        if the mode rules would otherwise ``ask`` — and a session-level
+        ``deny`` should hard-block even when an explicit allow exists.
+        """
+        if self._matches(action, self._session_deny):
+            return "deny"
+        if self._matches(action, self._session_allow):
+            return "allow"
+
         for decision in ("deny", "ask", "allow"):
             if self._matches(action, self.explicit_rules.get(decision, [])):
                 return decision
@@ -153,6 +217,72 @@ class PermissionManager:
             if self._matches(action, defaults.get(decision, [])):
                 return decision
         return "allow"
+
+    def decision_for_tool(self, tool: Any, tool_input: Any) -> str:
+        """Resolve the decision for a tool invocation.
+
+        Precedence:
+
+        1. A bound :class:`PlanWorkflow` in ``drafting`` state restricts the
+           tool surface to :data:`~cli.workbench_app.plan_mode.DRAFTING_ALLOWED_TOOLS`.
+           Read-only tools still pass through to the normal check.
+        2. Read-only tools (``tool.read_only is True``) short-circuit to
+           ``allow`` — they never mutate the workspace, so prompting would
+           only train the user to auto-approve every prompt.
+        3. Everything else flows through :meth:`decision_for` with the
+           action string produced by ``tool.permission_action(tool_input)``.
+        """
+        read_only = bool(getattr(tool, "read_only", False))
+        action = tool.permission_action(tool_input) if not read_only else ""
+
+        # Skill overlays (see cli.user_skills.allowlist) take precedence so
+        # an in-flight skill never executes a tool outside its declared
+        # allow-list. Read-only tools on the overlay are still subject to
+        # the overlay — the skill may be intentionally narrowing reads too.
+        from cli.user_skills.allowlist import skill_overlay_allows
+
+        overlay_verdict = skill_overlay_allows(self, tool.name)
+        if overlay_verdict is False:
+            return "deny"
+
+        base_decision = "allow" if read_only else self.decision_for(action)
+
+        workflow = self._plan_workflow
+        if workflow is not None and getattr(workflow, "active_restriction", None):
+            # Local import keeps the plan module optional; cli.permissions
+            # must still load cleanly if a caller never uses plan mode.
+            from cli.workbench_app.plan_mode import decision_for_tool_with_workflow
+
+            return decision_for_tool_with_workflow(
+                tool.name,
+                read_only,
+                workflow,
+                base_decision,
+            )
+        return base_decision
+
+    def allow_for_session(self, pattern: str) -> None:
+        """Register an allow pattern for the lifetime of this manager."""
+        if pattern and pattern not in self._session_allow:
+            self._session_allow.append(pattern)
+
+    def deny_for_session(self, pattern: str) -> None:
+        """Register a deny pattern for the lifetime of this manager."""
+        if pattern and pattern not in self._session_deny:
+            self._session_deny.append(pattern)
+
+    def persist_allow_rule(self, pattern: str) -> Path:
+        """Append an allow rule to ``settings.json`` and reload the cache."""
+        rules = self.explicit_rules
+        existing = list(rules.get("allow", []))
+        if pattern in existing:
+            return settings_path(self.root)
+        existing.append(pattern)
+        path = update_workspace_settings(
+            {"permissions": {"rules": {**rules, "allow": existing}}}, root=self.root
+        )
+        self.settings = load_workspace_settings(self.root)
+        return path
 
     def require(
         self,

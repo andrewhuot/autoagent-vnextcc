@@ -2257,6 +2257,13 @@ cli.add_command(usage_command)
 permissions_group.hidden = True
 usage_command.hidden = True
 
+# Phase-7 non-interactive entry point — ``agentlab print "prompt"`` runs
+# one orchestrator turn with tools/permissions/hooks wired, mirroring
+# Claude Code's ``claude -p``.
+from cli.print_mode import print_command  # noqa: E402
+
+cli.add_command(print_command)
+
 
 @cli.command("advanced")
 @click.pass_context

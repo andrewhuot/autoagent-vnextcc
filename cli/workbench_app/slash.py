@@ -704,6 +704,14 @@ def build_builtin_registry(
         build_diff_command,
         build_reject_command,
     )
+    from cli.workbench_app.plan_slash import all_plan_commands
+    from cli.workbench_app.context_viz_slash import build_usage_command
+    from cli.workbench_app.transcript_rewind_slash import all_transcript_rewind_commands
+    from cli.user_skills.slash import all_skill_commands
+    from cli.workbench_app.background_slash import all_background_commands
+    from cli.workbench_app.init_slash import build_init_command
+    from cli.workbench_app.theme_slash import build_theme_command
+    from cli.workbench_app.output_style_slash import build_output_style_command
 
     registry.register(build_model_command())
     registry.register(build_tasks_command())
@@ -714,6 +722,18 @@ def build_builtin_registry(
     registry.register(build_diff_command())
     registry.register(build_accept_command())
     registry.register(build_reject_command())
+    registry.register(build_usage_command())
+    for plan_command in all_plan_commands():
+        registry.register(plan_command)
+    for transcript_command in all_transcript_rewind_commands():
+        registry.register(transcript_command)
+    for skill_command in all_skill_commands():
+        registry.register(skill_command)
+    for background_command in all_background_commands():
+        registry.register(background_command)
+    registry.register(build_init_command())
+    registry.register(build_theme_command())
+    registry.register(build_output_style_command())
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,
