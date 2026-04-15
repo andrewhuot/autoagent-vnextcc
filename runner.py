@@ -110,6 +110,7 @@ from cli.providers import (
     provider_health_checks,
     provider_live_health_checks,
     providers_file_path,
+    providers_file_path_for_runtime_config,
     sync_runtime_config,
     upsert_provider,
 )
@@ -173,14 +174,14 @@ EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
 
 
 # Command visibility tiers for simplified help output
-PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "status", "doctor", "shell"}
+PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "ship", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {
     "review", "config", "instruction", "model", "provider", "mode", "memory",
     "template", "connect", "harness", "context",
 }
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
-    "ship", "release", "intelligence", "skill", "mcp", "session", "continue",
+    "release", "intelligence", "skill", "mcp", "session", "continue",
     "permissions", "usage", "export", "trace", "knowledge", "quickstart", "demo",
     "init", "serve", "server", "full-auto", "edit", "cx", "adk", "dataset",
     "outcomes", "pref", "rl", "benchmark", "run", "build-show", "build-inspect",
@@ -2551,7 +2552,7 @@ def init_project(
 )
 @click.pass_context
 def new_workspace(ctx: click.Context, name: str, template: str, demo: bool, mode: str) -> None:
-    """Create a new starter workspace and print the first three commands to run."""
+    """Create a new starter workspace and print the recommended build-to-ship loop."""
     runtime_mode = _resolve_workspace_bootstrap_mode(ctx, mode.lower())
     workspace, summary = _create_workspace(
         template=template,
@@ -2588,11 +2589,16 @@ def new_workspace(ctx: click.Context, name: str, template: str, demo: bool, mode
     click.echo(f"  Mode: {mode_summary['message']}")
     if "mock" in mode_summary.get("message", "").lower():
         click.echo("  Live setup: run `agentlab provider configure` when you are ready to use real models.")
+    if demo:
+        click.echo("  Demo data makes `agentlab eval run` and `agentlab deploy --auto-review --yes` ready now.")
     click.echo("")
-    click.echo(click.style("  Next 3 commands:", bold=True))
+    click.echo(click.style("  Recommended loop:", bold=True))
     click.echo(f"    cd {name}")
     click.echo("    agentlab status")
+    click.echo("    agentlab build \"Build a support agent for order tracking\"")
     click.echo("    agentlab eval run")
+    click.echo("    agentlab optimize --cycles 1")
+    click.echo("    agentlab deploy --auto-review --yes")
     click.echo("")
 
 
@@ -5708,6 +5714,7 @@ def _open_in_editor(file_path: Path) -> None:
 )
 @click.option("--auto-review", is_flag=True, default=False,
               help="Apply all pending review cards before deploying (replicates ship behavior).")
+@click.option("--release-experiment-id", default=None, hidden=True)
 def deploy(
     workflow: str | None,
     config_version: int | None,
@@ -5727,6 +5734,7 @@ def deploy(
     json_output: bool = False,
     output_format: str = "text",
     auto_review: bool = False,
+    release_experiment_id: str | None = None,
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
 
@@ -5964,7 +5972,7 @@ def deploy(
         from cli.stream2_helpers import ReleaseStore
 
         created_release = ReleaseStore().create(
-            f"ship-v{config_version:03d}",
+            release_experiment_id or f"ship-v{config_version:03d}",
             config_version=config_version,
         )
 
@@ -6893,7 +6901,12 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     # Provider Profiles
     # ------------------------------------------------------------------
     click.echo("\nProvider Profiles")
-    provider_path = providers_file_path(workspace)
+    config_file = Path(config_path).expanduser()
+    provider_path = (
+        providers_file_path_for_runtime_config(config_file)
+        if config_file.exists()
+        else providers_file_path(workspace)
+    )
     checks = provider_health_checks(provider_path, runtime_config_path=config_path)
     if checks:
         for check in checks:
@@ -11901,68 +11914,48 @@ def release_create(
     click.echo(f"  Path:       .agentlab/releases/{release['release_id']}.json")
 
 
-@cli.command("ship", hidden=True)
+@cli.command("ship")
 @click.option("--config-version", type=int, default=None, help="Config version to package and deploy.")
 @click.option("--experiment-id", default=None, help="Experiment ID to associate with the release.")
 @click.option("--yes", is_flag=True, default=False, help="Skip the interactive confirmation prompt.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-def ship(config_version: int | None, experiment_id: str | None, yes: bool, json_output: bool = False) -> None:
-    """Create a release and deploy the selected config as a canary."""
-    click.echo(click.style(
-        "Tip: use `agentlab deploy --auto-review` for the same result.",
-        fg="yellow",
-    ))
-    from cli.stream2_helpers import ReleaseStore, json_response
-
-    store = ConversationStore(db_path=DB_PATH)
-    deployer = Deployer(configs_dir=CONFIGS_DIR, store=store)
-    history = deployer.version_manager.get_version_history()
-    if not history:
-        raise click.ClickException("No config versions are available to ship.")
-
-    selected_version = config_version if config_version is not None else history[-1]["version"]
-    selected = next((entry for entry in history if entry["version"] == selected_version), None)
-    if selected is None:
-        raise click.ClickException(f"Config version not found: v{selected_version:03d}")
-
-    pending_reviews = 0
-    try:
-        from optimizer.change_card import ChangeCardStore
-
-        pending_reviews = len(ChangeCardStore().list_pending(limit=200))
-    except Exception:
-        pending_reviews = 0
-
-    generated_experiment_id = experiment_id or f"ship-v{selected_version:03d}"
+@click.pass_context
+def ship(
+    ctx: click.Context,
+    config_version: int | None,
+    experiment_id: str | None,
+    yes: bool,
+    json_output: bool = False,
+) -> None:
+    """Apply pending review, create a release, and deploy the selected config as canary."""
     if not yes and not json_output:
         click.confirm(
-            f"Ship v{selected_version:03d} to the agentlab canary target?",
+            "Apply pending review cards, create a release, and deploy to canary?",
             abort=True,
         )
 
-    release_store = ReleaseStore()
-    release = release_store.create(generated_experiment_id, config_version=selected_version)
-    deployer.version_manager.mark_canary(selected_version)
-
-    payload = {
-        "config_version": selected_version,
-        "config_path": str(Path(CONFIGS_DIR) / selected["filename"]),
-        "release_id": release["release_id"],
-        "experiment_id": generated_experiment_id,
-        "pending_review_cards": pending_reviews,
-        "target": "agentlab",
-        "deployment": "canary",
-    }
-    if json_output:
-        click.echo(json_response("ok", payload, next_cmd="agentlab status"))
-        return
-
-    click.echo(click.style("\n✦ Ship", fg="cyan", bold=True))
-    click.echo(f"  Pending review items: {pending_reviews}")
-    click.echo(click.style(f"Applied: created release {release['release_id']}", fg="green"))
-    click.echo(f"  Deploying: v{selected_version:03d} from {Path(CONFIGS_DIR) / selected['filename']}")
-    click.echo("  Target:    agentlab canary")
-    click.echo(click.style(f"Applied: deployed v{selected_version:03d} as canary", fg="green"))
+    ctx.invoke(
+        deploy,
+        workflow=None,
+        config_version=config_version,
+        strategy="canary",
+        configs_dir=CONFIGS_DIR,
+        db=DB_PATH,
+        target="agentlab",
+        project=None,
+        location="global",
+        agent_id=None,
+        snapshot=None,
+        credentials=None,
+        output=None,
+        push=False,
+        dry_run=False,
+        acknowledge=True,
+        json_output=json_output,
+        output_format="json" if json_output else "text",
+        auto_review=True,
+        release_experiment_id=experiment_id,
+    )
 
 
 # ---------------------------------------------------------------------------

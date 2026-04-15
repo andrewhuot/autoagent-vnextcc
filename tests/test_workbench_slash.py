@@ -175,7 +175,9 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "optimize",
         "build",
         "deploy",
+        "ship",
         "skills",
+        "permissions",
         "model",
         "clear",
         "new",
@@ -222,7 +224,9 @@ def test_builtin_registry_without_streaming() -> None:
     assert "optimize" not in registry.names()
     assert "build" not in registry.names()
     assert "deploy" not in registry.names()
+    assert "ship" not in registry.names()
     assert "skills" not in registry.names()
+    assert "permissions" in registry.names()
     assert "save" in registry.names()  # /save is ported, not streaming
     assert "help" in registry.names()
     assert "model" in registry.names()  # T14 /model is inline, not streaming
@@ -249,6 +253,26 @@ def test_help_command_uses_structured_terminal_pane(ctx: SlashContext, echo: _Ec
     assert all(len(line) <= 120 for line in combined.splitlines() if line)
 
 
+def test_help_ship_renders_canary_shipping_guidance(ctx: SlashContext, echo: _EchoCapture) -> None:
+    dispatch(ctx, "/help ship")
+
+    combined = click.unstyle("\n".join(echo.lines))
+    assert "/ship" in combined
+    assert "auto-review" in combined
+    assert "canary" in combined
+
+
+def test_permissions_slash_delegates_to_root_permissions_command(
+    ctx: SlashContext,
+    echo: _EchoCapture,
+    invoker: _FakeClickInvoker,
+) -> None:
+    dispatch(ctx, "/permissions set acceptEdits")
+
+    assert invoker.calls == ["permissions set acceptEdits"]
+    assert echo.lines == ["stub:permissions set acceptEdits"]
+
+
 def test_builtin_registry_accepts_extra_commands() -> None:
     extra = LocalCommand(
         name="custom",
@@ -261,7 +285,7 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     # /usage + three transcript-rewind commands, three /skill* commands,
     # /background + /background-clear, /init, /theme, /output-style, and
     # the /custom supplied via ``extra``.
-    assert len(registry) == 48
+    assert len(registry) == 50
 
 
 # ---------------------------------------------------------------------------

@@ -76,6 +76,16 @@ LIFECYCLE_EVENT_TYPES = frozenset({
 })
 
 
+def bridged_system_event_type(event_type: BuilderEventType) -> str:
+    """Return the canonical EventLog type for a bridged builder lifecycle event."""
+    return f"builder_{event_type.value.replace('.', '_')}"
+
+
+BRIDGED_SYSTEM_EVENT_TYPES = frozenset(
+    bridged_system_event_type(event_type) for event_type in LIFECYCLE_EVENT_TYPES
+)
+
+
 @dataclass
 class BuilderEvent:
     """One event emitted by builder backend services."""
@@ -264,7 +274,7 @@ class EventBroker:
 
     def _bridge_to_system_log(self, event: BuilderEvent) -> None:
         """Write significant builder events to the system-wide EventLog."""
-        system_type = f"builder_{event.event_type.value.replace('.', '_')}"
+        system_type = bridged_system_event_type(event.event_type)
         bridge_payload = {
             "builder_event_id": event.event_id,
             **({"task_id": event.task_id} if event.task_id else {}),

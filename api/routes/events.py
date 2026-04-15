@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
-from builder.events import event_to_dict
+from builder.events import BRIDGED_SYSTEM_EVENT_TYPES, event_to_dict
 
 router = APIRouter(prefix="/api/events", tags=["events"])
 
@@ -84,12 +84,6 @@ async def list_unified_events(
     # Bridged builder event types appear in both system EventLog and builder
     # DurableEventStore.  When querying both sources, exclude the bridged copies
     # from the system results to avoid duplicates in the timeline.
-    _BRIDGED_BUILDER_TYPES = frozenset({
-        "builder_task_started", "builder_task_completed", "builder_task_failed",
-        "builder_session_opened", "builder_session_closed",
-        "builder_eval_started", "builder_eval_completed",
-    })
-
     merged: list[dict] = []
 
     # Collect system events
@@ -97,7 +91,7 @@ async def list_unified_events(
         system_events = event_log.list_events(limit=limit, session_id=session_id)
         for evt in system_events:
             # Skip bridged builder events when builder source is also included
-            if include_builder and evt["event_type"] in _BRIDGED_BUILDER_TYPES:
+            if include_builder and evt["event_type"] in BRIDGED_SYSTEM_EVENT_TYPES:
                 continue
             merged.append({
                 "id": f"sys-{evt['id']}",

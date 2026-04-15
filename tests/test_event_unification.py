@@ -17,10 +17,12 @@ from pathlib import Path
 import pytest
 
 from builder.events import (
+    BRIDGED_SYSTEM_EVENT_TYPES,
     BuilderEventType,
     DurableEventStore,
     EventBroker,
     LIFECYCLE_EVENT_TYPES,
+    bridged_system_event_type,
     event_to_dict,
 )
 from data.event_log import EventLog, VALID_EVENT_TYPES
@@ -108,7 +110,7 @@ class TestEventBrokerWiring:
 
         system_types = {e["event_type"] for e in system_events}
         expected_types = {
-            f"builder_{et.value.replace('.', '_')}" for et in LIFECYCLE_EVENT_TYPES
+            bridged_system_event_type(et) for et in LIFECYCLE_EVENT_TYPES
         }
         assert system_types == expected_types
 
@@ -198,12 +200,8 @@ class TestUnifiedEventMerge:
     simulating what GET /api/events/unified does internally.
     """
 
-    # Bridged builder event types — same set used by the unified endpoint
-    _BRIDGED_BUILDER_TYPES = frozenset({
-        "builder_task_started", "builder_task_completed", "builder_task_failed",
-        "builder_session_opened", "builder_session_closed",
-        "builder_eval_started", "builder_eval_completed",
-    })
+    # Bridged builder event types — same set used by the unified endpoint.
+    _BRIDGED_BUILDER_TYPES = BRIDGED_SYSTEM_EVENT_TYPES
 
     def _merge_events(
         self,

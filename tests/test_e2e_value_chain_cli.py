@@ -58,6 +58,46 @@ def _load_surface_state(workspace: Path) -> tuple[dict, dict]:
     return changes_response.json(), experiments_response.json()
 
 
+def test_demo_build_to_ship_golden_path(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A demo workspace should exercise the documented build-to-ship loop end to end."""
+    monkeypatch.chdir(tmp_path)
+    new_result = runner.invoke(
+        cli,
+        ["new", "golden-agent", "--demo", "--mode", "mock"],
+        catch_exceptions=False,
+    )
+    assert new_result.exit_code == 0, new_result.output
+    assert "Recommended loop:" in new_result.output
+    assert "agentlab build" in new_result.output
+    assert "agentlab deploy --auto-review --yes" in new_result.output
+    assert "Demo data makes `agentlab eval run` and `agentlab deploy --auto-review --yes` ready now." in new_result.output
+
+    workspace = tmp_path / "golden-agent"
+    monkeypatch.chdir(workspace)
+
+    commands = [
+        ["status"],
+        ["build", "Build a support agent for order tracking with refund escalation"],
+        ["build", "show", "latest"],
+        ["eval", "run"],
+        ["optimize", "--cycles", "1"],
+        ["review", "list"],
+        ["deploy", "--auto-review", "--yes"],
+        ["deploy", "status"],
+    ]
+    for command in commands:
+        result = runner.invoke(cli, command, catch_exceptions=False)
+        assert result.exit_code == 0, f"{command}: {result.output}"
+
+    manifest = _read_json(workspace / "configs" / "manifest.json")
+    assert manifest["canary_version"] is not None
+    assert ChangeCardStore(db_path=str(workspace / ".agentlab" / "change_cards.db")).list_pending() == []
+
+
 def test_eval_run_defaults_to_workspace_eval_suite(
     runner: CliRunner,
     tmp_path: Path,

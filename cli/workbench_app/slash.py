@@ -290,6 +290,12 @@ def _handle_review(ctx: SlashContext, *_: str) -> str:
     return _run_click(ctx, "review")
 
 
+def _handle_permissions(ctx: SlashContext, *args: str) -> str:
+    """Delegate Workbench permission inspection and mode changes to the root CLI."""
+    suffix = " " + shlex.join(args) if args else " show"
+    return _run_click(ctx, "permissions" + suffix)
+
+
 def _handle_mcp(ctx: SlashContext, *_: str) -> str:
     return _run_click(ctx, "mcp status")
 
@@ -612,6 +618,14 @@ _BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
     _BuiltinSpec("memory", "Show AGENTLAB.md contents", _handle_memory),
     _BuiltinSpec("doctor", "Run workspace diagnostics", _handle_doctor),
     _BuiltinSpec("review", "Show pending review cards", _handle_review),
+    _BuiltinSpec(
+        "permissions",
+        "Show or set Workbench permission mode",
+        _handle_permissions,
+        argument_hint="[show|set <mode>]",
+        when_to_use="Use to inspect or change whether tools ask before editing, deploying, or running commands.",
+        sensitive=True,
+    ),
     _BuiltinSpec("mcp", "Show MCP integration status", _handle_mcp),
     _BuiltinSpec(
         "save",
@@ -737,11 +751,13 @@ def build_builtin_registry(
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,
+            build_ship_command,
             build_skills_coordinator_command,
         )
 
         for intent in ("eval", "optimize", "build", "deploy"):
             registry.register(build_coordinator_command(intent))
+        registry.register(build_ship_command())
         registry.register(build_skills_coordinator_command())
     for command in extra:
         registry.register(command)

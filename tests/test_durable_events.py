@@ -17,11 +17,13 @@ from pathlib import Path
 import pytest
 
 from builder.events import (
+    BRIDGED_SYSTEM_EVENT_TYPES,
     BuilderEvent,
     BuilderEventType,
     DurableEventStore,
     EventBroker,
     LIFECYCLE_EVENT_TYPES,
+    bridged_system_event_type,
 )
 
 
@@ -230,17 +232,14 @@ class TestSystemEventBridge:
         assert len(mock_log.calls) == 0
 
     def test_all_lifecycle_types_are_bridged(self) -> None:
-        """Verify LIFECYCLE_EVENT_TYPES matches what we expect."""
+        """Every lifecycle transition should have one canonical system event name."""
         expected = {
-            BuilderEventType.TASK_STARTED,
-            BuilderEventType.TASK_COMPLETED,
-            BuilderEventType.TASK_FAILED,
-            BuilderEventType.SESSION_OPENED,
-            BuilderEventType.SESSION_CLOSED,
-            BuilderEventType.EVAL_STARTED,
-            BuilderEventType.EVAL_COMPLETED,
+            bridged_system_event_type(event_type)
+            for event_type in LIFECYCLE_EVENT_TYPES
         }
-        assert LIFECYCLE_EVENT_TYPES == expected
+
+        assert BRIDGED_SYSTEM_EVENT_TYPES == expected
+        assert len(BRIDGED_SYSTEM_EVENT_TYPES) == len(LIFECYCLE_EVENT_TYPES)
 
     def test_bridge_failure_does_not_break_publish(self, tmp_path: Path) -> None:
         """If the system log rejects the event, publish still succeeds."""

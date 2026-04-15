@@ -9,6 +9,7 @@ import pytest
 import yaml
 from click.testing import CliRunner
 
+from optimizer.change_card import ChangeCardStore, ProposedChangeCard
 from optimizer.cost_tracker import CostTracker
 from runner import cli
 
@@ -197,8 +198,14 @@ class TestOnboardingAndTemplates:
             assert (workspace / "configs" / "v001.yaml").exists()
             assert (workspace / "evals" / "cases").is_dir()
             assert "Mode:" in result.output
+            assert "Recommended loop:" in result.output
             assert "cd my-project" in result.output
             assert "agentlab status" in result.output
+            assert "agentlab build" in result.output
+            assert "agentlab eval run" in result.output
+            assert "agentlab optimize --cycles 1" in result.output
+            assert "agentlab deploy --auto-review --yes" in result.output
+            assert "Demo data makes `agentlab eval run` and `agentlab deploy --auto-review --yes` ready now." in result.output
 
     def test_demo_workspace_review_card_can_be_applied_and_deployed(
         self,
@@ -552,24 +559,34 @@ class TestWorkflowCommands:
             assert payload["status"] == "ok"
             assert any(entry["version"] == 2 for entry in payload["data"])
 
-    def test_ship_creates_release_and_marks_canary(self, runner: CliRunner) -> None:
-        """`agentlab ship --yes` should create a release and set a canary version."""
+    def test_ship_reuses_auto_review_deploy_path(self, runner: CliRunner) -> None:
+        """`agentlab ship --yes` should auto-approve review cards, release, and canary deploy."""
         with runner.isolated_filesystem():
             init_result = runner.invoke(cli, ["init", "--dir", "."])
             assert init_result.exit_code == 0, init_result.output
-            _seed_config_version(Path("."), model_name="ship-model-v2")
+            _seed_config_version(Path("."), model_name="ship-model-v2", status="candidate")
+            card_store = ChangeCardStore(db_path=".agentlab/change_cards.db")
+            card_store.save(
+                ProposedChangeCard(
+                    title="Ship candidate",
+                    why="Exercise the ship auto-review path.",
+                    candidate_config_version=2,
+                    candidate_config_path="configs/v002.yaml",
+                )
+            )
 
             result = runner.invoke(cli, ["ship", "--yes", "--config-version", "2", "--json"])
 
             assert result.exit_code == 0, result.output
-            # The ship command prints a deprecation tip before JSON output; strip non-JSON prefix.
-            json_start = result.output.index("{")
-            payload = json.loads(result.output[json_start:])
+            payload = json.loads(result.output)
             manifest = json.loads(Path("configs/manifest.json").read_text(encoding="utf-8"))
             releases = list((Path(".agentlab") / "releases").glob("rel-*.json"))
             assert payload["status"] == "ok"
-            assert payload["data"]["config_version"] == 2
+            assert payload["data"]["version"] == 2
+            assert payload["data"]["strategy"] == "canary"
+            assert payload["data"]["release"]["config_version"] == 2
             assert manifest["canary_version"] == 2
+            assert ChangeCardStore(db_path=".agentlab/change_cards.db").list_pending() == []
             assert releases
 
     def test_config_import_dry_run_does_not_write_new_version(self, runner: CliRunner) -> None:

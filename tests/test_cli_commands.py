@@ -74,7 +74,7 @@ class TestCLIStructure:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         # Commands visible in help (primary + secondary)
-        for cmd in ["build", "eval", "optimize", "config", "deploy", "status"]:
+        for cmd in ["build", "eval", "optimize", "config", "deploy", "ship", "status"]:
             assert cmd in result.output, f"Missing command: {cmd}"
         # Commands that exist but are hidden from help — verify via cli.commands dict
         for cmd in ["init", "loop", "logs", "server", "full-auto", "changes"]:

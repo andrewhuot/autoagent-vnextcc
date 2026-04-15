@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from builder.events import BRIDGED_SYSTEM_EVENT_TYPES
+
 
 VALID_EVENT_TYPES = {
     "mutation_proposed",
@@ -35,20 +37,12 @@ VALID_EVENT_TYPES = {
     # Context Workbench events
     "context_analyzed",
     "context_simulation_run",
-    # Builder lifecycle events (bridged from EventBroker)
-    "builder_task_started",
-    "builder_task_completed",
-    "builder_task_failed",
-    "builder_session_opened",
-    "builder_session_closed",
-    "builder_eval_started",
-    "builder_eval_completed",
     # Broadcast events (bridged from WebSocket broadcasts for unified observability)
     "eval_completed_broadcast",
     "optimize_completed_broadcast",
     "optimize_pending_review_broadcast",
     "loop_cycle_broadcast",
-}
+} | BRIDGED_SYSTEM_EVENT_TYPES
 
 
 class EventLog:

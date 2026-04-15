@@ -41,6 +41,23 @@ def build_coordinator_command(intent: str) -> LocalCommand:
     )
 
 
+def build_ship_command() -> LocalCommand:
+    """Return `/ship` as a deploy-intent alias for canary-first release flow."""
+    return LocalCommand(
+        name="ship",
+        description="Prepare auto-review and canary shipping gates",
+        handler=make_coordinator_handler("deploy"),
+        source="builtin",
+        argument_hint="[request]",
+        when_to_use=(
+            "Use when you want to apply pending review, create a release, "
+            "and prepare a canary deployment."
+        ),
+        effort="medium",
+        sensitive=True,
+    )
+
+
 def build_skills_coordinator_command() -> LocalCommand:
     """Return the coordinator-backed ``/skills`` command with subcommands.
 
@@ -479,6 +496,7 @@ def _meta_str(ctx: SlashContext, key: str) -> str | None:
 __all__ = [
     "build_context_command",
     "build_coordinator_command",
+    "build_ship_command",
     "build_skills_coordinator_command",
     "build_tasks_command",
     "make_coordinator_handler",

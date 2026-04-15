@@ -48,7 +48,7 @@ EchoFn = Callable[[str], None]
 
 DEFAULT_PROMPT = "› "
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q", "exit", "quit"})
-WORKFLOW_COMMANDS = frozenset({"build", "eval", "optimize", "deploy", "skills"})
+WORKFLOW_COMMANDS = frozenset({"build", "eval", "optimize", "deploy", "ship", "skills"})
 RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 """Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
 
@@ -487,7 +487,7 @@ def run_workbench_app(
                     line=" ".join(args).strip() or _default_workflow_message(command_name),
                     echo=out,
                     reader=reader,
-                    command_intent=command_name,
+                    command_intent=_workflow_command_intent(command_name),
                 )
                 handled_as_slash = True
             else:
@@ -898,9 +898,17 @@ def _default_workflow_message(command_name: str) -> str:
         "eval": "Evaluate the active agent candidate and summarize failures.",
         "optimize": "Optimize the agent from the latest eval evidence.",
         "deploy": "Prepare a canary deployment and rollback plan.",
+        "ship": "Apply pending review, create a release, and prepare a canary deployment.",
         "skills": "Recommend build-time skills that would improve this agent.",
     }
     return defaults.get(command_name, "Continue the agent build.")
+
+
+def _workflow_command_intent(command_name: str) -> str:
+    """Map slash-command aliases onto coordinator intents accepted by the runtime."""
+    if command_name == "ship":
+        return "deploy"
+    return command_name
 
 
 def _run_follow_up_turns(

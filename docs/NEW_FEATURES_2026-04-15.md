@@ -21,8 +21,8 @@ agentlab
 You now have a live tool-calling REPL with streaming markdown, per-tool
 permission dialogs, plan mode, skills, hooks, transcript rewind, MCP
 tools, background subagents, themes, output styles, and vim keybindings.
-Slash workflow commands (`/build`, `/eval`, `/optimize`, `/deploy`) still
-route through the coordinator because they do agentlab-specific work.
+Slash workflow commands (`/build`, `/eval`, `/optimize`, `/deploy`, `/ship`)
+still route through the coordinator because they do agentlab-specific work.
 
 Roll back any time with `export AGENTLAB_CLASSIC_COORDINATOR=1`.
 
@@ -318,17 +318,37 @@ entry points:
 
 ---
 
+## Remaining parity gaps
+
+This release targets parity for the agent build loop and Claude-style operator
+experience, not every Claude Code command or integration. The remaining gaps
+are tracked as lower priority because they do not block the
+`build -> eval -> optimize -> review -> ship` workflow:
+
+- Git workflow commands beyond the existing local release/deploy path.
+- IDE, mobile, remote handoff, voice, and auth surfaces.
+- Plugin management and install/update UX.
+- Notebook editing and language-server integrations.
+- REPL-only helpers and PowerShell-specific command surfaces.
+
+The supported shipping path is `agentlab deploy --auto-review --yes`, with
+`agentlab ship --yes` as a visible shortcut that uses the same implementation
+path. In Workbench, `/ship` prepares the same canary-first deploy intent, and
+`/permissions [show|set <mode>]` delegates to the root permission controls.
+
+---
+
 ## Running the full test suite
 
 ```bash
 source .venv/bin/activate
-python -m pytest tests/ -q --ignore=tests/api \
-  --deselect tests/test_cli_commands.py::TestDoctorCommand::test_doctor_reports_runtime_provider_ready_without_provider_registry \
-  --deselect tests/test_durable_events.py::TestSystemEventBridge::test_all_lifecycle_types_are_bridged \
-  --deselect tests/test_event_unification.py::TestEventBrokerWiring::test_all_lifecycle_types_bridge_correctly
+python -m pytest tests/ -q
+cd web && npm test -- --run && npm run build
 ```
 
-Expected: **5,387 passed, 1 skipped, 3 deselected**.
+Expected as of the workflow hardening pass:
 
-The three deselections are pre-existing failures on `master` that predate
-the parity work; they're unrelated to Phase 1–7.
+- Python: **5,397 passed, 1 skipped**.
+- Web tests: **56 files passed, 403 tests passed**.
+- Web build: passes; Vite still warns that the main JS chunk is larger than
+  500 kB after minification.

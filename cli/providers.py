@@ -47,6 +47,11 @@ def providers_file_path(workspace: AgentLabWorkspace | None) -> Path:
     return Path(".agentlab") / "providers.json"
 
 
+def providers_file_path_for_runtime_config(runtime_config_path: Path | str) -> Path:
+    """Return the provider registry adjacent to a specific runtime config path."""
+    return Path(runtime_config_path).expanduser().resolve().parent / ".agentlab" / "providers.json"
+
+
 def default_model_for(provider: str) -> str:
     """Return the default model name for a provider."""
     return DEFAULT_PROVIDER_MODELS.get(provider.strip().lower(), "gpt-4o")
