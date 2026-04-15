@@ -593,32 +593,26 @@ def _doctor_fix_workspace(workspace: AgentLabWorkspace) -> list[str]:
     return fixes
 
 
-def _print_score(score, heading: str) -> None:
+def _print_score(
+    score,
+    heading: str,
+    *,
+    mode_label: str | None = None,
+    status_label: str | None = None,
+    next_action: str | None = None,
+) -> None:
     """Print a consistent score summary for eval output."""
-    click.echo(f"\n{heading}")
-    click.echo(f"  Cases: {score.passed_cases}/{score.total_cases} passed")
-    quality_ci = score.confidence_intervals.get("quality")
-    safety_ci = score.confidence_intervals.get("safety")
-    latency_ci = score.confidence_intervals.get("latency")
-    cost_ci = score.confidence_intervals.get("cost")
-    composite_ci = score.confidence_intervals.get("composite")
+    from cli.eval_render import render_eval_scorecard
 
-    def _fmt_ci(ci: tuple[float, float] | None) -> str:
-        if ci is None:
-            return ""
-        return f"  (95% CI {ci[0]:.4f}..{ci[1]:.4f})"
-
-    click.echo(f"  Quality:   {score.quality:.4f}{_fmt_ci(quality_ci)}")
-    click.echo(f"  Safety:    {score.safety:.4f} ({score.safety_failures} failures){_fmt_ci(safety_ci)}")
-    click.echo(f"  Latency:   {score.latency:.4f}{_fmt_ci(latency_ci)}")
-    click.echo(f"  Cost:      {score.cost:.4f}{_fmt_ci(cost_ci)}")
-    click.echo(f"  Composite: {score.composite:.4f}{_fmt_ci(composite_ci)}")
-    click.echo(
-        f"  Tokens:    {getattr(score, 'total_tokens', 0)}"
-        f"  |  Est. USD: ${getattr(score, 'estimated_cost_usd', 0.0):.6f}"
-    )
-    for warning in getattr(score, "warnings", []):
-        click.echo(click.style(f"  Warning:   {warning}", fg="yellow"))
+    click.echo("")
+    for line in render_eval_scorecard(
+        score,
+        heading=heading,
+        mode_label=mode_label,
+        status_label=status_label,
+        next_action=next_action,
+    ):
+        click.echo(line)
 
 
 def _read_best_score(path: Path) -> float:
@@ -1032,6 +1026,46 @@ def _default_eval_suite_dir(explicit_suite: str | None = None) -> str | None:
     if workspace is not None and workspace.cases_dir.exists():
         return str(workspace.cases_dir)
     return None
+
+
+def _count_eval_cases_for_progress(
+    eval_runner: EvalRunner,
+    *,
+    category: str | None,
+    dataset_path: str | None,
+    split: str,
+) -> int:
+    """Return the case count used for eval progress events."""
+    if not hasattr(eval_runner, "load_cases"):
+        return 0
+    if dataset_path:
+        if not hasattr(eval_runner, "load_dataset_cases"):
+            return 0
+        cases = eval_runner.load_dataset_cases(dataset_path, split=split)
+    else:
+        cases = eval_runner.load_cases()
+    if category:
+        cases = [case for case in cases if case.category == category]
+    return len(cases)
+
+
+def _call_eval_method_with_progress(method, *args, progress_callback=None, **kwargs):
+    """Call an eval runner method, preserving compatibility with older test doubles."""
+    import inspect
+
+    try:
+        signature = inspect.signature(method)
+    except (TypeError, ValueError):
+        kwargs["progress_callback"] = progress_callback
+        return method(*args, **kwargs)
+
+    accepts_progress = "progress_callback" in signature.parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD
+        for parameter in signature.parameters.values()
+    )
+    if accepts_progress:
+        kwargs["progress_callback"] = progress_callback
+    return method(*args, **kwargs)
 
 
 def _latest_eval_payload() -> tuple[Path | None, dict | None]:
@@ -1613,6 +1647,16 @@ def _warn_mock_modes(
     if json_output:
         return
 
+    for message in _collect_mock_mode_messages(eval_runner=eval_runner, proposer=proposer):
+        click.echo(click.style(f"⚠ {message}", fg="yellow"))
+
+
+def _collect_mock_mode_messages(
+    *,
+    eval_runner: EvalRunner | None = None,
+    proposer: Proposer | None = None,
+) -> list[str]:
+    """Collect unique mock/fallback warnings without printing side-channel text."""
     messages: list[str] = []
     if proposer is not None and proposer.use_mock:
         messages.append(
@@ -1624,11 +1668,13 @@ def _warn_mock_modes(
         messages.extend(list(getattr(eval_runner, "mock_mode_messages", []) or []))
 
     seen: set[str] = set()
+    unique: list[str] = []
     for message in messages:
         if not message or message in seen:
             continue
         seen.add(message)
-        click.echo(click.style(f"⚠ {message}", fg="yellow"))
+        unique.append(message)
+    return unique
 
 
 def _optimize_cycle_status(
@@ -3240,7 +3286,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     from agent.eval_agent import LiveEvalRequiredError
     from cli.stream2_helpers import json_response
     from cli.output import resolve_output_format
-    from cli.progress import ProgressRenderer
+    from cli.progress import PhaseSpinner, ProgressRenderer
 
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
@@ -3295,21 +3341,109 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     )
     _ensure_live_eval_runner(runner)
     initial_mock_messages = list(getattr(runner, "mock_mode_messages", []) or [])
-    _warn_mock_modes(eval_runner=runner, json_output=(resolved_output_format == "json"))
+    for message in _collect_mock_mode_messages(eval_runner=runner):
+        if resolved_output_format == "text":
+            click.echo(click.style(f"⚠ {message}", fg="yellow"))
+        elif resolved_output_format == "stream-json":
+            progress.warning(message=message, phase="eval")
+
+    case_total = _count_eval_cases_for_progress(
+        runner,
+        category=category,
+        dataset_path=dataset,
+        split=dataset_split,
+    )
+    progress.task_started("eval-cases", "Eval cases", message="Evaluate cases", total=case_total)
+    progress_seen = False
+
+    def _progress_callback(current: int, total: int) -> None:
+        nonlocal progress_seen
+        progress_seen = True
+        note = f"{current}/{total} cases"
+        progress.task_progress(
+            "eval-cases",
+            "Eval cases",
+            note,
+            current=current,
+            total=total,
+        )
+
+    def _run_selected_eval() -> tuple[Any, str, str]:
+        if category:
+            score_result = _call_eval_method_with_progress(
+                runner.run_category,
+                category,
+                config=config,
+                dataset_path=dataset,
+                split=dataset_split,
+                progress_callback=_progress_callback,
+            )
+            return score_result, f"Category '{category}' complete", f"Category: {category}"
+        score_result = _call_eval_method_with_progress(
+            runner.run,
+            config=config,
+            dataset_path=dataset,
+            split=dataset_split,
+            progress_callback=_progress_callback,
+        )
+        return score_result, "Full eval suite complete", "Full eval suite"
 
     try:
-        if category:
-            score = runner.run_category(category, config=config, dataset_path=dataset, split=dataset_split)
-            progress.phase_completed("eval", message=f"Category '{category}' complete")
-            progress.next_action("agentlab optimize --cycles 3")
-            score_heading = f"Category: {category}"
+        if resolved_output_format == "text":
+            with PhaseSpinner(
+                f"Evaluating cases 0/{case_total}",
+                output_format=resolved_output_format,
+            ) as spinner:
+                def _text_progress_callback(current: int, total: int) -> None:
+                    _progress_callback(current, total)
+                    spinner.update(f"Evaluating cases {current}/{total}")
+
+                def _run_with_text_progress() -> tuple[Any, str, str]:
+                    if category:
+                        score_result = _call_eval_method_with_progress(
+                            runner.run_category,
+                            category,
+                            config=config,
+                            dataset_path=dataset,
+                            split=dataset_split,
+                            progress_callback=_text_progress_callback,
+                        )
+                        return score_result, f"Category '{category}' complete", f"Category: {category}"
+                    score_result = _call_eval_method_with_progress(
+                        runner.run,
+                        config=config,
+                        dataset_path=dataset,
+                        split=dataset_split,
+                        progress_callback=_text_progress_callback,
+                    )
+                    return score_result, "Full eval suite complete", "Full eval suite"
+
+                score, completion_message, score_heading = _run_with_text_progress()
+                spinner.update("Eval complete")
         else:
-            score = runner.run(config=config, dataset_path=dataset, split=dataset_split)
-            progress.phase_completed("eval", message="Full eval suite complete")
-            progress.next_action("agentlab optimize --cycles 3")
-            score_heading = "Full eval suite"
+            score, completion_message, score_heading = _run_selected_eval()
     except LiveEvalRequiredError as exc:
         raise click.ClickException(str(exc)) from exc
+
+    if not progress_seen:
+        progress.task_progress(
+            "eval-cases",
+            "Eval cases",
+            f"{case_total}/{case_total} cases",
+            current=case_total,
+            total=case_total,
+            progress=1.0 if case_total > 0 else None,
+        )
+    progress.task_completed(
+        "eval-cases",
+        "Eval cases",
+        message="Eval cases complete",
+        current=case_total,
+        total=case_total,
+        progress=1.0 if case_total > 0 else None,
+    )
+    progress.phase_completed("eval", message=completion_message)
+    progress.next_action("agentlab optimize --cycles 3")
 
     live_eval_agent = getattr(runner, "eval_agent", None)
     if live_eval_agent is not None:
@@ -3320,6 +3454,9 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
         ]
         if late_mock_messages:
             score.warnings = _merge_unique_warnings(getattr(score, "warnings", []) or [], late_mock_messages)
+            if resolved_output_format == "stream-json":
+                for message in late_mock_messages:
+                    progress.warning(message=message, phase="eval")
 
     eval_mode = _eval_mode_for_runner(runner, runtime=runtime)
     if eval_mode in {"mock", "mixed"}:
@@ -3333,7 +3470,13 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
 
     if resolved_output_format == "text":
         click.echo(f"\n{_eval_results_heading(eval_mode)}")
-        _print_score(score, score_heading)
+        _print_score(
+            score,
+            score_heading,
+            mode_label=eval_mode_banner_label(eval_mode),
+            status_label=_score_status_label(score.composite),
+            next_action="agentlab optimize --cycles 3",
+        )
 
     result = _build_eval_result_payload(
         score=score,
@@ -3351,7 +3494,8 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     if output:
         Path(output).write_text(json.dumps(result, indent=2), encoding="utf-8")
         progress.artifact_written("eval_results", path=output)
-        click.echo(f"\nResults written to {output}")
+        if resolved_output_format == "text":
+            click.echo(f"\nResults written to {output}")
 
     if resolved_output_format == "stream-json":
         return

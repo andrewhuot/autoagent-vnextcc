@@ -181,6 +181,68 @@ class ProgressRenderer:
         """Emit a recovery hint with a concrete command after interruptions or failures."""
         return self._emit("recovery_hint", phase=phase, message=message, command=command)
 
+    def task_started(
+        self,
+        task_id: str,
+        title: str,
+        *,
+        message: str | None = None,
+        total: int | None = None,
+    ) -> dict[str, Any]:
+        """Emit a task-started event for a long-running unit of work."""
+        return self._emit(
+            "task_started",
+            task_id=task_id,
+            title=title,
+            message=message or title,
+            total=total,
+        )
+
+    def task_progress(
+        self,
+        task_id: str,
+        title: str,
+        note: str,
+        *,
+        current: int | None = None,
+        total: int | None = None,
+        progress: float | None = None,
+    ) -> dict[str, Any]:
+        """Emit structured task progress with normalized progress when possible."""
+        resolved_progress = self._resolve_progress(current=current, total=total, progress=progress)
+        return self._emit(
+            "task_progress",
+            task_id=task_id,
+            title=title,
+            note=note,
+            message=note,
+            current=current,
+            total=total,
+            progress=resolved_progress,
+        )
+
+    def task_completed(
+        self,
+        task_id: str,
+        title: str,
+        *,
+        message: str | None = None,
+        current: int | None = None,
+        total: int | None = None,
+        progress: float | None = None,
+    ) -> dict[str, Any]:
+        """Emit a task-completed event with final progress details."""
+        resolved_progress = self._resolve_progress(current=current, total=total, progress=progress)
+        return self._emit(
+            "task_completed",
+            task_id=task_id,
+            title=title,
+            message=message or title,
+            current=current,
+            total=total,
+            progress=resolved_progress,
+        )
+
     def warning(self, *, message: str, phase: str | None = None) -> dict[str, Any]:
         """Emit a `warning` event."""
         return self._emit("warning", phase=phase, message=message)
@@ -208,6 +270,33 @@ class ProgressRenderer:
         return base
 
     @staticmethod
+    def _resolve_progress(
+        *,
+        current: int | None,
+        total: int | None,
+        progress: float | None,
+    ) -> float | None:
+        """Normalize explicit progress or derive it from current/total."""
+        if progress is not None:
+            try:
+                value = float(progress)
+            except (TypeError, ValueError):
+                return None
+            if value > 1.0 and value <= 100.0:
+                value = value / 100.0
+            return round(min(1.0, max(0.0, value)), 4)
+        if current is None or total is None:
+            return None
+        try:
+            total_value = int(total)
+            current_value = int(current)
+        except (TypeError, ValueError):
+            return None
+        if total_value <= 0:
+            return None
+        return round(min(1.0, max(0.0, current_value / total_value)), 4)
+
+    @staticmethod
     def _render_text(event: dict[str, Any]) -> str:
         event_type = event.get("event", "event")
         message = str(event.get("message", "")).strip()
@@ -228,6 +317,22 @@ class ProgressRenderer:
         if event_type == "recovery_hint":
             command = event.get("command")
             return f"[recover] {message}: {command}"
+        if event_type == "task_started":
+            total = event.get("total")
+            suffix = f" ({total} total)" if total is not None else ""
+            return f"[task] {event.get('title', 'task')} started{suffix}"
+        if event_type == "task_progress":
+            title = event.get("title", "task")
+            current = event.get("current")
+            total = event.get("total")
+            count = f" {current}/{total}" if current is not None and total is not None else ""
+            return f"[task] {title}{count}: {message}"
+        if event_type == "task_completed":
+            title = event.get("title", "task")
+            current = event.get("current")
+            total = event.get("total")
+            count = f" {current}/{total}" if current is not None and total is not None else ""
+            return f"[task] {title}{count} done"
         if event_type == "warning":
             return f"[warning] {message}"
         if event_type == "error":

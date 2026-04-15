@@ -55,6 +55,12 @@ _EVENT_RENDERERS: dict[str, Any] = {
         + (f" [{d['source']}]" if d.get("source") else ""),
         fg="green",
     ),
+    "task_started": lambda d: f"[task] {d.get('title', d.get('task_id', 'task'))} ...started",
+    "task_progress": lambda d: _format_task_progress_event(d),
+    "task_completed": lambda d: click.style(
+        f"[task] {d.get('title', d.get('task_id', 'task'))} ...done",
+        fg="green",
+    ),
     "message.delta": lambda _d: None,
     "artifact.updated": lambda d: f"[artifact] {(d.get('artifact') or d).get('name', 'artifact')} updated",
     "iteration.started": lambda d: click.style(
@@ -119,6 +125,13 @@ _EVENT_RENDERERS: dict[str, Any] = {
         dim=True,
     ),
 }
+
+
+def _format_task_progress_event(data: Mapping[str, Any]) -> str:
+    """Render shared task progress events with bars when structured counts exist."""
+    title = data.get("title") or data.get("task_id") or "task"
+    note = data.get("note") or data.get("message") or ""
+    return f"[task] {title}: {click.unstyle(_format_progress(str(note), data))}".rstrip()
 
 
 def fallback_badge(reason: str | None = None) -> str:

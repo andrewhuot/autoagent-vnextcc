@@ -134,6 +134,13 @@ def test_render_event_returns_none_for_unknown_event() -> None:
 def test_summarise_counts_phases_artifacts_warnings_errors() -> None:
     events = [
         {"event": "phase_started", "phase": "eval"},
+        {
+            "event": "task_progress",
+            "task_id": "eval-cases",
+            "title": "Eval cases",
+            "current": 3,
+            "total": 6,
+        },
         {"event": "phase_completed", "phase": "eval"},
         {"event": "artifact_written", "path": "/tmp/a.json"},
         {"event": "warning", "message": "slow"},
@@ -141,7 +148,9 @@ def test_summarise_counts_phases_artifacts_warnings_errors() -> None:
         {"event": "next_action", "message": "agentlab optimize"},
     ]
     summary = list(_summarise(events))[-1][1]
-    assert summary.events == 6
+    assert summary.events == 7
+    assert summary.cases_completed == 3
+    assert summary.cases_total == 6
     assert summary.phases_completed == 1
     assert summary.artifacts == ("/tmp/a.json",)
     assert summary.warnings == 1
@@ -165,9 +174,10 @@ def test_summarise_artifact_without_path_falls_back_to_message() -> None:
 
 
 def test_format_summary_green_on_clean_run() -> None:
-    line = _format_summary(EvalSummary(events=3, phases_completed=1))
+    line = _format_summary(EvalSummary(events=3, phases_completed=1, cases_completed=14, cases_total=14))
     plain = _strip_ansi(line)
     assert "/eval complete" in plain
+    assert "14 cases" in plain
     assert "3 events" in plain
 
 
@@ -299,6 +309,42 @@ def test_handler_surfaces_warnings_and_errors(
     assert "1 errors" in plain
     assert "1 warnings" in plain
     assert isinstance(result, DispatchResult)
+
+
+def test_handler_summary_includes_case_progress_counts(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "eval"},
+            {
+                "event": "task_progress",
+                "task_id": "eval-cases",
+                "title": "Eval cases",
+                "current": 2,
+                "total": 4,
+                "progress": 0.5,
+                "message": "2/4 cases",
+            },
+            {
+                "event": "task_completed",
+                "task_id": "eval-cases",
+                "title": "Eval cases",
+                "current": 4,
+                "total": 4,
+                "progress": 1.0,
+            },
+            {"event": "phase_completed", "phase": "eval"},
+        ]
+    )
+    _install_eval(ctx, runner)
+
+    dispatch(ctx, "/eval")
+
+    plain = "\n".join(echo.plain)
+    assert "2/4 cases" in plain
+    assert "/eval complete" in plain
+    assert "4 cases" in plain
 
 
 def test_make_eval_handler_uses_default_runner_when_none_passed() -> None:

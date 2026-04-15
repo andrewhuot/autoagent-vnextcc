@@ -51,6 +51,8 @@ class EvalSummary:
     """Counters the `/eval` handler uses to build the `onDone` result line."""
 
     events: int = 0
+    cases_completed: int = 0
+    cases_total: int = 0
     phases_completed: int = 0
     artifacts: tuple[str, ...] = ()
     warnings: int = 0
@@ -128,6 +130,15 @@ def _advance_phase(spin: Any, event: StreamEvent) -> None:
     data = {k: v for k, v in event.items() if k != "event"}
     if name == "phase_started":
         spin.update(str(data.get("phase") or "evaluating"))
+    elif name == "task_progress":
+        current = data.get("current")
+        total = data.get("total")
+        if current is not None and total is not None:
+            spin.update(f"evaluating cases {current}/{total}")
+        else:
+            spin.update(str(data.get("title") or "evaluating cases"))
+    elif name == "task_completed":
+        spin.update(str(data.get("title") or "eval cases complete"))
     elif name == "llm.fallback":
         spin.update(f"fallback ({data.get('reason', 'unknown')})")
     elif name == "llm.retry":
@@ -142,6 +153,8 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
     """
     counters = {
         "events": 0,
+        "cases_completed": 0,
+        "cases_total": 0,
         "phases_completed": 0,
         "warnings": 0,
         "errors": 0,
@@ -153,6 +166,16 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
         name = event.get("event")
         if name == "phase_completed":
             counters["phases_completed"] += 1
+        elif name in {"task_progress", "task_completed"} and event.get("task_id") == "eval-cases":
+            current = event.get("current")
+            total = event.get("total")
+            try:
+                if current is not None:
+                    counters["cases_completed"] = max(counters["cases_completed"], int(current))
+                if total is not None:
+                    counters["cases_total"] = max(counters["cases_total"], int(total))
+            except (TypeError, ValueError):
+                pass
         elif name == "artifact_written":
             path = event.get("path") or event.get("message")
             if path:
@@ -167,6 +190,8 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
                 next_action = str(message)
         yield event, EvalSummary(
             events=counters["events"],
+            cases_completed=counters["cases_completed"],
+            cases_total=counters["cases_total"],
             phases_completed=counters["phases_completed"],
             artifacts=tuple(artifacts),
             warnings=counters["warnings"],
@@ -177,11 +202,17 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
 
 def _format_summary(summary: EvalSummary) -> str:
     """Build the ``onDone`` result line from final counters."""
-    parts: list[str] = [f"{summary.events} events"]
+    parts: list[str] = []
+    if summary.cases_total:
+        label = "case" if summary.cases_total == 1 else "cases"
+        parts.append(f"{summary.cases_completed} {label}")
+    parts.append(f"{summary.events} events")
     if summary.phases_completed:
         parts.append(f"{summary.phases_completed} phases")
     if summary.artifacts:
-        parts.append(f"{len(summary.artifacts)} artifacts")
+        artifact_count = len(summary.artifacts)
+        artifact_label = "artifact" if artifact_count == 1 else "artifacts"
+        parts.append(f"{artifact_count} {artifact_label}")
     if summary.warnings:
         parts.append(f"{summary.warnings} warnings")
     if summary.errors:

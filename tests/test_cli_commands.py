@@ -410,6 +410,37 @@ class TestEvalCommands:
         assert "scores" in data
         assert "results" in data
 
+    def test_eval_run_stream_json_output_file_has_artifact_event_without_plain_text(
+        self,
+        runner,
+    ):
+        """Stream JSON mode should emit artifact events instead of prose write lines."""
+        with runner.isolated_filesystem():
+            result = runner.invoke(
+                cli,
+                [
+                    "eval",
+                    "run",
+                    "--output",
+                    "custom_eval_results.json",
+                    "--output-format",
+                    "stream-json",
+                ],
+                env=_env_without_api_keys(),
+            )
+
+            assert result.exit_code == 0, result.output
+            assert "Results written to" not in result.output
+            payloads = [json.loads(line) for line in result.output.splitlines() if line.strip()]
+            artifacts = [
+                payload
+                for payload in payloads
+                if payload["event"] == "artifact_written"
+                and payload.get("artifact") == "eval_results"
+            ]
+            assert artifacts
+            assert artifacts[-1]["path"] == "custom_eval_results.json"
+
     def test_eval_list_reads_workspace_latest_snapshot(self, runner, tmp_path, monkeypatch):
         """`eval list` should include the canonical workspace latest snapshot under `.agentlab/`."""
         workspace = tmp_path / "eval-list-workspace"
