@@ -10,7 +10,9 @@ AgentLab is a local-first toolkit for iterating on AI agent configurations. Give
 BUILD -> WORKBENCH -> EVAL -> COMPARE -> OPTIMIZE -> REVIEW -> DEPLOY
 ```
 
-> **[Workbench Guide](docs/WORKBENCH_GUIDE.md)** — End-to-end walkthrough of the Claude-Code-style Workbench (build → eval → optimize → deploy, plan mode, checkpoints, multi-turn memory, /diff and /accept)
+> **[What's New — Apr 2026 parity release](docs/NEW_FEATURES_2026-04-15.md)** — Live tool-calling REPL, permission dialogs, disk skills, hooks, plan mode workflow, MCP tools, streaming markdown, transcript rewind, themes, vim mode, Anthropic/OpenAI adapters, non-interactive `agentlab print`
+>
+> **[Workbench Guide](docs/WORKBENCH_GUIDE.md)** — End-to-end walkthrough of the Claude-Code-style Workbench (build → eval → optimize → deploy, plan mode, checkpoints, multi-turn memory, /diff and /accept, plus the full Phase 1–7 live-LLM surface)
 >
 > **[Quick Start](docs/QUICKSTART_GUIDE.md)** — Get a workspace running in minutes
 >
@@ -262,6 +264,7 @@ See [docs/deployment.md](docs/deployment.md) for local, container, and Cloud Run
 
 **Start here:**
 
+- [What's New — Apr 2026 parity release](docs/NEW_FEATURES_2026-04-15.md) — One-page tour of the Claude-Code parity surface
 - [Quick Start](docs/QUICKSTART_GUIDE.md) — Get running in minutes
 - [Concepts](docs/concepts.md) — Core terminology and mental model
 - [CLI Reference](docs/cli-reference.md) — Full command reference
