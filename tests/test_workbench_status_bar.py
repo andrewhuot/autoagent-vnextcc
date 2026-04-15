@@ -204,6 +204,46 @@ def test_render_snapshot_color_emits_ansi_codes() -> None:
     assert click.unstyle(colored) == plain
 
 
+def test_render_snapshot_uses_capabilities_limit_for_token_field() -> None:
+    # gpt-5 has a 1M window; status bar should render `used / 1,000,000`.
+    snap = StatusSnapshot(
+        workspace_label="w",
+        model="gpt-5",
+        tokens_used=12_345,
+    )
+    line = render_snapshot(snap, color=False)
+    assert "12,345/1,000,000 tok" in line
+
+
+def test_render_snapshot_explicit_limit_wins_over_model_lookup() -> None:
+    # When the caller knows the limit (e.g. adapter read it back), don't
+    # second-guess it from the registry.
+    snap = StatusSnapshot(
+        workspace_label="w",
+        model="gpt-5",
+        tokens_used=100,
+        context_limit=50_000,
+    )
+    line = render_snapshot(snap, color=False)
+    assert "100/50,000 tok" in line
+
+
+def test_render_snapshot_unknown_model_omits_denominator() -> None:
+    # No model, no registry entry, no explicit limit — we still show the
+    # used count rather than inventing a 200k default in the status bar.
+    snap = StatusSnapshot(workspace_label="w", tokens_used=789)
+    line = render_snapshot(snap, color=False)
+    assert "789 tok" in line
+    assert "/" not in line.split("789 tok")[0].rsplit(" | ", 1)[-1]
+
+
+def test_render_snapshot_hides_token_field_when_not_tracked() -> None:
+    # tokens_used=None must suppress the whole field (not render `0/…`).
+    snap = StatusSnapshot(workspace_label="w", model="gpt-5")
+    line = render_snapshot(snap, color=False)
+    assert "tok" not in line
+
+
 def test_render_snapshot_includes_extras() -> None:
     snap = StatusSnapshot(
         workspace_label="w",

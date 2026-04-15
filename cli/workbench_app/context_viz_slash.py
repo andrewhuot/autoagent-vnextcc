@@ -53,12 +53,14 @@ def _handle_usage(ctx: "SlashContext", *_: str) -> OnDoneResult:
     context_limit = _context_limit_from_ctx(ctx)
     system_prompt = _system_prompt_from_ctx(ctx)
     tool_overhead = _tool_overhead_from_ctx(ctx)
+    active_model = _active_model_from_ctx(ctx)
 
     snapshot = snapshot_from_transcript(
         ({"role": entry.role, "content": entry.content} for entry in session.transcript),
         system_prompt=system_prompt,
         tool_overhead=tool_overhead,
         context_limit=context_limit,
+        model=active_model,
     )
 
     lines = [theme.workspace("Context window usage"), ""]
@@ -96,6 +98,17 @@ def _tool_overhead_from_ctx(ctx: "SlashContext") -> int:
         return int(value) if value is not None else 0
     except (TypeError, ValueError):
         return 0
+
+
+def _active_model_from_ctx(ctx: "SlashContext") -> str | None:
+    """Currently-selected model id, if the REPL has published one on ``meta``.
+
+    Used downstream to resolve per-model context windows via
+    :mod:`cli.llm.capabilities` instead of the Claude-family default."""
+    value = ctx.meta.get("active_model") if ctx.meta else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
 
 
 __all__ = ["build_usage_command"]

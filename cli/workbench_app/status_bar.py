@@ -49,6 +49,13 @@ class StatusSnapshot:
     best_score: str | None = None
     agentlab_version: str = ""
     session_title: str | None = None
+    tokens_used: int | None = None
+    """Running total of context tokens consumed this session. ``None`` when
+    the caller hasn't wired token accounting yet — the renderer hides the
+    field rather than guessing a misleading ``0``."""
+    context_limit: int | None = None
+    """Optional explicit window. When omitted but ``model`` is set, the
+    renderer looks the limit up via :mod:`cli.llm.capabilities`."""
     extras: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     """Ad-hoc ``(label, value)`` pairs appended after the standard fields."""
 
@@ -151,6 +158,20 @@ def snapshot_from_workspace(
     )
 
 
+def _resolve_limit_for_snapshot(snapshot: "StatusSnapshot") -> int | None:
+    """Prefer an explicit ``context_limit`` on the snapshot; otherwise fall
+    back to the capabilities registry keyed by ``model``. Lazy import keeps
+    this renderer usable in environments that never look the limit up."""
+    if snapshot.context_limit:
+        return snapshot.context_limit
+    if not snapshot.model:
+        return None
+    from cli.llm.capabilities import get_capability
+
+    cap = get_capability(snapshot.model)
+    return cap.context_window if cap is not None else None
+
+
 def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
     """Render a snapshot to a single status line.
 
@@ -171,6 +192,13 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
 
     if snapshot.model:
         parts.append(snapshot.model)
+
+    if snapshot.tokens_used is not None:
+        limit = _resolve_limit_for_snapshot(snapshot)
+        if limit:
+            parts.append(f"{snapshot.tokens_used:,}/{limit:,} tok")
+        else:
+            parts.append(f"{snapshot.tokens_used:,} tok")
 
     if snapshot.pending_reviews > 0:
         label = "review" if snapshot.pending_reviews == 1 else "reviews"

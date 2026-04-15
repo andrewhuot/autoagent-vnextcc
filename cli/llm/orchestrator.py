@@ -25,6 +25,17 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from cli.llm.streaming import (
+    MessageStop,
+    TextDelta,
+    ThinkingDelta,
+    ToolUseDelta,
+    ToolUseEnd,
+    ToolUseStart,
+    UsageDelta,
+    collect_stream,
+    events_from_model_response,
+)
 from cli.llm.types import (
     AssistantTextBlock,
     AssistantToolUseBlock,
@@ -119,19 +130,8 @@ class LLMOrchestrator:
         # model keeps asking for tools past the limit we hard-stop.
         tool_iterations = 0
         while True:
-            response = self.model.complete(
-                system_prompt=self.system_prompt,
-                messages=list(self.messages),
-                tools=self.tool_registry.to_schema(),
-            )
+            response = self._run_model_turn(renderer, final_text_parts)
             _merge_usage(aggregated_usage, response.usage)
-
-            # Render any text blocks immediately so the user sees prose
-            # before the tool_use panel appears.
-            for block in response.text_blocks():
-                text = block.text or ""
-                final_text_parts.append(text)
-                renderer.feed(text if text.endswith("\n") else text + "\n")
 
             tool_uses = response.tool_uses()
             self.messages.append(
@@ -152,10 +152,21 @@ class LLMOrchestrator:
             # Execute tool calls and append a user-side message with the
             # tool_result blocks so the next model call can consume them.
             tool_results: list[dict[str, Any]] = []
+            post_fragments: list[str] = []
             for tool_use in tool_uses:
                 execution = self._execute_tool(tool_use)
                 executions.append(execution)
                 tool_results.append(_result_to_block(tool_use.id, execution))
+                post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
+
+            # Append the post-tool-use prompt fragments as a text block at
+            # the end of the tool_result message. This keeps them tied to
+            # the tools that triggered them and lets the model take them
+            # into account on its next turn.
+            if post_fragments:
+                tool_results.append(
+                    {"type": "text", "text": _render_fragment_block(post_fragments)}
+                )
 
             self.messages.append(TurnMessage(role="user", content=tool_results))
 
@@ -184,6 +195,109 @@ class LLMOrchestrator:
 
     # ------------------------------------------------------------------ helpers
 
+    def _run_model_turn(
+        self,
+        renderer: StreamingMarkdownRenderer,
+        final_text_parts: list[str],
+    ) -> ModelResponse:
+        """Call the model and render its output live.
+
+        Uses ``stream()`` when the client implements it — text chunks land
+        in the renderer as they arrive so the user sees the model
+        thinking. Clients that expose only ``complete()`` still route
+        through :func:`events_from_model_response` so the renderer path
+        is identical, just non-incremental."""
+        tools_schema = self.tool_registry.to_schema()
+        effective_system_prompt = self._compose_system_prompt()
+        stream_method = getattr(self.model, "stream", None)
+
+        if callable(stream_method):
+            events_iter = stream_method(
+                system_prompt=effective_system_prompt,
+                messages=list(self.messages),
+                tools=tools_schema,
+            )
+        else:
+            response = self.model.complete(
+                system_prompt=effective_system_prompt,
+                messages=list(self.messages),
+                tools=tools_schema,
+            )
+            events_iter = events_from_model_response(response)
+
+        # Fork the event stream: one consumer drives the renderer live,
+        # the other collects the final ModelResponse for bookkeeping.
+        # Materialising to a list is fine — events are tiny dataclasses
+        # and fork-splitting an iterator would add complexity for a gain
+        # that doesn't matter at this scale.
+        collected_events: list[Any] = []
+        pending_text = ""
+        for event in events_iter:
+            collected_events.append(event)
+            if isinstance(event, TextDelta):
+                text = event.text or ""
+                pending_text += text
+                final_text_parts.append(text)
+                # Feed the renderer without forcing newlines — the
+                # markdown streamer buffers partial lines correctly.
+                renderer.feed(text)
+            elif isinstance(event, ThinkingDelta):
+                # Thinking surfaces only on a dedicated indicator in the
+                # transcript chrome; the main stream stays focused on
+                # user-visible prose.
+                continue
+            # Tool-use deltas never render as text — they land in the
+            # collected ModelResponse via collect_stream.
+
+        # Ensure any trailing partial line flushes on end-of-turn; the
+        # renderer will add one itself at finalize(), but we mimic that
+        # here so the collected text ends on a clean boundary.
+        if pending_text and not pending_text.endswith("\n"):
+            renderer.feed("\n")
+            final_text_parts.append("\n")
+
+        return collect_stream(collected_events)
+
+    def _compose_system_prompt(self) -> str:
+        """Layer hook-supplied prompt fragments on top of the base prompt.
+
+        Fragments fire at ``PreToolUse`` with an empty tool_name because
+        they apply to the upcoming turn as a whole — a future revision
+        could narrow by the set of available tools, but in practice
+        session-level guidance is the common case. ``Stop`` fragments
+        are read separately and woven into post-turn telemetry rather
+        than leaking into the next model call."""
+        if self.hook_registry is None:
+            return self.system_prompt
+
+        from cli.hooks import HookEvent
+
+        fragments = self.hook_registry.prompt_fragments_for(HookEvent.PRE_TOOL_USE)
+        if not fragments:
+            return self.system_prompt
+
+        appendix = "\n\n".join(fragments)
+        base = self.system_prompt.rstrip()
+        return (
+            f"{base}\n\n## Hook Guidance\n\n{appendix}"
+            if base
+            else f"## Hook Guidance\n\n{appendix}"
+        )
+
+    def _post_tool_prompt_fragments(self, tool_name: str) -> list[str]:
+        """Return post-tool-use prompt fragments for ``tool_name``.
+
+        Keeping this in a helper means the main loop stays readable and
+        tests can stub the hook registry's output without patching the
+        loop itself."""
+        if self.hook_registry is None:
+            return []
+        from cli.hooks import HookEvent
+
+        return self.hook_registry.prompt_fragments_for(
+            HookEvent.POST_TOOL_USE, tool_name=tool_name
+        )
+
     def _execute_tool(self, tool_use: AssistantToolUseBlock) -> ToolExecution:
         context = ToolContext(
             workspace_root=self.workspace_root,
@@ -203,10 +317,16 @@ class LLMOrchestrator:
     def _build_tool_extra(self) -> dict[str, Any]:
         """Stamp the tool context with publishable session state.
 
-        Tools like :class:`AgentSpawnTool` read the background registry
-        off ``ToolContext.extra``; orchestrators attach it here so every
-        tool call in the turn sees a consistent view."""
-        extra: dict[str, Any] = {}
+        Tools like :class:`AgentSpawnTool`, :class:`SkillTool`, and
+        :class:`ExitPlanModeTool` read the relevant registries off
+        ``ToolContext.extra``; the orchestrator composes the payload
+        from a ``_tool_extra_seed`` (set by
+        :func:`cli.workbench_app.orchestrator_runtime.build_workbench_runtime`)
+        plus any session-local values. Seeds let one wiring site
+        centralise publication without every orchestrator caller
+        copy-pasting the same dict."""
+        seed = getattr(self, "_tool_extra_seed", None)
+        extra: dict[str, Any] = dict(seed or {})
         if self.session is not None:
             extra["session_id"] = self.session.session_id
         return extra
@@ -281,6 +401,17 @@ def synthetic_tool_use_id() -> str:
     """Helper for adapters that don't supply their own ids. Provides a
     stable, URL-safe identifier per tool call."""
     return f"toolu_{uuid.uuid4().hex[:16]}"
+
+
+def _render_fragment_block(fragments: list[str]) -> str:
+    """Format a group of post-tool-use fragments as a visible text block.
+
+    We wrap with a clear header so the model can see these are hook
+    guidance rather than tool output — otherwise the model could infer
+    the text is part of the tool_result payload and hallucinate semantics
+    that aren't there."""
+    body = "\n\n".join(fragments)
+    return f"Hook post-tool-use guidance:\n\n{body}"
 
 
 __all__ = ["DEFAULT_MAX_TOOL_LOOPS", "LLMOrchestrator", "synthetic_tool_use_id"]

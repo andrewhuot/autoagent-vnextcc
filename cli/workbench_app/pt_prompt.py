@@ -24,6 +24,10 @@ import shutil
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from cli.keybindings import BindingSet, KeyBindingMode, load_bindings
+from cli.keybindings.actions import ActionRegistry, build_default_registry
+from cli.keybindings.runtime import build_prompt_toolkit_bindings
+from cli.keybindings.vim import editing_mode_for
 from cli.permissions import (
     DEFAULT_PERMISSION_MODE,
     update_workspace_settings,
@@ -161,6 +165,25 @@ def build_prompt_input_provider(
     except ImportError as exc:  # pragma: no cover — prompt_toolkit is a hard dep
         raise RuntimeError("prompt_toolkit is required for the interactive prompt") from exc
 
+    # Load user keybindings (falls back to defaults if no config file).
+    # Failures are non-fatal: a broken keybindings.json shouldn't block
+    # the REPL — we keep the default behaviour intact.
+    try:
+        user_binding_set: BindingSet = load_bindings()
+    except Exception:
+        from cli.keybindings.loader import resolve_bindings
+
+        user_binding_set = resolve_bindings(
+            mode=KeyBindingMode.DEFAULT, user_bindings=()
+        )
+
+    # Build an action registry pre-populated with raising stubs; we
+    # overwrite the ones this REPL supports natively below. Anything the
+    # user binds to an action we don't register will be silently skipped
+    # by the runtime translator, so custom commands can be wired in
+    # incrementally without crashing existing sessions.
+    action_registry: ActionRegistry = build_default_registry()
+
     workspace_root = None
     try:
         workspace_root = getattr(state.workspace, "root", None)
@@ -182,6 +205,66 @@ def build_prompt_input_provider(
         state.transcript_view.toggle()
         state.transcript_view_cycles += 1
         event.app.invalidate()
+
+    # --- Action-registry handlers --------------------------------------
+    # These mirror the inline handlers above and provide real behaviour
+    # for any user-declared keybinding that points at a logical action.
+    # The inline handlers stay in place so the existing hard-coded keys
+    # (/, s-tab, c-t) keep working regardless of user config.
+
+    def _action_submit(event: Any) -> None:  # pragma: no cover — needs real PT app
+        event.current_buffer.validate_and_handle()
+
+    def _action_cancel(event: Any) -> None:  # pragma: no cover
+        event.current_buffer.reset()
+
+    def _action_interrupt(event: Any) -> None:  # pragma: no cover
+        event.app.exit(exception=KeyboardInterrupt())
+
+    def _action_exit(event: Any) -> None:  # pragma: no cover
+        event.app.exit(exception=EOFError())
+
+    def _action_clear_transcript(event: Any) -> None:  # pragma: no cover
+        state.transcript_view.toggle()
+        state.transcript_view_cycles += 1
+        event.app.invalidate()
+
+    def _action_history_previous(event: Any) -> None:  # pragma: no cover
+        event.current_buffer.history_backward()
+
+    def _action_history_next(event: Any) -> None:  # pragma: no cover
+        event.current_buffer.history_forward()
+
+    def _action_mode_cycle(event: Any) -> None:  # pragma: no cover
+        state.mode = cycle_permission_mode(state.mode)
+        state.cycle_count += 1
+        state.persist()
+        event.app.invalidate()
+
+    action_registry.register("submit", _action_submit)
+    action_registry.register("cancel", _action_cancel)
+    action_registry.register("interrupt", _action_interrupt)
+    action_registry.register("exit", _action_exit)
+    action_registry.register("clear-transcript", _action_clear_transcript)
+    action_registry.register("history-previous", _action_history_previous)
+    action_registry.register("history-next", _action_history_next)
+    action_registry.register("mode-cycle", _action_mode_cycle)
+
+    # Translate the loaded binding_set into a second KeyBindings instance
+    # and merge it into the primary ``bindings`` container. Doing it as a
+    # merge rather than replace keeps the hard-coded ``/`` / ``s-tab`` /
+    # ``c-t`` handlers authoritative — user config extends rather than
+    # shadows them. If the user has no config, user_binding_set contains
+    # only DEFAULT_BINDINGS and most of those are already handled by
+    # prompt_toolkit's built-in emacs bindings, so behaviour is preserved.
+    try:
+        user_bindings_kb = build_prompt_toolkit_bindings(
+            user_binding_set, action_registry
+        )
+        for binding in user_bindings_kb.bindings:
+            bindings.bindings.append(binding)
+    except Exception:  # pragma: no cover — defence in depth
+        pass
 
     @bindings.add("/")
     def _open_slash_menu(event: Any) -> None:  # pragma: no cover — needs real PT app
@@ -221,7 +304,9 @@ def build_prompt_input_provider(
             [("class:toolbar", render_bottom_toolbar(state.mode))]
         )
 
-    session = PromptSession(
+    # Only pass editing_mode when vim is active: letting prompt_toolkit
+    # default keeps behaviour identical for users without custom config.
+    session_kwargs: dict[str, Any] = dict(
         completer=completer,
         complete_while_typing=_complete_for_slash_commands,
         complete_style=CompleteStyle.COLUMN,
@@ -239,6 +324,13 @@ def build_prompt_input_provider(
             }
         ),
     )
+    if user_binding_set.mode == KeyBindingMode.VIM:
+        try:
+            session_kwargs["editing_mode"] = editing_mode_for(user_binding_set)
+        except Exception:  # pragma: no cover — defence in depth
+            pass
+
+    session = PromptSession(**session_kwargs)
 
     def provider(prompt_text: str) -> str:
         # Style the chevron amber so it matches Claude Code's accent. We wrap

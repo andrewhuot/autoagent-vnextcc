@@ -20,7 +20,13 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
-from cli.hooks.types import HookDefinition, HookEvent, HookOutcome, HookVerdict
+from cli.hooks.types import (
+    HookDefinition,
+    HookEvent,
+    HookOutcome,
+    HookType,
+    HookVerdict,
+)
 
 
 Runner = Callable[[HookDefinition, dict[str, Any]], "HookProcessResult"]
@@ -60,6 +66,33 @@ class HookRegistry:
             if hook.matches_tool(tool_name)
         ]
 
+    def prompt_fragments_for(
+        self,
+        event: HookEvent,
+        *,
+        tool_name: str = "",
+    ) -> list[str]:
+        """Return distinct prompt fragments subscribed to ``event``.
+
+        Deduplicates via :meth:`HookDefinition.resolved_id` so a rule that
+        matches every tool (``matcher=""``) doesn't flood the model call
+        with copies of the same text. Returns fragments in registration
+        order to keep injection deterministic."""
+        seen: set[str] = set()
+        fragments: list[str] = []
+        for hook in self.hooks_for(event, tool_name=tool_name):
+            if hook.hook_type is not HookType.PROMPT:
+                continue
+            fragment = (hook.prompt or "").strip()
+            if not fragment:
+                continue
+            fingerprint = hook.resolved_id()
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            fragments.append(fragment)
+        return fragments
+
     def fire(
         self,
         event: HookEvent,
@@ -67,14 +100,19 @@ class HookRegistry:
         tool_name: str = "",
         payload: Mapping[str, Any] | None = None,
     ) -> HookOutcome:
-        """Run every matching hook in order. Aggregate into one outcome.
+        """Run every matching *command* hook in order. Aggregate into one outcome.
 
         Hooks run sequentially. A gating event (``PreToolUse`` or
         ``OnPermissionRequest``) short-circuits on the first deny so
         subsequent hooks for the same event are skipped — matching
-        Claude Code's "first deny wins" semantics."""
+        Claude Code's "first deny wins" semantics. Prompt-type hooks are
+        ignored here; see :meth:`prompt_fragments_for`."""
         outcome = HookOutcome()
-        hooks = self.hooks_for(event, tool_name=tool_name)
+        hooks = [
+            hook
+            for hook in self.hooks_for(event, tool_name=tool_name)
+            if hook.hook_type is HookType.COMMAND
+        ]
         if not hooks:
             return outcome
 
@@ -196,11 +234,22 @@ def load_hook_registry(
             for hook_spec in hooks_list:
                 if not isinstance(hook_spec, dict):
                     continue
-                if hook_spec.get("type", "command") != "command":
+                raw_type = str(hook_spec.get("type", "command")).strip().lower()
+                if raw_type not in {"command", "prompt"}:
                     continue
-                command = str(hook_spec.get("command", "")).strip()
-                if not command:
-                    continue
+                hook_type = (
+                    HookType.COMMAND if raw_type == "command" else HookType.PROMPT
+                )
+                if hook_type is HookType.COMMAND:
+                    command = str(hook_spec.get("command", "")).strip()
+                    if not command:
+                        continue
+                    prompt = ""
+                else:
+                    prompt = str(hook_spec.get("prompt", "")).strip()
+                    if not prompt:
+                        continue
+                    command = ""
                 timeout = hook_spec.get("timeout_seconds") or hook_spec.get("timeout")
                 try:
                     timeout_seconds = int(timeout) if timeout is not None else 30
@@ -212,9 +261,12 @@ def load_hook_registry(
                         event=event,
                         matcher=matcher,
                         command=command,
+                        prompt=prompt,
+                        hook_type=hook_type,
                         timeout_seconds=timeout_seconds,
                         shell=str(hook_spec.get("shell") or "bash"),
                         env={str(k): str(v) for k, v in env.items()},
+                        id=str(hook_spec.get("id", "")),
                     )
                 )
     return registry

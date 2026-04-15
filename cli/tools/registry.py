@@ -90,6 +90,11 @@ def _register_builtins(registry: ToolRegistry) -> None:
     from cli.tools.config_read import ConfigReadTool
     from cli.tools.config_edit import ConfigEditTool
     from cli.tools.agent_spawn import AgentSpawnTool
+    from cli.tools.web_fetch import WebFetchTool
+    from cli.tools.web_search import WebSearchTool
+    from cli.tools.todo_write import TodoWriteTool
+    from cli.tools.skill_tool import SkillTool
+    from cli.tools.exit_plan_mode import ExitPlanModeTool
 
     registry.extend(
         [
@@ -102,6 +107,11 @@ def _register_builtins(registry: ToolRegistry) -> None:
             ConfigReadTool(),
             ConfigEditTool(),
             AgentSpawnTool(),
+            WebFetchTool(),
+            WebSearchTool(),
+            TodoWriteTool(),
+            SkillTool(),
+            ExitPlanModeTool(),
         ]
     )
 

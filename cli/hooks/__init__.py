@@ -33,7 +33,7 @@ Events supported:
 
 from __future__ import annotations
 
-from cli.hooks.types import HookDefinition, HookEvent, HookOutcome, HookVerdict
+from cli.hooks.types import HookDefinition, HookEvent, HookOutcome, HookType, HookVerdict
 from cli.hooks.registry import HookRegistry, load_hook_registry
 
 __all__ = [
@@ -41,6 +41,7 @@ __all__ = [
     "HookEvent",
     "HookOutcome",
     "HookRegistry",
+    "HookType",
     "HookVerdict",
     "load_hook_registry",
 ]

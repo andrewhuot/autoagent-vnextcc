@@ -22,6 +22,7 @@ path without API keys.
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -158,13 +159,20 @@ def run_print(
 
 
 def _default_model_factory(system_prompt: str) -> ModelClient:
-    """Placeholder model factory used when the caller doesn't supply one.
+    """Factory used when the caller doesn't supply one.
 
-    Returns an ``EchoModel`` that simply parrots the prompt — this keeps
-    ``agentlab print`` exercisable without credentials and gives the
-    tests a predictable fixture. Real adapters plug in at the call site
-    via ``--model-factory`` (future work)."""
-    return EchoModel()
+    Reads ``AGENTLAB_MODEL`` (default ``"claude-sonnet-4-5"``) and routes
+    through :func:`cli.llm.providers.create_model_client`. Falls back to
+    :class:`EchoModel` when credentials are missing so a fresh checkout
+    can run ``agentlab print`` for smoke purposes without secrets."""
+    del system_prompt  # factory signature — kept for future per-turn overrides
+    from cli.llm.providers import create_model_client
+
+    model = os.environ.get("AGENTLAB_MODEL", "claude-sonnet-4-5")
+    return create_model_client(
+        model=model,
+        echo_fallback_on_missing_keys=True,
+    )
 
 
 class EchoModel:

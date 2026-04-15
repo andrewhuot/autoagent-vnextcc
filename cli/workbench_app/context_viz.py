@@ -94,13 +94,21 @@ def snapshot_from_transcript(
     tool_overhead: int = 0,
     context_limit: int = DEFAULT_CONTEXT_LIMIT,
     warning_ratio: float = DEFAULT_WARNING_RATIO,
+    model: str | None = None,
 ) -> ContextSnapshot:
     """Build a :class:`ContextSnapshot` from a sequence of role/content dicts.
 
     Accepts the :class:`cli.sessions.SessionEntry` wire format (``role``
     and ``content`` keys) so callers that already persist transcripts don't
     need an adapter. ``tool_overhead`` accounts for schema definitions the
-    model sees but the transcript doesn't store verbatim."""
+    model sees but the transcript doesn't store verbatim.
+
+    ``model`` is an optional canonical model id. When supplied *and* the
+    caller kept the default ``context_limit``, we look the window up in
+    :mod:`cli.llm.capabilities` so GPT-5/Gemini sessions report their full
+    1M window instead of the 200k Claude fallback. An explicit
+    ``context_limit`` always wins — adapters that already know the true
+    limit shouldn't be second-guessed."""
     role_tokens: dict[str, int] = {role: 0 for role in ROLES_IN_ORDER}
     if system_prompt:
         role_tokens["system"] += tokenizer(system_prompt)
@@ -112,9 +120,17 @@ def snapshot_from_transcript(
         content = str(entry.get("content", ""))
         role_tokens[role] += tokenizer(content)
 
+    resolved_limit = context_limit
+    if model and context_limit == DEFAULT_CONTEXT_LIMIT:
+        # Lazy import keeps this module dependency-free for callers that
+        # never reach this branch (e.g. tests that pass an explicit limit).
+        from cli.llm.capabilities import resolve_context_limit
+
+        resolved_limit = resolve_context_limit(model, default=DEFAULT_CONTEXT_LIMIT)
+
     return ContextSnapshot(
         role_tokens=role_tokens,
-        context_limit=context_limit,
+        context_limit=resolved_limit,
         warning_ratio=warning_ratio,
     )
 

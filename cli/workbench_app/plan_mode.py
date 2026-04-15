@@ -44,6 +44,10 @@ DRAFTING_ALLOWED_TOOLS = frozenset(
         "Glob",
         "Grep",
         "ConfigRead",
+        # ExitPlanMode is how the model tells the user the draft is
+        # ready. Denying it would trap the model inside the restricted
+        # surface with no legal way to transition out.
+        "ExitPlanMode",
     }
 )
 """Tools that may run while a plan is being drafted.

@@ -34,6 +34,20 @@ class HookVerdict(str, Enum):
     INFORM = "inform"
 
 
+class HookType(str, Enum):
+    """How the hook delivers its payload.
+
+    * ``COMMAND`` — shell command with the event payload on stdin; exit
+      code gates (``PreToolUse``/``OnPermissionRequest``). This is the
+      original Phase-4 shape.
+    * ``PROMPT`` — text fragment injected into the model's context at
+      the event's lifecycle point. Never gates: prompt hooks can only
+      add instructions, not block execution."""
+
+    COMMAND = "command"
+    PROMPT = "prompt"
+
+
 @dataclass
 class HookDefinition:
     """One registered hook entry.
@@ -45,7 +59,16 @@ class HookDefinition:
 
     event: HookEvent
     matcher: str
-    command: str
+    command: str = ""
+    """Shell command to run for COMMAND-type hooks. Ignored otherwise."""
+
+    prompt: str = ""
+    """Prompt fragment for PROMPT-type hooks. Ignored otherwise."""
+
+    hook_type: HookType = HookType.COMMAND
+    """Delivery mechanism. Defaults to COMMAND so pre-existing settings
+    files keep the original meaning."""
+
     timeout_seconds: int = 30
     """Hard ceiling on shell hooks — we cap the REPL's exposure to a
     buggy validator. Authors who need longer runtimes should move the
@@ -60,6 +83,11 @@ class HookDefinition:
     like ``GITHUB_TOKEN`` or CI-only toggles without exporting them
     globally in the user's shell."""
 
+    id: str = ""
+    """Optional stable id used to dedupe prompt fragments when the same
+    hook matches repeatedly within a turn. Auto-derived from the prompt
+    content when empty."""
+
     def matches_tool(self, tool_name: str) -> bool:
         """``matcher`` is a simple fnmatch expression; empty → match all."""
         if not self.matcher:
@@ -67,6 +95,17 @@ class HookDefinition:
         from fnmatch import fnmatch
 
         return fnmatch(tool_name, self.matcher)
+
+    def resolved_id(self) -> str:
+        """Return ``id`` when set, else a hash of the prompt.
+
+        Prompt hooks dedupe by id so multiple matching rules don't stuff
+        the same guidance into the model turn after turn."""
+        if self.id:
+            return self.id
+        # Stable short hash — good enough for in-session dedup, not for
+        # cross-run identity. Kept simple so no new imports leak in.
+        return str(hash(self.prompt or self.command))
 
 
 @dataclass

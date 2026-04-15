@@ -103,6 +103,44 @@ def test_snapshot_from_transcript_buckets_roles_and_overhead() -> None:
     assert 0 < snapshot.used_ratio < 1
 
 
+def test_snapshot_from_transcript_resolves_limit_from_model() -> None:
+    # GPT-5 reports 1M; the default-limit branch should swap in the wider
+    # window so the grid scales correctly.
+    snapshot = snapshot_from_transcript(
+        [{"role": "user", "content": "x" * 400}],
+        model="gpt-5",
+    )
+    assert snapshot.context_limit == 1_000_000
+
+
+def test_snapshot_from_transcript_explicit_limit_wins_over_model() -> None:
+    # Explicit context_limit is an adapter-level signal; never second-guess
+    # it, even when the model would normally report something different.
+    snapshot = snapshot_from_transcript(
+        [{"role": "user", "content": "x" * 400}],
+        context_limit=50_000,
+        model="gpt-5",
+    )
+    assert snapshot.context_limit == 50_000
+
+
+def test_snapshot_from_transcript_unknown_model_keeps_default() -> None:
+    snapshot = snapshot_from_transcript(
+        [{"role": "user", "content": "x" * 400}],
+        model="never-shipped-model",
+    )
+    assert snapshot.context_limit == 200_000
+
+
+def test_usage_command_threads_active_model_from_meta(session: Session) -> None:
+    # When the REPL publishes active_model via SlashContext.meta, /usage
+    # should display the per-model window instead of the 200k default.
+    ctx = SlashContext(session=session)
+    ctx.meta = {"active_model": "gpt-5"}
+    result = build_usage_command().handler(ctx)
+    assert "1,000,000" in _as_text(result)
+
+
 def test_snapshot_warning_flag_triggers_above_threshold() -> None:
     snapshot = ContextSnapshot(
         role_tokens={"user": 900},
