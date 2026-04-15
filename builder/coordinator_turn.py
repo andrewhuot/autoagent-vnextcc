@@ -293,12 +293,26 @@ class CoordinatorTurnService:
             f"  Coordinator plan {plan['plan_id']} created for {worker_count} worker"
             f"{'' if worker_count == 1 else 's'}.",
         ]
+        degraded_reason = getattr(self._runtime, "worker_mode_degraded_reason", None)
+        if degraded_reason:
+            lines.append(
+                "  ⚠ Worker mode: deterministic stub — "
+                "responses are canned templates, not real LLM output. "
+                "Run /doctor for configuration guidance."
+            )
         for state in run.worker_states:
             status = state.status.value
             role = state.worker_role.value.replace("_", " ")
             summary = state.result.summary if state.result else state.blocker_reason or state.error or ""
+            stub_suffix = ""
+            if (
+                state.result is not None
+                and isinstance(state.result.output_payload, dict)
+                and state.result.output_payload.get("adapter") == "deterministic_worker_adapter"
+            ):
+                stub_suffix = " [stub]"
             suffix = f" — {summary}" if summary else ""
-            lines.append(f"  • {role}: {status}{suffix}")
+            lines.append(f"  • {role}: {status}{stub_suffix}{suffix}")
         synthesis = run.coordinator_synthesis or {}
         if synthesis.get("next_step"):
             lines.append(f"  Next: {synthesis['next_step']}")

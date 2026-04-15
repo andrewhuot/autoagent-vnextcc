@@ -31,8 +31,10 @@ from builder.worker_adapters import (
 )
 from builder.worker_mode import (
     DEFAULT_WORKER_MODE,
+    EffectiveWorkerMode,
     WorkerMode,
     WorkerModeConfigurationError,
+    resolve_effective_worker_mode,
     resolve_worker_mode,
 )
 
@@ -62,7 +64,16 @@ class CoordinatorWorkerRuntime:
         requested_mode = worker_mode
         env_mode = str(os.environ.get("AGENTLAB_WORKER_MODE", "")).strip().lower()
         env_requested_mode = requested_mode is None and env_mode in {WorkerMode.LLM.value, WorkerMode.HYBRID.value}
-        self._worker_mode = requested_mode or resolve_worker_mode()
+        self._worker_mode_resolution: EffectiveWorkerMode | None = None
+        self._worker_mode_degraded_reason: str | None = None
+        if requested_mode is not None:
+            # Operator explicitly pinned a mode — keep existing strict semantics
+            # so a broken LLM config surfaces as WorkerModeConfigurationError.
+            self._worker_mode = requested_mode
+        else:
+            resolution = resolve_effective_worker_mode()
+            self._worker_mode_resolution = resolution
+            self._worker_mode = resolution.mode
         self._default_worker_adapter = (
             default_worker_adapter
             or _build_default_adapter_for_mode(
@@ -70,11 +81,49 @@ class CoordinatorWorkerRuntime:
                 strict=requested_mode is not None or env_requested_mode,
             )
         )
+        if (
+            default_worker_adapter is None
+            and self._worker_mode_resolution is not None
+            and self._worker_mode_resolution.source.startswith("autoselect.deterministic")
+        ):
+            # Auto-selection already chose deterministic; record the reason so
+            # the transcript, status bar, and /doctor can surface it. We don't
+            # emit the event from __init__ (no active run yet) — callers on the
+            # first turn will pick this up via get_worker_mode_degraded_reason().
+            self._worker_mode_degraded_reason = self._worker_mode_resolution.reason
+        elif (
+            default_worker_adapter is None
+            and self._worker_mode == WorkerMode.LLM
+            and isinstance(self._default_worker_adapter, DeterministicWorkerAdapter)
+        ):
+            # Non-strict fallback inside _build_default_adapter_for_mode silently
+            # downgraded a LLM request to deterministic. Capture a reason for the UI.
+            self._worker_mode_degraded_reason = (
+                "WorkerMode.LLM was requested but harness.models.worker could not "
+                "be satisfied; worker output is from the deterministic stub."
+            )
+        self._worker_mode_degraded_event_published = False
 
     @property
     def worker_mode(self) -> WorkerMode:
         """Return the resolved :class:`WorkerMode` backing this runtime."""
         return self._worker_mode
+
+    @property
+    def worker_mode_resolution(self) -> EffectiveWorkerMode | None:
+        """Return the :class:`EffectiveWorkerMode` used for auto-selection, if any."""
+        return self._worker_mode_resolution
+
+    @property
+    def worker_mode_degraded_reason(self) -> str | None:
+        """Return a one-line reason when the runtime is running deterministic stubs.
+
+        ``None`` means the runtime is running its requested mode cleanly. A
+        non-empty string means workers are producing canned output and the
+        UI should surface why — missing harness model, missing credentials,
+        or a silent LLM-to-deterministic fallback.
+        """
+        return self._worker_mode_degraded_reason
 
     def execute_plan(self, task_id: str, plan_id: str | None = None) -> CoordinatorExecutionRun:
         """Execute a previously persisted coordinator plan for a root task."""
@@ -119,6 +168,22 @@ class CoordinatorWorkerRuntime:
                 "worker_count": len(worker_nodes),
             },
         )
+
+        if (
+            self._worker_mode_degraded_reason is not None
+            and not self._worker_mode_degraded_event_published
+        ):
+            resolution = self._worker_mode_resolution
+            self._publish(
+                BuilderEventType.COORDINATOR_WORKER_MODE_DEGRADED,
+                run,
+                payload={
+                    "mode": self._worker_mode.value,
+                    "reason": self._worker_mode_degraded_reason,
+                    "source": resolution.source if resolution else "fallback",
+                },
+            )
+            self._worker_mode_degraded_event_published = True
 
         completed_nodes = {
             str(node.get("task_id"))
@@ -188,6 +253,9 @@ class CoordinatorWorkerRuntime:
                     raise RuntimeError(str(result.verification["reason"]))
 
                 state.result = result
+                adapter_name = None
+                if isinstance(result.output_payload, dict):
+                    adapter_name = result.output_payload.get("adapter")
                 self._transition_worker(
                     run,
                     state,
@@ -197,6 +265,7 @@ class CoordinatorWorkerRuntime:
                         "summary": result.summary,
                         "artifacts": sorted(result.artifacts),
                         "worker_role": state.worker_role.value,
+                        "adapter": adapter_name,
                     },
                 )
                 completed_nodes.add(state.node_id)

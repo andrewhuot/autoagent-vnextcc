@@ -17,7 +17,7 @@ from builder.coordinator_turn import CoordinatorTurnResult
 from builder.events import BuilderEvent, EventBroker
 from builder.orchestrator import BuilderOrchestrator
 from builder.store import BuilderStore
-from builder.worker_mode import WorkerMode, resolve_worker_mode
+from builder.worker_mode import WorkerMode, resolve_effective_worker_mode
 from cli.workbench_app.coordinator_session import CoordinatorSession
 
 
@@ -38,14 +38,17 @@ class WorkbenchAgentRuntime:
         self._store = store or BuilderStore(db_path=db_path or ".agentlab/builder.db")
         self._events = events or EventBroker()
         self._orchestrator = orchestrator or BuilderOrchestrator(store=self._store)
-        self._worker_mode = worker_mode or resolve_worker_mode()
         self._coordinator_runtime = coordinator_runtime or CoordinatorWorkerRuntime(
             store=self._store,
             orchestrator=self._orchestrator,
             events=self._events,
-            worker_mode=self._worker_mode,
+            worker_mode=worker_mode,
             checkpoint_manager=_build_checkpoint_manager(configs_dir),
         )
+        # Mirror the coordinator runtime's resolved mode so callers that only
+        # hold a WorkbenchAgentRuntime reference can render the active mode
+        # without reaching into internals.
+        self._worker_mode = self._coordinator_runtime.worker_mode
         self._coordinator_session = CoordinatorSession(
             store=self._store,
             orchestrator=self._orchestrator,
@@ -57,6 +60,11 @@ class WorkbenchAgentRuntime:
     def worker_mode(self) -> WorkerMode:
         """Return the :class:`WorkerMode` driving worker execution."""
         return self._worker_mode
+
+    @property
+    def worker_mode_degraded_reason(self) -> str | None:
+        """Return a one-line reason when workers are running deterministic stubs."""
+        return self._coordinator_runtime.worker_mode_degraded_reason
 
     @property
     def coordinator_session(self) -> CoordinatorSession:

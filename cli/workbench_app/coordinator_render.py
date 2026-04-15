@@ -69,6 +69,13 @@ def format_coordinator_event(event: BuilderEvent) -> str | None:
             fg="cyan",
             bold=True,
         )
+    if event_type == BuilderEventType.COORDINATOR_WORKER_MODE_DEGRADED:
+        reason = str(payload.get("reason") or "no worker model configured.").strip()
+        return _warn(
+            "  ⚠ Worker mode: deterministic stub — responses are canned templates, "
+            "not real LLM output. Run /doctor for guidance. "
+            f"({reason})"
+        )
     if event_type in {
         BuilderEventType.WORKER_GATHERING_CONTEXT,
         BuilderEventType.WORKER_ACTING,
@@ -82,8 +89,9 @@ def format_coordinator_event(event: BuilderEvent) -> str | None:
         return _detail_line(text)
     if event_type == BuilderEventType.WORKER_COMPLETED:
         summary = str(payload.get("summary") or "").strip()
+        stub_marker = " [stub]" if payload.get("adapter") == "deterministic_worker_adapter" else ""
         suffix = f": {summary}" if summary else ""
-        return _success(_worker_line(role, f"completed{suffix}", terminal=True))
+        return _success(_worker_line(role, f"completed{stub_marker}{suffix}", terminal=True))
     if event_type == BuilderEventType.WORKER_FAILED:
         return _error(
             f"  {_END_GLYPH} ! {role} failed: {payload.get('error') or 'unknown error'}"

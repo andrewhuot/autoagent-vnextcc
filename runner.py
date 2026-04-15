@@ -396,12 +396,26 @@ def _instruction_agent_name(config: dict[str, Any]) -> str | None:
 
 
 def _enter_discovered_workspace(command_name: str | None) -> AgentLabWorkspace | None:
-    """Switch cwd to the nearest discovered workspace for workspace-aware commands."""
+    """Switch cwd to the nearest discovered workspace for workspace-aware commands.
+
+    Also hydrates provider API keys saved in ``.agentlab/.env`` into ``os.environ``
+    so the coordinator/worker runtime can resolve ``harness.models.*`` credentials
+    without the user exporting keys in their shell. Without this, the runtime
+    silently degrades to the :class:`DeterministicWorkerAdapter` stub.
+    """
     if command_name in {"init", "new"}:
         return None
     workspace = discover_workspace()
     if workspace is not None and Path.cwd() != workspace.root:
         os.chdir(workspace.root)
+    if workspace is not None:
+        try:
+            from cli.workspace_env import load_workspace_env
+
+            load_workspace_env(workspace.root, override=False)
+        except Exception:
+            # Env hydration is best-effort — a malformed .env must not stop startup.
+            pass
     return workspace
 
 

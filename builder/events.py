@@ -53,6 +53,7 @@ class BuilderEventType(str, Enum):
     COORDINATOR_EXECUTION_COMPLETED = "coordinator.execution.completed"
     COORDINATOR_EXECUTION_FAILED = "coordinator.execution.failed"
     COORDINATOR_EXECUTION_BLOCKED = "coordinator.execution.blocked"
+    COORDINATOR_WORKER_MODE_DEGRADED = "coordinator.worker_mode.degraded"
 
 
 # Event types that represent significant lifecycle transitions and should
@@ -73,6 +74,7 @@ LIFECYCLE_EVENT_TYPES = frozenset({
     BuilderEventType.COORDINATOR_EXECUTION_COMPLETED,
     BuilderEventType.COORDINATOR_EXECUTION_FAILED,
     BuilderEventType.COORDINATOR_EXECUTION_BLOCKED,
+    BuilderEventType.COORDINATOR_WORKER_MODE_DEGRADED,
 })
 
 

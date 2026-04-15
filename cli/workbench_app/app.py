@@ -62,16 +62,47 @@ class StubAppResult:
     interrupts: int = 0
 
 
-def build_status_line(workspace: Any | None, *, color: bool = True) -> str:
+def build_status_line(
+    workspace: Any | None,
+    *,
+    color: bool = True,
+    agent_runtime: Any | None = None,
+) -> str:
     """Render the one-line status shown under the banner.
 
     Thin wrapper around :mod:`cli.workbench_app.status_bar` that the banner
     uses for its one-shot render. Long-lived callers should hold a
     :class:`StatusBar` instance and call :meth:`StatusBar.render` so state
     can be patched reactively as events arrive.
+
+    When ``agent_runtime`` is supplied, a ``worker:`` badge is appended
+    showing ``llm`` or ``stub`` so operators see the active mode without
+    running ``/doctor`` first.
     """
     snapshot = snapshot_from_workspace(workspace)
+    if agent_runtime is not None:
+        badge = _worker_mode_badge(agent_runtime)
+        if badge is not None:
+            snapshot = replace_snapshot_extras(snapshot, ("worker", badge))
     return render_snapshot(snapshot, color=color)
+
+
+def replace_snapshot_extras(snapshot, pair):
+    """Return a copy of ``snapshot`` with ``pair`` appended to ``extras``."""
+    from dataclasses import replace
+
+    return replace(snapshot, extras=tuple(list(snapshot.extras) + [pair]))
+
+
+def _worker_mode_badge(agent_runtime: Any) -> str | None:
+    """Return the ``(label, value)`` badge string describing the active worker mode."""
+    mode = getattr(agent_runtime, "worker_mode", None)
+    if mode is None:
+        return None
+    degraded = getattr(agent_runtime, "worker_mode_degraded_reason", None)
+    if degraded:
+        return "stub"
+    return getattr(mode, "value", str(mode))
 
 
 def _default_input_provider(prompt: str) -> str:
@@ -155,7 +186,12 @@ def _iter_input_provider(lines: Iterable[str]) -> InputProvider:
     return _provider
 
 
-def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
+def _render_banner(
+    echo: EchoFn,
+    workspace: Any | None,
+    *,
+    agent_runtime: Any | None = None,
+) -> None:
     """Render the branded ASCII-logo intro + Claude-Code-style welcome card.
 
     The AgentLab logo (logo + wordmark + "Experiment. Evaluate. Refine."
@@ -175,7 +211,7 @@ def _render_banner(echo: EchoFn, workspace: Any | None) -> None:
     # wide monitors — it feels lighter when capped.
     card_width = min(terminal_width(), 76)
     mode_label = theme.format_mode(_permission_mode_for_workspace(workspace), color=False)
-    status = build_status_line(workspace, color=False)
+    status = build_status_line(workspace, color=False, agent_runtime=agent_runtime)
     body_lines: list[str] = [
         theme.accent(f"✻ Welcome to AgentLab Workbench  v{version}"),
         "",
@@ -296,12 +332,32 @@ def run_workbench_app(
     else:
         reader = _iter_input_provider(input_provider)  # type: ignore[arg-type]
 
+    # Build the agent runtime before the banner so the welcome card can show
+    # the active worker mode (llm vs stub). The runtime resolves this from
+    # harness.models.worker + credentials; hiding it behind a post-banner
+    # notice means users don't realize they're on canned stubs until a
+    # turn completes with suspiciously fast, uniform output.
+    active_agent_runtime = agent_runtime
+    if active_agent_runtime is None and workspace is not None:
+        try:
+            from cli.workbench_app.runtime import build_default_agent_runtime
+
+            active_agent_runtime = build_default_agent_runtime(workspace)
+        except Exception:  # pragma: no cover - defensive startup path
+            active_agent_runtime = None
+
     if show_banner:
-        _render_banner(out, workspace)
+        _render_banner(out, workspace, agent_runtime=active_agent_runtime)
         hint = resume_hint(session_store, current=session)
         if hint is not None:
             out(theme.meta(hint))
             out("")
+        if active_agent_runtime is not None:
+            degraded = getattr(active_agent_runtime, "worker_mode_degraded_reason", None)
+            if degraded:
+                out(theme.warning(f"⚠ Worker mode: deterministic stub — {degraded}"))
+                out(theme.meta("  Run /doctor for provider + credential diagnostics."))
+                out("")
 
     token = cancellation if cancellation is not None else CancellationToken()
 
@@ -348,14 +404,6 @@ def run_workbench_app(
         if ctx.cancellation is None:
             ctx.cancellation = token
 
-    active_agent_runtime = agent_runtime
-    if active_agent_runtime is None and workspace is not None:
-        try:
-            from cli.workbench_app.runtime import build_default_agent_runtime
-
-            active_agent_runtime = build_default_agent_runtime(workspace)
-        except Exception:  # pragma: no cover - defensive startup path
-            active_agent_runtime = None
     if ctx is not None and active_agent_runtime is not None:
         ctx.meta["agent_runtime"] = active_agent_runtime
         ctx.coordinator_session = getattr(active_agent_runtime, "coordinator_session", None)

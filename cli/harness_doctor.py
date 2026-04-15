@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from builder.model_resolver import missing_credential_env, resolve_harness_model
-from builder.worker_mode import resolve_worker_mode
+from builder.worker_mode import resolve_effective_worker_mode, resolve_worker_mode
 
 
 def render_coordinator_section(workspace: Any | None) -> str:
@@ -39,6 +39,9 @@ def render_coordinator_section(workspace: Any | None) -> str:
     lines.append(f"  Worker mode:        {worker_mode.value}")
 
     if workspace is None:
+        effective = resolve_effective_worker_mode()
+        lines.append(f"  Effective mode:     {effective.mode.value}")
+        lines.append(f"  Why:                {effective.reason}")
         lines.append("  Coordinator model:  (no workspace)")
         lines.append("  Worker model:       (no workspace)")
         lines.append("  Credentials:        (no workspace)")
@@ -48,7 +51,10 @@ def render_coordinator_section(workspace: Any | None) -> str:
 
     coordinator = resolve_harness_model("coordinator", config_path=config_path)
     worker = resolve_harness_model("worker", config_path=config_path)
+    effective = resolve_effective_worker_mode(config_path=config_path)
 
+    lines.append(f"  Effective mode:     {effective.mode.value}")
+    lines.append(f"  Why:                {effective.reason}")
     lines.append(f"  Coordinator model:  {_format_role_line(coordinator)}")
     lines.append(f"  Worker model:       {_format_role_line(worker)}")
     lines.append(f"  Credentials:        {_format_credentials(coordinator, worker)}")
