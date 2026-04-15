@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
 
 import click
@@ -250,6 +251,7 @@ def run_workbench_app(
     slash_context: "SlashContext | None" = None,
     prompt_state: Any | None = None,
     agent_runtime: Any | None = None,
+    orchestrator: Any | None = None,
     prompt_owns_footer: bool = False,
 ) -> StubAppResult:
     """Run the interactive workbench loop.
@@ -274,6 +276,17 @@ def run_workbench_app(
         True when the live prompt_toolkit session is rendering the bottom
         toolbar. In that mode the loop does not echo an extra post-turn
         footer, avoiding duplicated/clipped bottom chrome.
+    orchestrator:
+        Optional :class:`~cli.llm.orchestrator.LLMOrchestrator` (or a
+        :class:`~cli.workbench_app.orchestrator_runtime.WorkbenchRuntime`
+        wrapper). When supplied, natural-language turns are routed through
+        it — giving the REPL live tool-calling, permission dialogs,
+        streaming markdown, and hook integration. ``agent_runtime`` still
+        handles ``/build``/``/eval``/``/optimize``/``/deploy`` workflow
+        commands because those exercise agentlab-specific coordinator
+        logic rather than chat. When neither the orchestrator nor the
+        agent runtime is supplied, free-text input echoes back (the
+        headless test default).
     """
     out: EchoFn = echo if echo is not None else click.echo
     if input_provider is None:
@@ -346,6 +359,15 @@ def run_workbench_app(
     if ctx is not None and active_agent_runtime is not None:
         ctx.meta["agent_runtime"] = active_agent_runtime
         ctx.coordinator_session = getattr(active_agent_runtime, "coordinator_session", None)
+
+    # When an orchestrator is supplied, publish its subsystems onto the
+    # slash context so /plan, /skill, /transcript-*, /background, /usage
+    # all see the live state the orchestrator is using. Without this the
+    # slash layer would fall back to "not configured" warnings even
+    # though the REPL is running with a full orchestrator stack.
+    active_orchestrator = _resolve_orchestrator(orchestrator)
+    if ctx is not None and active_orchestrator is not None:
+        _publish_orchestrator_meta(ctx, orchestrator)
 
     def _maybe_render_turn_footer() -> None:
         if prompt_owns_footer:
@@ -492,7 +514,18 @@ def run_workbench_app(
                 session=session,
                 line=line,
             )
-            if active_agent_runtime is not None:
+            if active_orchestrator is not None:
+                # Orchestrator path: real LLM turn with tool-calling,
+                # permission dialogs, hooks, and streaming markdown. All
+                # subsystems were published onto ctx.meta above so slash
+                # commands fired from inside this turn see the same state.
+                _run_orchestrator_turn(
+                    orchestrator=active_orchestrator,
+                    ctx=ctx,
+                    line=line,
+                    echo=out,
+                )
+            elif active_agent_runtime is not None:
                 current_mode = (
                     getattr(prompt_state, "mode", None)
                     or _permission_mode_for_workspace(workspace)
@@ -1026,6 +1059,8 @@ def launch_workbench(
         except Exception:  # pragma: no cover — fall back to input() on any failure
             provider = None
 
+    orchestrator_bundle = _maybe_build_orchestrator(workspace, session, store, resolved_echo)
+
     return run_workbench_app(
         workspace,
         show_banner=show_banner,
@@ -1036,8 +1071,53 @@ def launch_workbench(
         registry=registry,
         slash_context=ctx,
         prompt_state=prompt_state,
+        orchestrator=orchestrator_bundle,
         prompt_owns_footer=prompt_state is not None,
     )
+
+
+def _maybe_build_orchestrator(
+    workspace: Any | None,
+    session: "Session | None",
+    store: "SessionStore | None",
+    echo: EchoFn,
+) -> Any | None:
+    """Build the :class:`WorkbenchRuntime` bundle when the user has opted
+    in via ``AGENTLAB_LLM_ORCHESTRATOR`` or has an explicit model set.
+
+    Defaults to ``None`` so the classic coordinator path keeps running —
+    existing tests and workspaces that haven't opted in notice no change.
+    Set ``AGENTLAB_CLASSIC_COORDINATOR=1`` to force-disable even with the
+    opt-in env var present (useful for debugging by bisecting between
+    the two paths)."""
+    import os
+
+    if os.environ.get("AGENTLAB_CLASSIC_COORDINATOR"):
+        return None
+    opt_in = bool(os.environ.get("AGENTLAB_LLM_ORCHESTRATOR"))
+    if not opt_in:
+        return None
+    if workspace is None:
+        return None
+    try:
+        from cli.llm.providers import create_model_client
+        from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
+
+        model_name = os.environ.get("AGENTLAB_MODEL", "claude-sonnet-4-5")
+        model = create_model_client(
+            model=model_name,
+            echo_fallback_on_missing_keys=True,
+        )
+        return build_workbench_runtime(
+            workspace_root=Path(workspace.root) if hasattr(workspace, "root") else Path.cwd(),
+            model=model,
+            session=session,
+            session_store=store,
+            active_model=model_name,
+            echo=echo,
+        )
+    except Exception:  # pragma: no cover — opt-in must never crash boot
+        return None
 
 
 def uuid_hex() -> str:
@@ -1045,6 +1125,124 @@ def uuid_hex() -> str:
     import uuid
 
     return uuid.uuid4().hex[:12]
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator helpers (Phase C live wiring)
+# ---------------------------------------------------------------------------
+
+
+def _resolve_orchestrator(bundle: Any | None) -> Any | None:
+    """Return the :class:`LLMOrchestrator` from either a bare orchestrator
+    or a :class:`WorkbenchRuntime` bundle. ``None`` means "no LLM path"."""
+    if bundle is None:
+        return None
+    if hasattr(bundle, "orchestrator"):
+        return bundle.orchestrator
+    if hasattr(bundle, "run_turn"):
+        return bundle
+    return None
+
+
+def _publish_orchestrator_meta(ctx: "SlashContext", bundle: Any) -> None:
+    """Thread every subsystem from the :class:`WorkbenchRuntime` into
+    ``SlashContext.meta`` so slash handlers (``/plan``, ``/skill``,
+    ``/transcript-*``, ``/background``, ``/usage``) see the live state.
+
+    Accepts both a bare orchestrator (limited publication — just the
+    active_model) and a full runtime bundle (every subsystem). The two
+    paths share the same helper so callers never need to remember which
+    keys land where."""
+    if bundle is None or ctx is None:
+        return
+
+    from cli.tools.exit_plan_mode import PLAN_WORKFLOW_KEY
+    from cli.tools.skill_tool import SKILL_REGISTRY_KEY
+    from cli.user_skills.slash import SKILL_REGISTRY_META_KEY as SKILL_SLASH_KEY
+    from cli.workbench_app.background_slash import (
+        BACKGROUND_REGISTRY_META_KEY,
+    )
+    from cli.workbench_app.plan_slash import PLAN_WORKFLOW_META_KEY
+    from cli.workbench_app.transcript_rewind_slash import (
+        TRANSCRIPT_REWIND_MANAGER_META_KEY,
+    )
+
+    # Both ``WorkbenchRuntime`` and a future bundle with plain fields
+    # expose attributes by the same names — we check with getattr so
+    # either shape works.
+    plan_workflow = getattr(bundle, "plan_workflow", None)
+    skill_registry = getattr(bundle, "skill_registry", None)
+    transcript_rewind = getattr(bundle, "transcript_rewind", None)
+    background_tasks = getattr(bundle, "background_tasks", None)
+    hook_registry = getattr(bundle, "hook_registry", None)
+
+    if plan_workflow is not None:
+        ctx.meta[PLAN_WORKFLOW_META_KEY] = plan_workflow
+        ctx.meta[PLAN_WORKFLOW_KEY] = plan_workflow
+    if skill_registry is not None:
+        # Slash dispatch reads under one key, SkillTool reads under
+        # another — both point at the same registry instance.
+        ctx.meta[SKILL_SLASH_KEY] = skill_registry
+        ctx.meta[SKILL_REGISTRY_KEY] = skill_registry
+    if transcript_rewind is not None:
+        ctx.meta[TRANSCRIPT_REWIND_MANAGER_META_KEY] = transcript_rewind
+    if background_tasks is not None:
+        ctx.meta[BACKGROUND_REGISTRY_META_KEY] = background_tasks
+    if hook_registry is not None:
+        ctx.meta["hook_registry"] = hook_registry
+
+    orchestrator = _resolve_orchestrator(bundle)
+    if orchestrator is not None:
+        # active_model feeds /usage's per-model context-window lookup.
+        seed = getattr(orchestrator, "_tool_extra_seed", None)
+        if isinstance(seed, dict) and "active_model" in seed:
+            ctx.meta["active_model"] = seed["active_model"]
+
+
+def _run_orchestrator_turn(
+    *,
+    orchestrator: Any,
+    ctx: "SlashContext | None",
+    line: str,
+    echo: EchoFn,
+) -> None:
+    """Route one natural-language user turn through :meth:`run_turn`.
+
+    The orchestrator owns its own echo sink (set at construction) but the
+    REPL wants streamed output to land in its live transcript. We rebind
+    :attr:`LLMOrchestrator.echo` to the REPL's sink for the duration of
+    the turn — callers that injected their own sink keep it for
+    reporting outside the orchestrator but see every live text delta in
+    the REPL. The rebind is scoped so a failure inside run_turn still
+    restores the prior echo, which matters when the orchestrator lives
+    across multiple REPL instances (tests reuse it)."""
+    previous_echo = getattr(orchestrator, "echo", None)
+    try:
+        orchestrator.echo = echo
+    except Exception:  # pragma: no cover — orchestrator without echo attribute
+        previous_echo = None
+
+    try:
+        result = orchestrator.run_turn(line)
+    except Exception as exc:  # pragma: no cover — defensive REPL
+        echo(theme.warning(f"  (orchestrator turn failed: {exc})"))
+        return
+    finally:
+        if previous_echo is not None:
+            try:
+                orchestrator.echo = previous_echo
+            except Exception:  # pragma: no cover
+                pass
+
+    if ctx is None or result is None:
+        return
+
+    # Update status counters so the footer reflects what just happened.
+    tool_executions = list(getattr(result, "tool_executions", []) or [])
+    ctx.meta["active_tasks"] = len(tool_executions)
+    stop_reason = getattr(result, "stop_reason", None)
+    if stop_reason and stop_reason != "end_turn":
+        echo(theme.meta(f"  (stop: {stop_reason})"))
 
 
 __all__ = [
