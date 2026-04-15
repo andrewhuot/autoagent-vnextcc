@@ -14,14 +14,17 @@ interpreter + venv as the workbench.
 
 from __future__ import annotations
 
-import json
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
+from cli.workbench_app._subprocess import (
+    DEFAULT_STALL_TIMEOUT_S,
+    SubprocessStreamError,
+    stream_subprocess,
+)
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
@@ -65,17 +68,20 @@ def _default_stream_runner(
     args: Sequence[str],
     *,
     cancellation: CancellationToken | None = None,
+    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
     """Spawn ``agentlab eval run`` and yield stream-json events line by line.
 
-    ``args`` are the extra CLI args after ``eval run`` (e.g. ``["--config",
-    "configs/v003.yaml"]``). ``--output-format stream-json`` is appended
-    automatically so callers don't need to remember the flag.
+    Delegates to :func:`cli.workbench_app._subprocess.stream_subprocess` for
+    the transport layer: line-buffered pipe, stall-timeout detection, and
+    cancellation-aware cleanup. This handler keeps ownership of:
 
-    When ``cancellation`` is supplied, the subprocess is registered so a
-    ctrl-c at the app level terminates it, and the reader breaks out as
-    soon as ``cancellation.cancelled`` flips. The process is always killed
-    in the ``finally`` block so we never leak orphans.
+    - the ``eval run`` argv (including the ``--output-format stream-json``
+      suffix the helper does not know about),
+    - the flat ``{"event": "warning", "message": ...}`` synthetic envelope
+      used for lines that fail JSON parsing,
+    - translating :class:`SubprocessStreamError` into ``EvalCommandError`` so
+      the handler's existing ``except EvalCommandError:`` catch still fires.
     """
     cmd: list[str] = [
         sys.executable,
@@ -87,46 +93,17 @@ def _default_stream_runner(
         "stream-json",
         *args,
     ]
-    # bufsize=1 gives line-buffered text pipes so we can stream events as they
-    # arrive instead of waiting for the child to fill its pipe buffer.
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    # Register immediately so any exception before the try-block still
-    # sees the process cleaned up on ctrl-c.
-    if cancellation is not None:
-        cancellation.register_process(proc)
-    assert proc.stdout is not None  # subprocess.PIPE guarantees a stream.
-    exit_code = 0
     try:
-        for raw in proc.stdout:
-            if cancellation is not None and cancellation.cancelled:
-                break
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                # Non-JSON output (e.g. a warning from an inner tool)
-                # should still appear in the transcript rather than be
-                # silently dropped. Emit a synthetic ``warning`` event.
-                yield {"event": "warning", "message": line}
-        exit_code = proc.wait()
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        if cancellation is not None:
-            cancellation.unregister_process(proc)
-    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
-        raise EvalCommandError(
-            f"eval run exited with status {exit_code}"
+        yield from stream_subprocess(
+            cmd,
+            stall_timeout_s=stall_timeout_s,
+            cancellation=cancellation,
+            on_nonjson=lambda line: {"event": "warning", "message": line},
         )
+    except SubprocessStreamError as exc:
+        # Keep the error class runners expect while preserving kind/tail
+        # so higher layers can tell a stall apart from a non-zero exit.
+        raise EvalCommandError(f"eval run: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -143,6 +120,18 @@ def _render_event(event: StreamEvent) -> str | None:
     # so pass the remaining payload (which is what the renderers read).
     payload = {k: v for k, v in event.items() if k != "event"}
     return format_workbench_event(event_name, payload)
+
+
+def _advance_phase(spin: Any, event: StreamEvent) -> None:
+    """Update the spinner phase on ``phase_started`` / LLM fallback events."""
+    name = str(event.get("event", ""))
+    data = {k: v for k, v in event.items() if k != "event"}
+    if name == "phase_started":
+        spin.update(str(data.get("phase") or "evaluating"))
+    elif name == "llm.fallback":
+        spin.update(f"fallback ({data.get('reason', 'unknown')})")
+    elif name == "llm.retry":
+        spin.update("retrying JSON parse")
 
 
 def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, EvalSummary]]:
@@ -225,14 +214,16 @@ def make_eval_handler(
         try:
             final_summary = EvalSummary()
             stream = _invoke_runner(active_runner, stream_args, cancellation)
-            for event, summary in _summarise(stream):
-                final_summary = summary
-                line = _render_event(event)
-                if line is not None:
-                    echo(line)
-                if cancellation is not None and cancellation.cancelled:
-                    cancelled = True
-                    break
+            with ctx.spinner("evaluating") as spin:
+                for event, summary in _summarise(stream):
+                    final_summary = summary
+                    _advance_phase(spin, event)
+                    line = _render_event(event)
+                    if line is not None:
+                        spin.echo(line)
+                    if cancellation is not None and cancellation.cancelled:
+                        cancelled = True
+                        break
         except KeyboardInterrupt:
             cancelled = True
             if cancellation is not None:

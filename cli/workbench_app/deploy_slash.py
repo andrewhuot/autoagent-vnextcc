@@ -19,9 +19,7 @@ spawn a real process or block on ``input()``.
 
 from __future__ import annotations
 
-import json
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
@@ -29,6 +27,11 @@ from typing import Any, Callable, Iterable, Iterator, Sequence
 import click
 
 from cli.workbench_app import theme
+from cli.workbench_app._subprocess import (
+    DEFAULT_STALL_TIMEOUT_S,
+    SubprocessStreamError,
+    stream_subprocess,
+)
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
@@ -79,12 +82,15 @@ def _default_stream_runner(
     args: Sequence[str],
     *,
     cancellation: CancellationToken | None = None,
+    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
     """Spawn ``agentlab deploy`` and yield stream-json events line by line.
 
-    ``--output-format stream-json`` is appended automatically so callers
-    don't have to remember the flag. When ``cancellation`` is provided,
-    ctrl-c kills the subprocess and the reader breaks out cleanly.
+    Delegates to :func:`cli.workbench_app._subprocess.stream_subprocess` for
+    pipe management, stall detection, and cancellation wiring. This function
+    only owns the argv layout (note: deploy passes positional args before
+    ``--output-format`` to respect Click's subcommand ordering) and error
+    translation into :class:`DeployCommandError`.
     """
     cmd: list[str] = [
         sys.executable,
@@ -95,39 +101,15 @@ def _default_stream_runner(
         "--output-format",
         "stream-json",
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    if cancellation is not None:
-        cancellation.register_process(proc)
-    assert proc.stdout is not None
-    exit_code = 0
     try:
-        for raw in proc.stdout:
-            if cancellation is not None and cancellation.cancelled:
-                break
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                yield {"event": "warning", "message": line}
-        exit_code = proc.wait()
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        if cancellation is not None:
-            cancellation.unregister_process(proc)
-    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
-        raise DeployCommandError(
-            f"deploy exited with status {exit_code}"
+        yield from stream_subprocess(
+            cmd,
+            stall_timeout_s=stall_timeout_s,
+            cancellation=cancellation,
+            on_nonjson=lambda line: {"event": "warning", "message": line},
         )
+    except SubprocessStreamError as exc:
+        raise DeployCommandError(f"deploy: {exc}") from exc
 
 
 def _default_prompter(message: str) -> bool:
@@ -194,6 +176,18 @@ def _render_event(event: StreamEvent) -> str | None:
         return None
     payload = {k: v for k, v in event.items() if k != "event"}
     return format_workbench_event(event_name, payload)
+
+
+def _advance_phase(spin: Any, event: StreamEvent) -> None:
+    """Advance the deploy spinner phase on lifecycle / fallback events."""
+    name = str(event.get("event", ""))
+    data = {k: v for k, v in event.items() if k != "event"}
+    if name == "phase_started":
+        spin.update(str(data.get("phase") or "deploying"))
+    elif name == "llm.fallback":
+        spin.update(f"fallback ({data.get('reason', 'unknown')})")
+    elif name == "llm.retry":
+        spin.update("retrying JSON parse")
 
 
 def _summarise(
@@ -295,14 +289,16 @@ def make_deploy_handler(
         try:
             final_summary = DeploySummary(strategy=strategy)
             stream = _invoke_runner(active_runner, stream_args, cancellation)
-            for event, summary in _summarise(stream, strategy=strategy):
-                final_summary = summary
-                line = _render_event(event)
-                if line is not None:
-                    echo(line)
-                if cancellation is not None and cancellation.cancelled:
-                    cancelled = True
-                    break
+            with ctx.spinner(f"deploying ({strategy})") as spin:
+                for event, summary in _summarise(stream, strategy=strategy):
+                    final_summary = summary
+                    _advance_phase(spin, event)
+                    line = _render_event(event)
+                    if line is not None:
+                        spin.echo(line)
+                    if cancellation is not None and cancellation.cancelled:
+                        cancelled = True
+                        break
         except KeyboardInterrupt:
             cancelled = True
             if cancellation is not None:

@@ -54,13 +54,17 @@ class SlashCompletion:
     argument_hint: str | None = None
 
     def __post_init__(self) -> None:
-        """Backfill display metadata for direct test constructors."""
+        """Backfill display metadata for direct test constructors.
+
+        Mirrors :func:`_completion_meta`: source tag is appended only for
+        non-builtin commands so direct constructions match what the real
+        registry-backed rendering path produces.
+        """
         if not self.display_meta:
-            object.__setattr__(
-                self,
-                "display_meta",
-                f"{self.description}  [{self.source}]",
-            )
+            meta = self.description
+            if self.source and self.source != "builtin":
+                meta = f"{meta}  [{self.source}]"
+            object.__setattr__(self, "display_meta", meta)
 
 
 def iter_completions(
@@ -148,14 +152,21 @@ def _skill_meta(skill: Any) -> str:
 
 
 def _completion_meta(command: SlashCommand) -> str:
-    """Render compact metadata for a slash completion row."""
+    """Render compact metadata for a slash completion row.
+
+    Matches Claude Code's palette: description first, then argument hint if
+    the command takes args, then aliases, and finally a ``[source]`` tag
+    only for non-builtin commands. Builtin commands are the vast majority,
+    so tagging every one of them just clutters the menu.
+    """
     parts = [command.description]
     if command.argument_hint:
         parts.append(command.argument_hint)
     if command.aliases:
         aliases = ", ".join(f"/{alias}" for alias in command.aliases)
         parts.append(f"aliases: {aliases}")
-    parts.append(f"[{command.source}]")
+    if command.source and command.source != "builtin":
+        parts.append(f"[{command.source}]")
     return "  ".join(parts)
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import click
@@ -522,6 +523,13 @@ def build_command(
         click.echo(click.style(f"\n[workbench] Building: {brief}", fg="cyan", bold=True))
         click.echo("Workbench builds a candidate. Eval still measures it afterward.")
 
+    # Signal in-process components (e.g. LLMWorkerAdapter) that they should
+    # emit user-visible events to stdout as stream-json so the parent CLI
+    # process can render them in the transcript instead of letting them
+    # fall through to stderr logs.
+    if resolved_output_format == "stream-json":
+        os.environ["AGENTLAB_WORKBENCH_STREAM_JSON"] = "1"
+
     agent, execution = build_default_agent_with_readiness(force_mock=mock)
 
     collected_events: list[dict[str, Any]] = []
@@ -611,6 +619,8 @@ def iterate_command(
     resolved_project_id = _resolve_project_id(service, project_id)
     if resolved_output_format == "text":
         click.echo(click.style(f"\n[workbench] Iterating: {message}", fg="cyan", bold=True))
+    if resolved_output_format == "stream-json":
+        os.environ["AGENTLAB_WORKBENCH_STREAM_JSON"] = "1"
     agent, execution = build_default_agent_with_readiness(force_mock=mock)
 
     collected_events: list[dict[str, Any]] = []

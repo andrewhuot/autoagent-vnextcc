@@ -14,14 +14,17 @@ interpreter + venv as the workbench.
 
 from __future__ import annotations
 
-import json
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
+from cli.workbench_app._subprocess import (
+    DEFAULT_STALL_TIMEOUT_S,
+    SubprocessStreamError,
+    stream_subprocess,
+)
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
@@ -73,14 +76,15 @@ def _default_stream_runner(
     args: Sequence[str],
     *,
     cancellation: CancellationToken | None = None,
+    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
     """Spawn ``agentlab optimize`` and yield stream-json events line by line.
 
-    ``args`` are the extra CLI args after ``optimize`` (e.g. ``["--cycles",
-    "3"]``). ``--output-format stream-json`` is appended automatically so
-    callers don't need to remember the flag. When ``cancellation`` is
-    provided, ctrl-c at the app level kills the subprocess via
-    :class:`CancellationToken` and the reader breaks out cleanly.
+    Delegates the transport (pipe, stall timeout, cancellation) to
+    :func:`cli.workbench_app._subprocess.stream_subprocess`; this function
+    only owns the argv layout and error translation to
+    :class:`OptimizeCommandError` so existing handler ``except`` clauses
+    continue to work.
     """
     cmd: list[str] = [
         sys.executable,
@@ -91,39 +95,15 @@ def _default_stream_runner(
         "stream-json",
         *args,
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    if cancellation is not None:
-        cancellation.register_process(proc)
-    assert proc.stdout is not None
-    exit_code = 0
     try:
-        for raw in proc.stdout:
-            if cancellation is not None and cancellation.cancelled:
-                break
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                yield {"event": "warning", "message": line}
-        exit_code = proc.wait()
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        if cancellation is not None:
-            cancellation.unregister_process(proc)
-    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
-        raise OptimizeCommandError(
-            f"optimize exited with status {exit_code}"
+        yield from stream_subprocess(
+            cmd,
+            stall_timeout_s=stall_timeout_s,
+            cancellation=cancellation,
+            on_nonjson=lambda line: {"event": "warning", "message": line},
         )
+    except SubprocessStreamError as exc:
+        raise OptimizeCommandError(f"optimize: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +118,24 @@ def _render_event(event: StreamEvent) -> str | None:
         return None
     payload = {k: v for k, v in event.items() if k != "event"}
     return format_workbench_event(event_name, payload)
+
+
+def _advance_phase(spin: Any, event: StreamEvent) -> None:
+    """Update the spinner's phase label when a meaningful event arrives.
+
+    Optimize streams ``phase_started`` / ``phase_completed`` events from
+    :class:`cli.progress.ProgressRenderer`; bubble the phase name up to the
+    spinner so users see which optimizer stage is active.
+    """
+    name = str(event.get("event", ""))
+    data = {k: v for k, v in event.items() if k != "event"}
+    if name == "phase_started":
+        phase = data.get("phase") or "optimizing"
+        spin.update(str(phase))
+    elif name == "llm.fallback":
+        spin.update(f"fallback ({data.get('reason', 'unknown')})")
+    elif name == "llm.retry":
+        spin.update("retrying JSON parse")
 
 
 def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, OptimizeSummary]]:
@@ -221,14 +219,16 @@ def make_optimize_handler(
         try:
             final_summary = OptimizeSummary()
             stream = _invoke_runner(active_runner, stream_args, cancellation)
-            for event, summary in _summarise(stream):
-                final_summary = summary
-                line = _render_event(event)
-                if line is not None:
-                    echo(line)
-                if cancellation is not None and cancellation.cancelled:
-                    cancelled = True
-                    break
+            with ctx.spinner("optimizing") as spin:
+                for event, summary in _summarise(stream):
+                    final_summary = summary
+                    _advance_phase(spin, event)
+                    line = _render_event(event)
+                    if line is not None:
+                        spin.echo(line)
+                    if cancellation is not None and cancellation.cancelled:
+                        cancelled = True
+                        break
         except KeyboardInterrupt:
             cancelled = True
             if cancellation is not None:

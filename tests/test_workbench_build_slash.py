@@ -439,3 +439,55 @@ def test_summary_dataclass_is_frozen() -> None:
     summary = BuildSummary(events=1)
     with pytest.raises(Exception):
         summary.events = 2  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# LLM fallback / retry surfacing in the summary
+# ---------------------------------------------------------------------------
+
+
+def test_summarise_counts_llm_fallback_and_retry_events() -> None:
+    events = [
+        {"event": "turn.started", "data": {"turn_number": 1}},
+        {"event": "llm.retry", "data": {"reason": "no_json_object"}},
+        {"event": "llm.fallback", "data": {"reason": "no_json_object", "attempts": 2}},
+        {"event": "run.completed", "data": {"project_id": "p1", "version": "1"}},
+    ]
+    summary = list(_summarise(events))[-1][1]
+    assert summary.fallback_count == 1
+    assert summary.retry_count == 1
+    assert summary.fallback_reasons == ("no_json_object",)
+
+
+def test_format_summary_appends_fallback_badge() -> None:
+    line = _format_summary(
+        BuildSummary(
+            events=4,
+            run_status="completed",
+            run_version="1",
+            fallback_count=1,
+            fallback_reasons=("no_json_object",),
+        )
+    )
+    plain = _strip_ansi(line)
+    assert "[fallback]" in plain
+    assert "1 fallback" in plain
+
+
+def test_handler_surfaces_fallback_in_meta_and_summary(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    runner = _fake_runner(
+        [
+            {"event": "llm.fallback", "data": {"reason": "provider_error", "attempts": 1}},
+            {"event": "run.completed", "data": {"project_id": "p1", "version": "1"}},
+        ]
+    )
+    _install_build(ctx, runner)
+
+    result = dispatch(ctx, "/build brief")
+
+    plain_lines = [_strip_ansi(l) for l in echo.lines]
+    assert any("LLM fallback" in l for l in plain_lines)
+    plain_meta = [_strip_ansi(m) for m in result.meta_messages]
+    assert any("LLM fallback" in m and "provider_error" in m for m in plain_meta)

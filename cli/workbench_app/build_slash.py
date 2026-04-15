@@ -23,18 +23,21 @@ event dicts.
 
 from __future__ import annotations
 
-import json
 import shlex
-import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
+from cli.workbench_app._subprocess import (
+    DEFAULT_STALL_TIMEOUT_S,
+    SubprocessStreamError,
+    stream_subprocess,
+)
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
-from cli.workbench_render import format_workbench_event
+from cli.workbench_render import fallback_badge, format_workbench_event
 
 
 StreamEvent = dict[str, Any]
@@ -66,6 +69,9 @@ class BuildSummary:
     run_version: str | None = None
     failure_reason: str | None = None
     project_id: str | None = None
+    fallback_count: int = 0
+    fallback_reasons: tuple[str, ...] = ()
+    retry_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -77,13 +83,18 @@ def _default_stream_runner(
     args: Sequence[str],
     *,
     cancellation: CancellationToken | None = None,
+    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
     """Spawn ``agentlab workbench build`` and yield stream-json events line by line.
 
-    ``args`` must include the ``brief`` positional argument as the first token
-    — the handler guarantees that before calling. ``--output-format stream-json``
-    is appended automatically. When ``cancellation`` is provided, ctrl-c kills
-    the subprocess and the reader breaks out cleanly without leaking orphans.
+    Unlike the other runners, workbench stream-json nests the renderable
+    payload under ``data`` (see ``builder/workbench_agent.py``), so the
+    ``on_nonjson`` factory here also wraps the synthetic warning under
+    ``data`` to keep the envelope shape consistent with real events.
+
+    All other transport concerns — pipe management, stall detection, and
+    cancellation — live in :func:`stream_subprocess`; error translation to
+    :class:`BuildCommandError` keeps existing ``except`` clauses working.
     """
     cmd: list[str] = [
         sys.executable,
@@ -95,39 +106,15 @@ def _default_stream_runner(
         "--output-format",
         "stream-json",
     ]
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    if cancellation is not None:
-        cancellation.register_process(proc)
-    assert proc.stdout is not None
-    exit_code = 0
     try:
-        for raw in proc.stdout:
-            if cancellation is not None and cancellation.cancelled:
-                break
-            line = raw.strip()
-            if not line:
-                continue
-            try:
-                yield json.loads(line)
-            except json.JSONDecodeError:
-                yield {"event": "warning", "data": {"message": line}}
-        exit_code = proc.wait()
-    finally:
-        if proc.poll() is None:
-            proc.kill()
-            proc.wait()
-        if cancellation is not None:
-            cancellation.unregister_process(proc)
-    if exit_code != 0 and not (cancellation is not None and cancellation.cancelled):
-        raise BuildCommandError(
-            f"workbench build exited with status {exit_code}"
+        yield from stream_subprocess(
+            cmd,
+            stall_timeout_s=stall_timeout_s,
+            cancellation=cancellation,
+            on_nonjson=lambda line: {"event": "warning", "data": {"message": line}},
         )
+    except SubprocessStreamError as exc:
+        raise BuildCommandError(f"workbench build: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -166,12 +153,15 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Bui
         "iterations": 0,
         "warnings": 0,
         "errors": 0,
+        "fallback_count": 0,
+        "retry_count": 0,
     }
     artifacts: list[str] = []
     run_status: str | None = None
     run_version: str | None = None
     failure_reason: str | None = None
     project_id: str | None = None
+    fallback_reasons: list[str] = []
 
     for event in events:
         counters["events"] += 1
@@ -219,6 +209,13 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Bui
             counters["errors"] += 1
         elif name == "warning":
             counters["warnings"] += 1
+        elif name == "llm.fallback":
+            counters["fallback_count"] += 1
+            reason = data.get("reason")
+            if reason:
+                fallback_reasons.append(str(reason))
+        elif name == "llm.retry":
+            counters["retry_count"] += 1
 
         yield event, BuildSummary(
             events=counters["events"],
@@ -231,6 +228,9 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Bui
             run_version=run_version,
             failure_reason=failure_reason,
             project_id=project_id,
+            fallback_count=counters["fallback_count"],
+            fallback_reasons=tuple(fallback_reasons),
+            retry_count=counters["retry_count"],
         )
 
 
@@ -249,6 +249,9 @@ def _format_summary(summary: BuildSummary) -> str:
         parts.append(f"{summary.warnings} warnings")
     if summary.errors:
         parts.append(theme.error(f"{summary.errors} errors", bold=False))
+    if summary.fallback_count:
+        label = "fallback" if summary.fallback_count == 1 else "fallbacks"
+        parts.append(f"{summary.fallback_count} {label}")
 
     failed = summary.run_status in ("failed", "cancelled") or summary.errors > 0
     if summary.run_status == "cancelled":
@@ -261,6 +264,9 @@ def _format_summary(summary: BuildSummary) -> str:
         status = f"{status} (v{summary.run_version})"
 
     line = f"  /build {status} — {', '.join(parts)}"
+    if summary.fallback_count:
+        reason = summary.fallback_reasons[0] if summary.fallback_reasons else None
+        line = f"{line} {fallback_badge(reason)}"
     return theme.error(line) if failed else theme.success(line, bold=True)
 
 
@@ -295,14 +301,16 @@ def make_build_handler(
         try:
             final_summary = BuildSummary()
             stream = _invoke_runner(active_runner, stream_args, cancellation)
-            for event, summary in _summarise(stream):
-                final_summary = summary
-                line = _render_event(event)
-                if line is not None:
-                    echo(line)
-                if cancellation is not None and cancellation.cancelled:
-                    cancelled = True
-                    break
+            with ctx.spinner("building candidate") as spin:
+                for event, summary in _summarise(stream):
+                    final_summary = summary
+                    _update_spinner_phase(spin, event)
+                    line = _render_event(event)
+                    if line is not None:
+                        spin.echo(line)
+                    if cancellation is not None and cancellation.cancelled:
+                        cancelled = True
+                        break
         except KeyboardInterrupt:
             cancelled = True
             if cancellation is not None:
@@ -330,6 +338,12 @@ def make_build_handler(
         meta: list[str] = []
         if final_summary.failure_reason:
             meta.append(f"Reason: {final_summary.failure_reason}")
+        if final_summary.fallback_count:
+            reasons = ", ".join(sorted(set(final_summary.fallback_reasons))) or "unknown"
+            meta.append(
+                f"LLM fallback x{final_summary.fallback_count} — reasons: {reasons}. "
+                "Artifacts are placeholders; retry with a valid provider key."
+            )
         if (
             final_summary.run_status == "completed"
             and final_summary.project_id
@@ -348,6 +362,30 @@ def make_build_handler(
         )
 
     return _handle_build
+
+
+def _update_spinner_phase(spin: Any, event: StreamEvent) -> None:
+    """Advance the spinner phase when a meaningful lifecycle event arrives.
+
+    Chosen event set keeps the on-screen label readable (one swap every few
+    seconds) without showing every ``task.progress`` note. Unknown events
+    leave the current phase untouched so the spinner keeps spinning on the
+    last known label.
+    """
+    name = str(event.get("event", ""))
+    data = _event_payload(event)
+    if name == "iteration.started":
+        iteration = data.get("iteration")
+        suffix = f" {iteration}" if iteration not in (None, "", 0) else ""
+        spin.update(f"iterating{suffix}")
+    elif name == "task.started":
+        title = data.get("title") or data.get("task_id") or "task"
+        spin.update(f"running {title}")
+    elif name == "llm.fallback":
+        reason = data.get("reason") or "unknown"
+        spin.update(f"fallback ({reason})")
+    elif name == "llm.retry":
+        spin.update("retrying JSON parse")
 
 
 def _invoke_runner(

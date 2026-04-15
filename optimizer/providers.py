@@ -628,6 +628,122 @@ def build_router_from_runtime_config(optimizer_config: Any) -> LLMRouter:
     )
 
 
+@dataclass(frozen=True)
+class ProviderInfo:
+    """One-line summary of the LLM provider the CLI will talk to by default.
+
+    The status line, banner, and `/doctor` all consume this so they don't
+    each reimplement "which provider, which model, is the key set".
+    """
+
+    name: str
+    model: str
+    key_present: bool
+    env_var: str | None = None
+
+
+_DEFAULT_PROVIDER_MODELS: dict[str, str] = {
+    "openai": "gpt-4o",
+    "anthropic": "claude-sonnet-4-5",
+    "google": "gemini-2.5-pro",
+}
+
+_PROVIDER_LOOKUP_ORDER: tuple[str, ...] = ("google", "anthropic", "openai")
+
+
+def _model_from_runtime_config(
+    runtime_config_path: str | os.PathLike[str] | None,
+    environ: dict[str, str] | None,
+) -> ProviderInfo | None:
+    """Return the best active, non-mock model from the runtime config.
+
+    WHY: ``agentlab.yaml`` is the canonical source for what will actually run;
+    status-line readers should trust it when present instead of guessing.
+
+    "Best" means: the first configured model whose API-key env var is set.
+    The default runtime config declares one model per provider in
+    ``(openai, anthropic, google)`` order, so without this preference step the
+    status line would claim ``openai`` even when the operator has only wired
+    a Google key — which is exactly the silent-misconfiguration bug Chunk 4
+    exists to surface.
+    """
+    if runtime_config_path is None:
+        return None
+    try:
+        from agent.config.runtime import load_runtime_config
+    except Exception:
+        return None
+    try:
+        runtime = load_runtime_config(str(runtime_config_path))
+    except Exception:
+        return None
+    env = environ if environ is not None else os.environ
+
+    def _info_for(model: Any) -> ProviderInfo | None:
+        provider_name = str(getattr(model, "provider", "")).strip().lower()
+        if not provider_name or provider_name == "mock":
+            return None
+        model_name = str(getattr(model, "model", "")).strip()
+        env_var = getattr(model, "api_key_env", None) or _default_api_key_env(provider_name)
+        key_present = bool(env_var and env.get(env_var))
+        return ProviderInfo(
+            name=provider_name,
+            model=model_name or _DEFAULT_PROVIDER_MODELS.get(provider_name, "unknown"),
+            key_present=key_present,
+            env_var=env_var,
+        )
+
+    candidates: list[ProviderInfo] = []
+    for model in getattr(runtime.optimizer, "models", []) or []:
+        info = _info_for(model)
+        if info is None:
+            continue
+        candidates.append(info)
+        if info.key_present:
+            return info
+    return candidates[0] if candidates else None
+
+
+def describe_default_provider(
+    *,
+    runtime_config_path: str | os.PathLike[str] | None = None,
+    environ: dict[str, str] | None = None,
+) -> ProviderInfo:
+    """Return a ``ProviderInfo`` for the provider the CLI will use by default.
+
+    Resolution order:
+
+    1. First active non-mock model from the runtime config (if loadable).
+    2. First provider with a key present in ``environ`` (GOOGLE → ANTHROPIC →
+       OPENAI), using the canonical default model for that provider.
+    3. Fallback: Google / gemini-2.5-pro / no key — the rendering will be
+       warn-coloured so the operator immediately sees the missing credential.
+    """
+    env = environ if environ is not None else os.environ
+
+    from_runtime = _model_from_runtime_config(runtime_config_path, env)
+    if from_runtime is not None:
+        return from_runtime
+
+    for provider_name in _PROVIDER_LOOKUP_ORDER:
+        env_var = _default_api_key_env(provider_name)
+        if env_var and env.get(env_var):
+            return ProviderInfo(
+                name=provider_name,
+                model=_DEFAULT_PROVIDER_MODELS[provider_name],
+                key_present=True,
+                env_var=env_var,
+            )
+
+    fallback = _PROVIDER_LOOKUP_ORDER[0]
+    return ProviderInfo(
+        name=fallback,
+        model=_DEFAULT_PROVIDER_MODELS[fallback],
+        key_present=False,
+        env_var=_default_api_key_env(fallback),
+    )
+
+
 def has_real_provider_credentials(optimizer_config: Any) -> bool:
     """Return whether any configured non-mock model has usable credentials.
 

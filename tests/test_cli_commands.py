@@ -845,6 +845,49 @@ class TestDoctorCommand:
         assert "harness.models.coordinator" in result.output
         assert "harness.models.worker" in result.output
 
+    def test_doctor_active_provider_reports_key_present(self, runner, tmp_dir, monkeypatch):
+        """doctor surfaces the active provider + model + key status.
+
+        The Active Provider section is what Chunk 4 added so operators don't
+        have to read the API Keys list and mentally map them back to the
+        default provider. Key present → green check + env var label.
+        """
+        workspace = Path(tmp_dir) / "provider-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+        assert init_result.exit_code == 0, init_result.output
+        monkeypatch.chdir(workspace)
+        config_file = workspace / "agentlab.yaml"
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        data.setdefault("optimizer", {})["use_mock"] = False
+        config_file.write_text(yaml.safe_dump(data), encoding="utf-8")
+        env = _env_without_api_keys()
+        env["GOOGLE_API_KEY"] = "g-test-key"
+        result = runner.invoke(cli, ["doctor", "--config", str(config_file)], env=env)
+        assert result.exit_code == 0, result.output
+        assert "Active Provider" in result.output
+        assert "google" in result.output
+        assert "gemini-2.5-pro" in result.output
+        # Key present → GOOGLE_API_KEY set is reported
+        assert "GOOGLE_API_KEY set" in result.output
+
+    def test_doctor_active_provider_warns_when_key_missing(self, runner, tmp_dir, monkeypatch):
+        """doctor flags the fallback banner when no provider key is present."""
+        workspace = Path(tmp_dir) / "nokey-workspace"
+        init_result = runner.invoke(cli, ["init", "--dir", str(workspace), "--mode", "mock"])
+        assert init_result.exit_code == 0, init_result.output
+        monkeypatch.chdir(workspace)
+        config_file = workspace / "agentlab.yaml"
+        data = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
+        data.setdefault("optimizer", {})["use_mock"] = False
+        config_file.write_text(yaml.safe_dump(data), encoding="utf-8")
+        env = _env_without_api_keys()
+        result = runner.invoke(cli, ["doctor", "--config", str(config_file)], env=env)
+        assert result.exit_code == 0, result.output
+        assert "Active Provider" in result.output
+        # No key → explicit callout about placeholders
+        assert "not set" in result.output
+        assert "placeholders" in result.output
+
     def test_eval_run_prints_mock_warning(self, runner):
         """eval run warns when the harness falls back to mock mode."""
         result = runner.invoke(cli, ["eval", "run"], env=_env_without_api_keys())

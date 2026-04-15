@@ -23,6 +23,7 @@ from typing import Iterable, Iterator, Sequence
 
 import pytest
 
+from cli.workbench_app import _subprocess as _subprocess_helper
 from cli.workbench_app import eval_slash
 from cli.workbench_app.commands import CommandRegistry
 from cli.workbench_app.eval_slash import build_eval_command
@@ -121,8 +122,14 @@ class _FakePopen:
 
 @pytest.fixture
 def patch_popen(monkeypatch: pytest.MonkeyPatch) -> type[_FakePopen]:
-    """Replace ``subprocess.Popen`` *in eval_slash* with the fake."""
-    monkeypatch.setattr(eval_slash.subprocess, "Popen", _FakePopen)
+    """Replace ``subprocess.Popen`` *in the shared stream helper* with the fake.
+
+    After the Chunk 3 refactor, ``_default_stream_runner`` delegates the raw
+    Popen call to :mod:`cli.workbench_app._subprocess`; patching at that
+    level keeps the integration tests exercising the same runner-→ parser →
+    transcript path without needing to know the helper's internals.
+    """
+    monkeypatch.setattr(_subprocess_helper.subprocess, "Popen", _FakePopen)
     return _FakePopen
 
 
@@ -318,7 +325,7 @@ def test_eval_missing_binary_handled_gracefully(
     def _boom(*a: object, **kw: object) -> None:
         raise FileNotFoundError("python")
 
-    monkeypatch.setattr(eval_slash.subprocess, "Popen", _boom)
+    monkeypatch.setattr(_subprocess_helper.subprocess, "Popen", _boom)
 
     result = dispatch(slash_ctx, "/eval")
 
@@ -405,10 +412,10 @@ def test_eval_default_runner_uses_subprocess_popen(
             super().__init__(cmd, **kw)
 
     _Sentinel.configure(events=[])
-    monkeypatch.setattr(eval_slash.subprocess, "Popen", _Sentinel)
+    monkeypatch.setattr(_subprocess_helper.subprocess, "Popen", _Sentinel)
 
     list(eval_slash._default_stream_runner([]))
 
-    assert called, "eval_slash._default_stream_runner must call subprocess.Popen"
+    assert called, "_default_stream_runner must delegate to subprocess.Popen"
     # The real runner always passes --output-format stream-json.
     assert "stream-json" in called[0]

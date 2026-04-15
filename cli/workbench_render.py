@@ -106,7 +106,42 @@ _EVENT_RENDERERS: dict[str, Any] = {
     "warning": lambda d: click.style(
         f"[warning] {d.get('message', '')}", fg="yellow",
     ),
+    # LLM adapter self-reported fallback/retry events. Distinct from generic
+    # "warning" so the transcript can badge them clearly and downstream summary
+    # code can count them to append a "[fallback]" badge on the final line.
+    "llm.fallback": lambda d: click.style(
+        _format_llm_fallback(d),
+        fg="red",
+        bold=True,
+    ),
+    "llm.retry": lambda d: click.style(
+        f"↻ retry: {d.get('reason', 'unknown')}",
+        dim=True,
+    ),
 }
+
+
+def fallback_badge(reason: str | None = None) -> str:
+    """Return the inline ``[fallback]`` badge used on summaries and artifacts.
+
+    Centralized so the badge label stays consistent across renderers; keep
+    the brackets so downstream line parsers (tests, log greps) can match it
+    without regex surgery.
+    """
+    base = click.style("[fallback]", fg="yellow", bold=True)
+    if not reason:
+        return base
+    return f"{base} {click.style(reason, dim=True)}"
+
+
+def _format_llm_fallback(data: Mapping[str, Any]) -> str:
+    """Build the user-facing banner line for an ``llm.fallback`` event."""
+    reason = str(data.get("reason") or "unknown")
+    attempts = data.get("attempts")
+    attempt_suffix = f" (attempt {attempts})" if attempts else ""
+    return (
+        f"⚠ LLM fallback: {reason}{attempt_suffix} — results are placeholders"
+    )
 
 
 # ---------------------------------------------------------------------------

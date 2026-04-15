@@ -414,6 +414,71 @@ def test_help_handler_lists_all_commands(
     assert echo.lines == [rendered]
 
 
+def test_help_handler_renders_three_column_table(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """``/help`` should read as a three-column table (name | description |
+    argument hint) so operators can scan the palette quickly. The name
+    column widens per source group to fit the longest entry, so commands
+    like ``/transcript-checkpoints`` don't bleed into the description column.
+    """
+    result = dispatch(ctx, "/help")
+    rendered = click.unstyle(result.output or "")
+
+    # Name column is sized to the widest name in the builtin group. After the
+    # builtin group is rendered, the same column width is used for every row
+    # in that group, so ``/help`` (short name) and ``/transcript-checkpoints``
+    # (long name) must produce description cells at the *same* column offset.
+    builtin_lines = [
+        line for line in rendered.splitlines() if line.lstrip().startswith("/")
+    ]
+    assert len(builtin_lines) > 5  # sanity: the builtin group is populous
+
+    def _description_offset(line: str) -> int:
+        # The row starts with 4 spaces of indent, then the name cell
+        # (ljust-padded), then two spaces, then the description. We locate
+        # the description by finding the run of 2+ spaces after the name.
+        stripped = line.rstrip()
+        assert stripped.startswith("    /"), stripped
+        # Find the first run of two-or-more spaces after the name token.
+        idx = 5  # past the "    /" prefix
+        while idx < len(stripped) and not stripped[idx:].startswith("  "):
+            idx += 1
+        # Skip the double-space separator to land on the description column.
+        while idx < len(stripped) and stripped[idx] == " ":
+            idx += 1
+        return idx
+
+    offsets = {_description_offset(line) for line in builtin_lines}
+    assert len(offsets) == 1, (
+        f"description column must be aligned across all builtin rows, got offsets {offsets}"
+    )
+
+
+def test_help_handler_argument_hint_rendered_as_column(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Commands with an ``argument_hint`` must surface it on the help row —
+    it's the third column of the table. Absent commands get no phantom
+    ``[none]`` placeholder; the row simply stops after the description."""
+    result = dispatch(ctx, "/help")
+    rendered = click.unstyle(result.output or "")
+
+    resume_line = next(
+        line for line in rendered.splitlines() if line.lstrip().startswith("/resume ")
+    )
+    # ``/resume`` declares an argument hint of ``[session_id]`` in the
+    # registry — it must reach the rendered row.
+    assert "[session_id]" in resume_line
+
+    clear_line = next(
+        line for line in rendered.splitlines() if line.lstrip().startswith("/clear ")
+    )
+    # ``/clear`` takes no arguments — no empty brackets or ``<>`` noise.
+    assert "[]" not in clear_line
+    assert "<>" not in clear_line
+
+
 def test_help_handler_shows_command_detail(
     ctx: SlashContext, echo: _EchoCapture
 ) -> None:

@@ -45,6 +45,14 @@ class StatusSnapshot:
     workspace_label: str | None = None
     config_version: int | None = None
     model: str | None = None
+    provider: str | None = None
+    """Active provider name (``openai`` / ``anthropic`` / ``google``). When
+    set, the renderer folds it into the model segment as ``model · provider``
+    so the operator can see at a glance which API will be called."""
+    provider_key_present: bool = True
+    """``False`` when the active provider's API key env var is unset. The
+    renderer switches the model segment to warn-color and appends ``[no key]``
+    so silent-fallback bugs are obvious before a command is even issued."""
     pending_reviews: int = 0
     best_score: str | None = None
     agentlab_version: str = ""
@@ -123,24 +131,55 @@ def _model_from_config(active: Any | None) -> str | None:
     return str(model) if model else None
 
 
+def _describe_provider_safely(workspace: Any | None) -> Any | None:
+    """Look up the active provider without ever crashing the status bar.
+
+    Status-line failures must be invisible — an unreadable runtime config or a
+    missing optional dependency can't take down the REPL prompt. We return
+    ``None`` on any error; the renderer treats that as "no provider info".
+    """
+    try:
+        from optimizer.providers import describe_default_provider
+    except Exception:
+        return None
+    runtime_config_path = getattr(workspace, "runtime_config_path", None) if workspace else None
+    try:
+        return describe_default_provider(runtime_config_path=runtime_config_path)
+    except Exception:
+        return None
+
+
 def snapshot_from_workspace(
     workspace: Any | None,
     *,
     session: Session | None = None,
     model_override: str | None = None,
+    provider_info: Any | None = None,
 ) -> StatusSnapshot:
     """Build a :class:`StatusSnapshot` from current workspace/session state.
 
     ``model_override`` wins over whatever the active config reports — used by
     ``/model`` (T14) to reflect a session-local model switch that hasn't been
     written back to the config yet.
+
+    ``provider_info`` lets tests inject a pre-built :class:`ProviderInfo` so
+    they don't touch environment variables or the runtime config.  When omitted
+    the status bar calls :func:`optimizer.providers.describe_default_provider`
+    via :func:`_describe_provider_safely`.
     """
     version = get_agentlab_version()
+    info = provider_info if provider_info is not None else _describe_provider_safely(workspace)
+
+    provider_name = getattr(info, "name", None) if info is not None else None
+    provider_key_present = bool(getattr(info, "key_present", True)) if info is not None else True
+
     if workspace is None:
         return StatusSnapshot(
             agentlab_version=version,
             session_title=(session.title if session else None),
             model=model_override,
+            provider=provider_name,
+            provider_key_present=provider_key_present,
         )
 
     active = _resolve_active_config(workspace)
@@ -151,6 +190,8 @@ def snapshot_from_workspace(
         workspace_label=getattr(workspace, "workspace_label", None),
         config_version=config_version,
         model=model,
+        provider=provider_name,
+        provider_key_present=provider_key_present,
         pending_reviews=_read_pending_reviews(workspace),
         best_score=_read_best_score(workspace),
         agentlab_version=version,
@@ -190,8 +231,19 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
     if snapshot.config_version is not None:
         parts.append(f"v{snapshot.config_version:03d}")
 
-    if snapshot.model:
-        parts.append(snapshot.model)
+    if snapshot.model or snapshot.provider:
+        segment_parts: list[str] = []
+        if snapshot.model:
+            segment_parts.append(snapshot.model)
+        if snapshot.provider:
+            segment_parts.append(snapshot.provider)
+        if not snapshot.provider_key_present:
+            segment_parts.append("[no key]")
+        segment = " · ".join(segment_parts)
+        if not snapshot.provider_key_present:
+            parts.append(theme.warning(segment, color=color))
+        else:
+            parts.append(segment)
 
     if snapshot.tokens_used is not None:
         limit = _resolve_limit_for_snapshot(snapshot)
@@ -250,10 +302,14 @@ class StatusBar:
         *,
         session: Session | None = None,
         model_override: str | None = None,
+        provider_info: Any | None = None,
     ) -> StatusSnapshot:
         """Rebuild the snapshot from disk/DB state and return the new value."""
         self._snapshot = snapshot_from_workspace(
-            workspace, session=session, model_override=model_override
+            workspace,
+            session=session,
+            model_override=model_override,
+            provider_info=provider_info,
         )
         return self._snapshot
 

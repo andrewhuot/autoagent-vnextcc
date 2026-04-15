@@ -110,7 +110,11 @@ def test_iter_completions_carries_metadata(registry: CommandRegistry) -> None:
     assert completions["help"].description == "Show available slash commands"
     assert completions["help"].source == "builtin"
     assert completions["expand"].source == "plugin"
-    assert "[builtin]" in completions["help"].display_meta
+    # ``[builtin]`` is suppressed from display_meta to match Claude Code's
+    # palette — it's the overwhelming default and only non-builtin commands
+    # get an explicit source tag in the menu.
+    assert "[builtin]" not in completions["help"].display_meta
+    assert "[plugin]" in completions["expand"].display_meta
 
 
 def test_iter_completions_stops_once_user_types_argument(
@@ -231,7 +235,19 @@ def test_completer_display_meta_shows_description(registry: CommandRegistry) -> 
     completer = SlashCommandCompleter(registry)
     completions = _get_completions(completer, "/he")
     assert "Show available slash commands" in completions[0].display_meta[0][1]
-    assert "[builtin]" in completions[0].display_meta[0][1]
+
+
+def test_completer_display_meta_shows_source_only_for_non_builtin(
+    registry: CommandRegistry,
+) -> None:
+    """Builtin commands get no source badge (Claude-Code palette parity) —
+    plugins, skills, and user commands keep theirs so the operator can tell
+    at a glance which rows come from outside the default set."""
+    completer = SlashCommandCompleter(registry)
+    help_completions = _get_completions(completer, "/he")
+    assert "[builtin]" not in help_completions[0].display_meta[0][1]
+    expand_completions = _get_completions(completer, "/expand")
+    assert "[plugin]" in expand_completions[0].display_meta[0][1]
 
 
 def test_completer_start_position_matches_iter_completions(

@@ -66,6 +66,11 @@ class PhaseSpinner:
         self._lock = threading.Lock()
         self._last_width = 0
 
+    @property
+    def enabled(self) -> bool:
+        """Whether the animation thread will actually render frames."""
+        return self._enabled
+
     def __enter__(self) -> "PhaseSpinner":
         self._started_at = time.monotonic()
         if self._enabled:

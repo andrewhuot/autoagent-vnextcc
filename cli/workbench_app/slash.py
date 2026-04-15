@@ -49,6 +49,7 @@ from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.help_text import render_shortcuts_help
 
 if TYPE_CHECKING:
+    from cli.workbench_app.spinner import StreamingSpinner
     from cli.workbench_app.transcript import Transcript
 
 EchoFn = Callable[[str], None]
@@ -82,6 +83,32 @@ class SlashContext:
     def request_exit(self) -> None:
         """Ask the enclosing loop to terminate after this dispatch returns."""
         self.exit_requested = True
+
+    def spinner(
+        self,
+        phase: str,
+        *,
+        model: str | None = None,
+    ) -> "StreamingSpinner":
+        """Build a :class:`StreamingSpinner` bound to this context's echo sink.
+
+        ``model`` is optional today; the Chunk-4 provider-visibility work
+        will introspect :mod:`optimizer.providers` and wire a default when
+        the caller leaves it ``None``. Until then, the caller supplies the
+        display string. The fallback echo is always ``ctx.echo`` so
+        non-TTY runs (tests, pipes) still route transcript lines through
+        the transcript / capture rather than bare ``click.echo``.
+        """
+        from cli.workbench_app.spinner import StreamingSpinner
+
+        model_label = model
+        if model_label is None:
+            model_label = self.meta.get("provider_model") if isinstance(self.meta, dict) else None
+        return StreamingSpinner(
+            phase,
+            model=model_label,
+            echo=self.echo,
+        )
 
 
 @dataclass(frozen=True)
@@ -217,12 +244,24 @@ def _handle_help(ctx: SlashContext, *args: str) -> OnDoneResult:
         if not commands:
             continue
         lines.append(theme.meta(f"  {label}"))
+        # Size the name column to fit the longest name in this source so the
+        # description column stays aligned — Claude Code's /help reads as a
+        # three-column table (name | description | argument hint) and we
+        # lose that table feel when long names like /transcript-checkpoints
+        # bleed into the next column.
+        name_width = max(len(f"/{command.name}") for command in commands)
         for command in commands:
-            hint = f" {command.argument_hint}" if command.argument_hint else ""
-            aliases = _format_aliases(command.aliases)
-            lines.append(
-                f"    /{command.name:<12} {command.description}{hint}{aliases}"
+            name_cell = f"/{command.name}".ljust(name_width)
+            # Put the argument hint in meta color, separated by two spaces
+            # so it reads as its own column (mirrors the ``aliases:`` suffix
+            # treatment below) rather than trailing the description.
+            hint = (
+                f"  {theme.meta(command.argument_hint)}"
+                if command.argument_hint
+                else ""
             )
+            aliases = _format_aliases(command.aliases)
+            lines.append(f"    {name_cell}  {command.description}{hint}{aliases}")
     lines.append("")
     lines.append("  Type /help <command> for details. Type ? for shortcuts.")
     return on_done("\n".join(lines), display="user")

@@ -51,13 +51,28 @@ class DeterministicWorkerAdapter:
         """Produce role-aware artifacts and review metadata without side effects."""
         state = context.state
         expected = list(context.context.get("expected_artifacts", []))
+        fallback_reason = context.context.get("_fallback_reason")
         artifacts = {
-            artifact: self._artifact_payload(context, artifact)
+            artifact: self._artifact_payload(context, artifact, fallback_reason=fallback_reason)
             for artifact in expected
         }
         review_required = self._requires_review(context)
         summary = self._summary(context, artifact_count=len(artifacts))
         next_actions = self._next_actions(context, review_required=review_required)
+        output_payload: dict[str, Any] = {
+            "adapter": self.name,
+            "specialist": context.routed["specialist"],
+            "recommended_tools": list(context.routed.get("recommended_tools", [])),
+            "permission_scope": list(context.routed.get("permission_scope", [])),
+            "review_required": review_required,
+            "next_actions": next_actions,
+        }
+        if fallback_reason:
+            output_payload["source"] = "deterministic-fallback"
+            output_payload["fallback_reason"] = fallback_reason
+            output_payload["note"] = "LLM unavailable — placeholder content"
+        else:
+            output_payload["source"] = "deterministic"
         return WorkerExecutionResult(
             node_id=state.node_id,
             worker_role=state.worker_role,
@@ -69,14 +84,7 @@ class DeterministicWorkerAdapter:
                 "skill_candidates": list(context.context["skill_candidates"]),
                 "dependency_summaries": dict(context.context["dependency_summaries"]),
             },
-            output_payload={
-                "adapter": self.name,
-                "specialist": context.routed["specialist"],
-                "recommended_tools": list(context.routed.get("recommended_tools", [])),
-                "permission_scope": list(context.routed.get("permission_scope", [])),
-                "review_required": review_required,
-                "next_actions": next_actions,
-            },
+            output_payload=output_payload,
             provenance={
                 "run_id": context.run.run_id,
                 "plan_id": context.run.plan_id,
@@ -91,17 +99,22 @@ class DeterministicWorkerAdapter:
         self,
         context: WorkerAdapterContext,
         artifact_type: str,
+        *,
+        fallback_reason: str | None = None,
     ) -> dict[str, Any]:
         """Build one reviewable artifact payload for a worker role."""
         role = context.state.worker_role
         goal = str(context.context.get("goal") or context.run.goal)
-        base = {
+        base: dict[str, Any] = {
             "artifact_type": artifact_type,
             "worker_role": role.value,
             "source_node_id": context.state.node_id,
             "goal": goal,
-            "source": self.name,
+            "source": "deterministic-fallback" if fallback_reason else self.name,
         }
+        if fallback_reason:
+            base["fallback_reason"] = fallback_reason
+            base["note"] = "LLM unavailable — placeholder content"
         role_payloads = {
             SpecialistRole.BUILD_ENGINEER: {
                 "summary": "Drafted the agent change as a saveable configuration candidate.",

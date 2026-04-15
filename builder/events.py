@@ -54,6 +54,8 @@ class BuilderEventType(str, Enum):
     COORDINATOR_EXECUTION_FAILED = "coordinator.execution.failed"
     COORDINATOR_EXECUTION_BLOCKED = "coordinator.execution.blocked"
     COORDINATOR_WORKER_MODE_DEGRADED = "coordinator.worker_mode.degraded"
+    LLM_FALLBACK = "llm.fallback"
+    LLM_RETRY = "llm.retry"
 
 
 # Event types that represent significant lifecycle transitions and should

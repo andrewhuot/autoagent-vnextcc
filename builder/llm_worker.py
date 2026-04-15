@@ -11,16 +11,22 @@ Operational guarantees:
   broken model or quota trip never aborts the run mid-turn.
 - Every adapter run emits a single ``WORKER_MESSAGE_DELTA`` event with the
   raw response text so the REPL can render live worker commentary.
+- Every fallback or retry emits a first-class ``LLM_FALLBACK`` / ``LLM_RETRY``
+  event through the broker AND (when configured) to a stream-json sink, so
+  the user sees what happened instead of a stray log line.
 - Expected artifacts declared in the coordinator plan are honored: the LLM
   is required to return them, and missing keys trip the fallback path.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
+import os
 import re
-from typing import Any
+import sys
+from typing import Any, Callable
 
 from builder.events import BuilderEventType
 from builder.types import (
@@ -38,6 +44,34 @@ from optimizer.providers import LLMRequest, LLMRouter
 logger = logging.getLogger(__name__)
 
 
+EventSink = Callable[[str, dict[str, Any]], None]
+"""Callable that receives ``(event_name, payload)`` for user-visible events.
+
+Used to surface LLM fallback / retry events to the stream-json stdout of
+a workbench build subprocess so the `/build` CLI handler can render them
+in the transcript. Default sink is environment-driven (see
+:func:`_default_event_sink`)."""
+
+
+def _default_event_sink(event_name: str, payload: dict[str, Any]) -> None:
+    """Emit a stream-json line to stdout when running under a workbench stream.
+
+    The ``AGENTLAB_WORKBENCH_STREAM_JSON`` env var is set by
+    ``cli/workbench.py::build_command`` (and its eval/optimize siblings)
+    when the output format is ``stream-json``. Outside that window we stay
+    silent so normal test / CLI runs are not corrupted by stray JSON lines.
+    """
+    if os.environ.get("AGENTLAB_WORKBENCH_STREAM_JSON") != "1":
+        return
+    try:
+        print(
+            json.dumps({"event": event_name, "data": payload}, default=str),
+            flush=True,
+        )
+    except Exception:  # pragma: no cover — stream sink must never break execution
+        pass
+
+
 class LLMWorkerAdapter:
     """Worker adapter that drives a real provider through :class:`LLMRouter`."""
 
@@ -50,11 +84,13 @@ class LLMWorkerAdapter:
         fallback: WorkerAdapter | None = None,
         temperature: float = 0.2,
         max_tokens: int = 1200,
+        event_sink: EventSink | None = None,
     ) -> None:
         self._router = router
         self._fallback = fallback or DeterministicWorkerAdapter()
         self._temperature = temperature
         self._max_tokens = max_tokens
+        self._event_sink = event_sink if event_sink is not None else _default_event_sink
 
     def execute(self, context: WorkerAdapterContext) -> WorkerExecutionResult:
         """Run the LLM worker, returning parsed artifacts or fallback output."""
@@ -82,21 +118,38 @@ class LLMWorkerAdapter:
         )
 
         response, parse_error = self._call_and_parse(context, request)
+        attempts = 1
         if parse_error == _PROVIDER_ERROR_KIND:
-            # Network / auth failure — retrying would just double the
-            # outage cost. Straight to fallback.
-            return self._fallback.execute(context)
+            self._emit_fallback(
+                context,
+                reason=parse_error,
+                attempts=attempts,
+                provider=None,
+                model=None,
+            )
+            return self._run_fallback(context, reason=parse_error)
         if parse_error is not None:
-            # Provider returned *something* but it didn't parse. One
-            # retry with a stricter suffix often recovers; cap at one.
+            self._emit_retry(context, reason=parse_error)
             retry_request = _with_strict_suffix(request, parse_error)
             response, parse_error = self._call_and_parse(
                 context,
                 retry_request,
                 is_retry=True,
             )
+            attempts = 2
             if parse_error is not None or response is None:
-                return self._fallback.execute(context)
+                provider, model = _provider_model_from_response(response)
+                self._emit_fallback(
+                    context,
+                    reason=parse_error or "unknown",
+                    attempts=attempts,
+                    provider=provider,
+                    model=model,
+                )
+                return self._run_fallback(
+                    context,
+                    reason=parse_error or "unknown",
+                )
 
         assert response is not None  # for type-checkers; parse_error is None here
         parsed_envelope, raw_response = response
@@ -104,15 +157,27 @@ class LLMWorkerAdapter:
         expected = list(context.context.get("expected_artifacts", []))
         artifacts = parsed_envelope.get("artifacts") or {}
         if expected and not all(name in artifacts for name in expected):
-            logger.warning(
-                "llm_worker: response missing expected artifacts — falling back",
+            reason = "missing_expected_artifacts"
+            logger.info(
+                "llm_worker: response missing expected artifacts",
                 extra={
                     "worker_role": context.state.worker_role.value,
                     "expected": expected,
                     "received": sorted(artifacts.keys()),
                 },
             )
-            return self._fallback.execute(context)
+            self._emit_fallback(
+                context,
+                reason=reason,
+                attempts=attempts,
+                provider=raw_response.provider,
+                model=raw_response.model,
+                detail={
+                    "expected": expected,
+                    "received": sorted(artifacts.keys()),
+                },
+            )
+            return self._run_fallback(context, reason=reason)
 
         return _to_execution_result(
             context=context,
@@ -121,6 +186,121 @@ class LLMWorkerAdapter:
             model=raw_response.model,
             total_tokens=raw_response.total_tokens,
         )
+
+    # ------------------------------------------------------------------
+    # Event emission
+    # ------------------------------------------------------------------
+
+    def _emit_fallback(
+        self,
+        context: WorkerAdapterContext,
+        *,
+        reason: str,
+        attempts: int,
+        provider: str | None,
+        model: str | None,
+        detail: dict[str, Any] | None = None,
+    ) -> None:
+        """Publish an ``LLM_FALLBACK`` event through the broker and stream sink.
+
+        The user-facing message is rendered by ``cli/workbench_render.py``; we
+        keep logger output at ``info`` level so machine logs still carry the
+        detail without leaking a raw warning line into the TUI."""
+        payload: dict[str, Any] = {
+            "run_id": context.run.run_id,
+            "node_id": context.state.node_id,
+            "worker_role": context.state.worker_role.value,
+            "reason": reason,
+            "attempts": attempts,
+            "provider": provider,
+            "model": model,
+        }
+        if detail:
+            payload["detail"] = detail
+        logger.info(
+            "llm_worker: falling back to deterministic adapter",
+            extra={
+                "worker_role": context.state.worker_role.value,
+                "reason": reason,
+                "attempts": attempts,
+                "provider": provider,
+                "model": model,
+            },
+        )
+        self._publish_broker_event(
+            context,
+            BuilderEventType.LLM_FALLBACK,
+            payload,
+        )
+        self._safe_sink(BuilderEventType.LLM_FALLBACK.value, payload)
+
+    def _emit_retry(
+        self,
+        context: WorkerAdapterContext,
+        *,
+        reason: str,
+    ) -> None:
+        """Publish an ``LLM_RETRY`` event before the stricter second attempt."""
+        payload = {
+            "run_id": context.run.run_id,
+            "node_id": context.state.node_id,
+            "worker_role": context.state.worker_role.value,
+            "reason": reason,
+            "attempt": 2,
+        }
+        logger.info(
+            "llm_worker: retrying with strict JSON suffix",
+            extra={
+                "worker_role": context.state.worker_role.value,
+                "reason": reason,
+            },
+        )
+        self._publish_broker_event(
+            context,
+            BuilderEventType.LLM_RETRY,
+            payload,
+        )
+        self._safe_sink(BuilderEventType.LLM_RETRY.value, payload)
+
+    def _publish_broker_event(
+        self,
+        context: WorkerAdapterContext,
+        event_type: BuilderEventType,
+        payload: dict[str, Any],
+    ) -> None:
+        """Publish to the builder event broker, swallowing broker failures."""
+        try:
+            context.events.publish(
+                event_type,
+                context.run.session_id,
+                context.run.root_task_id,
+                payload,
+            )
+        except Exception:  # pragma: no cover — broker failures must not abort
+            pass
+
+    def _safe_sink(self, event_name: str, payload: dict[str, Any]) -> None:
+        """Call the event sink, guarding against sink-side failures."""
+        try:
+            self._event_sink(event_name, payload)
+        except Exception:  # pragma: no cover — sink failure must not break execution
+            pass
+
+    def _run_fallback(
+        self,
+        context: WorkerAdapterContext,
+        *,
+        reason: str,
+    ) -> WorkerExecutionResult:
+        """Invoke the deterministic fallback with a ``_fallback_reason`` crumb.
+
+        The deterministic adapter reads that crumb to stamp every artifact
+        with its provenance so downstream renderers can badge stub output
+        as ``[fallback]`` instead of presenting it as real LLM work."""
+        augmented_context = dict(context.context)
+        augmented_context["_fallback_reason"] = reason
+        fallback_context = dataclasses.replace(context, context=augmented_context)
+        return self._fallback.execute(fallback_context)
 
     def _call_and_parse(
         self,
@@ -142,8 +322,8 @@ class LLMWorkerAdapter:
         try:
             response = self._router.generate(request)
         except Exception as exc:
-            logger.warning(
-                "llm_worker: provider call failed — falling back to deterministic",
+            logger.info(
+                "llm_worker: provider call failed",
                 extra={
                     "worker_role": context.state.worker_role.value,
                     "error": str(exc),
@@ -156,8 +336,8 @@ class LLMWorkerAdapter:
 
         envelope, failure_kind = _parse_envelope(response.text)
         if envelope is None:
-            logger.warning(
-                "llm_worker: response was not valid JSON envelope — falling back",
+            logger.info(
+                "llm_worker: response did not parse as JSON envelope",
                 extra={
                     "worker_role": context.state.worker_role.value,
                     "failure_kind": failure_kind,
@@ -204,6 +384,18 @@ _STRICT_RETRY_SYSTEM_SUFFIX = (
     "wrap it in markdown code fences. Do not include any prose before or "
     "after the JSON."
 )
+
+
+def _provider_model_from_response(
+    response: tuple[dict[str, Any], Any] | None,
+) -> tuple[str | None, str | None]:
+    """Extract provider/model from a parsed response tuple, if any."""
+    if response is None:
+        return None, None
+    _, raw = response
+    provider = getattr(raw, "provider", None)
+    model = getattr(raw, "model", None)
+    return provider, model
 
 
 def _with_strict_suffix(request: LLMRequest, failure_kind: str) -> LLMRequest:
@@ -364,6 +556,7 @@ def _to_execution_result(
         "permission_scope", list(context.routed.get("permission_scope", []))
     )
     output_payload.setdefault("review_required", _default_review_required(state.worker_role))
+    output_payload.setdefault("source", "llm")
 
     return WorkerExecutionResult(
         node_id=state.node_id,
@@ -408,5 +601,6 @@ def _default_review_required(role: SpecialistRole) -> bool:
 
 
 __all__ = [
+    "EventSink",
     "LLMWorkerAdapter",
 ]

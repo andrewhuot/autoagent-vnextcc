@@ -6892,6 +6892,40 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
         )
 
     # ------------------------------------------------------------------
+    # Active Provider
+    # ------------------------------------------------------------------
+    click.echo("\nActive Provider")
+    try:
+        from optimizer.providers import describe_default_provider
+
+        active_info = describe_default_provider(runtime_config_path=config_path)
+    except Exception as exc:  # pragma: no cover — defensive
+        click.echo("  " + click.style(f"\u26a0 Unable to resolve active provider: {exc}", fg="yellow"))
+    else:
+        click.echo(f"  {'Provider:':<22}" + click.style(active_info.name, fg="green"))
+        click.echo(f"  {'Model:':<22}" + click.style(active_info.model, fg="green"))
+        env_label = active_info.env_var or "(none)"
+        if active_info.key_present:
+            click.echo(
+                f"  {'Key:':<22}"
+                + click.style(f"\u2713 {env_label} set", fg="green")
+            )
+        else:
+            # Informational rather than a blocker: the harness already
+            # gracefully falls back to mock/deterministic when keys are
+            # missing, and the existing "API Keys" + "Coordinator" sections
+            # are the authoritative places to flag blockers. We just surface
+            # the fact so operators can correlate a failed /build with the
+            # missing credential at a glance.
+            click.echo(
+                f"  {'Key:':<22}"
+                + click.style(
+                    f"\u2717 {env_label} not set — /build will fall back to placeholders",
+                    fg="yellow",
+                )
+            )
+
+    # ------------------------------------------------------------------
     # API Keys
     # ------------------------------------------------------------------
     click.echo("\nAPI Keys")
