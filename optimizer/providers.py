@@ -51,6 +51,13 @@ class LLMRequest:
     temperature: float = 0.2
     max_tokens: int = 1000
     metadata: dict[str, Any] = field(default_factory=dict)
+    response_format: str | None = None
+    """Optional output-shape hint. ``"json"`` asks the provider to emit
+    only a raw JSON document — providers that expose a native JSON mode
+    (Gemini's ``response_mime_type``, OpenAI's ``response_format``) use
+    it; Anthropic has no native equivalent and gets a strict system
+    directive instead. ``None`` preserves the historical free-form
+    behaviour so existing callers see no change."""
 
 
 @dataclass
@@ -149,12 +156,18 @@ class OpenAIProvider(_BaseHTTPProvider):
             messages.append({"role": "system", "content": request.system})
         messages.append({"role": "user", "content": request.prompt})
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model_config.model,
             "messages": messages,
             "temperature": request.temperature,
             "max_tokens": request.max_tokens,
         }
+        # Opt into OpenAI's JSON mode when the caller asks for it. The
+        # model enforces JSON-only output, which is the behaviour the
+        # llm_worker envelope parser expects.
+        if request.response_format == "json":
+            payload["response_format"] = {"type": "json_object"}
+
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
@@ -199,14 +212,30 @@ class AnthropicProvider(_BaseHTTPProvider):
         base_url = self.model_config.base_url or "https://api.anthropic.com"
         url = urllib.parse.urljoin(base_url.rstrip("/") + "/", "v1/messages")
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.model_config.model,
             "max_tokens": request.max_tokens,
             "temperature": request.temperature,
             "messages": [{"role": "user", "content": request.prompt}],
         }
-        if request.system:
-            payload["system"] = request.system
+        # Anthropic has no native JSON mode. Prepend a strict directive to
+        # the system prompt so the model is much less likely to wrap
+        # output in prose or code fences. Belt-and-braces defence — the
+        # llm_worker's envelope parser still copes with slip-ups.
+        effective_system = request.system or ""
+        if request.response_format == "json":
+            directive = (
+                "You MUST respond with a single raw JSON object. "
+                "Do not wrap the response in markdown code fences. "
+                "Do not include any prose before or after the JSON."
+            )
+            effective_system = (
+                f"{directive}\n\n{effective_system}".strip()
+                if effective_system
+                else directive
+            )
+        if effective_system:
+            payload["system"] = effective_system
 
         headers = {
             "x-api-key": api_key,
@@ -255,12 +284,22 @@ class GoogleProvider(_BaseHTTPProvider):
             parts.append({"text": request.system})
         parts.append({"text": request.prompt})
 
+        generation_config: dict[str, Any] = {
+            "temperature": request.temperature,
+            "maxOutputTokens": request.max_tokens,
+        }
+        # Gemini's hard contract for JSON-only output. Without this flag
+        # Gemini 2.5-pro frequently wraps JSON in prose ("Sure! Here is
+        # the envelope…") or emits explanatory tails — both of which
+        # fail the worker envelope parser even when the JSON itself is
+        # syntactically fine. Flipping the mime-type makes the model
+        # honour the schema the prompt already declares.
+        if request.response_format == "json":
+            generation_config["response_mime_type"] = "application/json"
+
         payload = {
             "contents": [{"role": "user", "parts": parts}],
-            "generationConfig": {
-                "temperature": request.temperature,
-                "maxOutputTokens": request.max_tokens,
-            },
+            "generationConfig": generation_config,
         }
         headers = {"Content-Type": "application/json"}
         data = self._http_post(url, payload, headers)
