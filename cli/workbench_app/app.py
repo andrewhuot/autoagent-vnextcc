@@ -962,9 +962,9 @@ def launch_workbench(
     not a precondition for launching.
 
     The default input path attaches a prompt_toolkit session with the
-    slash-command completer, a ``╭─╮ / ╰─╯`` border around the input,
-    and a shift+tab binding that cycles the permission mode. Callers
-    supplying ``input_provider`` (tests, piped stdin) skip this wiring.
+    slash-command completer, prompt-owned footer chrome, and a shift+tab
+    binding that cycles the permission mode. Callers supplying
+    ``input_provider`` (tests, piped stdin) skip this wiring.
     """
     import os
     import sys

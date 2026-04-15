@@ -215,10 +215,10 @@ def test_bottom_toolbar_keeps_full_hint_when_width_allows() -> None:
     assert "ctrl+t transcript" in toolbar
 
 
-def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Borders should wrap every prompt call, even when prompt_toolkit
-    raises (e.g. EOF) — we rely on a ``try / finally`` for that.
-    """
+def test_build_prompt_input_provider_does_not_preprint_half_border(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The live prompt must not print a top border without a live bottom edge."""
     from cli.workbench_app import pt_prompt
     from cli.workbench_app.slash import build_builtin_registry
 
@@ -243,11 +243,5 @@ def test_build_prompt_input_provider_renders_borders(monkeypatch: pytest.MonkeyP
 
     assert provider("› ") == "hi"
     plain = [click.unstyle(line) for line in captured]
-    # Rounded-corner input card: one ╭──╮ top and one ╰──╯ bottom.
-    top_corners = [line for line in plain if line.startswith("╭") and line.endswith("╮")]
-    bottom_corners = [line for line in plain if line.startswith("╰") and line.endswith("╯")]
-    assert len(top_corners) == 1
-    assert len(bottom_corners) == 1
-    # Both corners span the mocked 20-column width.
-    assert len(top_corners[0]) == 20
-    assert len(bottom_corners[0]) == 20
+    assert not any(line.startswith("╭") for line in plain)
+    assert not any(line.startswith("╰") for line in plain)

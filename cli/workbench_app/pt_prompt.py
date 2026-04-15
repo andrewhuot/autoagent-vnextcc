@@ -5,8 +5,8 @@ chrome pieces the plain ``input()`` loop couldn't offer:
 
 - a slash-command completion popup driven by
   :class:`cli.workbench_app.completer.SlashCommandCompleter`,
-- Unicode rounded-corner borders (``╭──╮`` / ``╰──╯``) rendered above and
-  below the input line — Claude Code's signature input card, and
+- prompt-owned compact footer chrome that stays visible while input is live,
+  without pre-printing half of a fake input box, and
 - a ``shift+tab`` key binding that cycles the active permission mode
   (``default`` → ``acceptEdits`` → ``plan`` → ``bypass``),
   persisting the choice to ``.agentlab/settings.json`` when a workspace
@@ -106,14 +106,6 @@ def _terminal_width(default: int = 80) -> int:
     return max(20, min(cols, 160))
 
 
-def _supports_rounded_corners() -> bool:
-    """Return ``True`` when stdout can render ``╭╮╰╯`` without mojibake."""
-    import sys
-
-    encoding = (getattr(sys.stdout, "encoding", None) or "").lower()
-    return encoding.startswith("utf")
-
-
 def _fit_toolbar(text: str, width: int) -> str:
     """Fit toolbar text into one terminal row without wrapping."""
     clean = " ".join(text.split())
@@ -145,29 +137,6 @@ def render_bottom_toolbar(mode: str, *, width: int | None = None) -> str:
         if len(padded) <= resolved_width:
             return padded
     return _fit_toolbar(f"  {variants[-1]}", resolved_width)
-
-
-def _render_top_border(echo: EchoFn) -> None:
-    """Emit the top edge of the input card.
-
-    Real rounded corners (``╭──╮``) when the terminal advertises UTF; a
-    plain horizontal rule otherwise so cp437 users don't see question marks.
-    """
-    width = _terminal_width()
-    if _supports_rounded_corners() and width >= 4:
-        body = "─" * (width - 2)
-        echo(theme.border(f"╭{body}╮"))
-    else:
-        echo(theme.border("─" * width))
-
-
-def _render_bottom_border(echo: EchoFn) -> None:
-    width = _terminal_width()
-    if _supports_rounded_corners() and width >= 4:
-        body = "─" * (width - 2)
-        echo(theme.border(f"╰{body}╯"))
-    else:
-        echo(theme.border("─" * width))
 
 
 def build_prompt_input_provider(
@@ -272,15 +241,10 @@ def build_prompt_input_provider(
     )
 
     def provider(prompt_text: str) -> str:
-        _render_top_border(echo)
         # Style the chevron amber so it matches Claude Code's accent. We wrap
         # the styled string in ``ANSI`` so prompt_toolkit respects the SGR
         # escapes — otherwise they render as literal ``\x1b[...]`` text.
         styled_prompt = ANSI(theme.accent(prompt_text))
-        try:
-            raw = session.prompt(styled_prompt)
-        finally:
-            _render_bottom_border(echo)
-        return raw
+        return session.prompt(styled_prompt)
 
     return provider
