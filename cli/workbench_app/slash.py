@@ -787,6 +787,13 @@ def build_builtin_registry(
     registry.register(build_init_command())
     registry.register(build_theme_command())
     registry.register(build_output_style_command())
+    # `/improve` is a streaming passthrough — no coordinator wrapper. It is
+    # registered unconditionally so the TUI surfaces the full R2 improve
+    # surface (run, accept, measure, diff, lineage, list, show) independently
+    # of the streaming-intent toggle, which only gates coordinator commands.
+    from cli.workbench_app.improve_slash import build_improve_command
+
+    registry.register(build_improve_command())
     if include_streaming:
         from cli.workbench_app.coordinator_slash import (
             build_coordinator_command,

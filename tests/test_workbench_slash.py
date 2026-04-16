@@ -214,6 +214,8 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         # Phase-6 personalization commands.
         "theme",
         "output-style",
+        # R2 Slice D.1 — unified improve loop passthrough.
+        "improve",
     }
     assert set(registry.names()) == expected
 
@@ -283,9 +285,10 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     assert registry.get("/custom") is extra
     # Existing built-ins + Phase 2–6 additions: the five /plan* commands,
     # /usage + three transcript-rewind commands, three /skill* commands,
-    # /background + /background-clear, /init, /theme, /output-style, and
-    # the /custom supplied via ``extra``.
-    assert len(registry) == 50
+    # /background + /background-clear, /init, /theme, /output-style, the R2
+    # Slice D.1 ``/improve`` passthrough, and the /custom supplied via
+    # ``extra``.
+    assert len(registry) == 51
 
 
 # ---------------------------------------------------------------------------
