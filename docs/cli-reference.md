@@ -124,6 +124,8 @@ Subcommands:
 - `breakdown` — show score bars and failure clusters for the latest run
 - `generate` — generate an eval suite from a config
 - `results` — inspect structured results, annotate examples, diff runs, or export a run
+- `dataset` — import/export/dedupe/balance/bootstrap eval cases (see [Dataset tooling](evals/dataset-tooling.md))
+- `ingest` — convert production traces into eval cases with mandatory PII redaction (see [Dataset tooling](evals/dataset-tooling.md))
 
 Useful `eval run` options:
 
@@ -132,6 +134,8 @@ Useful `eval run` options:
 - `--dataset TEXT`
 - `--split [train|test|all]`
 - `--category TEXT`
+- `--tag TEXT` — repeatable, OR semantics. Filters by `case.tags`; case-sensitive.
+- `--exclude-tag TEXT` — repeatable. Drops cases whose tags contain any match.
 - `--output TEXT`
 - `--instruction-overrides TEXT`
 - `--real-agent`

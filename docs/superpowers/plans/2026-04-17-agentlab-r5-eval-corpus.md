@@ -1,6 +1,6 @@
 # R5 — Eval Corpus & Dataset Tooling (TDD expansion plan)
 
-**Status:** draft, ready for execution
+**Status:** shipped on 943e551 (2026-04-17)
 **Branch:** `claude/r5-eval-corpus` (off `master` at `777df64`)
 **Depends on:** R1 (strict-live), R2 (modular `cli/commands/`). Parallel-
 shippable with R4.
