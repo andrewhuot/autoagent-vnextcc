@@ -17,5 +17,7 @@ def register_all(cli: "click.Group") -> None:
     """Register every command group on *cli*. Called from runner.py."""
     from cli.commands.improve import register_improve_commands
     from cli.commands.build import register_build_commands
+    from cli.commands.eval import register_eval_commands
     register_improve_commands(cli)
     register_build_commands(cli)
+    register_eval_commands(cli)
