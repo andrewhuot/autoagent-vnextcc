@@ -6,23 +6,409 @@ cli.commands.register_all().
 
 Preserves R1 invariants: --force-deploy-degraded / --reason gating
 and lineage emission via --attempt-id (Slice A.5).
+
+R4.6 extracts the `deploy` Click callback body into the module-level
+:func:`run_deploy_in_process` function so both the CLI and the Workbench
+``/deploy`` slash handler can share the same business logic without
+spawning a subprocess. The Click wrapper delegates the stream-json path
+to it; the legacy text/JSON paths are preserved as-is to avoid churn.
 """
 from __future__ import annotations
 
 import json
 import os
+import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
 import yaml
+
+from cli.commands._in_process import make_event_writer as _make_event_writer
 
 
 def _runner_module():
     """Late-bound import of runner to avoid circular imports."""
     import runner as _r
     return _r
+
+
+# ---------------------------------------------------------------------------
+# R4.6 — pure business-logic function shared by CLI + `/deploy` slash handler.
+# ---------------------------------------------------------------------------
+
+
+class DeployCommandError(RuntimeError):
+    """Raised by ``run_deploy_in_process`` for domain-level deploy failures.
+
+    The Click wrapper translates this to :class:`click.ClickException`;
+    the slash handler surfaces the message as a transcript error.
+    """
+
+
+class DeployVerdictBlockedError(DeployCommandError):
+    """Raised when the R1.9 deploy verdict gate blocks a deploy.
+
+    The Click wrapper translates this to ``sys.exit(EXIT_DEGRADED_DEPLOY)``
+    (the R1-established exit code 13); the slash handler surfaces the
+    message as a transcript error. The in-process runner emits a terminal
+    ``deploy_complete`` event with ``status="blocked"`` BEFORE raising so
+    consumers see a well-formed envelope either way.
+    """
+
+
+@dataclass(frozen=True)
+class DeployRunResult:
+    """Outcome of an in-process ``deploy`` invocation.
+
+    The ``/deploy`` slash handler uses this to build its summary; the
+    Click wrapper ignores it (stream-json is the authoritative output).
+    """
+
+    attempt_id: str | None
+    deployment_id: str | None
+    verdict: str | None       # "approved" | "blocked" | None
+    status: str               # "ok" | "failed" | "blocked" | "cancelled"
+    failure_reason: str | None = None
+
+
+def _strict_live_gate(*, strict_live: bool, warnings: list[str]) -> None:
+    """Apply the strict-live gate on accumulated fallback warnings.
+
+    Extracted as a module-level function so tests can monkeypatch it to
+    inject a :class:`MockFallbackError` without going through the full
+    deploy flow. Real strict-live enforcement happens via
+    :class:`cli.strict_live.StrictLivePolicy`.
+    """
+    if not strict_live or not warnings:
+        return
+    from cli.strict_live import MockFallbackError
+
+    raise MockFallbackError(warnings)
+
+
+def run_deploy_in_process(
+    *,
+    workflow: str | None = None,
+    config_version: int | None = None,
+    strategy: str = "canary",
+    configs_dir: str | None = None,
+    db: str | None = None,
+    target: str = "agentlab",
+    dry_run: bool = False,
+    acknowledge: bool = False,
+    auto_review: bool = False,
+    force_deploy_degraded: bool = False,
+    force_reason: str | None = None,
+    attempt_id: str | None = None,
+    release_experiment_id: str | None = None,
+    strict_live: bool = False,
+    on_event: Callable[[dict[str, Any]], None],
+    text_writer: Callable[[str], None] | None = None,
+) -> DeployRunResult:
+    """Execute a non-CX deploy flow in-process; stream events to ``on_event``.
+
+    This extraction covers the non-CX-studio deploy paths (canary,
+    immediate, rollback, status, dry-run). CX export remains on the
+    legacy Click callback — it involves interactive state that does not
+    map onto the event-streaming model.
+
+    Invariants preserved from R1:
+      - The degraded-verdict gate runs before any state mutation.
+      - A blocked verdict raises :class:`DeployVerdictBlockedError`
+        (Click wrapper → ``sys.exit(EXIT_DEGRADED_DEPLOY)``). Before
+        raising, a terminal ``deploy_complete`` event is emitted with
+        ``status="blocked"`` / ``verdict="blocked"``.
+      - ``--force-deploy-degraded`` with a ``--reason`` of at least 10
+        characters overrides the gate.
+    """
+    from cli.progress import ProgressRenderer
+    from cli.stream2_helpers import json_response
+
+    runner = _runner_module()
+    resolved_configs_dir = configs_dir if configs_dir is not None else runner.CONFIGS_DIR
+    resolved_db = db if db is not None else runner.DB_PATH
+    ConversationStore = runner.ConversationStore
+    Deployer = runner.Deployer
+
+    # Stream-json-shaped ProgressRenderer; the writer re-parses each JSON
+    # line back into a dict and hands it to on_event.
+    progress = ProgressRenderer(
+        output_format="stream-json",
+        render_text=False,
+        writer=_make_event_writer(on_event),
+    )
+
+    warnings_collected: list[str] = []
+    terminal_verdict: str | None = None
+    terminal_deployment_id: str | None = None
+
+    def _emit_text(message: str) -> None:
+        if text_writer is not None:
+            text_writer(message)
+
+    def _emit_terminal(
+        *,
+        status: str,
+        verdict: str | None,
+        deployment_id: str | None,
+        failure_reason: str | None = None,
+    ) -> DeployRunResult:
+        event: dict[str, Any] = {
+            "event": "deploy_complete",
+            "attempt_id": attempt_id,
+            "deployment_id": deployment_id,
+            "status": status,
+            "verdict": verdict,
+        }
+        if failure_reason is not None:
+            event["failure_reason"] = failure_reason
+        on_event(event)
+        return DeployRunResult(
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            verdict=verdict,
+            status=status,
+            failure_reason=failure_reason,
+        )
+
+    # Optional auto-review (replicates ship behavior) — unchanged from R1.
+    if auto_review:
+        try:
+            from optimizer.change_card import ChangeCardStore
+
+            card_store = ChangeCardStore()
+            pending = card_store.list_pending(limit=200)
+            if not dry_run:
+                for card in pending:
+                    card_store.approve(card.card_id)
+        except Exception:
+            pass
+
+    progress.phase_started("deploy", message="Prepare deployment")
+
+    # R1.9 verdict gate — translate sys.exit into DeployVerdictBlockedError.
+    try:
+        runner._deploy_gate_check(
+            force_deploy_degraded=force_deploy_degraded,
+            force_reason=force_reason,
+            output_format="stream-json",
+        )
+    except SystemExit as exc:
+        # Gate decided to block. Emit terminal event, then raise.
+        code = int(exc.code) if isinstance(exc.code, int) else 1
+        from cli.exit_codes import EXIT_DEGRADED_DEPLOY
+        if code == EXIT_DEGRADED_DEPLOY:
+            _emit_terminal(
+                status="blocked",
+                verdict="blocked",
+                deployment_id=None,
+                failure_reason="deploy gate: degraded eval verdict",
+            )
+            raise DeployVerdictBlockedError(
+                "Deploy blocked: latest eval verdict is degraded. "
+                "Use --force-deploy-degraded --reason \"...\" to override."
+            ) from exc
+        # Other exit codes (e.g. 2 for bad --reason) re-raise as-is.
+        raise
+
+    # Workflow positional resolves strategy.
+    if workflow is not None:
+        if workflow == "release":
+            strategy = "immediate"
+        elif workflow != "rollback":
+            strategy = workflow
+
+    store = ConversationStore(db_path=resolved_db)
+    deployer = Deployer(configs_dir=resolved_configs_dir, store=store)
+    history = deployer.version_manager.get_version_history()
+
+    if workflow == "status":
+        snapshot = deployer.status()
+        progress.phase_completed("deploy", message="Status read")
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        return _emit_terminal(status="ok", verdict=None, deployment_id=None)
+
+    if not history:
+        progress.warning(message="No config versions available", phase="deploy")
+        warnings_collected.append("no config versions available")
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        return _emit_terminal(
+            status="failed",
+            verdict=None,
+            deployment_id=None,
+            failure_reason="no config versions available",
+        )
+
+    if workflow == "rollback":
+        rollback_version = config_version or deployer.version_manager.manifest.get(
+            "canary_version"
+        )
+        if rollback_version is None:
+            progress.warning(
+                message="No active canary deployment to roll back", phase="deploy"
+            )
+            return _emit_terminal(
+                status="failed",
+                verdict=None,
+                deployment_id=None,
+                failure_reason="no canary deployment to roll back",
+            )
+        if dry_run:
+            progress.phase_completed(
+                "deploy",
+                message=f"Dry-run rollback preview v{rollback_version:03d}",
+            )
+            progress.next_action("agentlab deploy rollback")
+            _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+            return _emit_terminal(
+                status="ok",
+                verdict="approved",
+                deployment_id=None,
+            )
+        deployer.version_manager.rollback(rollback_version)
+        deployment_id = f"rollback-v{rollback_version:03d}"
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            version=rollback_version,
+            strategy="rollback",
+        )
+        progress.phase_completed(
+            "deploy", message=f"Rolled back canary v{rollback_version:03d}"
+        )
+        progress.next_action("agentlab status")
+        terminal_deployment_id = deployment_id
+        terminal_verdict = "approved"
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        return _emit_terminal(
+            status="ok",
+            verdict=terminal_verdict,
+            deployment_id=terminal_deployment_id,
+        )
+
+    active_version = deployer.version_manager.manifest.get("active_version")
+    if config_version is None:
+        deployable_candidates = [
+            entry["version"]
+            for entry in history
+            if entry["version"] != active_version
+            and entry.get("status") in {"candidate", "evaluated", "canary", "imported"}
+        ]
+        if strategy == "canary":
+            if not deployable_candidates:
+                reason = (
+                    "No candidate config version available to deploy. "
+                    "Run `agentlab optimize --cycles 1`, review/apply a candidate, "
+                    "or pass --config-version."
+                )
+                progress.warning(message=reason, phase="deploy")
+                _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+                _emit_terminal(
+                    status="failed",
+                    verdict=None,
+                    deployment_id=None,
+                    failure_reason=reason,
+                )
+                raise DeployCommandError(reason)
+            config_version = max(deployable_candidates)
+        else:
+            config_version = history[-1]["version"]
+
+    found = None
+    for v in history:
+        if v["version"] == config_version:
+            found = v
+            break
+    if found is None:
+        reason = f"Version {config_version} not found"
+        progress.warning(message=reason, phase="deploy")
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        return _emit_terminal(
+            status="failed",
+            verdict=None,
+            deployment_id=None,
+            failure_reason=reason,
+        )
+
+    if strategy == "canary" and config_version == active_version:
+        reason = (
+            f"Cannot deploy active version v{config_version:03d} as its own canary. "
+            "Choose a non-active candidate version."
+        )
+        progress.warning(message=reason, phase="deploy")
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        _emit_terminal(
+            status="failed",
+            verdict=None,
+            deployment_id=None,
+            failure_reason=reason,
+        )
+        raise DeployCommandError(reason)
+
+    filepath = Path(resolved_configs_dir) / found["filename"]
+    with filepath.open("r", encoding="utf-8") as f:
+        _config = yaml.safe_load(f)
+    del _config
+
+    if dry_run:
+        progress.phase_completed("deploy", message="Dry-run deployment preview ready")
+        progress.next_action("agentlab deploy")
+        _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+        return _emit_terminal(
+            status="ok",
+            verdict="approved",
+            deployment_id=None,
+        )
+
+    created_release: dict[str, Any] | None = None
+    if auto_review:
+        from cli.stream2_helpers import ReleaseStore
+
+        created_release = ReleaseStore().create(
+            release_experiment_id or f"ship-v{config_version:03d}",
+            config_version=config_version,
+        )
+
+    if strategy == "immediate":
+        deployer.version_manager.promote(config_version)
+        deployment_id = f"promote-v{config_version:03d}"
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            version=config_version,
+            strategy="immediate",
+        )
+        progress.phase_completed(
+            "deploy", message=f"Deployed v{config_version:03d} immediately"
+        )
+        progress.next_action("agentlab status")
+        terminal_deployment_id = deployment_id
+        terminal_verdict = "approved"
+    else:
+        deployer.version_manager.mark_canary(config_version)
+        deployment_id = f"canary-v{config_version:03d}"
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            version=config_version,
+            strategy="canary",
+        )
+        progress.phase_completed(
+            "deploy", message=f"Deployed v{config_version:03d} as canary"
+        )
+        progress.next_action("agentlab status")
+        terminal_deployment_id = deployment_id
+        terminal_verdict = "approved"
+
+    _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
+    return _emit_terminal(
+        status="ok",
+        verdict=terminal_verdict,
+        deployment_id=terminal_deployment_id,
+    )
 
 
 def _emit_deploy_lineage(
@@ -162,11 +548,51 @@ def register_deploy_commands(cli: click.Group) -> None:
                     click.echo(click.style(f"  Auto-reviewed: {len(pending)} pending card(s)", fg="green"))
             except Exception:
                 pass
-        from cli.output import resolve_output_format
+        from cli.output import resolve_output_format, emit_stream_json
         from cli.permissions import PermissionManager
         from cli.progress import ProgressRenderer
 
         resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+
+        # R4.6 — stream-json mode delegates to run_deploy_in_process so
+        # the /deploy slash handler + CLI share the exact same event
+        # sequence and terminal envelope. The legacy text/json paths
+        # below keep their original shape.
+        if resolved_output_format == "stream-json" and target != "cx-studio":
+            from cli.exit_codes import EXIT_DEGRADED_DEPLOY, EXIT_MOCK_FALLBACK
+            from cli.strict_live import MockFallbackError
+
+            def _on_event(event: dict[str, Any]) -> None:
+                emit_stream_json(event, writer=click.echo)
+
+            try:
+                run_deploy_in_process(
+                    workflow=workflow,
+                    config_version=config_version,
+                    strategy=strategy,
+                    configs_dir=configs_dir,
+                    db=db,
+                    target=target,
+                    dry_run=dry_run,
+                    acknowledge=acknowledge,
+                    auto_review=auto_review,
+                    force_deploy_degraded=force_deploy_degraded,
+                    force_reason=force_reason,
+                    attempt_id=attempt_id,
+                    release_experiment_id=release_experiment_id,
+                    on_event=_on_event,
+                    text_writer=None,
+                )
+            except DeployVerdictBlockedError as exc:
+                click.echo(str(exc), err=True)
+                sys.exit(EXIT_DEGRADED_DEPLOY)
+            except MockFallbackError as exc:
+                click.echo(str(exc), err=True)
+                sys.exit(EXIT_MOCK_FALLBACK)
+            except DeployCommandError as exc:
+                raise click.ClickException(str(exc)) from exc
+            return
+
         progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
         progress.phase_started("deploy", message="Prepare deployment")
 

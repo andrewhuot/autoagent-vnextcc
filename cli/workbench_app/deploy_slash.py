@@ -1,51 +1,56 @@
-"""`/deploy` slash command — streams ``agentlab deploy`` into the transcript.
+"""`/deploy` slash command — runs ``agentlab deploy`` **in-process** (R4.6).
 
-T12 follows the `/eval` (T09) / `/optimize` (T10) streaming pattern, with one
-distinguishing rule: deployment mutates shared state, so the handler always
-prompts the user for an explicit ``y/N`` confirmation before spawning the
-subprocess. The confirmation is bypassed in two cases:
+The handler no longer spawns a subprocess. It calls
+:func:`cli.commands.deploy.run_deploy_in_process` on a background
+thread and bridges its ``on_event`` callback into a :class:`queue.Queue`
+so the existing synchronous-generator renderer + spinner machinery
+keeps its shape.
 
-- ``--dry-run`` is on the args list (no state change, safe to run).
-- The user already passed ``-y`` / ``--yes``; they've opted into the advanced
-  flow and we respect it.
+Deployment mutates shared state, so the handler prompts the user for an
+explicit ``y/N`` confirmation before running. The confirmation is
+bypassed when ``--dry-run`` is on the args list or when the user
+already passed ``-y`` / ``--yes``. When the prompt returns ``y``, the
+handler appends ``-y`` to the argv so the subprocess compatibility
+layer does not re-prompt through :class:`PermissionManager`.
 
-When the prompt returns ``y`` (case-insensitive), the handler appends ``-y``
-to the subprocess args so ``runner.deploy`` does not re-prompt through
-:class:`PermissionManager`. Anything else cancels quietly.
-
-The subprocess runner and the prompter are injectable seams so tests never
-spawn a real process or block on ``input()``.
+Session-aware argv injection (R4.6): when the user omits
+``--attempt-id``, ``session.last_attempt_id`` is injected. If neither
+source supplies one, the handler emits a transcript error and never
+calls the runner. R1 invariant: a verdict-blocked runner result
+surfaces as a transcript error with ``status="blocked"`` metadata from
+the terminal ``deploy_complete`` event.
 """
 
 from __future__ import annotations
 
+import queue
 import shlex
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 import click
 
 from cli.workbench_app import theme
-from cli.workbench_app._subprocess import (
-    DEFAULT_STALL_TIMEOUT_S,
-    SubprocessStreamError,
-    stream_subprocess,
-)
+from cli.workbench_app._subprocess import DEFAULT_STALL_TIMEOUT_S
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
 
 
+_SENTINEL: Any = object()
+
+
 StreamEvent = dict[str, Any]
-"""One JSON event emitted by a stream-json subprocess."""
+"""One JSON event emitted by an in-process deploy run."""
 
 StreamRunner = Callable[..., Iterator[StreamEvent]]
-"""Given ``(args,)`` yield parsed JSON events until the process exits.
+"""Given ``(args,)`` yield parsed JSON events until the run exits.
 
-Raise :class:`DeployCommandError` for non-zero exits. Tests inject a generator
-in place of the real subprocess.
+Raise :class:`DeployCommandError` for domain failures. Tests inject a
+generator in place of the real in-process runner.
 """
 
 Prompter = Callable[[str], bool]
@@ -57,7 +62,7 @@ that returns a canned decision.
 
 
 class DeployCommandError(RuntimeError):
-    """Raised by a :data:`StreamRunner` when the subprocess fails."""
+    """Raised by a :data:`StreamRunner` (or session resolver) on failure."""
 
 
 @dataclass(frozen=True)
@@ -71,45 +76,16 @@ class DeploySummary:
     errors: int = 0
     next_action: str | None = None
     strategy: str | None = None
+    # R4.6 — populated from the terminal ``deploy_complete`` event.
+    attempt_id: str | None = None
+    deployment_id: str | None = None
+    verdict: str | None = None
+    status: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Default seams
 # ---------------------------------------------------------------------------
-
-
-def _default_stream_runner(
-    args: Sequence[str],
-    *,
-    cancellation: CancellationToken | None = None,
-    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
-) -> Iterator[StreamEvent]:
-    """Spawn ``agentlab deploy`` and yield stream-json events line by line.
-
-    Delegates to :func:`cli.workbench_app._subprocess.stream_subprocess` for
-    pipe management, stall detection, and cancellation wiring. This function
-    only owns the argv layout (note: deploy passes positional args before
-    ``--output-format`` to respect Click's subcommand ordering) and error
-    translation into :class:`DeployCommandError`.
-    """
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "runner",
-        "deploy",
-        *args,
-        "--output-format",
-        "stream-json",
-    ]
-    try:
-        yield from stream_subprocess(
-            cmd,
-            stall_timeout_s=stall_timeout_s,
-            cancellation=cancellation,
-            on_nonjson=lambda line: {"event": "warning", "message": line},
-        )
-    except SubprocessStreamError as exc:
-        raise DeployCommandError(f"deploy: {exc}") from exc
 
 
 def _default_prompter(message: str) -> bool:
@@ -166,6 +142,179 @@ def _parse_args(args: Sequence[str]) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Argv parser + session resolver
+# ---------------------------------------------------------------------------
+
+
+def _args_to_kwargs(args: Sequence[str]) -> dict[str, Any]:
+    """Translate the ``/deploy`` argv shape into ``run_deploy_in_process`` kwargs.
+
+    Mirrors the Click wrapper's argument spec so the slash handler can
+    drive the exact same business logic. Unknown flags are dropped — the
+    slash command surface is deliberately narrower than the full CLI.
+    """
+    kwargs: dict[str, Any] = {
+        "workflow": None,
+        "config_version": None,
+        "strategy": "canary",
+        "dry_run": False,
+        "acknowledge": False,
+        "auto_review": False,
+        "force_deploy_degraded": False,
+        "force_reason": None,
+        "attempt_id": None,
+        "strict_live": False,
+    }
+    it = iter(args)
+    for token in it:
+        if token == "--strategy":
+            value = next(it, None)
+            if value is not None:
+                kwargs["strategy"] = value
+        elif token.startswith("--strategy="):
+            kwargs["strategy"] = token.split("=", 1)[1]
+        elif token in {"canary", "immediate", "release", "rollback", "status"}:
+            kwargs["workflow"] = token
+        elif token == "--config-version":
+            value = next(it, None)
+            if value is not None:
+                try:
+                    kwargs["config_version"] = int(value)
+                except ValueError:
+                    pass
+        elif token == "--dry-run":
+            kwargs["dry_run"] = True
+        elif token in _CONFIRM_SKIP_FLAGS:
+            kwargs["acknowledge"] = True
+        elif token == "--auto-review":
+            kwargs["auto_review"] = True
+        elif token == "--force-deploy-degraded":
+            kwargs["force_deploy_degraded"] = True
+        elif token == "--reason":
+            value = next(it, None)
+            if value is not None:
+                kwargs["force_reason"] = value
+        elif token == "--attempt-id":
+            value = next(it, None)
+            if value is not None:
+                kwargs["attempt_id"] = value
+        elif token == "--strict-live":
+            kwargs["strict_live"] = True
+        elif token == "--no-strict-live":
+            kwargs["strict_live"] = False
+        # Unknown flags are intentionally ignored for the slash surface.
+    return kwargs
+
+
+def _resolve_session_attempt_id(
+    kwargs: dict[str, Any],
+    session: Any,
+) -> dict[str, Any]:
+    """Inject ``session.last_attempt_id`` when the user omits ``--attempt-id``.
+
+    User-supplied ``attempt_id`` always wins. Raises
+    :class:`DeployCommandError` when neither source supplies one so the
+    handler can surface a command-shape error rather than letting a
+    deploy start without attempt linkage.
+    """
+    out = dict(kwargs)
+    if out.get("attempt_id"):
+        return out
+    session_value = (
+        getattr(session, "last_attempt_id", None) if session is not None else None
+    )
+    if not session_value:
+        raise DeployCommandError(
+            "/deploy: no attempt in session — run /optimize or /improve accept first, "
+            "or pass --attempt-id <id>."
+        )
+    out["attempt_id"] = session_value
+    return out
+
+
+def _build_stream_args(
+    original_args: Sequence[str], resolved_kwargs: dict[str, Any]
+) -> list[str]:
+    """Append session-injected ``--attempt-id`` to argv when absent.
+
+    Preserves the user's original argv order. If the user already passed
+    ``--attempt-id``, argv is returned unchanged. Otherwise the
+    resolver-provided value is appended so the runner (real + fake) sees
+    the canonical invocation.
+    """
+    out = list(original_args)
+    if any(tok == "--attempt-id" for tok in out):
+        return out
+    injected = resolved_kwargs.get("attempt_id")
+    if injected:
+        out.extend(["--attempt-id", str(injected)])
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Default in-process runner (R4.6) — thread + queue bridge
+# ---------------------------------------------------------------------------
+
+
+def _default_stream_runner(
+    args: Sequence[str],
+    *,
+    cancellation: CancellationToken | None = None,
+    stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
+) -> Iterator[StreamEvent]:
+    """Run ``deploy`` in-process on a background thread; yield events.
+
+    Parses ``args`` into :func:`cli.commands.deploy.run_deploy_in_process`
+    kwargs, spins up a worker thread, and bridges the worker's
+    ``on_event`` callback into this generator via a :class:`queue.Queue`.
+    Domain exceptions are captured and re-raised as
+    :class:`DeployCommandError` at the boundary.
+
+    ``cancellation`` and ``stall_timeout_s`` are preserved for
+    ``_invoke_runner`` API compatibility; ``stall_timeout_s`` is a no-op
+    in-process.
+    """
+    from cli.commands.deploy import (
+        DeployCommandError as _DomainError,
+        DeployVerdictBlockedError,
+        run_deploy_in_process,
+    )
+
+    kwargs = _args_to_kwargs(args)
+    q: queue.Queue = queue.Queue()
+    error_holder: dict[str, BaseException] = {}
+
+    def _worker() -> None:
+        try:
+            run_deploy_in_process(**kwargs, on_event=q.put)
+        except DeployVerdictBlockedError as exc:
+            error_holder["value"] = DeployCommandError(f"deploy blocked: {exc}")
+        except _DomainError as exc:
+            error_holder["value"] = DeployCommandError(f"deploy: {exc}")
+        except BaseException as exc:
+            error_holder["value"] = exc
+        finally:
+            q.put(_SENTINEL)
+
+    t = threading.Thread(target=_worker, daemon=True, name="deploy-in-process")
+    t.start()
+    try:
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            yield item
+    finally:
+        t.join(timeout=5.0)
+
+    if "value" in error_holder:
+        exc = error_holder["value"]
+        if isinstance(exc, DeployCommandError):
+            raise exc
+        raise DeployCommandError(f"deploy: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
 # Event → transcript line rendering
 # ---------------------------------------------------------------------------
 
@@ -201,6 +350,10 @@ def _summarise(
     }
     artifacts: list[str] = []
     next_action: str | None = None
+    attempt_id: str | None = None
+    deployment_id: str | None = None
+    verdict: str | None = None
+    status: str | None = None
     for event in events:
         counters["events"] += 1
         name = event.get("event")
@@ -218,6 +371,21 @@ def _summarise(
             message = event.get("message")
             if message:
                 next_action = str(message)
+        elif name == "deploy_complete":
+            # R4.6 terminal event: flat-shape metadata the slash handler
+            # surfaces in the summary + onDone meta lines.
+            candidate_attempt = event.get("attempt_id")
+            if candidate_attempt:
+                attempt_id = str(candidate_attempt)
+            candidate_deployment = event.get("deployment_id")
+            if candidate_deployment:
+                deployment_id = str(candidate_deployment)
+            candidate_verdict = event.get("verdict")
+            if candidate_verdict:
+                verdict = str(candidate_verdict)
+            candidate_status = event.get("status")
+            if candidate_status:
+                status = str(candidate_status)
         yield event, DeploySummary(
             events=counters["events"],
             phases_completed=counters["phases_completed"],
@@ -226,6 +394,10 @@ def _summarise(
             errors=counters["errors"],
             next_action=next_action,
             strategy=strategy,
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            verdict=verdict,
+            status=status,
         )
 
 
@@ -280,14 +452,33 @@ def make_deploy_handler(
                 return on_done(result=cancelled, display="skip")
             stream_args.append("-y")
 
+        # R4.6 — session-aware attempt_id injection.
+        session = (
+            ctx.meta.get("workbench_session") if isinstance(ctx.meta, dict) else None
+        )
+        parsed_kwargs = _args_to_kwargs(stream_args)
+        try:
+            resolved_kwargs = _resolve_session_attempt_id(parsed_kwargs, session)
+        except DeployCommandError as exc:
+            echo(theme.error(f"  /deploy failed: {exc}"))
+            return on_done(
+                result=f"  /deploy failed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
+
+        # Thread the resolved attempt_id back into argv so the runner
+        # (real + fake) sees the canonical invocation.
+        stream_args = _build_stream_args(stream_args, resolved_kwargs)
+
         echo(theme.command_name(
             f"  /deploy starting — agentlab deploy {shlex.join(stream_args)}".rstrip(),
         ))
 
         cancellation = ctx.cancellation
         cancelled = False
+        final_summary = DeploySummary(strategy=strategy)
         try:
-            final_summary = DeploySummary(strategy=strategy)
             stream = _invoke_runner(active_runner, stream_args, cancellation)
             with ctx.spinner(f"deploying ({strategy})") as spin:
                 for event, summary in _summarise(stream, strategy=strategy):
@@ -316,6 +507,14 @@ def make_deploy_handler(
         except FileNotFoundError as exc:
             echo(theme.error(f"  /deploy failed: {exc}"))
             return on_done(result=None, display="skip")
+        except Exception as exc:  # error boundary — must come AFTER domain catches
+            # R4.6 — an in-process handler must never crash the TUI.
+            echo(theme.error(f"  /deploy crashed: {type(exc).__name__}: {exc}"))
+            return on_done(
+                result=f"  /deploy crashed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
 
         if cancelled:
             message = "  /deploy cancelled — ctrl-c; rollout aborted."
@@ -366,7 +565,7 @@ def build_deploy_command(
         argument_hint="[canary|immediate] [--dry-run] [-y]",
         when_to_use="Use when you are ready to ship the active config.",
         effort="medium",
-        allowed_tools=("subprocess",),
+        allowed_tools=("in-process",),
         sensitive=True,
     )
 

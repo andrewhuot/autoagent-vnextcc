@@ -13,7 +13,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 import click
 
@@ -33,6 +34,240 @@ from cli.workbench_render import (
 )
 from cli.workspace import AgentLabWorkspace, discover_workspace
 from shared.build_artifact_store import BuildArtifactStore
+
+
+# ---------------------------------------------------------------------------
+# R4.3 — pure business-logic function shared by CLI + `/build` slash handler.
+# ---------------------------------------------------------------------------
+
+
+class BuildCommandError(RuntimeError):
+    """Raised by :func:`run_build_in_process` on non-recoverable failures.
+
+    The Click wrapper translates this to :class:`click.ClickException` with
+    a non-zero exit code; the ``/build`` slash handler renders a transcript
+    error. Matches the error taxonomy R4.2 established for eval.
+    """
+
+
+class LiveBuildRequiredError(BuildCommandError):
+    """Raised when ``require_live=True`` cannot be satisfied.
+
+    Distinct subclass so callers that care about the strict-live failure
+    class (e.g. a future strict-live CLI flag) can branch on it.
+    """
+
+
+@dataclass(frozen=True)
+class BuildRunResult:
+    """Outcome of an in-process workbench build run.
+
+    * ``project_id`` — resolved from the stream events (newest wins).
+    * ``config_path`` — path to the latest build artifact snapshot
+      (``.agentlab/build_artifact_latest.json``) so downstream slash
+      commands (``/eval``, ``/optimize``) can resolve it.
+    * ``status`` — ``"ok"`` / ``"failed"`` / ``"cancelled"``.
+    * ``failure_reason`` — surfaced from ``run.failed`` / ``run.cancelled``.
+    * ``events`` — full event trail (including the synthetic
+      ``build_complete`` terminal event).
+    """
+
+    project_id: str | None
+    config_path: str | None
+    status: str
+    failure_reason: str | None
+    events: tuple[dict[str, Any], ...]
+
+
+def run_build_in_process(
+    *,
+    brief: str,
+    project_id: str | None = None,
+    start_new: bool = False,
+    target: str = "portable",
+    environment: str = "draft",
+    mock: bool = False,
+    require_live: bool = False,
+    auto_iterate: bool = True,
+    max_iterations: int = 3,
+    max_seconds: int | None = None,
+    max_tokens: int | None = None,
+    max_cost_usd: float | None = None,
+    on_event: Callable[[dict[str, Any]], None],
+) -> BuildRunResult:
+    """Run the workbench build loop in-process and stream events to ``on_event``.
+
+    This is the shared business logic extracted from ``build_command``. Both
+    the Click wrapper and the ``/build`` slash handler drive it. Events are
+    delivered in the existing workbench ``{"event": name, "data": {...}}``
+    shape (unchanged by R4.3). A synthetic terminal event ``build_complete``
+    carrying ``{event, project_id, config_path, status, failure_reason}``
+    is appended so the slash handler can update the shared
+    :class:`~cli.workbench_app.session_state.WorkbenchSession` in one pass.
+
+    Raises:
+        LiveBuildRequiredError: If ``require_live=True`` and no live router
+            is configured. The terminal ``build_complete`` event is emitted
+            with ``status="failed"`` before the raise.
+        BuildCommandError: For any other non-recoverable workbench failure.
+    """
+    from builder.workbench_agent import build_default_agent_with_readiness
+
+    workspace = _require_workspace()
+    service = _service_for_workspace(workspace)
+    selected_project_id = None if start_new else project_id
+
+    agent, execution = build_default_agent_with_readiness(force_mock=mock)
+
+    collected_events: list[dict[str, Any]] = []
+    failure_reason: str | None = None
+    status: str = "ok"
+    cancelled = False
+
+    async def _consume() -> None:
+        stream = await service.run_build_stream(
+            project_id=selected_project_id,
+            brief=brief,
+            target=target,
+            environment=environment,
+            agent=agent,
+            auto_iterate=auto_iterate,
+            max_iterations=max_iterations,
+            max_seconds=max_seconds,
+            max_tokens=max_tokens,
+            max_cost_usd=max_cost_usd,
+            execution=execution,
+            require_live=require_live,
+        )
+        async for event in stream:
+            collected_events.append(event)
+            on_event(event)
+
+    try:
+        asyncio.run(_consume())
+    except KeyboardInterrupt:
+        cancelled = True
+        status = "cancelled"
+        _cancel_active_run(service, collected_events, selected_project_id)
+    except Exception as exc:  # noqa: BLE001
+        # Classify: require_live → LiveBuildRequiredError, else generic.
+        status = "failed"
+        failure_reason = str(exc) or exc.__class__.__name__
+        live_required = require_live and (
+            "Live Workbench generation" in failure_reason
+            or "live provider" in failure_reason
+        )
+        # Resolve project_id from whatever events we have, then emit the
+        # terminal build_complete event BEFORE raising so the slash handler
+        # always sees a consistent terminal frame.
+        pid = _project_id_from_events(collected_events, selected_project_id)
+        config_path = _resolve_build_config_path(workspace)
+        terminal = {
+            "event": "build_complete",
+            "project_id": pid,
+            "config_path": config_path,
+            "status": status,
+            "failure_reason": failure_reason,
+        }
+        collected_events.append(terminal)
+        on_event(terminal)
+        if live_required:
+            raise LiveBuildRequiredError(failure_reason) from exc
+        raise BuildCommandError(failure_reason) from exc
+
+    # Inspect the terminal run.* event for failure/cancel status if we didn't
+    # already raise above.
+    if not cancelled:
+        for event in reversed(collected_events):
+            name = event.get("event")
+            if name == "run.completed":
+                status = "ok"
+                break
+            if name == "run.failed":
+                status = "failed"
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                # ``_fail_run_stream`` uses ``message`` for the actual exception
+                # text and ``failure_reason`` as a short tag (defaults to
+                # "error"). Prefer the richer message when it's informative.
+                msg = data.get("message")
+                reason = data.get("failure_reason")
+                if msg and msg != reason:
+                    failure_reason = str(msg)
+                elif reason:
+                    failure_reason = str(reason)
+                break
+            if name == "run.cancelled":
+                status = "cancelled"
+                data = event.get("data") if isinstance(event.get("data"), dict) else {}
+                failure_reason = (
+                    str(data.get("cancel_reason"))
+                    if data.get("cancel_reason")
+                    else None
+                )
+                break
+
+    resolved_project_id = _project_id_from_events(collected_events, selected_project_id)
+    resolved_config_path = _resolve_build_config_path(workspace)
+
+    terminal_event = {
+        "event": "build_complete",
+        "project_id": resolved_project_id,
+        "config_path": resolved_config_path,
+        "status": status,
+        "failure_reason": failure_reason,
+    }
+    collected_events.append(terminal_event)
+    on_event(terminal_event)
+
+    # If a require_live run ultimately failed, raise a domain error AFTER the
+    # terminal event so both the CLI wrapper (→ click.ClickException) and the
+    # slash handler (→ transcript error) can translate it uniformly. Without
+    # require_live, a ``run.failed`` is not by itself an exceptional case —
+    # the caller inspects ``BuildRunResult.status``.
+    if require_live and status == "failed":
+        if failure_reason and (
+            "Live Workbench" in failure_reason
+            or "live provider" in failure_reason
+            or "mock-backed" in failure_reason
+        ):
+            raise LiveBuildRequiredError(failure_reason)
+        raise BuildCommandError(failure_reason or "Workbench run failed.")
+
+    return BuildRunResult(
+        project_id=resolved_project_id,
+        config_path=resolved_config_path,
+        status=status,
+        failure_reason=failure_reason,
+        events=tuple(collected_events),
+    )
+
+
+def _project_id_from_events(
+    events: list[dict[str, Any]], fallback: str | None
+) -> str | None:
+    """Resolve the project_id from the newest event that carries one.
+
+    Unlike :func:`_last_project_id_from_events` this variant is forgiving:
+    it returns ``None`` rather than raising when no project_id was seen.
+    """
+    for event in reversed(events):
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        project_id = data.get("project_id") or event.get("project_id")
+        if project_id:
+            return str(project_id)
+    return fallback
+
+
+def _resolve_build_config_path(workspace: AgentLabWorkspace) -> str | None:
+    """Return the path to the latest build artifact snapshot, if present.
+
+    ``_artifact_store_for_workspace`` points at ``build_artifact_latest.json``
+    — the canonical location downstream slash commands consume. Returns the
+    string path even if the file doesn't yet exist so callers can still thread
+    it into their session state (existence is checked by the consumers).
+    """
+    latest = workspace.agentlab_dir / "build_artifact_latest.json"
+    return str(latest)
 
 
 TARGET_CHOICES = click.Choice(["portable", "adk", "cx"], case_sensitive=False)
@@ -276,11 +511,57 @@ async def _consume_workbench_stream(
     return events
 
 
+def _make_text_renderer() -> Callable[[dict[str, Any]], None]:
+    """Build a per-event text renderer matching :func:`_consume_workbench_stream`.
+
+    Setup logic (harness banner) runs once at call time; the returned
+    function is applied to each workbench event dict. Extracted for R4.3
+    so ``build_command`` can hand ``run_build_in_process`` a per-event
+    callback without wrapping the async iterator.
+    """
+    from cli.auto_harness import (
+        HarnessEvent,
+        HarnessRenderer,
+        HarnessSession,
+        resolve_cli_ui,
+        workbench_event_to_harness_event,
+    )
+    from cli.permissions import PermissionManager
+
+    harness = None
+    renderer = None
+    if resolve_cli_ui("text", requested_ui=None) == "claude":
+        harness = HarnessSession(permission_mode=PermissionManager().mode)
+        renderer = HarnessRenderer()
+        harness.emit(HarnessEvent("session.started", message="AgentLab Workbench"))
+        harness.emit(HarnessEvent("stage.started", message="Running Workbench stream"))
+        click.echo(renderer.render(harness.snapshot()))
+        click.echo("")
+
+    def _render(event: dict[str, Any]) -> None:
+        event_name = str(event.get("event") or "message")
+        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        if harness is not None and renderer is not None:
+            adapted = workbench_event_to_harness_event(event_name, data)
+            if adapted is not None:
+                harness.emit(adapted)
+                click.echo(renderer.render(harness.snapshot()))
+                click.echo("")
+                return
+        render_workbench_event(event_name, data)
+
+    return _render
+
+
 def _last_project_id_from_events(events: list[dict[str, Any]], fallback: str | None = None) -> str:
-    """Read the project id from the newest event that carries it."""
+    """Read the project id from the newest event that carries it.
+
+    Tolerates both workbench events (``data.project_id``) and the R4.3
+    synthetic ``build_complete`` terminal event (flat ``project_id`` key).
+    """
     for event in reversed(events):
         data = event.get("data") if isinstance(event.get("data"), dict) else {}
-        project_id = data.get("project_id")
+        project_id = data.get("project_id") or event.get("project_id")
         if project_id:
             return str(project_id)
     if fallback:
@@ -512,13 +793,16 @@ def build_command(
     json_output: bool,
     output_format: str,
 ) -> None:
-    """Run the Workbench build loop from the terminal."""
-    from builder.workbench_agent import build_default_agent_with_readiness
+    """Run the Workbench build loop from the terminal.
 
-    workspace = _require_workspace()
-    service = _service_for_workspace(workspace)
+    R4.3: thin Click wrapper over :func:`run_build_in_process`. The event
+    dispatcher below preserves byte-identical user-visible output in both
+    text and stream-json modes: stream-json echoes each workbench event
+    directly (including the synthetic ``build_complete`` terminal event),
+    and text mode reuses :func:`_consume_workbench_stream`'s rendering
+    via :func:`render_workbench_event`.
+    """
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
-    selected_project_id = None if start_new else project_id
     if resolved_output_format == "text":
         click.echo(click.style(f"\n[workbench] Building: {brief}", fg="cyan", bold=True))
         click.echo("Workbench builds a candidate. Eval still measures it afterward.")
@@ -530,38 +814,54 @@ def build_command(
     if resolved_output_format == "stream-json":
         os.environ["AGENTLAB_WORKBENCH_STREAM_JSON"] = "1"
 
-    agent, execution = build_default_agent_with_readiness(force_mock=mock)
+    # Pre-build the text-mode harness (matches _consume_workbench_stream's
+    # header lines) so rendering stays byte-identical.
+    text_render = _make_text_renderer() if resolved_output_format == "text" else None
 
-    collected_events: list[dict[str, Any]] = []
+    def _on_event(event: dict[str, Any]) -> None:
+        if resolved_output_format == "stream-json":
+            click.echo(json.dumps(event, default=str))
+            return
+        if resolved_output_format == "text" and text_render is not None:
+            # Skip the synthetic ``build_complete`` terminal event in text
+            # mode — it's internal-only and would show as "unknown event".
+            if event.get("event") == "build_complete":
+                return
+            text_render(event)
 
     try:
-        collected_events = asyncio.run(
-            _consume_workbench_stream(
-                service.run_build_stream(
-                    project_id=selected_project_id,
-                    brief=brief,
-                    target=target,
-                    environment=environment,
-                    agent=agent,
-                    auto_iterate=auto_iterate,
-                    max_iterations=max_iterations,
-                    max_seconds=max_seconds,
-                    max_tokens=max_tokens,
-                    max_cost_usd=max_cost_usd,
-                    execution=execution,
-                    require_live=require_live,
-                ),
-                output_format=resolved_output_format,
-            )
+        result = run_build_in_process(
+            brief=brief,
+            project_id=project_id,
+            start_new=start_new,
+            target=target,
+            environment=environment,
+            mock=mock,
+            require_live=require_live,
+            auto_iterate=auto_iterate,
+            max_iterations=max_iterations,
+            max_seconds=max_seconds,
+            max_tokens=max_tokens,
+            max_cost_usd=max_cost_usd,
+            on_event=_on_event,
         )
-    except KeyboardInterrupt:
+    except LiveBuildRequiredError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except BuildCommandError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if result.status == "cancelled":
         click.echo(click.style("\nInterrupted. Cancelling run...", fg="yellow"))
-        _cancel_active_run(service, collected_events, selected_project_id)
         raise SystemExit(130)
 
     if resolved_output_format == "stream-json":
         return
-    resolved_project_id = _last_project_id_from_events(collected_events, fallback=selected_project_id)
+
+    workspace = _require_workspace()
+    service = _service_for_workspace(workspace)
+    resolved_project_id = _last_project_id_from_events(
+        list(result.events), fallback=result.project_id
+    )
     data = _build_summary(service, resolved_project_id)
     status = _terminal_status(data)
     if resolved_output_format == "json":

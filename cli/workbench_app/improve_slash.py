@@ -1,68 +1,85 @@
-"""`/improve` slash command — streams ``agentlab improve <sub>`` into the transcript.
+"""`/improve` slash command — runs ``agentlab improve <sub>`` **in-process** (R4.5).
 
-Slice D.1 of AgentLab R2 wires the unified improvement loop surface into the
-workbench. `/improve` is a thin passthrough group: the first positional
-argument selects the ``improve`` subcommand (``run``, ``accept``,
-``measure``, ``diff``, ``lineage``, ``list``, ``show``) and the rest of the
-argv is forwarded verbatim. The subprocess emits ``stream-json`` events that
-are piped through :func:`cli.workbench_render.format_workbench_event` into
-the transcript, exactly like ``/eval`` and ``/optimize``.
+The handler no longer spawns a subprocess. It dispatches on the first argv
+token to one of the ``run_improve_*_in_process`` pure functions extracted
+in R4.5 and bridges the worker's ``on_event`` callback into a
+:class:`queue.Queue` so the existing renderer + spinner machinery keeps
+its shape.
 
-The subprocess runner is an injectable seam (:data:`StreamRunner`) so tests
-can hand in a generator of pre-baked events rather than spawning a real
-process. The default runner uses :mod:`subprocess` with ``sys.executable -m
-runner`` so the child picks up the same interpreter + venv as the workbench.
+Session-aware argv injection: for ``accept``, ``measure``, and ``diff`` —
+subcommands that require ``<attempt_id>`` positionally — when the user
+omits the argument we inject ``session.last_attempt_id``. If neither
+source supplies one, the handler emits a transcript error and never
+calls the runner. On ``improve run`` / ``improve accept`` success the
+terminal ``improve_<sub>_complete`` event's ``attempt_id`` is written
+back to :class:`~cli.workbench_app.session_state.WorkbenchSession`.
 
-Slice R4 will grow richer widgets on top of this passthrough (an interactive
-attempt picker, inline diff rendering, etc.). For Slice D.1 the goal is
-parity: every CLI subcommand reachable from the TUI, nothing more.
+Scope note: the underlying CLI group has 8 subcommands, but
+``improve optimize`` is a thin alias for ``/optimize`` (already in-process
+via R4.4) so the slash surface remains at the 7 public subcommands.
+
+The runner remains an injectable seam (:data:`StreamRunner`) so tests
+can hand in a callable that yields pre-baked event dicts without
+touching the real improve stack.
 """
 
 from __future__ import annotations
 
+import queue
 import shlex
-import sys
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
-from cli.workbench_app._subprocess import (
-    DEFAULT_STALL_TIMEOUT_S,
-    SubprocessStreamError,
-    stream_subprocess,
-)
+from cli.workbench_app._subprocess import DEFAULT_STALL_TIMEOUT_S
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
 
 
+_SENTINEL: Any = object()
+
+
 StreamEvent = dict[str, Any]
-"""One JSON event emitted by a stream-json subprocess."""
+"""One JSON event emitted by an in-process improve run."""
 
 StreamRunner = Callable[..., Iterator[StreamEvent]]
-"""Given ``(args,)`` yield parsed JSON events until the process exits.
+"""Given ``(args,)`` yield parsed event dicts until the run exits.
 
-Raise :class:`ImproveCommandError` for non-zero exits or parse failures.
-Tests inject a generator in place of the real subprocess.
+Raise :class:`ImproveCommandError` for domain failures or parse errors.
+Tests inject a generator in place of the real in-process runner.
 """
 
 
 # Subcommands we recognise. Kept in sync with ``cli/commands/improve.py``.
-# Mismatched entries surface the parse error at dispatch time (cheap, loud)
-# rather than shelling out to ``agentlab improve <typo>`` which would spawn a
-# process and surface a less-obvious Click error several seconds later.
+# The CLI also has ``improve optimize``, but that's a thin alias for
+# ``optimize`` (already in-process via R4.4) — we exclude it from the slash
+# surface rather than duplicate the optimize dispatch here.
 _KNOWN_SUBCOMMANDS: frozenset[str] = frozenset(
     {"run", "accept", "measure", "diff", "lineage", "list", "show"}
 )
 
+# Subcommands that require ``<attempt_id>`` positionally and are eligible
+# for session-based auto-injection when the user omits it.
+_ATTEMPT_ID_SUBCOMMANDS: frozenset[str] = frozenset(
+    {"accept", "measure", "diff", "lineage", "show"}
+)
+
+# Subcommands whose session-based injection is automatic (per the R4.5 spec).
+# ``lineage`` + ``show`` use ``last_attempt_id`` when provided but don't raise
+# when absent here; the in-process function will raise on empty prefix lookup.
+_AUTO_INJECT_ATTEMPT_ID: frozenset[str] = frozenset(
+    {"accept", "measure", "diff"}
+)
+
 
 class ImproveCommandError(RuntimeError):
-    """Raised by a :data:`StreamRunner` when the subprocess fails.
+    """Raised by a :data:`StreamRunner` (or session resolver) on failure.
 
     Also raised by :func:`_parse_args` when the user invokes ``/improve``
-    with a missing or unknown subcommand — the handler catches and renders
-    a usage line rather than letting the error bubble to dispatch.
+    with a missing or unknown subcommand.
     """
 
 
@@ -77,11 +94,201 @@ class ImproveSummary:
     errors: int = 0
     next_action: str | None = None
     exit_code: int | None = None
+    attempt_id: str | None = None
+    deployment_id: str | None = None
+    status: str | None = None
+    subcommand: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Default subprocess runner
+# Argv parser + session resolver
 # ---------------------------------------------------------------------------
+
+
+_USAGE = (
+    "usage: /improve <run|accept|measure|diff|lineage|list|show> [args]"
+)
+
+
+def _parse_args(args: Sequence[str]) -> list[str]:
+    """Validate ``/improve`` args and return the subprocess argv tail.
+
+    Raises :class:`ImproveCommandError` when no subcommand is supplied or an
+    unknown one is used.
+    """
+    if not args:
+        raise ImproveCommandError(_USAGE)
+    sub = args[0]
+    if sub not in _KNOWN_SUBCOMMANDS:
+        raise ImproveCommandError(f"unknown subcommand {sub!r}. {_USAGE}")
+    return list(args)
+
+
+def _args_to_kwargs(sub: str, rest: Sequence[str]) -> dict[str, Any]:
+    """Translate ``/improve <sub> <rest>`` argv into in-process kwargs.
+
+    Keeps the slash surface narrow: only the flags the in-process functions
+    understand are recognised. Unknown tokens are dropped (matching the
+    other R4 slash handlers).
+    """
+    kwargs: dict[str, Any] = {}
+    # First positional attempt_id for accept/measure/diff/lineage/show.
+    positional_attempt_id: str | None = None
+
+    it = iter(rest)
+    for token in it:
+        if token == "--strategy":
+            value = next(it, None)
+            if value is not None:
+                kwargs["strategy"] = value
+        elif token == "--strict-live":
+            kwargs["strict_live"] = True
+        elif token == "--no-strict-live":
+            kwargs["strict_live"] = False
+        elif token == "--memory-db":
+            value = next(it, None)
+            if value is not None:
+                kwargs["memory_db"] = value
+        elif token == "--lineage-db":
+            value = next(it, None)
+            if value is not None:
+                kwargs["lineage_db"] = value
+        elif token == "--status":
+            value = next(it, None)
+            if value is not None:
+                kwargs["status"] = value
+        elif token == "--reason":
+            value = next(it, None)
+            if value is not None:
+                kwargs["reason"] = value
+        elif token == "--limit":
+            value = next(it, None)
+            if value is not None:
+                try:
+                    kwargs["limit"] = int(value)
+                except ValueError:
+                    pass
+        elif token == "--cycles":
+            value = next(it, None)
+            if value is not None:
+                try:
+                    kwargs["cycles"] = int(value)
+                except ValueError:
+                    pass
+        elif token == "--mode":
+            value = next(it, None)
+            if value is not None:
+                kwargs["mode"] = value
+        elif token == "--auto":
+            kwargs["auto"] = True
+        elif token.startswith("--"):
+            # Unknown flag — drop silently but consume any value that is not
+            # itself a flag (avoids swallowing the next recognised token).
+            continue
+        else:
+            # Positional token. For run, it's the config_path; otherwise it's
+            # the attempt_id prefix.
+            if sub == "run":
+                kwargs.setdefault("config_path", token)
+            elif positional_attempt_id is None and sub in _ATTEMPT_ID_SUBCOMMANDS:
+                positional_attempt_id = token
+    if positional_attempt_id is not None:
+        kwargs["attempt_id"] = positional_attempt_id
+    return kwargs
+
+
+def _resolve_session_attempt_id(
+    sub: str,
+    kwargs: dict[str, Any],
+    session: Any,
+) -> dict[str, Any]:
+    """Inject ``session.last_attempt_id`` when the user omits it.
+
+    Applies to ``accept`` / ``measure`` / ``diff`` only (per the R4.5 spec).
+    User-supplied ``attempt_id`` always wins. Raises
+    :class:`ImproveCommandError` when neither source supplies one.
+    """
+    out = dict(kwargs)
+    if sub not in _AUTO_INJECT_ATTEMPT_ID:
+        return out
+    if out.get("attempt_id"):
+        return out
+    session_value = (
+        getattr(session, "last_attempt_id", None) if session is not None else None
+    )
+    if not session_value:
+        raise ImproveCommandError(
+            f"/improve {sub}: no attempt in session — run /improve run first "
+            f"or pass <attempt_id>."
+        )
+    out["attempt_id"] = session_value
+    return out
+
+
+def _build_stream_args(
+    sub: str,
+    original_rest: Sequence[str],
+    resolved_kwargs: dict[str, Any],
+) -> list[str]:
+    """Append session-injected ``<attempt_id>`` to argv when absent.
+
+    For subcommands in :data:`_AUTO_INJECT_ATTEMPT_ID`, if the user didn't
+    pass a positional attempt_id the resolver's value is inserted right
+    after the subcommand token so the runner (real + fake) sees the
+    canonical invocation.
+    """
+    out: list[str] = [sub]
+    if sub not in _AUTO_INJECT_ATTEMPT_ID:
+        out.extend(original_rest)
+        return out
+    # Determine whether the user already supplied a positional attempt id.
+    user_has_attempt = False
+    for token in original_rest:
+        if not token.startswith("--"):
+            user_has_attempt = True
+            break
+    if user_has_attempt:
+        out.extend(original_rest)
+        return out
+    injected = resolved_kwargs.get("attempt_id")
+    if injected:
+        out.append(str(injected))
+    out.extend(original_rest)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Default in-process runner (R4.5) — thread + queue bridge
+# ---------------------------------------------------------------------------
+
+
+def _dispatch_in_process(
+    sub: str,
+    kwargs: dict[str, Any],
+    on_event: Callable[[dict[str, Any]], None],
+) -> None:
+    """Route to the correct ``run_improve_*_in_process`` function."""
+    from cli.commands.improve import (
+        run_improve_accept_in_process,
+        run_improve_diff_in_process,
+        run_improve_lineage_in_process,
+        run_improve_list_in_process,
+        run_improve_measure_in_process,
+        run_improve_run_in_process,
+        run_improve_show_in_process,
+    )
+
+    dispatch: dict[str, Callable[..., Any]] = {
+        "run": run_improve_run_in_process,
+        "list": run_improve_list_in_process,
+        "show": run_improve_show_in_process,
+        "accept": run_improve_accept_in_process,
+        "measure": run_improve_measure_in_process,
+        "diff": run_improve_diff_in_process,
+        "lineage": run_improve_lineage_in_process,
+    }
+    fn = dispatch[sub]
+    fn(**kwargs, on_event=on_event)
 
 
 def _default_stream_runner(
@@ -90,33 +297,69 @@ def _default_stream_runner(
     cancellation: CancellationToken | None = None,
     stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
-    """Spawn ``agentlab improve <sub>`` and yield stream-json events.
+    """Run ``improve <sub>`` in-process on a background thread; yield events.
 
-    Delegates transport to :func:`stream_subprocess`; this function only owns
-    the argv layout (``runner improve <sub> --output-format stream-json
-    <rest>``) and error translation to :class:`ImproveCommandError`.
+    Parses ``args`` into the matching ``run_improve_*_in_process`` kwargs
+    and bridges its ``on_event`` callback into this generator via a
+    :class:`queue.Queue`. Domain exceptions (``ImproveCommandError``,
+    anything else) are captured and re-raised as
+    :class:`ImproveCommandError` at the boundary.
+
+    ``cancellation`` / ``stall_timeout_s`` are preserved for
+    ``_invoke_runner`` API compatibility.
     """
     if not args:
-        raise ImproveCommandError("improve: missing subcommand")
-    sub, *rest = args
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "runner",
-        "improve",
-        sub,
-        "--output-format",
-        "stream-json",
-        *rest,
-    ]
-    try:
-        yield from stream_subprocess(
-            cmd,
-            stall_timeout_s=stall_timeout_s,
-            cancellation=cancellation,
-            on_nonjson=lambda line: {"event": "warning", "message": line},
+        raise ImproveCommandError(_USAGE)
+    sub = args[0]
+    if sub not in _KNOWN_SUBCOMMANDS:
+        raise ImproveCommandError(f"unknown subcommand {sub!r}. {_USAGE}")
+
+    rest = args[1:]
+    # Import lazily to avoid the slash module pulling the CLI stack at
+    # import time.
+    from cli.commands.improve import ImproveCommandError as _DomainError
+
+    kwargs = _args_to_kwargs(sub, rest)
+
+    # Guarantee positional requirements for subcommands that need them.
+    if sub in _ATTEMPT_ID_SUBCOMMANDS and not kwargs.get("attempt_id"):
+        raise ImproveCommandError(
+            f"improve {sub}: missing <attempt_id>."
         )
-    except SubprocessStreamError as exc:
+    if sub == "run" and not kwargs.get("config_path"):
+        # The in-process run path requires a config. Surface the error here.
+        raise ImproveCommandError(
+            "improve run: missing <config_path>."
+        )
+
+    q: queue.Queue = queue.Queue()
+    error_holder: dict[str, BaseException] = {}
+
+    def _worker() -> None:
+        try:
+            _dispatch_in_process(sub, kwargs, q.put)
+        except _DomainError as exc:
+            error_holder["value"] = ImproveCommandError(f"improve {sub}: {exc}")
+        except BaseException as exc:  # capture unexpected errors
+            error_holder["value"] = exc
+        finally:
+            q.put(_SENTINEL)
+
+    t = threading.Thread(target=_worker, daemon=True, name="improve-in-process")
+    t.start()
+    try:
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            yield item
+    finally:
+        t.join(timeout=5.0)
+
+    if "value" in error_holder:
+        exc = error_holder["value"]
+        if isinstance(exc, ImproveCommandError):
+            raise exc
         raise ImproveCommandError(f"improve {sub}: {exc}") from exc
 
 
@@ -146,7 +389,14 @@ def _advance_phase(spin: Any, event: StreamEvent) -> None:
         spin.update("retrying JSON parse")
 
 
-def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, ImproveSummary]]:
+# Event-name prefix the R4.5 terminal envelope carries for every subcommand.
+_TERMINAL_EVENT_PREFIX = "improve_"
+_TERMINAL_EVENT_SUFFIX = "_complete"
+
+
+def _summarise(
+    events: Iterable[StreamEvent],
+) -> Iterator[tuple[StreamEvent, ImproveSummary]]:
     """Iterate events yielding ``(event, running_summary)`` tuples."""
     counters = {
         "events": 0,
@@ -156,6 +406,10 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Imp
     }
     artifacts: list[str] = []
     next_action: str | None = None
+    attempt_id: str | None = None
+    deployment_id: str | None = None
+    status: str | None = None
+    subcommand: str | None = None
     for event in events:
         counters["events"] += 1
         name = event.get("event")
@@ -173,6 +427,22 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Imp
             message = event.get("message")
             if message:
                 next_action = str(message)
+        if (
+            isinstance(name, str)
+            and name.startswith(_TERMINAL_EVENT_PREFIX)
+            and name.endswith(_TERMINAL_EVENT_SUFFIX)
+        ):
+            # R4.5 terminal event, e.g. ``improve_accept_complete``.
+            subcommand = name[len(_TERMINAL_EVENT_PREFIX):-len(_TERMINAL_EVENT_SUFFIX)]
+            candidate_attempt = event.get("attempt_id")
+            if candidate_attempt:
+                attempt_id = str(candidate_attempt)
+            candidate_deployment = event.get("deployment_id")
+            if candidate_deployment:
+                deployment_id = str(candidate_deployment)
+            candidate_status = event.get("status")
+            if candidate_status:
+                status = str(candidate_status)
         yield event, ImproveSummary(
             events=counters["events"],
             phases_completed=counters["phases_completed"],
@@ -180,6 +450,10 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Imp
             warnings=counters["warnings"],
             errors=counters["errors"],
             next_action=next_action,
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            status=status,
+            subcommand=subcommand,
         )
 
 
@@ -202,31 +476,6 @@ def _format_summary(summary: ImproveSummary) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Argument normalisation
-# ---------------------------------------------------------------------------
-
-
-_USAGE = (
-    "usage: /improve <run|accept|measure|diff|lineage|list|show> [args]"
-)
-
-
-def _parse_args(args: Sequence[str]) -> list[str]:
-    """Validate ``/improve`` args and return the subprocess argv tail.
-
-    Raises :class:`ImproveCommandError` when no subcommand is supplied or an
-    unknown one is used. The handler catches and renders a usage line rather
-    than shelling out to ``runner improve <typo>``.
-    """
-    if not args:
-        raise ImproveCommandError(_USAGE)
-    sub = args[0]
-    if sub not in _KNOWN_SUBCOMMANDS:
-        raise ImproveCommandError(f"unknown subcommand {sub!r}. {_USAGE}")
-    return list(args)
-
-
-# ---------------------------------------------------------------------------
 # Handler + registration
 # ---------------------------------------------------------------------------
 
@@ -236,7 +485,7 @@ def make_improve_handler(
 ) -> Callable[..., OnDoneResult]:
     """Return a slash handler closed over ``runner``.
 
-    Defaults to the real subprocess runner; tests inject a generator fixture.
+    Defaults to the real in-process runner; tests inject a generator fixture.
     """
     active_runner = runner or _default_stream_runner
 
@@ -245,22 +494,41 @@ def make_improve_handler(
         try:
             stream_args = _parse_args(args)
         except ImproveCommandError as exc:
-            # Surface the usage hint on its own line — ``on_done`` with
-            # ``display="skip"`` keeps the enclosing loop from quoting the
-            # message back to the model.
             message = f"  /improve — {exc}"
             echo(theme.error(message))
             return on_done(result=message, display="skip")
 
+        sub = stream_args[0]
+        rest = stream_args[1:]
+
+        # Session-aware attempt_id injection (accept/measure/diff).
+        session = (
+            ctx.meta.get("workbench_session") if isinstance(ctx.meta, dict) else None
+        )
+        parsed_kwargs = _args_to_kwargs(sub, rest)
+        try:
+            resolved_kwargs = _resolve_session_attempt_id(sub, parsed_kwargs, session)
+        except ImproveCommandError as exc:
+            echo(theme.error(f"  /improve failed: {exc}"))
+            return on_done(
+                result=f"  /improve failed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
+
+        # Thread the resolved attempt_id back into argv so the runner sees
+        # the canonical invocation.
+        final_stream_args = _build_stream_args(sub, rest, resolved_kwargs)
+
         echo(theme.command_name(
-            f"  /improve starting — agentlab improve {shlex.join(stream_args)}".rstrip(),
+            f"  /improve starting — agentlab improve {shlex.join(final_stream_args)}".rstrip(),
         ))
 
         cancellation = ctx.cancellation
         cancelled = False
         final_summary = ImproveSummary()
         try:
-            stream = _invoke_runner(active_runner, stream_args, cancellation)
+            stream = _invoke_runner(active_runner, final_stream_args, cancellation)
             with ctx.spinner("improving") as spin:
                 for event, summary in _summarise(stream):
                     final_summary = summary
@@ -288,11 +556,29 @@ def make_improve_handler(
         except FileNotFoundError as exc:  # missing binary / wrong cwd
             echo(theme.error(f"  /improve failed: {exc}"))
             return on_done(result=None, display="skip")
+        except Exception as exc:  # error boundary — must come AFTER domain catches
+            # R4.5 §1.6 — an in-process handler must never crash the TUI.
+            echo(theme.error(f"  /improve crashed: {type(exc).__name__}: {exc}"))
+            return on_done(
+                result=f"  /improve crashed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
 
         if cancelled:
             message = "  /improve cancelled — ctrl-c; no changes persisted."
             echo(theme.warning(message))
             return on_done(result=message, display="skip")
+
+        # R4.5 — propagate attempt identifiers to the shared
+        # WorkbenchSession. Only ``run`` and ``accept`` update session state;
+        # the read-only subcommands (list/show/measure/diff/lineage) don't.
+        if session is not None and final_summary.subcommand in {"run", "accept"}:
+            if final_summary.attempt_id:
+                try:
+                    session.update(last_attempt_id=final_summary.attempt_id)
+                except Exception as exc:
+                    echo(theme.warning(f"  /improve: session update failed: {exc}"))
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -318,7 +604,7 @@ def _invoke_runner(
 
     Matches the probe-first pattern used by ``eval_slash._invoke_runner`` so
     legacy positional-only runners (including the repo's test fixtures) keep
-    working alongside the real subprocess runner.
+    working alongside the real in-process runner.
     """
     if cancellation is None:
         return iter(runner(args))
@@ -346,7 +632,7 @@ def build_improve_command(
             "workbench."
         ),
         effort="medium",
-        allowed_tools=("subprocess",),
+        allowed_tools=("in-process",),
     )
 
 

@@ -2,22 +2,517 @@
 
 Extracted from runner.py in R2 Slice C.3. register_optimize_commands(cli)
 is called from cli.commands.register_all().
+
+R4.4 extracts the `optimize` Click callback body into the module-level
+:func:`run_optimize_in_process` function so both the CLI and the
+Workbench ``/optimize`` slash handler can share the same business logic
+without spawning a subprocess. The Click wrapper is now a thin shell
+that parses argv, installs an ``on_event`` writer, and translates
+domain exceptions into ``sys.exit`` / ``click.ClickException``.
 """
 from __future__ import annotations
 
+import json
 import sys
 import time
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
+
+from cli.commands._in_process import make_event_writer as _make_event_writer
 
 
 def _runner_module():
     """Late-bound import of runner to avoid circular imports."""
     import runner as _r
     return _r
+
+
+# ---------------------------------------------------------------------------
+# R4.4 — pure business-logic function shared by CLI + `/optimize` slash handler.
+# ---------------------------------------------------------------------------
+
+
+class LiveOptimizeRequiredError(RuntimeError):
+    """Raised when ``require_live``/strict-live cannot be satisfied.
+
+    Distinct from :class:`cli.strict_live.MockFallbackError` so callers can
+    branch: ``MockFallbackError`` signals a post-hoc fallback, while
+    ``LiveOptimizeRequiredError`` signals an up-front requirement failure.
+    """
+
+
+@dataclass(frozen=True)
+class OptimizeRunResult:
+    """Outcome of an in-process ``optimize`` run.
+
+    The Click wrapper uses this to render its final text/json output; the
+    slash handler uses ``eval_run_id`` / ``attempt_id`` / ``config_path``
+    to update :class:`~cli.workbench_app.session_state.WorkbenchSession`.
+    """
+
+    eval_run_id: str | None
+    attempt_id: str | None
+    config_path: str | None
+    status: str  # "ok" | "failed" | "cancelled"
+    composite_before: float | None
+    composite_after: float | None
+    warnings: tuple[str, ...]
+    artifacts: tuple[str, ...]
+
+
+def run_optimize_in_process(
+    *,
+    cycles: int = 1,
+    continuous: bool = False,
+    mode: str | None = None,
+    strategy: str | None = None,
+    db: str | None = None,
+    configs_dir: str | None = None,
+    config_path: str | None = None,
+    eval_run_id: str | None = None,
+    require_eval_evidence: bool = False,
+    memory_db: str | None = None,
+    full_auto: bool = False,
+    dry_run: bool = False,
+    explain_strategy: bool = False,
+    max_budget_usd: float | None = None,
+    strict_live: bool = False,
+    force_mock: bool = False,
+    on_event: Callable[[dict[str, Any]], None],
+    text_writer: Callable[[str], None] | None = None,
+) -> OptimizeRunResult:
+    """Run optimization cycles in-process; stream progress events to ``on_event``.
+
+    This is the shared business logic extracted from the ``optimize`` Click
+    callback. The Click wrapper passes an ``on_event`` that writes stream-json
+    lines to stdout (``--output-format stream-json``) or no-ops otherwise, plus
+    a ``text_writer`` for the human-readable output. The ``/optimize`` slash
+    handler passes an ``on_event`` that queues events for its generator.
+
+    Raises:
+        cli.strict_live.MockFallbackError: When ``strict_live`` is set and the
+            proposer is in mock mode. The Click wrapper translates to
+            ``sys.exit(EXIT_MOCK_FALLBACK)``; the slash wrapper surfaces the
+            error in the transcript.
+        LiveOptimizeRequiredError: Future use — when ``require_live`` is set
+            and live providers can't be obtained.
+    """
+    from cli.progress import ProgressRenderer
+    from cli.usage import enforce_workspace_budget
+    from optimizer.cost_tracker import CostTracker
+    from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
+
+    runner = _runner_module()
+
+    # Resolve DB paths from defaults when unset (matching the Click defaults).
+    resolved_db = db if db is not None else runner.DB_PATH
+    resolved_configs_dir = configs_dir if configs_dir is not None else runner.CONFIGS_DIR
+    resolved_memory_db = memory_db if memory_db is not None else runner.MEMORY_DB
+
+    artifact_paths_collected: list[str] = []
+    warnings_collected: list[str] = []
+    composite_before: float | None = None
+    composite_after: float | None = None
+    resolved_attempt_id: str | None = None
+    terminal_status: str = "ok"
+    resolved_eval_run_id: str | None = eval_run_id
+    resolved_config_for_result: str | None = None
+
+    # stream-json-shaped ProgressRenderer; the writer re-parses each JSON line
+    # back into a dict and hands it to on_event.
+    progress = ProgressRenderer(
+        output_format="stream-json",
+        render_text=False,
+        writer=_make_event_writer(on_event),
+    )
+
+    def _emit_text(message: str) -> None:
+        if text_writer is not None:
+            text_writer(message)
+
+    progress.phase_started("optimize", message="Run optimization cycle(s)")
+
+    if text_writer is not None:
+        _emit_text(click.style(f"\n✦ {runner._soul_line('optimize')}", fg="cyan"))
+        if full_auto:
+            _emit_text(click.style("⚠ FULL AUTO ENABLED: skipping manual promotion gates.", fg="yellow"))
+        runner._print_cli_plan(
+            "Optimization plan",
+            [
+                "Observe failures and select dominant issue",
+                "Propose and evaluate candidate config changes",
+                "Accept/deploy only when quality improves",
+            ],
+        )
+
+    if strategy is not None:
+        _emit_text(click.style(
+            "Warning: --strategy is deprecated. Use --mode instead. "
+            "Mapping: simple->standard, adaptive->advanced, full/pro->research.",
+            fg="yellow",
+        ))
+        if mode is None:
+            mode = ModeRouter.from_legacy_strategy(strategy).value
+
+    if mode is not None:
+        mode_enum = OptimizationMode(mode)
+        mode_config = ModeConfig(mode=mode_enum)
+        resolved = ModeRouter().resolve(mode_config)
+        if text_writer is not None:
+            _emit_text(
+                f"Mode: {mode} (strategy={resolved.search_strategy.value}, "
+                f"candidates={resolved.max_candidates})"
+            )
+
+    if dry_run:
+        preview = {
+            "cycles": cycles,
+            "continuous": continuous,
+            "mode": mode or "default",
+            "full_auto": full_auto,
+            "db": resolved_db,
+            "configs_dir": resolved_configs_dir,
+            "config_path": config_path,
+            "eval_run_id": eval_run_id,
+            "require_eval_evidence": require_eval_evidence,
+            "memory_db": resolved_memory_db,
+            "max_budget_usd": max_budget_usd,
+        }
+        if text_writer is not None:
+            _emit_text("Dry run: optimization would execute with the following plan:")
+            _emit_text(f"  cycles:      {cycles}")
+            _emit_text(f"  continuous:  {continuous}")
+            _emit_text(f"  mode:        {mode or 'default'}")
+            _emit_text(f"  full_auto:   {full_auto}")
+            _emit_text(f"  configs_dir: {resolved_configs_dir}")
+        if explain_strategy:
+            from optimizer.proposer import (
+                _LAST_EXPLANATION as _module_last_explanation,
+                format_strategy_explanation,
+            )
+            if _module_last_explanation and text_writer is not None:
+                for entry in _module_last_explanation:
+                    _emit_text(format_strategy_explanation(entry))
+            elif text_writer is not None:
+                _emit_text(
+                    "No strategy explanation available (reflection data empty or mock mode)."
+                )
+
+        terminal = {
+            "event": "optimize_complete",
+            "eval_run_id": eval_run_id,
+            "attempt_id": None,
+            "config_path": config_path,
+            "status": "ok",
+        }
+        on_event(terminal)
+        return OptimizeRunResult(
+            eval_run_id=eval_run_id,
+            attempt_id=None,
+            config_path=config_path,
+            status="ok",
+            composite_before=None,
+            composite_after=None,
+            warnings=tuple(preview.get("message", "") and [str(preview.get("message"))] or []),
+            artifacts=(),
+        )
+
+    budget_ok, budget_message, budget_snapshot = enforce_workspace_budget(max_budget_usd)
+    if not budget_ok:
+        if budget_message:
+            warnings_collected.append(budget_message)
+        progress.warning(message=budget_message or "Budget reached")
+        if text_writer is not None and budget_message:
+            _emit_text(budget_message)
+        terminal = {
+            "event": "optimize_complete",
+            "eval_run_id": eval_run_id,
+            "attempt_id": None,
+            "config_path": config_path,
+            "status": "ok",
+        }
+        on_event(terminal)
+        return OptimizeRunResult(
+            eval_run_id=eval_run_id,
+            attempt_id=None,
+            config_path=config_path,
+            status="ok",
+            composite_before=None,
+            composite_after=None,
+            warnings=tuple(warnings_collected),
+            artifacts=(),
+        )
+
+    (
+        runtime,
+        eval_runner,
+        proposer,
+        skill_engine,
+        adversarial_simulator,
+        skill_autolearner,
+    ) = runner._build_runtime_components()
+    if force_mock:
+        # Force the proposer into mock mode regardless of runtime config.
+        proposer.use_mock = True
+    resolved_config_path = runner._resolve_optimize_config_path(config_path)
+    resolution = runner.resolve_config_snapshot(
+        config_path=str(resolved_config_path) if resolved_config_path is not None else None,
+        command="optimize",
+    )
+    runner.persist_config_lockfile(resolution)
+    resolved_config_for_result = (
+        str(resolved_config_path) if resolved_config_path is not None else None
+    )
+    runner._warn_mock_modes(proposer=proposer, json_output=True)
+    store = runner.ConversationStore(db_path=resolved_db)
+    observer = runner.Observer(store)
+    deployer = runner.Deployer(configs_dir=resolved_configs_dir, store=store)
+    memory = runner.OptimizationMemory(db_path=resolved_memory_db)
+    tracker_db_path, per_cycle_dollars, daily_dollars, stall_threshold_cycles = (
+        runner._runtime_budget_config(runtime)
+    )
+    cost_tracker = CostTracker(
+        db_path=tracker_db_path,
+        per_cycle_budget_dollars=per_cycle_dollars,
+        daily_budget_dollars=daily_dollars,
+        stall_threshold_cycles=stall_threshold_cycles,
+    )
+
+    from optimizer.failure_analyzer import FailureAnalyzer
+    from optimizer.reflection import ReflectionEngine
+
+    reflection_engine = None
+    failure_analyzer = None
+    agent_card_markdown = ""
+
+    if strict_live and proposer.use_mock:
+        from cli.strict_live import MockFallbackError
+
+        msg = "optimize: proposer is in mock mode (no provider key or use_mock=true in config)"
+        # Emit a terminal optimize_complete event BEFORE raising so callers
+        # always see a consistent terminal frame, then raise.
+        terminal = {
+            "event": "optimize_complete",
+            "eval_run_id": eval_run_id,
+            "attempt_id": None,
+            "config_path": resolved_config_for_result,
+            "status": "failed",
+        }
+        on_event(terminal)
+        raise MockFallbackError([msg])
+
+    if not proposer.use_mock:
+        reflection_engine = ReflectionEngine(
+            llm_router=proposer.llm_router,
+            db_path=str(Path(resolved_memory_db).parent / "reflections.db"),
+        )
+        failure_analyzer = FailureAnalyzer(llm_router=proposer.llm_router)
+
+        try:
+            from agent_card.converter import from_config_dict as card_from_config
+            from agent_card.renderer import render_to_markdown as card_to_md
+
+            if resolution.snapshot:
+                card_obj = card_from_config(resolution.snapshot)
+                agent_card_markdown = card_to_md(card_obj)
+        except Exception:
+            pass  # Agent Card generation is best-effort
+
+    optimizer = runner.Optimizer(
+        eval_runner=eval_runner,
+        memory=memory,
+        proposer=proposer,
+        significance_alpha=runtime.eval.significance_alpha,
+        significance_min_effect_size=runtime.eval.significance_min_effect_size,
+        significance_iterations=runtime.eval.significance_iterations,
+        significance_min_pairs=getattr(runtime.eval, "significance_min_pairs", 0),
+        skill_engine=skill_engine,
+        use_skills=True,
+        skill_selection_strategy="auto",
+        skill_max_candidates=5,
+        adversarial_simulator=adversarial_simulator,
+        skill_autolearner=skill_autolearner,
+        auto_learn_skills=runtime.optimizer.skill_autolearn_enabled,
+        failure_analyzer=failure_analyzer,
+        reflection_engine=reflection_engine,
+        agent_card_markdown=agent_card_markdown,
+    )
+
+    best_score_file = Path(".agentlab/best_score.txt")
+    all_time_best = runner._read_best_score(best_score_file)
+    log_path = runner.default_experiment_log_path()
+    next_cycle_number = runner.next_experiment_log_cycle_number(log_path)
+
+    experiments_run = 0
+    kept_count = 0
+    discarded_count = 0
+    skipped_count = 0
+    display_cycle = 1
+
+    try:
+        while True:
+            cost_before = runner._proposer_total_cost(proposer)
+            cycle_result, all_time_best = _run_optimize_cycle(
+                cycle_number=next_cycle_number,
+                display_cycle=display_cycle,
+                display_total=None if continuous else cycles,
+                continuous=continuous,
+                json_output=True,  # suppress click.echo text noise inside cycle
+                full_auto=full_auto,
+                store=store,
+                observer=observer,
+                optimizer=optimizer,
+                deployer=deployer,
+                memory=memory,
+                eval_runner=eval_runner,
+                best_score_file=best_score_file,
+                all_time_best=all_time_best,
+                log_path=log_path,
+                config_path=resolved_config_path,
+                eval_run_id=eval_run_id,
+                require_eval_evidence=require_eval_evidence,
+                spinner=None,
+                harness=None,
+            )
+            cost_after = runner._proposer_total_cost(proposer)
+            cycle_cost = max(0.0, round(cost_after - cost_before, 8))
+            cycle_delta = float(cycle_result.get("delta") or 0.0)
+            cost_tracker.record_cycle(
+                cycle_id=f"optimize-{cycle_result['experiment_cycle']}",
+                spent_dollars=cycle_cost,
+                improvement_delta=cycle_delta,
+            )
+            progress.phase_completed(
+                "optimize-cycle",
+                message=(
+                    f"Cycle {cycle_result['experiment_cycle']} "
+                    f"{cycle_result['status']} ({cycle_delta:+.2f})"
+                ),
+            )
+            # Track before/after composite from the first/latest cycles.
+            if composite_before is None:
+                composite_before = cycle_result.get("score_before")
+            composite_after = cycle_result.get("score_after")
+
+            if (require_eval_evidence or eval_run_id) and cycle_result["status"] == "crash":
+                terminal_status = "failed"
+                raise click.ClickException(
+                    str(cycle_result.get("change_description") or "Missing eval evidence.")
+                )
+
+            experiments_run += 1
+            if cycle_result["status"] == "keep":
+                kept_count += 1
+            elif cycle_result["status"] == "discard":
+                discarded_count += 1
+            elif cycle_result["status"] == "skip":
+                skipped_count += 1
+
+            if not continuous and display_cycle >= cycles:
+                break
+            next_cycle_number += 1
+            display_cycle += 1
+            if continuous and text_writer is None:
+                # In-process continuous is unusual; break to avoid infinite
+                # loops when no UI drives cancellation.
+                break
+    except KeyboardInterrupt:
+        terminal_status = "cancelled"
+    except click.ClickException:
+        terminal_status = "failed"
+        terminal = {
+            "event": "optimize_complete",
+            "eval_run_id": resolved_eval_run_id,
+            "attempt_id": resolved_attempt_id,
+            "config_path": resolved_config_for_result,
+            "status": terminal_status,
+        }
+        on_event(terminal)
+        raise
+
+    progress.phase_completed("optimize", message="Optimization run complete")
+    progress.next_action("agentlab status")
+
+    # Pull the latest attempt_id from memory for terminal envelope.
+    latest_attempts = memory.recent(limit=1)
+    if latest_attempts:
+        resolved_attempt_id = getattr(latest_attempts[0], "attempt_id", None)
+
+    if text_writer is not None:
+        if cycles > 1 and not continuous:
+            _emit_text(f"\nOptimization complete. {cycles} cycles executed.")
+        latest_score = latest_attempts[0].score_after if latest_attempts else None
+        _emit_text(click.style(
+            f"  Status: {runner._score_status_label(latest_score)}", fg="magenta",
+        ))
+        runner._print_next_actions(
+            [
+                "agentlab status",
+                "agentlab runbook list",
+                "agentlab optimize --continuous",
+            ],
+        )
+
+        final_report = observer.observe()
+        recs = runner._generate_recommendations(final_report, None)
+        if recs:
+            _emit_text(click.style("\n  ⚡ Recommended next steps:", fg="cyan", bold=True))
+            for rec in recs:
+                _emit_text(rec)
+
+    if explain_strategy and text_writer is not None:
+        from optimizer.proposer import (
+            _LAST_EXPLANATION as _module_last_explanation,
+            format_strategy_explanation,
+        )
+
+        explanation = getattr(proposer, "_last_explanation", None) or list(
+            _module_last_explanation
+        )
+        if explanation:
+            for entry in explanation:
+                _emit_text(format_strategy_explanation(entry))
+        else:
+            _emit_text(
+                "No strategy explanation available (reflection data empty or mock mode)."
+            )
+
+    if text_writer is not None and proposer.llm_router is not None:
+        summary = proposer.llm_router.cost_summary()
+        if summary:
+            _emit_text("\nProvider cost summary:")
+            for key, item in summary.items():
+                _emit_text(
+                    f"  {key}: requests={item['requests']} "
+                    f"prompt_tokens={item['prompt_tokens']} "
+                    f"completion_tokens={item['completion_tokens']} "
+                    f"cost=${item['total_cost']:.6f}"
+                )
+
+    # Emit the terminal event the slash handler / CLI consumer reads.
+    terminal = {
+        "event": "optimize_complete",
+        "eval_run_id": resolved_eval_run_id,
+        "attempt_id": resolved_attempt_id,
+        "config_path": resolved_config_for_result,
+        "status": terminal_status,
+    }
+    on_event(terminal)
+
+    return OptimizeRunResult(
+        eval_run_id=resolved_eval_run_id,
+        attempt_id=resolved_attempt_id,
+        config_path=resolved_config_for_result,
+        status=terminal_status,
+        composite_before=composite_before,
+        composite_after=composite_after,
+        warnings=tuple(warnings_collected),
+        artifacts=tuple(artifact_paths_collected),
+    )
 
 
 def _summarize_failed_eval_cases(data: dict, limit: int = 3) -> list[str]:
@@ -545,13 +1040,56 @@ def register_optimize_commands(cli: click.Group) -> None:
           agentlab optimize --continuous
           agentlab optimize --mode advanced --cycles 3
         """
-        from cli.output import resolve_output_format
+        from cli.output import resolve_output_format, emit_stream_json
         from cli.progress import PhaseSpinner, ProgressRenderer
+        from cli.strict_live import MockFallbackError
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
         from cli.usage import enforce_workspace_budget
         from optimizer.cost_tracker import CostTracker
         from optimizer.mode_router import ModeConfig, ModeRouter, OptimizationMode
 
         resolved_output_format = resolve_output_format(output_format, json_output=json_output)
+
+        # Route events based on output format. stream-json re-emits each
+        # structured event to stdout via emit_stream_json; other formats
+        # drop them (the Click wrapper uses text_writer for human output).
+        if resolved_output_format == "stream-json":
+            def _on_event(event: dict) -> None:
+                emit_stream_json(event, writer=click.echo)
+            _text_writer = None
+        else:
+            _on_event = lambda _e: None  # noqa: E731
+            _text_writer = click.echo if resolved_output_format == "text" else None
+
+        # Stream-json and JSON output modes delegate terminal handling to the
+        # in-process runner. Text/harness mode keeps the existing harness +
+        # spinner wiring; fall through to the legacy path below for that.
+        if resolved_output_format == "stream-json":
+            try:
+                run_optimize_in_process(
+                    cycles=cycles,
+                    continuous=continuous,
+                    mode=mode,
+                    strategy=strategy,
+                    db=db,
+                    configs_dir=configs_dir,
+                    config_path=config_path,
+                    eval_run_id=eval_run_id,
+                    require_eval_evidence=require_eval_evidence,
+                    memory_db=memory_db,
+                    full_auto=full_auto,
+                    dry_run=dry_run,
+                    explain_strategy=explain_strategy,
+                    max_budget_usd=max_budget_usd,
+                    strict_live=strict_live,
+                    on_event=_on_event,
+                    text_writer=None,
+                )
+            except MockFallbackError as err:
+                click.echo(str(err), err=True)
+                sys.exit(EXIT_MOCK_FALLBACK)
+            return
+
         if harness is None:
             harness = runner._harness_session(
                 title="AgentLab Optimize",

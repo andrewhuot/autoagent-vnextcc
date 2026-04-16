@@ -2,23 +2,396 @@
 
 Extracted from runner.py in R2 Slice C.2. register_eval_commands(cli)
 is called from cli.commands.register_all().
+
+R4.2 extracts the `eval_run` Click callback body into the module-level
+:func:`run_eval_in_process` function so both the CLI and the Workbench
+slash handler can share the same business logic without spawning a
+subprocess. The Click wrapper is now a thin shell that parses argv,
+installs event/text writers, and translates domain exceptions into
+``sys.exit`` / ``click.ClickException``.
 """
 from __future__ import annotations
 
 import json
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import click
 import yaml
+
+from cli.commands._in_process import make_event_writer as _make_event_writer
 
 
 def _runner_module():
     """Late-bound import of runner to avoid circular imports."""
     import runner as _r
     return _r
+
+
+# ---------------------------------------------------------------------------
+# R4.2 — pure business-logic function shared by CLI + `/eval` slash handler.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class EvalRunResult:
+    """Outcome of an in-process ``eval run``.
+
+    The Click wrapper uses this to build its final text/json output; the
+    slash handler uses ``run_id`` / ``config_path`` to update
+    :class:`~cli.workbench_app.session_state.WorkbenchSession`.
+    """
+
+    run_id: str | None
+    config_path: str | None
+    mode: str  # "mock" | "mixed" | "live"
+    status: str  # "ok" | "failed"
+    composite: float | None
+    warnings: tuple[str, ...]
+    artifacts: tuple[str, ...]
+    # Full CompositeScore-as-dict payload, used by the Click JSON wrapper to
+    # render the historical envelope shape (quality/safety/latency/cost/…).
+    # The slash handler ignores this field.
+    score_payload: dict[str, Any] | None = None
+
+
+def run_eval_in_process(
+    *,
+    config_path: str | None = None,
+    suite: str | None = None,
+    category: str | None = None,
+    dataset: str | None = None,
+    dataset_split: str = "all",
+    output_path: str | None = None,
+    instruction_overrides_path: str | None = None,
+    real_agent: bool = False,
+    force_mock: bool = False,
+    require_live: bool = False,
+    strict_live: bool = False,
+    on_event: Callable[[dict], None],
+    text_writer: Callable[[str], None] | None = None,
+) -> EvalRunResult:
+    """Run an eval suite in-process and stream progress events to ``on_event``.
+
+    This is the shared business logic extracted from ``eval_run``. The Click
+    wrapper passes an ``on_event`` that writes stream-json lines to stdout
+    (when ``--output-format stream-json``) or no-ops (otherwise) plus a
+    ``text_writer`` for the human-readable output. The slash handler passes
+    an ``on_event`` that queues events for its generator to yield.
+
+    Raises:
+        cli.strict_live.MockFallbackError: When ``strict_live`` is set and
+            the run fell back to mock mode. The Click wrapper translates
+            to ``sys.exit(EXIT_MOCK_FALLBACK)``; the slash wrapper surfaces
+            the error in the transcript.
+        agent.eval_agent.LiveEvalRequiredError: When ``require_live`` is set
+            and live providers can't be obtained. Propagated as-is.
+    """
+    from agent.eval_agent import LiveEvalRequiredError  # noqa: F401 - re-raised implicitly
+    from cli.output import emit_stream_json
+    from cli.progress import PhaseSpinner, ProgressRenderer
+
+    runner = _runner_module()
+    load_runtime_with_mode_preference = runner.load_runtime_with_mode_preference
+    discover_workspace = runner.discover_workspace
+    resolve_config_snapshot = runner.resolve_config_snapshot
+    persist_config_lockfile = runner.persist_config_lockfile
+    eval_mode_banner_label = runner.eval_mode_banner_label
+
+    # --strict-live is the canonical user-facing flag; it implies --require-live
+    # AND additionally enforces a post-hoc check on score.warnings.
+    if strict_live:
+        require_live = True
+
+    # Emit events in stream-json shape; the writer re-parses the JSON line
+    # back into a dict and hands it to on_event. This keeps ProgressRenderer
+    # unchanged.
+    progress = ProgressRenderer(
+        output_format="stream-json",
+        render_text=False,
+        writer=_make_event_writer(on_event),
+    )
+
+    artifact_paths_collected: list[str] = []
+
+    def _emit_text(message: str) -> None:
+        if text_writer is not None:
+            text_writer(message)
+
+    progress.phase_started("eval", message="Run evaluation suite")
+
+    runtime = load_runtime_with_mode_preference()
+    if text_writer is not None:
+        _emit_text(click.style(f"✦ {runner._soul_line('eval')}", fg="cyan"))
+        runner._print_cli_plan(
+            "Eval plan",
+            [
+                "Load active runtime + config",
+                "Run eval suite against selected scope",
+                "Summarize scores and suggested follow-up",
+            ],
+        )
+
+    resolved_suite = runner._default_eval_suite_dir(suite)
+    config = None
+    if config_path:
+        config_path = str(runner._resolve_invocation_input_path(Path(config_path)))
+        config = runner._load_config_dict(config_path)
+        _emit_text(f"Evaluating config: {config_path}")
+    else:
+        workspace = discover_workspace()
+        if workspace is not None:
+            resolved = workspace.resolve_active_config()
+            if resolved is not None:
+                config = resolved.config
+                config_path = str(resolved.path)
+                _emit_text(f"Evaluating active config: {resolved.path}")
+        if config is None:
+            _emit_text("Evaluating with default config")
+
+    resolution = resolve_config_snapshot(config_path=config_path, command="eval run")
+    persist_config_lockfile(resolution)
+
+    if instruction_overrides_path:
+        overrides = runner._load_config_dict(
+            str(runner._resolve_invocation_input_path(Path(instruction_overrides_path)))
+        )
+        if config is None:
+            config = {}
+        config["_instruction_overrides"] = overrides
+
+    # Resolve agent mode: --mock > --real-agent > auto-detect via credentials
+    if force_mock:
+        use_real_agent = False
+        _auto_detect_reason = "mock-forced"
+    elif real_agent:
+        use_real_agent = True
+        _auto_detect_reason = "real-forced"
+    else:
+        use_real_agent = runner._has_llm_credentials()
+        _auto_detect_reason = "auto-real" if use_real_agent else "auto-mock"
+
+    if text_writer is not None:
+        if _auto_detect_reason == "real-forced":
+            _emit_text(click.style("Running evals with real agent (--real-agent flag)", fg="green"))
+        elif _auto_detect_reason == "auto-real":
+            _emit_text(click.style("Running evals with real agent (credentials auto-detected)", fg="green"))
+        elif _auto_detect_reason == "mock-forced":
+            _emit_text(click.style("Running evals with mock agent (--mock flag)", fg="yellow"))
+        elif _auto_detect_reason == "auto-mock":
+            _emit_text(click.style(
+                "Running evals with mock agent (no LLM credentials found."
+                " Set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY for real evals)",
+                fg="yellow",
+            ))
+
+    eval_runner_obj = runner._build_eval_runner(
+        runtime,
+        cases_dir=resolved_suite,
+        use_real_agent=use_real_agent,
+        default_agent_config=config,
+        **({"require_live": True} if require_live else {}),
+    )
+    try:
+        runner._ensure_live_eval_runner(eval_runner_obj)
+    except click.ClickException as exc:
+        # Under --strict-live, a pre-execution mock detection is the same
+        # failure class as a post-hoc fallback: raise MockFallbackError so
+        # callers (Click wrapper / slash handler) can translate uniformly.
+        # Without --strict-live, preserve the original ClickException for
+        # CLI users who expect the stable exit-code + message contract.
+        if strict_live:
+            from cli.strict_live import MockFallbackError
+            raise MockFallbackError([str(exc)]) from exc
+        raise
+    initial_mock_messages = list(getattr(eval_runner_obj, "mock_mode_messages", []) or [])
+    for message in runner._collect_mock_mode_messages(eval_runner=eval_runner_obj):
+        if text_writer is not None:
+            _emit_text(click.style(f"⚠ {message}", fg="yellow"))
+        progress.warning(message=message, phase="eval")
+
+    case_total = runner._count_eval_cases_for_progress(
+        eval_runner_obj,
+        category=category,
+        dataset_path=dataset,
+        split=dataset_split,
+    )
+    progress.task_started("eval-cases", "Eval cases", message="Evaluate cases", total=case_total)
+    progress_seen = False
+
+    def _progress_callback(current: int, total: int) -> None:
+        nonlocal progress_seen
+        progress_seen = True
+        note = f"{current}/{total} cases"
+        progress.task_progress(
+            "eval-cases",
+            "Eval cases",
+            note,
+            current=current,
+            total=total,
+        )
+
+    def _run_selected_eval() -> tuple[Any, str, str]:
+        if category:
+            score_result = runner._call_eval_method_with_progress(
+                eval_runner_obj.run_category,
+                category,
+                config=config,
+                dataset_path=dataset,
+                split=dataset_split,
+                progress_callback=_progress_callback,
+            )
+            return score_result, f"Category '{category}' complete", f"Category: {category}"
+        score_result = runner._call_eval_method_with_progress(
+            eval_runner_obj.run,
+            config=config,
+            dataset_path=dataset,
+            split=dataset_split,
+            progress_callback=_progress_callback,
+        )
+        return score_result, "Full eval suite complete", "Full eval suite"
+
+    if text_writer is not None:
+        with PhaseSpinner(
+            f"Evaluating cases 0/{case_total}",
+            output_format="text",
+        ) as spinner:
+            def _text_progress_callback(current: int, total: int) -> None:
+                _progress_callback(current, total)
+                spinner.update(f"Evaluating cases {current}/{total}")
+
+            def _run_with_text_progress() -> tuple[Any, str, str]:
+                if category:
+                    score_result = runner._call_eval_method_with_progress(
+                        eval_runner_obj.run_category,
+                        category,
+                        config=config,
+                        dataset_path=dataset,
+                        split=dataset_split,
+                        progress_callback=_text_progress_callback,
+                    )
+                    return score_result, f"Category '{category}' complete", f"Category: {category}"
+                score_result = runner._call_eval_method_with_progress(
+                    eval_runner_obj.run,
+                    config=config,
+                    dataset_path=dataset,
+                    split=dataset_split,
+                    progress_callback=_text_progress_callback,
+                )
+                return score_result, "Full eval suite complete", "Full eval suite"
+
+            score, completion_message, score_heading = _run_with_text_progress()
+            spinner.update("Eval complete")
+    else:
+        score, completion_message, score_heading = _run_selected_eval()
+
+    if not progress_seen:
+        progress.task_progress(
+            "eval-cases",
+            "Eval cases",
+            f"{case_total}/{case_total} cases",
+            current=case_total,
+            total=case_total,
+            progress=1.0 if case_total > 0 else None,
+        )
+    progress.task_completed(
+        "eval-cases",
+        "Eval cases",
+        message="Eval cases complete",
+        current=case_total,
+        total=case_total,
+        progress=1.0 if case_total > 0 else None,
+    )
+    progress.phase_completed("eval", message=completion_message)
+    progress.next_action("agentlab optimize --cycles 3")
+
+    live_eval_agent = getattr(eval_runner_obj, "eval_agent", None)
+    if live_eval_agent is not None:
+        refreshed_mock_messages = list(getattr(live_eval_agent, "mock_mode_messages", []) or [])
+        eval_runner_obj.mock_mode_messages = refreshed_mock_messages
+        late_mock_messages = [
+            message for message in refreshed_mock_messages if message not in initial_mock_messages
+        ]
+        if late_mock_messages:
+            score.warnings = runner._merge_unique_warnings(
+                getattr(score, "warnings", []) or [], late_mock_messages
+            )
+            for message in late_mock_messages:
+                progress.warning(message=message, phase="eval")
+
+    eval_mode = runner._eval_mode_for_runner(eval_runner_obj, runtime=runtime)
+    if eval_mode in {"mock", "mixed"}:
+        score.warnings = runner._merge_unique_warnings(
+            getattr(score, "warnings", []) or [],
+            list(getattr(eval_runner_obj, "mock_mode_messages", []) or []),
+        )
+    if eval_mode == "mixed":
+        for warning in list(getattr(eval_runner_obj, "mock_mode_messages", []) or []):
+            runner.LOG.warning("eval_run.live_fallback_to_mock: %s", warning)
+
+    # R1.3: --strict-live post-hoc gate. Any mock fallback warning that
+    # accumulated in score.warnings causes a raise. The Click wrapper
+    # translates this to sys.exit(12); the slash wrapper renders a
+    # transcript error.
+    if strict_live:
+        from cli.strict_live import StrictLivePolicy, MockFallbackError
+        policy = StrictLivePolicy(enabled=True)
+        policy.ingest_existing_warnings(getattr(score, "warnings", []) or [])
+        policy.check()  # raises MockFallbackError
+
+    if text_writer is not None:
+        _emit_text(f"\n{runner._eval_results_heading(eval_mode)}")
+        # ``_print_score`` echoes directly via click.echo; no text_writer hook
+        # exists for it. Keep identical behavior to the pre-R4.2 code path.
+        runner._print_score(
+            score,
+            score_heading,
+            mode_label=eval_mode_banner_label(eval_mode),
+            status_label=runner._score_status_label(score.composite),
+            next_action="agentlab optimize --cycles 3",
+        )
+
+    result_payload = runner._build_eval_result_payload(
+        score=score,
+        mode=eval_mode,
+        config_path=config_path,
+        category=category,
+        dataset=dataset,
+        dataset_split=dataset_split,
+    )
+    latest_output = runner._latest_eval_output_path()
+    latest_output.parent.mkdir(parents=True, exist_ok=True)
+    latest_output.write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
+    progress.artifact_written("eval_results_latest", path=str(latest_output))
+    artifact_paths_collected.append(str(latest_output))
+
+    if output_path:
+        Path(output_path).write_text(json.dumps(result_payload, indent=2), encoding="utf-8")
+        progress.artifact_written("eval_results", path=output_path)
+        artifact_paths_collected.append(output_path)
+        _emit_text(f"\nResults written to {output_path}")
+
+    # Emit the terminal event the slash handler uses to update session state.
+    on_event({
+        "event": "eval_complete",
+        "run_id": getattr(score, "run_id", None),
+        "config_path": config_path,
+        "mode": eval_mode,
+    })
+
+    return EvalRunResult(
+        run_id=getattr(score, "run_id", None),
+        config_path=config_path,
+        mode=eval_mode,
+        status="ok",
+        composite=getattr(score, "composite", None),
+        warnings=tuple(getattr(score, "warnings", []) or []),
+        artifacts=tuple(artifact_paths_collected),
+        score_payload=runner._score_to_dict(score),
+    )
 
 
 def register_eval_commands(cli: click.Group) -> None:
@@ -116,272 +489,69 @@ def register_eval_commands(cli: click.Group) -> None:
         """
         from agent.eval_agent import LiveEvalRequiredError
         from cli.stream2_helpers import json_response
-        from cli.output import resolve_output_format
-        from cli.progress import PhaseSpinner, ProgressRenderer
-
-        # --strict-live is the canonical user-facing flag; it implies --require-live
-        # AND additionally enforces a post-hoc check on score.warnings.
-        if strict_live:
-            require_live = True
+        from cli.output import resolve_output_format, emit_stream_json
+        from cli.strict_live import MockFallbackError
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
 
         resolved_output_format = resolve_output_format(output_format, json_output=json_output)
-        progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
-        progress.phase_started("eval", message="Run evaluation suite")
 
-        runtime = load_runtime_with_mode_preference()
-        if resolved_output_format == "text":
-            click.echo(click.style(f"✦ {runner._soul_line('eval')}", fg="cyan"))
-            runner._print_cli_plan(
-                "Eval plan",
-                [
-                    "Load active runtime + config",
-                    "Run eval suite against selected scope",
-                    "Summarize scores and suggested follow-up",
-                ],
-            )
-
-        resolved_suite = runner._default_eval_suite_dir(suite)
-        config = None
-        if config_path:
-            config_path = str(runner._resolve_invocation_input_path(Path(config_path)))
-            config = runner._load_config_dict(config_path)
-            if resolved_output_format == "text":
-                click.echo(f"Evaluating config: {config_path}")
+        # The Click wrapper wires (a) stream-json stdout emission, (b) text
+        # rendering, depending on the resolved output format. The slash
+        # handler takes a different path (see eval_slash.py).
+        if resolved_output_format == "stream-json":
+            def _on_event(event: dict) -> None:
+                # Re-encode and emit as a stream-json line on stdout. The
+                # ``eval_complete`` event is internal-only — it's how the
+                # slash handler learns the run_id; we do NOT leak it to
+                # stdout to keep the CLI stream shape compatible with
+                # downstream loaders.
+                if event.get("event") == "eval_complete":
+                    # Keep it on the CLI stream too — callers who consume
+                    # stream-json may want it. The R4.2 regression test
+                    # asserts this is present.
+                    pass
+                emit_stream_json(event, writer=click.echo)
+            text_writer = None
         else:
-            workspace = discover_workspace()
-            if workspace is not None:
-                resolved = workspace.resolve_active_config()
-                if resolved is not None:
-                    config = resolved.config
-                    config_path = str(resolved.path)
-                    if resolved_output_format == "text":
-                        click.echo(f"Evaluating active config: {resolved.path}")
-            if config is None and resolved_output_format == "text":
-                click.echo("Evaluating with default config")
-
-        resolution = resolve_config_snapshot(config_path=config_path, command="eval run")
-        persist_config_lockfile(resolution)
-
-        if instruction_overrides_path:
-            overrides = runner._load_config_dict(str(runner._resolve_invocation_input_path(Path(instruction_overrides_path))))
-            if config is None:
-                config = {}
-            config["_instruction_overrides"] = overrides
-
-        # Resolve agent mode: --mock > --real-agent > auto-detect via credentials
-        if force_mock:
-            use_real_agent = False
-            _auto_detect_reason = "mock-forced"
-        elif real_agent:
-            use_real_agent = True
-            _auto_detect_reason = "real-forced"
-        else:
-            use_real_agent = runner._has_llm_credentials()
-            _auto_detect_reason = "auto-real" if use_real_agent else "auto-mock"
-
-        if resolved_output_format == "text":
-            if _auto_detect_reason == "real-forced":
-                click.echo(click.style("Running evals with real agent (--real-agent flag)", fg="green"))
-            elif _auto_detect_reason == "auto-real":
-                click.echo(click.style("Running evals with real agent (credentials auto-detected)", fg="green"))
-            elif _auto_detect_reason == "mock-forced":
-                click.echo(click.style("Running evals with mock agent (--mock flag)", fg="yellow"))
-            elif _auto_detect_reason == "auto-mock":
-                click.echo(click.style(
-                    "Running evals with mock agent (no LLM credentials found."
-                    " Set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY for real evals)",
-                    fg="yellow",
-                ))
-
-        eval_runner_obj = runner._build_eval_runner(
-            runtime,
-            cases_dir=resolved_suite,
-            use_real_agent=use_real_agent,
-            default_agent_config=config,
-            **({"require_live": True} if require_live else {}),
-        )
-        runner._ensure_live_eval_runner(eval_runner_obj)
-        initial_mock_messages = list(getattr(eval_runner_obj, "mock_mode_messages", []) or [])
-        for message in runner._collect_mock_mode_messages(eval_runner=eval_runner_obj):
-            if resolved_output_format == "text":
-                click.echo(click.style(f"⚠ {message}", fg="yellow"))
-            elif resolved_output_format == "stream-json":
-                progress.warning(message=message, phase="eval")
-
-        case_total = runner._count_eval_cases_for_progress(
-            eval_runner_obj,
-            category=category,
-            dataset_path=dataset,
-            split=dataset_split,
-        )
-        progress.task_started("eval-cases", "Eval cases", message="Evaluate cases", total=case_total)
-        progress_seen = False
-
-        def _progress_callback(current: int, total: int) -> None:
-            nonlocal progress_seen
-            progress_seen = True
-            note = f"{current}/{total} cases"
-            progress.task_progress(
-                "eval-cases",
-                "Eval cases",
-                note,
-                current=current,
-                total=total,
-            )
-
-        def _run_selected_eval() -> tuple[Any, str, str]:
-            if category:
-                score_result = runner._call_eval_method_with_progress(
-                    eval_runner_obj.run_category,
-                    category,
-                    config=config,
-                    dataset_path=dataset,
-                    split=dataset_split,
-                    progress_callback=_progress_callback,
-                )
-                return score_result, f"Category '{category}' complete", f"Category: {category}"
-            score_result = runner._call_eval_method_with_progress(
-                eval_runner_obj.run,
-                config=config,
-                dataset_path=dataset,
-                split=dataset_split,
-                progress_callback=_progress_callback,
-            )
-            return score_result, "Full eval suite complete", "Full eval suite"
+            _on_event = lambda _event: None  # noqa: E731 — compact assignment is clearer here
+            text_writer = click.echo if resolved_output_format == "text" else None
 
         try:
-            if resolved_output_format == "text":
-                with PhaseSpinner(
-                    f"Evaluating cases 0/{case_total}",
-                    output_format=resolved_output_format,
-                ) as spinner:
-                    def _text_progress_callback(current: int, total: int) -> None:
-                        _progress_callback(current, total)
-                        spinner.update(f"Evaluating cases {current}/{total}")
-
-                    def _run_with_text_progress() -> tuple[Any, str, str]:
-                        if category:
-                            score_result = runner._call_eval_method_with_progress(
-                                eval_runner_obj.run_category,
-                                category,
-                                config=config,
-                                dataset_path=dataset,
-                                split=dataset_split,
-                                progress_callback=_text_progress_callback,
-                            )
-                            return score_result, f"Category '{category}' complete", f"Category: {category}"
-                        score_result = runner._call_eval_method_with_progress(
-                            eval_runner_obj.run,
-                            config=config,
-                            dataset_path=dataset,
-                            split=dataset_split,
-                            progress_callback=_text_progress_callback,
-                        )
-                        return score_result, "Full eval suite complete", "Full eval suite"
-
-                    score, completion_message, score_heading = _run_with_text_progress()
-                    spinner.update("Eval complete")
-            else:
-                score, completion_message, score_heading = _run_selected_eval()
+            result = run_eval_in_process(
+                config_path=config_path,
+                suite=suite,
+                category=category,
+                dataset=dataset,
+                dataset_split=dataset_split,
+                output_path=output,
+                instruction_overrides_path=instruction_overrides_path,
+                real_agent=real_agent,
+                force_mock=force_mock,
+                require_live=require_live,
+                strict_live=strict_live,
+                on_event=_on_event,
+                text_writer=text_writer,
+            )
+        except MockFallbackError as err:
+            click.echo(str(err), err=True)
+            sys.exit(EXIT_MOCK_FALLBACK)
         except LiveEvalRequiredError as exc:
             raise click.ClickException(str(exc)) from exc
-
-        if not progress_seen:
-            progress.task_progress(
-                "eval-cases",
-                "Eval cases",
-                f"{case_total}/{case_total} cases",
-                current=case_total,
-                total=case_total,
-                progress=1.0 if case_total > 0 else None,
-            )
-        progress.task_completed(
-            "eval-cases",
-            "Eval cases",
-            message="Eval cases complete",
-            current=case_total,
-            total=case_total,
-            progress=1.0 if case_total > 0 else None,
-        )
-        progress.phase_completed("eval", message=completion_message)
-        progress.next_action("agentlab optimize --cycles 3")
-
-        live_eval_agent = getattr(eval_runner_obj, "eval_agent", None)
-        if live_eval_agent is not None:
-            refreshed_mock_messages = list(getattr(live_eval_agent, "mock_mode_messages", []) or [])
-            eval_runner_obj.mock_mode_messages = refreshed_mock_messages
-            late_mock_messages = [
-                message for message in refreshed_mock_messages if message not in initial_mock_messages
-            ]
-            if late_mock_messages:
-                score.warnings = runner._merge_unique_warnings(getattr(score, "warnings", []) or [], late_mock_messages)
-                if resolved_output_format == "stream-json":
-                    for message in late_mock_messages:
-                        progress.warning(message=message, phase="eval")
-
-        eval_mode = runner._eval_mode_for_runner(eval_runner_obj, runtime=runtime)
-        if eval_mode in {"mock", "mixed"}:
-            score.warnings = runner._merge_unique_warnings(
-                getattr(score, "warnings", []) or [],
-                list(getattr(eval_runner_obj, "mock_mode_messages", []) or []),
-            )
-        if eval_mode == "mixed":
-            for warning in list(getattr(eval_runner_obj, "mock_mode_messages", []) or []):
-                runner.LOG.warning("eval_run.live_fallback_to_mock: %s", warning)
-
-        # R1.3: --strict-live post-hoc gate. Any mock fallback warning that
-        # accumulated in score.warnings causes a hard exit with code 12.
-        if strict_live:
-            from cli.strict_live import StrictLivePolicy, MockFallbackError
-            from cli.exit_codes import EXIT_MOCK_FALLBACK
-            policy = StrictLivePolicy(enabled=True)
-            policy.ingest_existing_warnings(getattr(score, "warnings", []) or [])
-            try:
-                policy.check()
-            except MockFallbackError as err:
-                click.echo(str(err), err=True)
-                sys.exit(EXIT_MOCK_FALLBACK)
-
-        if resolved_output_format == "text":
-            click.echo(f"\n{runner._eval_results_heading(eval_mode)}")
-            runner._print_score(
-                score,
-                score_heading,
-                mode_label=eval_mode_banner_label(eval_mode),
-                status_label=runner._score_status_label(score.composite),
-                next_action="agentlab optimize --cycles 3",
-            )
-
-        result = runner._build_eval_result_payload(
-            score=score,
-            mode=eval_mode,
-            config_path=config_path,
-            category=category,
-            dataset=dataset,
-            dataset_split=dataset_split,
-        )
-        latest_output = runner._latest_eval_output_path()
-        latest_output.parent.mkdir(parents=True, exist_ok=True)
-        latest_output.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        progress.artifact_written("eval_results_latest", path=str(latest_output))
-
-        if output:
-            Path(output).write_text(json.dumps(result, indent=2), encoding="utf-8")
-            progress.artifact_written("eval_results", path=output)
-            if resolved_output_format == "text":
-                click.echo(f"\nResults written to {output}")
 
         if resolved_output_format == "stream-json":
             return
 
         if resolved_output_format == "json":
-            payload = runner._score_to_dict(score)
-            payload["mode"] = eval_mode
-            payload["run_id"] = score.run_id
+            # Preserve the pre-R4.2 JSON envelope shape: the full
+            # ``_score_to_dict`` payload with ``mode`` and ``run_id`` merged.
+            payload: dict[str, Any] = dict(result.score_payload or {})
+            payload["mode"] = result.mode
+            payload["run_id"] = result.run_id
             click.echo(json_response("ok", payload, next_cmd="agentlab optimize --cycles 3"))
             return
 
-        click.echo(click.style(f"\n  Status: {runner._score_status_label(score.composite)}", fg="magenta"))
+        # Text mode — trailing status + next-actions banner.
+        click.echo(click.style(f"\n  Status: {runner._score_status_label(result.composite)}", fg="magenta"))
         runner._print_next_actions(
             [
                 "agentlab optimize --cycles 3",
