@@ -115,7 +115,7 @@ class Optimizer:
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
-        self.proposer = proposer or Proposer(use_mock=True)
+        self.proposer = proposer or Proposer()
         self.gates = gates or Gates()
         self.significance_alpha = significance_alpha
         self.significance_min_effect_size = significance_min_effect_size
