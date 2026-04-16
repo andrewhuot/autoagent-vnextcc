@@ -215,6 +215,11 @@ class CompositeScorer:
     CI_ITERATIONS = 400
     CI_SEED = 7
 
+    def __init__(self, weights: "CompositeWeights | None" = None) -> None:
+        from evals.composite_weights import CompositeWeights, validate_weights
+        self._weights = weights or CompositeWeights()
+        validate_weights(self._weights)
+
     def score(self, results: list[EvalResult]) -> CompositeScore:
         """Compute composite score from eval results."""
         if not results:
@@ -252,20 +257,20 @@ class CompositeScorer:
         quality_values = [r.quality_score for r in results]
         composite_values = [
             (
-                self.QUALITY_WEIGHT * r.quality_score
-                + self.SAFETY_WEIGHT * (1.0 if r.safety_passed else 0.0)
-                + self.LATENCY_WEIGHT * latency_values[idx]
-                + self.COST_WEIGHT * cost_values[idx]
+                self._weights.quality * r.quality_score
+                + self._weights.safety * (1.0 if r.safety_passed else 0.0)
+                + self._weights.latency * latency_values[idx]
+                + self._weights.cost * cost_values[idx]
             )
             for idx, r in enumerate(results)
         ]
 
         # Composite: weighted sum
         composite = (
-            self.QUALITY_WEIGHT * quality
-            + self.SAFETY_WEIGHT * safety
-            + self.LATENCY_WEIGHT * latency
-            + self.COST_WEIGHT * cost
+            self._weights.quality * quality
+            + self._weights.safety * safety
+            + self._weights.latency * latency
+            + self._weights.cost * cost
         )
 
         passed_cases = sum(1 for r in results if r.passed)
