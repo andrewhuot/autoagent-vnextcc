@@ -203,6 +203,14 @@ class ReflectionEngine:
             "patterns": patterns,
         }
 
+    def read_surface_effectiveness(self, surface: str) -> SurfaceEffectiveness | None:
+        """Return the cumulative effectiveness record for a surface, or None if absent.
+
+        Thin wrapper over get_surface_effectiveness() so callers can query a
+        single surface without materializing the full dict.
+        """
+        return self.get_surface_effectiveness().get(surface)
+
     def get_surface_effectiveness(self) -> dict[str, SurfaceEffectiveness]:
         """Get cumulative effectiveness scores for each mutation surface."""
         with sqlite3.connect(self.db_path) as conn:
