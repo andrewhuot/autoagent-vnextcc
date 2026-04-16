@@ -108,6 +108,8 @@ All three still emit lineage events, so `agentlab improve lineage` and
 `agentlab improve list` reflect their output regardless of whether you
 went through the unified command or the per-step commands.
 
+Pass `agentlab optimize --explain-strategy` to see one rationale line per ranked strategy (effectiveness scores from reflection plus any epsilon-greedy exploration pick). Composite scoring weights live in `agentlab.yaml` under `eval.composite.weights` and are inspected/mutated via `agentlab eval weights show|set|validate`; every `CompositeScore` snapshots the weights it was scored under, so historical scores re-render stably even after the yaml changes. When a real provider key is configured, the pairwise LLM judge is used for `a_vs_b` comparisons (with a 30-day SQLite cache at `.agentlab/llm_judge_cache.db`); the heuristic judge remains the default and fallback.
+
 ## Trusting the loop: strict-live mode
 
 By default, every AgentLab command (`build`, `eval run`, `optimize`,

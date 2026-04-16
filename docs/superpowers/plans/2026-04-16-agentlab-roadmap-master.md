@@ -1242,7 +1242,7 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 
 ## R3 — Optimizer that Learns
 
-> **Expansion required:** Expand into `docs/superpowers/plans/2026-04-XX-agentlab-r3-smart-optimizer.md` before execution.
+> **Status:** shipped 2026-04-16. Expansion plan: [2026-04-XX-agentlab-r3-smart-optimizer.md](2026-04-XX-agentlab-r3-smart-optimizer.md). What landed: coverage-gap signal threaded into the proposer, epsilon-greedy strategy ranking via reflection, auto-grown cases under 30% coverage, LLM pairwise judge (with SQLite cache) behind a heuristic fallback, per-workspace composite weights with a snapshot on every score, and bootstrap CI + variance-calibrated effect size in `paired_significance`. See [CHANGELOG.md](../../../CHANGELOG.md) entry `[4.0.0-R3]` for the full list and deferred follow-ups.
 
 **Goal:** Optimizer uses coverage data to target proposals, reads back its own reflection learnings, auto-grows the eval suite when coverage is thin, and uses an LLM-backed pairwise judge.
 
