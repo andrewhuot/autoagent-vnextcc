@@ -909,3 +909,7 @@ def register_eval_commands(cli: click.Group) -> None:
 
         for cluster, count in sorted(clusters.items(), key=lambda item: (-item[1], item[0])):
             click.echo(f"    {count:>3}x {cluster}")
+
+    # R5 Slice A.6: nested `agentlab eval dataset {import,export}` subgroup.
+    from .dataset import register_dataset_commands
+    register_dataset_commands(eval_group)

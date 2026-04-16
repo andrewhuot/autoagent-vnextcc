@@ -12,6 +12,7 @@ Options:
 Commands:
   breakdown  Show score breakdown bars and failure clusters for the...
   compare    Compare two eval runs or run a pairwise head-to-head config...
+  dataset    Import/export eval case datasets (JSONL, CSV, HuggingFace).
   generate   AI-generate a comprehensive eval suite from agent config.
   list       List recent eval runs.
   results    Inspect structured eval results from the CLI Results Explorer.
