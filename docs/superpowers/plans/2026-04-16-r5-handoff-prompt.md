@@ -3,31 +3,33 @@
 Paste the block below into a fresh Claude Code session at the repo root
 (`/Users/andrew/Desktop/agentlab`).
 
-**Prerequisite:** R1 must be merged. R2 is preferred (R5 adds a
-`dataset` command group alongside the R2-extracted `cli/commands/*.py`
-layout; doing R5 before R2 means you'd have to port the new command
-group during R2's refactor). R5 is **parallel-shippable with R3** — the
-two touch mostly disjoint code.
+**Prerequisites (all confirmed shipped on master as of 2026-04-16):**
+- **R1** ✅ — strict-live policy through `1ac4409`
+- **R2** ✅ — merged at `6a0f242`
+- **R3** ✅ — merged at `47ff7f8`
+
+R5 can run in parallel with R4 (Workbench Harness) — they touch
+disjoint code. R5 should land before R6.
 
 ---
 
 ## Session prompt
 
 You are picking up the AgentLab roadmap at **R5 — Eval Corpus & Dataset
-Tooling**. R1 and R2 have already shipped on master. R3 may or may not
-be in flight in parallel — that's fine, R5 and R3 rarely conflict. R5
-is its own session for clean context.
+Tooling**. R1, R2, and R3 have shipped on master. R5 is its own session
+for clean context.
 
 ### What already shipped (context, don't re-do)
 
 **R1:** strict-live policy, exit codes, rejection records, deploy
 verdict gate, provider-key validation.
 
-**R2:** lineage store, `agentlab improve` command group, runner.py
-split into `cli/commands/{build,eval,optimize,deploy,improve}.py`.
+**R2 (merged at `6a0f242`):** lineage store, `agentlab improve` command
+group, runner.py split into `cli/commands/{build,eval,optimize,deploy,improve}.py`.
 
-**R3 (if merged):** coverage-aware proposer, reflection feedback,
-configurable composite weights, LLM-backed pairwise judge.
+**R3 (merged at `47ff7f8`):** coverage-aware proposer, reflection
+feedback, configurable composite weights with per-run snapshotting,
+LLM-backed pairwise judge, `agentlab eval weights` subcommand.
 
 ### Your job
 
@@ -147,8 +149,10 @@ tag-filtered evals, trace ingestion, failure-driven generation.
 2. Follow `superpowers:subagent-driven-development` — dispatch one
    subagent per task, don't implement in the main thread.
 3. After each slice, offer to open a PR before moving to the next.
-4. If R3 is in flight in parallel, coordinate on `evals/scorer.py` /
-   `evals/statistics.py` touch points — those are R3's turf.
+4. R3 is shipped, so `evals/scorer.py` / `evals/statistics.py` are
+   stable. R4 may be in flight in parallel — coordinate on
+   `cli/workbench_app/` touchpoints if R5 needs to surface dataset
+   commands in Workbench (likely just `improve_slash.py` parity).
 
 ### If you get stuck
 

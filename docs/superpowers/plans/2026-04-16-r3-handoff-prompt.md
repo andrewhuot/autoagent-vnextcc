@@ -1,5 +1,11 @@
 # R3 Handoff Prompt — Optimizer that Learns
 
+> **STATUS: ✅ SHIPPED.** R3 was merged to master at commit `47ff7f8`
+> ("Merge branch 'claude/r3-smart-optimizer': R3 — Smart Optimizer").
+> The expansion plan lives at
+> `docs/superpowers/plans/2026-04-XX-agentlab-r3-smart-optimizer.md`.
+> This handoff is preserved for historical reference; do not dispatch.
+
 Paste the block below into a fresh Claude Code session at the repo root
 (`/Users/andrew/Desktop/agentlab`).
 

@@ -3,42 +3,48 @@
 Paste the block below into a fresh Claude Code session at the repo root
 (`/Users/andrew/Desktop/agentlab`).
 
-**Prerequisite:** R3 AND R4 must be merged to master. R3 supplies the
-LLM-call infrastructure (provider abstraction, judge cache, strict-live
-policy). R4 supplies in-process commands and `WorkbenchSession`. R7 is
-NOT in the 90-day MVP — it's a stretch release that turns Workbench
-from a control panel into a conversational shell. Confirm with the
-user that they actually want R7 before starting; the MVP path stops at
-R3.
+**Prerequisites:**
+- **R3** ✅ shipped (merged at `47ff7f8`) — LLM-call infrastructure
+  available for reuse
+- **R4** ⏳ MUST be merged before R7 begins (R7 wraps R4's in-process
+  commands as LLM-callable tools and stores conversation in
+  `WorkbenchSession`)
+
+R7 is NOT in the 90-day MVP — it's a stretch release that turns
+Workbench from a control panel into a conversational shell. Confirm
+with the user that they actually want R7 before starting; the MVP
+path stops at R3 (already shipped).
 
 ---
 
 ## Session prompt
 
 You are picking up the AgentLab roadmap at **R7 — Workbench as Agent**.
-R1–R6 have shipped on master. R7 is the conversational stretch release
-and gets its own session for clean context.
+R1, R2, R3 have shipped on master. R4 must be shipped before this
+session starts (R5/R6 are independent of R7 and may or may not have
+shipped — R7 doesn't depend on either). R7 is the conversational
+stretch release and gets its own session for clean context.
 
 ### What already shipped (context, don't re-do)
 
-**R1:** strict-live policy, exit codes, rejection records, deploy
-verdict gate, provider-key validation.
+**R1 (`1ac4409`):** strict-live policy, exit codes, rejection records,
+deploy verdict gate, provider-key validation.
 
-**R2:** lineage store, `agentlab improve` command group, modular
-`cli/commands/*.py`.
+**R2 (merged at `6a0f242`):** lineage store, `agentlab improve` command
+group, modular `cli/commands/*.py`.
 
-**R3:** coverage-aware proposer, reflection feedback, configurable
-composite weights, LLM-backed pairwise judge with provider abstraction.
+**R3 (merged at `47ff7f8`):** coverage-aware proposer, reflection
+feedback, configurable composite weights, LLM-backed pairwise judge
+with provider abstraction.
 
-**R4:** `WorkbenchSession` dataclass, in-process slash commands (no
-subprocess), rich progress widgets, lineage/diff views, error
-boundaries.
+**R4 (verify merge commit before starting):** `WorkbenchSession`
+dataclass, in-process slash commands (no subprocess), rich progress
+widgets, lineage/diff views, error boundaries.
 
-**R5:** dataset tooling, trace ingestion, failure-driven case
-generation.
-
-**R6:** scheduled continuous loop, drift detection, calibration,
-canary scoring, cost-aware Pareto, notifications.
+**R5 / R6 (may or may not be shipped):** R7 has no dependency on
+either. If R5 is shipped, dataset commands are also exposable as
+tools (R7.1 should include them in the registry). If R6 is shipped,
+the continuous loop is exposable as a tool too.
 
 ### Your job
 

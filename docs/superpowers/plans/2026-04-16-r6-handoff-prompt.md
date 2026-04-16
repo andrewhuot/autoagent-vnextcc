@@ -3,34 +3,44 @@
 Paste the block below into a fresh Claude Code session at the repo root
 (`/Users/andrew/Desktop/agentlab`).
 
-**Prerequisite:** R6 depends on **R1 + R2 + R3 + R5**. All four must be
-merged to master before R6 begins. R4 is nice-to-have (rich Workbench
-widgets visualize R6 data well) but not a hard dependency.
+**Prerequisites:**
+- **R1** ✅ shipped (through `1ac4409`)
+- **R2** ✅ shipped (merged at `6a0f242`)
+- **R3** ✅ shipped (merged at `47ff7f8`)
+- **R5** ⏳ MUST be merged before R6 begins (R6.2 depends on R5's
+  trace ingestion infrastructure)
+- **R4** is nice-to-have (rich Workbench widgets visualize R6 data
+  well) but not a hard dependency.
+
+Do NOT dispatch R6 until R5 is on master.
 
 ---
 
 ## Session prompt
 
 You are picking up the AgentLab roadmap at **R6 — Continuous
-Improvement & Observability**. R1, R2, R3, and R5 have already shipped
-on master. R6 is the final roadmap release and gets its own session for
-clean context.
+Improvement & Observability**. R1, R2, R3, and R5 have shipped on
+master (verify R5 before starting). R6 is the final core-roadmap
+release; R7 is a stretch on top. R6 gets its own session for clean
+context.
 
 ### What already shipped (context, don't re-do)
 
-**R1:** strict-live policy, exit codes, rejection records, deploy
-verdict gate, provider-key validation.
+**R1 (`1ac4409`):** strict-live policy, exit codes, rejection records,
+deploy verdict gate, provider-key validation.
 
-**R2:** lineage store with full
+**R2 (merged at `6a0f242`):** lineage store with full
 `eval_run_id → attempt_id → deployment_id → measurement_id` chain,
 `agentlab improve` command group, modular `cli/commands/*.py`.
 
-**R3:** coverage-aware proposer, reflection feedback, configurable
-composite weights (snapshotted per eval run), LLM-backed pairwise
-judge with heuristic fallback.
+**R3 (merged at `47ff7f8`):** coverage-aware proposer, reflection
+feedback, configurable composite weights (snapshotted per eval run),
+LLM-backed pairwise judge with heuristic fallback, `agentlab eval
+weights` subcommand.
 
 **R5:** dataset tooling, `agentlab eval ingest --from-traces`, pluggable
-embedder, failure-driven case generation.
+embedder, failure-driven case generation. Verify the R5 merge commit
+on master before dispatching anything.
 
 ### Your job
 

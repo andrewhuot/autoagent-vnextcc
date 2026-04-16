@@ -3,34 +3,38 @@
 Paste the block below into a fresh Claude Code session at the repo root
 (`/Users/andrew/Desktop/agentlab`).
 
-**Prerequisite:** R2 MUST be merged to master before R4 begins. R4 depends
-on the modular `cli/commands/*.py` layout and the `agentlab improve`
-command group R2 introduces. R1 and R3 do not block R4, but R3 improves
-the data that R4's widgets visualize, so prefer `R1 → R2 → R3 → R4`
-order if you have the option.
+**Prerequisites (all confirmed shipped on master as of 2026-04-16):**
+- **R1** ✅ — strict-live policy through `1ac4409`
+- **R2** ✅ — merged at `6a0f242` (lineage store + `agentlab improve`
+  group + `cli/commands/*.py` split)
+- **R3** ✅ — merged at `47ff7f8` (smart optimizer)
+
+R4 can run in parallel with R5 (Eval Corpus) — they touch disjoint
+code. R4 should land before R6 and R7.
 
 ---
 
 ## Session prompt
 
 You are picking up the AgentLab roadmap at **R4 — Workbench is the
-Harness**. R1, R2, and (ideally) R3 have already shipped on master. R4
-is a separate, large release and gets its own session for clean context.
+Harness**. R1, R2, and R3 have shipped on master. R4 is a separate,
+large release and gets its own session for clean context.
 
 ### What already shipped (context, don't re-do)
 
 **R1 (`433e803` → `1ac4409`):** strict-live policy, exit codes,
 rejection records, deploy verdict gate, provider-key validation.
 
-**R2:** lineage store with full
+**R2 (merged at `6a0f242`):** lineage store with full
 `eval_run_id → attempt_id → deployment_id → measurement_id` chain,
 `agentlab improve {run,accept,measure,diff,lineage}` command group,
 runner.py split into `cli/commands/{build,eval,optimize,deploy,improve}.py`,
 workbench `/improve` slash parity.
 
-**R3 (if merged):** coverage-aware proposer, reflection feedback,
-configurable composite weights, LLM-backed pairwise judge with
-heuristic fallback.
+**R3 (merged at `47ff7f8`):** coverage-aware proposer, reflection
+feedback, configurable composite weights with per-run snapshotting,
+LLM-backed pairwise judge with heuristic fallback, `agentlab eval
+weights` subcommand, bootstrap CI + paired significance.
 
 ### Your job
 
