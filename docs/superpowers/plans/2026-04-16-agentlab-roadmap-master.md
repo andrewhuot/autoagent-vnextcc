@@ -1451,6 +1451,88 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 
 ---
 
+## R7 — Workbench as Agent (Conversational Shell)
+
+> **Expansion required:** Expand into `docs/superpowers/plans/2026-04-XX-agentlab-r7-workbench-as-agent.md` before execution. **Depends on R3 + R4.** R3 supplies the LLM-call infrastructure (provider abstraction, judge cache, strict-live policy). R4 supplies in-process commands and `WorkbenchSession`, both prerequisites for exposing slash commands as LLM-callable tools.
+
+**Goal:** Workbench accepts free-form natural language. An LLM interprets intent, calls the in-process slash commands as tools, streams a response, persists conversation across sessions. The user types "evaluate the current config and tell me what's failing" instead of `/eval` then reading the JSON.
+
+**Reference architecture:** Claude Code's REPL (`src/state/AppStateStore.ts`, `src/commands.ts`, `src/QueryEngine.ts`, `src/coordinator/`). `AppState` ↔ `WorkbenchSession`; Claude Code's tools ↔ AgentLab's slash commands; Claude Code's QueryEngine ↔ R7's `ConversationLoop`. The shape is intentionally similar; the scope is much smaller (AgentLab's tool set is ~7 commands, not ~40).
+
+### File Structure
+
+| File | Status | Responsibility |
+|---|---|---|
+| `cli/workbench_app/conversation_loop.py` | **Create** | LLM agent loop: messages in → tool calls dispatched → response streamed |
+| `cli/workbench_app/tool_registry.py` | **Create** | Wraps in-process commands as LLM-callable tools with JSON schemas |
+| `cli/workbench_app/tool_permissions.py` | **Create** | Allow / deny / ask gates per tool. Mutating tools (`/deploy`, `/improve accept`) default to ask |
+| `cli/workbench_app/conversation_store.py` | **Create** | SQLite-backed conversation history at `.agentlab/conversations.db` |
+| `cli/workbench_app/system_prompt.py` | **Create** | Built-in system prompt referencing the loaded Agent Card + workspace state |
+| `cli/workbench_app/conversation_view.py` | **Create** | Textual widget rendering streamed assistant messages + tool calls |
+| [cli/workbench_app/session_state.py](cli/workbench_app/session_state.py) | **Modify** | Add `current_conversation_id`, `conversation_model` to `WorkbenchSession` |
+| [cli/workbench_app/runtime.py](cli/workbench_app/runtime.py) | **Modify** | Route non-slash input through `ConversationLoop` |
+| `cli/commands/conversation.py` | **Create** | `agentlab conversation {list,show,resume,export}` for headless access |
+
+### Task Outline
+
+- [ ] **R7.1**: `tool_registry.py` — convert each `cli/commands/*.py` entry into a tool descriptor (name, JSON schema for args, callable). Test: registry exposes 7+ tools, each invocable via `registry.call(name, args)`.
+- [ ] **R7.2**: `tool_permissions.py` with three policies (`allow`, `deny`, `ask`). Mutating tools (`deploy`, `improve_accept`, `build`) default to `ask`; read-only (`eval_run`, `improve_list`, `improve_diff`) default to `allow`. Test: deny policy blocks; ask policy raises `PermissionPending` event.
+- [ ] **R7.3**: `conversation_store.py` — `Conversation`, `Message`, `ToolCall` tables. Test: round-trip a 5-message conversation; resume yields identical history.
+- [ ] **R7.4**: `system_prompt.py` builder — pulls workspace name, loaded Agent Card, recent eval verdict, available tools. Test: snapshot of generated prompt for a fixture workspace.
+- [ ] **R7.5**: `ConversationLoop.run(user_message)` — calls LLM with tools, dispatches tool calls, loops until LLM returns a non-tool message. Test: with a fake LLM that emits `eval_run({})` → text, the loop calls the registered tool and returns the text.
+- [ ] **R7.6**: Streaming. `ConversationLoop.stream(user_message)` yields events (`AssistantTextDelta`, `ToolCallStarted`, `ToolCallResult`, `Done`). Test: events arrive in order; partial deltas concatenate to final text.
+- [ ] **R7.7**: `runtime.py` routing — input starting with `/` → existing slash dispatcher; anything else → `ConversationLoop.stream`. Slash commands continue to work unchanged. Test: `/eval` still routes to slash; "hello" routes to conversation.
+- [ ] **R7.8**: `conversation_view.py` widget — renders streaming assistant text, expandable tool-call cards, permission prompts. Snapshot test for rendered transcript.
+- [ ] **R7.9**: Permission prompt UI — when `tool_permissions.py` raises `PermissionPending`, the widget shows an inline approve/deny dialog; the conversation pauses until resolved. Test: pilot interaction approves a `deploy` call and the loop resumes.
+- [ ] **R7.10**: Persistence — every conversation auto-saves to the store; `WorkbenchSession.current_conversation_id` tracks the active one. Crash mid-conversation → reopening Workbench resumes it. Test: kill mid-conversation, restart, history is intact.
+- [ ] **R7.11**: `agentlab conversation list/show/resume/export` headless CLI. Useful for piping to scripts, sharing transcripts. Test: list returns recent conversations; export → JSON round-trips.
+- [ ] **R7.12**: Strict-live integration — if the workspace is strict-live and the conversation provider key is missing, the conversation refuses to start with the same exit semantics as `eval --strict-live`. Test: missing key + strict-live → clear error, exit 14.
+- [ ] **R7.13**: Cost tracking — every LLM turn updates `WorkbenchSession.cost_ticker`. Conversation transcript includes per-turn cost. Test: 3 turns × known token counts → ticker reflects sum.
+- [ ] **R7.14**: System-prompt refresh on workspace change — when `current_config_path` changes mid-conversation, surface a "context changed" notice and offer to reset; don't silently mix contexts.
+- [ ] **R7.15**: Documentation — quickstart, "talking to Workbench" guide, tool-permission reference, conversation export/share workflow.
+
+### Acceptance Tests
+
+- Open Workbench, type "what's my current eval verdict and what's failing?" → assistant calls `eval_run` (or reads cached result), `improve_list`, summarizes in plain English.
+- Type "improve safety on case 12" → assistant proposes calling `improve_run` with relevant args; permission prompt fires; on approve, run starts and streams progress.
+- Type "deploy the best candidate" → assistant proposes `improve_accept` then `deploy`; both prompts fire; deny denies; approve runs.
+- Kill Workbench mid-stream → reopen → conversation resumes with full history; the in-flight tool call is marked `interrupted` (not falsely succeeded).
+- Strict-live workspace + no key → conversation refuses to start; doctor explains why.
+- Headless: `agentlab conversation export <id> --format markdown` produces a clean transcript.
+
+### Risks
+
+- **Prompt injection via tool output.** A failed eval that includes user-supplied text (case description) could try to override the system prompt. Mitigate: render tool output to the model inside fenced blocks tagged `<tool_result>`; system prompt instructs the model to treat tool output as untrusted data, not instructions.
+- **Tool-permission fatigue.** If every other turn triggers an "approve?" dialog, users disable permissions wholesale. Mitigate: per-conversation "remember for this session" approvals; sensible defaults (read-only auto, mutating asks once); a one-time "I trust this conversation" toggle that promotes ask → allow for the rest of the session.
+- **Context window blowup.** Conversations + tool outputs balloon fast. Mitigate: summarize old turns past N tokens (Claude Code's `/compact` pattern); store the full transcript in SQLite, send a summary to the model.
+- **Conversation drift from workspace state.** User starts a conversation about workspace A, switches to workspace B mid-thread. Mitigate: R7.14 — explicit "context changed" notice; offer to fork the conversation.
+- **LLM hallucinated tool calls.** Model invents a tool name that doesn't exist. Mitigate: registry returns a clear error message back to the model with the list of real tool names; loop continues.
+- **Streaming + permission prompts interact badly.** Model is mid-stream when a tool call needs approval; UI must pause cleanly. Mitigate: streaming yields a discrete `PermissionRequired` event the widget handles before continuing.
+- **Coupling to a specific provider's tool-use API.** Anthropic, OpenAI, Google all have slightly different shapes. Mitigate: define an internal `ToolCall` / `ToolResult` shape in `conversation_loop.py`; provider adapters translate. Start with one provider (Anthropic), generalize when a second is needed.
+
+### Critical Invariants
+
+- **Slash commands keep working unchanged.** R4 users who never type free-form input see no behavior change. R7 is additive.
+- **Tool permissions are non-bypassable from the model.** A clever prompt cannot trick the model into running a `deny`-policy tool. The registry checks the policy before invocation; the model never sees a way around it.
+- **Strict-live is honored.** R1's policy applies to the conversation provider too. No silent mock fallback when the workspace is strict-live.
+- **Conversation state never corrupts session state.** `ConversationLoop` reads `WorkbenchSession` but writes only through documented setters. Tools run via the existing in-process command path — they update session state the same way slash commands do.
+- **Read-only tools never have side effects.** `eval_run` is read-only only if it doesn't trigger a fresh eval; if "run" semantics matter, it goes in the `ask` bucket. Audit the default policy table carefully.
+- **Cost is always visible.** Every LLM turn increments the ticker. A conversation that quietly burns $50 is a roadmap-ending UX failure.
+
+### Architectural Decisions Deferred to the Session
+
+- **Provider abstraction shape.** Reuse R3's LLM-judge provider abstraction if it's general enough; if it's judge-specific, factor a shared `LLMClient` out of both.
+- **Tool schema generation.** Hand-write JSON schemas in `tool_registry.py` vs. derive from Click options. Hand-write is more flexible (richer descriptions for the model); deriving stays in sync with CLI changes. Recommend hybrid: derive arg names/types, hand-write descriptions.
+- **Conversation summarization trigger.** Token-based (>50k) vs. turn-based (>20). Token-based is more accurate but requires a tokenizer. Default token-based with a tiktoken / Anthropic token counter.
+- **System prompt size.** Aggressive injection of workspace state vs. lean prompt + on-demand tool calls (`get_workspace_status` tool). Lean is more flexible; aggressive is faster for common questions. Recommend lean — let the model fetch what it needs.
+- **Conversation forking.** When workspace context changes (R7.14), allow `fork` (new conversation seeded from the old one) vs. `reset` (drop history). Both are easy; pick one default and expose the other as a command.
+
+**R7 Scope: Large (~3 weeks for one engineer, ~15 commits).**
+
+> **MVP relevance:** R7 is NOT in the 90-day MVP. It's a stretch goal that turns Workbench from a control panel into a conversational shell. Ship after R6 unless conversational UX is the primary differentiator.
+
+---
+
 ## Cross-Release Risks
 
 1. **Big runner.py refactor (R2)** — biggest single risk. Mitigate: snapshot test of `agentlab --help`, extract one group at a time, ship between extractions, fully reversible per-group.
@@ -1481,9 +1563,11 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 - **R4 (Workbench harness)** — Large, ~3 weeks (depends on R2)
 - **R5 (Eval corpus)** — Medium, ~2 weeks (parallel with R3)
 - **R6 (Continuous)** — Large, ~4 weeks (depends on R1+R2+R3+R5)
+- **R7 (Workbench as Agent)** — Large, ~3 weeks (depends on R3+R4) — stretch, not in MVP
 
 **MVP cut (90 days): R1 + R2 + R3.** Ship-worthy major version.
 **Full roadmap (180 days): all six.**
+**Stretch (210 days): + R7** — conversational Workbench.
 
 ---
 
