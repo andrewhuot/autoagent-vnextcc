@@ -818,6 +818,131 @@ def register_improve_commands(cli: click.Group) -> None:
             click.echo(_json.dumps(patch_bundle_parsed, indent=2, sort_keys=True))
 
 
+    @improve_group.command("lineage")
+    @click.argument("attempt_id", required=True)
+    @click.option("--memory-db", default=None,
+                  help="Optimizer memory DB (default: AGENTLAB_MEMORY_DB or optimizer_memory.db).")
+    @click.option("--lineage-db", default=None,
+                  help="Improvement lineage DB (default: AGENTLAB_IMPROVEMENT_LINEAGE_DB or .agentlab/improvement_lineage.db).")
+    @click.option("--json", "json_output", "-j", is_flag=True,
+                  help="Output as JSON.")
+    def improve_lineage(
+        attempt_id: str,
+        memory_db: str | None,
+        lineage_db: str | None,
+        json_output: bool,
+    ) -> None:
+        """Render the full lineage chain for an attempt.
+
+        eval_run → attempt → (rejection?) → deployment → measurement
+        """
+        import json as _json
+        from optimizer.improvement_lineage import ImprovementLineageStore
+
+        resolved_memory_db = memory_db or os.environ.get(
+            "AGENTLAB_MEMORY_DB", MEMORY_DB
+        )
+        resolved_lineage_db = lineage_db or os.environ.get(
+            "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+            ".agentlab/improvement_lineage.db",
+        )
+
+        matches = _lookup_attempt_by_prefix(attempt_id, resolved_memory_db)
+        if not matches:
+            click.echo(click.style(
+                f"No improvement found with attempt_id prefix {attempt_id!r}.",
+                fg="red"), err=True)
+            raise click.exceptions.Exit(1)
+        if len(matches) > 1:
+            click.echo(click.style(
+                f"Ambiguous prefix {attempt_id!r} — matches {len(matches)} attempts.",
+                fg="yellow"), err=True)
+            raise click.exceptions.Exit(1)
+
+        attempt = matches[0]
+        full_id = attempt.attempt_id
+
+        store = ImprovementLineageStore(db_path=resolved_lineage_db)
+        view = store.view_attempt(full_id)
+
+        if json_output:
+            click.echo(_json.dumps({
+                "status": "ok",
+                "attempt_id": view.attempt_id,
+                "status_classified": view.status or getattr(attempt, "status", None),
+                "eval_run_id": view.eval_run_id,
+                "deployment_id": view.deployment_id,
+                "deployed_version": view.deployed_version,
+                "measurement_id": view.measurement_id,
+                "composite_delta": view.composite_delta,
+                "score_before": view.score_before,
+                "score_after": view.score_after,
+                "parent_attempt_id": view.parent_attempt_id,
+                "rejection_reason": view.rejection_reason,
+                "rejection_detail": view.rejection_detail,
+                "rolled_back": view.rolled_back,
+                "events": [
+                    {
+                        "event_type": e.event_type,
+                        "timestamp": e.timestamp,
+                        "version": e.version,
+                        "payload": e.payload,
+                    }
+                    for e in view.events
+                ],
+            }))
+            return
+
+        click.echo(click.style(
+            f"\nLineage for {full_id}",
+            fg="cyan", bold=True))
+        click.echo(f"  Section:  {getattr(attempt, 'config_section', None) or '—'}")
+        click.echo(f"  Status:   {view.status or getattr(attempt, 'status', '—')}")
+        if view.eval_run_id:
+            click.echo(f"  Eval run: {view.eval_run_id}")
+        if view.parent_attempt_id:
+            click.echo(f"  Parent:   {view.parent_attempt_id}")
+        if view.score_before is not None or view.score_after is not None:
+            before = f"{view.score_before:.4f}" if view.score_before is not None else "n/a"
+            after = f"{view.score_after:.4f}" if view.score_after is not None else "n/a"
+            click.echo(f"  Scores:   before={before} after={after}")
+        if view.rejection_reason:
+            click.echo(click.style(
+                f"  Rejected: {view.rejection_reason} — {view.rejection_detail or ''}",
+                fg="red"))
+        if view.deployment_id:
+            ver = f"v{view.deployed_version:03d}" if view.deployed_version is not None else ""
+            click.echo(f"  Deployed: {view.deployment_id} {ver}".rstrip())
+        if view.rolled_back:
+            click.echo(click.style("  ⚠ rolled back", fg="yellow"))
+        if view.measurement_id:
+            delta = view.composite_delta
+            delta_str = f"{delta:+.4f}" if delta is not None else "pending"
+            click.echo(f"  Measured: {view.measurement_id} Δ={delta_str}")
+        click.echo("")
+        click.echo(click.style("Events:", bold=True))
+        if not view.events:
+            click.echo("  (no lineage events recorded for this attempt)")
+        else:
+            for e in view.events:
+                when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.timestamp))
+                ver = f" v{e.version:03d}" if e.version is not None else ""
+                extra = ""
+                if e.event_type == "rejection":
+                    extra = f" — {e.payload.get('reason', '')}: {e.payload.get('detail', '')}"
+                elif e.event_type == "measurement":
+                    delta = e.payload.get("composite_delta")
+                    if delta is not None:
+                        extra = f" — Δ={delta:+.4f}"
+                    elif e.payload.get("scheduled"):
+                        extra = " — scheduled (pending)"
+                elif e.event_type == "eval_run":
+                    cs = e.payload.get("composite_score")
+                    if cs is not None:
+                        extra = f" — composite={cs:.4f}"
+                click.echo(f"  [{when}] {e.event_type}{ver}{extra}")
+
+
     @improve_group.command("optimize")
     @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
     @click.option("--continuous", is_flag=True, default=False, help="Loop indefinitely until Ctrl+C.")
