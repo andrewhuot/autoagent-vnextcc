@@ -18,6 +18,7 @@ import sqlite3
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 
@@ -273,6 +274,85 @@ class ImprovementLineageStore:
             if event.event_type in ("promote", "deploy_canary") and event.version is not None:
                 return event.version
         return None
+
+    # ------------------------------------------------------------------
+    # Backfill (R2 Slice D.2)
+    # ------------------------------------------------------------------
+
+    def backfill_orphans(self, root: str = ".agentlab") -> int:
+        """Backfill orphan eval runs from a pre-R2 EvalResultsStore.
+
+        Scans ``<root>/eval_results.db`` for ``run_id`` values that do not
+        yet have a matching ``eval_run`` lineage event, and inserts one
+        for each. Idempotent: repeated calls no-op after the first sweep
+        writes sentinel ``<root>/.lineage_backfill_done``.
+
+        Returns the number of orphan rows backfilled. Returns ``0`` when
+        the eval results DB is absent, so it is always safe to call on
+        first install.
+        """
+        root_path = Path(root)
+        eval_db_path = root_path / "eval_results.db"
+        if not eval_db_path.exists():
+            return 0
+
+        # Collect run_ids already in the lineage table so we don't double-insert.
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT payload FROM lineage_events WHERE event_type = ?",
+                (EVENT_EVAL_RUN,),
+            ).fetchall()
+        already_linked: set[str] = set()
+        for (payload_json,) in rows:
+            try:
+                parsed = json.loads(payload_json) if payload_json else {}
+            except json.JSONDecodeError:
+                continue
+            rid = parsed.get("eval_run_id") if isinstance(parsed, dict) else None
+            if rid:
+                already_linked.add(rid)
+
+        try:
+            with sqlite3.connect(str(eval_db_path)) as eval_conn:
+                eval_rows = eval_conn.execute(
+                    "SELECT run_id, summary FROM result_runs"
+                ).fetchall()
+        except sqlite3.Error:
+            return 0
+
+        inserted = 0
+        for run_id, summary_json in eval_rows:
+            if not run_id or run_id in already_linked:
+                continue
+            composite_score: float | None = None
+            if summary_json:
+                try:
+                    parsed = json.loads(summary_json)
+                    if isinstance(parsed, dict):
+                        raw = parsed.get("composite")
+                        composite_score = float(raw) if raw is not None else None
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    composite_score = None
+            try:
+                self.record_eval_run(
+                    eval_run_id=run_id,
+                    attempt_id="",
+                    composite_score=composite_score,
+                    backfilled=True,
+                )
+                inserted += 1
+            except Exception:
+                continue
+
+        try:
+            if root_path.is_dir():
+                (root_path / ".lineage_backfill_done").write_text(
+                    "lineage backfill sentinel"
+                )
+        except OSError:
+            pass
+
+        return inserted
 
     @staticmethod
     def _row_to_event(row: tuple) -> LineageEvent:
