@@ -24,6 +24,14 @@ from typing import Any
 DEFAULT_DB_PATH = ".agentlab/improvement_lineage.db"
 
 
+# Event type constants (stable strings; never rename — api/ and cli/ consume these).
+EVENT_EVAL_RUN = "eval_run"
+EVENT_ATTEMPT = "attempt"
+EVENT_REJECTION = "rejection"
+EVENT_DEPLOYMENT = "deployment"
+EVENT_MEASUREMENT = "measurement"
+
+
 @dataclass
 class LineageEvent:
     event_id: str
@@ -43,6 +51,7 @@ class ImprovementLineageStore:
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS lineage_events (
@@ -93,6 +102,85 @@ class ImprovementLineageStore:
             )
             conn.commit()
         return event
+
+    def record_eval_run(
+        self,
+        *,
+        eval_run_id: str,
+        attempt_id: str = "",
+        config_path: str = "",
+        composite_score: float | None = None,
+        case_count: int | None = None,
+        **extra: Any,
+    ) -> LineageEvent:
+        payload = {
+            "eval_run_id": eval_run_id,
+            "config_path": config_path,
+            "composite_score": composite_score,
+            "case_count": case_count,
+            **extra,
+        }
+        return self.record(attempt_id, EVENT_EVAL_RUN, payload=payload)
+
+    def record_attempt(
+        self,
+        *,
+        attempt_id: str,
+        status: str,
+        score_before: float | None = None,
+        score_after: float | None = None,
+        eval_run_id: str | None = None,
+        parent_attempt_id: str | None = None,
+        **extra: Any,
+    ) -> LineageEvent:
+        payload = {
+            "status": status,
+            "score_before": score_before,
+            "score_after": score_after,
+            "eval_run_id": eval_run_id,
+            "parent_attempt_id": parent_attempt_id,
+            **extra,
+        }
+        return self.record(attempt_id, EVENT_ATTEMPT, payload=payload)
+
+    def record_rejection(
+        self,
+        *,
+        attempt_id: str,
+        reason: str,
+        detail: str = "",
+        **extra: Any,
+    ) -> LineageEvent:
+        payload = {"reason": reason, "detail": detail, **extra}
+        return self.record(attempt_id, EVENT_REJECTION, payload=payload)
+
+    def record_deployment(
+        self,
+        *,
+        attempt_id: str,
+        deployment_id: str,
+        version: int | None = None,
+        **extra: Any,
+    ) -> LineageEvent:
+        payload = {"deployment_id": deployment_id, **extra}
+        return self.record(attempt_id, EVENT_DEPLOYMENT, version=version, payload=payload)
+
+    def record_measurement(
+        self,
+        *,
+        attempt_id: str,
+        measurement_id: str,
+        composite_delta: float | None = None,
+        eval_run_id: str | None = None,
+        **extra: Any,
+    ) -> LineageEvent:
+        payload = {
+            "measurement_id": measurement_id,
+            "composite_delta": composite_delta,
+            "eval_run_id": eval_run_id,
+            **extra,
+        }
+        return self.record(attempt_id, EVENT_MEASUREMENT, payload=payload)
 
     def events_for(self, attempt_id: str) -> list[LineageEvent]:
         with sqlite3.connect(self.db_path) as conn:
