@@ -111,9 +111,19 @@ def test_run_eval_in_process_emits_eval_complete_with_run_id(tmp_path) -> None:
     assert "mode" in final
 
 
-def test_run_eval_in_process_raises_on_strict_live_mock_fallback(tmp_path) -> None:
+def test_run_eval_in_process_raises_on_strict_live_mock_fallback(
+    tmp_path, monkeypatch
+) -> None:
     from cli.commands.eval import run_eval_in_process
     from cli.strict_live import MockFallbackError
+
+    # Hermetic isolation: without these, an ambient .agentlab/workspace.json
+    # set to mode=live and an ambient GOOGLE_API_KEY cause eval_mode to
+    # resolve to "live" and the real provider to be called — the
+    # force_mock+strict_live contract never gets exercised.
+    monkeypatch.chdir(tmp_path)
+    for var in ("GOOGLE_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.delenv(var, raising=False)
 
     # Force mock but require strict-live: the post-hoc gate must raise.
     with pytest.raises(MockFallbackError):
