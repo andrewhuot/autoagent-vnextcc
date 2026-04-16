@@ -4,13 +4,28 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from shared.canonical_ir_convert import from_config_dict
 from shared.canonical_patch import ComponentPatchOperation, TypedPatchBundle, find_component_reference
 
 from .providers import LLMRequest, LLMRouter
+
+if TYPE_CHECKING:
+    from .reflection import ReflectionEngine
+
+# Strategy -> mutation-surface mapping. Used by _rank_strategies to look up
+# historical effectiveness on the surface a strategy targets. Seed mapping;
+# extend as new strategies are registered.
+STRATEGY_TO_SURFACE: dict[str, str] = {
+    "tighten_prompt": "prompting",
+    "add_tool": "tools",
+    "refactor": "architecture",
+    "expand_card": "agent_card",
+}
 
 _ROUTING_STOP_WORDS = {
     "and",
@@ -117,6 +132,53 @@ class Proposer:
         if not non_zero:
             return None
         return max(non_zero, key=non_zero.get)
+
+    def _rank_strategies(
+        self,
+        available_strategies: list[str],
+        reflection_engine: "ReflectionEngine | None",
+        epsilon: float = 0.1,
+        rng: random.Random | None = None,
+    ) -> list[str]:
+        """Rank strategies by historical effectiveness with epsilon-greedy exploration.
+
+        With probability ``epsilon``, returns a random shuffle of the input
+        (exploration). Otherwise ranks strategies by the ``avg_improvement`` of
+        the surface each strategy targets (exploitation), pulled from the
+        reflection engine's surface-level effectiveness table.
+
+        Ties break by ``attempts`` (more evidence wins), then by strategy name
+        for determinism.
+
+        WHY: Without epsilon exploration, the optimizer will over-pick whichever
+        strategy worked in its first successes and starve alternatives - a known
+        reflection-feedback-loop failure mode.
+        """
+        rng = rng or random.Random()
+        if reflection_engine is None:
+            return list(available_strategies)
+
+        # Epsilon-greedy branch: shuffle and return.
+        if rng.random() < epsilon:
+            shuffled = list(available_strategies)
+            rng.shuffle(shuffled)
+            return shuffled
+
+        # Exploitation branch: sort by (avg_improvement, attempts, name) desc.
+        def _key(strategy: str) -> tuple[float, int, str]:
+            surface = STRATEGY_TO_SURFACE.get(strategy)
+            if surface is None:
+                # Unknown strategies sort last but stably.
+                return (float("-inf"), 0, strategy)
+            eff = reflection_engine.read_surface_effectiveness(surface)
+            if eff is None:
+                return (0.0, 0, strategy)
+            return (eff.avg_improvement, eff.attempts, strategy)
+
+        # Stable tie-break on name ascending requires sorting by name first,
+        # then by the primary keys reverse (Python sort is stable).
+        staged = sorted(available_strategies, key=lambda s: s)
+        return sorted(staged, key=_key, reverse=True)
 
     @staticmethod
     def _append_unique_keywords(existing: list[str], additions: list[str]) -> list[str]:
