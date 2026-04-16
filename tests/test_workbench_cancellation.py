@@ -267,7 +267,7 @@ def _strip(s: str) -> str:
                 runner=runner, prompter=lambda _msg: True
             ),
             "/deploy",
-            ("-y",),
+            ("-y", "--attempt-id", "att_test"),
         ),
     ],
 )
@@ -296,7 +296,7 @@ def test_handler_cancels_mid_stream_via_token(
                 runner=runner, prompter=lambda _msg: True
             ),
             "/deploy",
-            ("-y",),
+            ("-y", "--attempt-id", "att_test"),
         ),
     ],
 )

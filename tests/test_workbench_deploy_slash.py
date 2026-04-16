@@ -261,7 +261,17 @@ def echo() -> _EchoCapture:
 @pytest.fixture
 def ctx(echo: _EchoCapture) -> SlashContext:
     registry = CommandRegistry()
-    return SlashContext(echo=echo, registry=registry)
+    ctx = SlashContext(echo=echo, registry=registry)
+    # R4.6: pre-install a session with last_attempt_id so the new
+    # session-aware gate doesn't short-circuit legacy tests that predate
+    # it. Tests that exercise the missing-attempt path install their own
+    # empty session in ctx.meta.
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    _session = WorkbenchSession()
+    _session.update(last_attempt_id="att_test")
+    ctx.meta["workbench_session"] = _session
+    return ctx
 
 
 def _install_deploy(
@@ -292,7 +302,8 @@ def test_handler_prompts_and_appends_yes_on_confirmation(
     assert len(prompter.messages) == 1
     assert "strategy=canary" in _strip_ansi(prompter.messages[0])
     # -y appended by the handler so runner.deploy doesn't re-prompt.
-    assert runner.calls == [["--strategy", "canary", "-y"]]
+    # Session then injects --attempt-id att_test (see ctx fixture).
+    assert runner.calls == [["--strategy", "canary", "-y", "--attempt-id", "att_test"]]
     plain = "\n".join(echo.plain)
     assert "/deploy starting" in plain
     assert "/deploy complete" in plain
@@ -345,7 +356,8 @@ def test_handler_skips_prompt_when_yes_already_passed(
 
     # Prompter never consulted; -y not double-appended.
     assert prompter.messages == []
-    assert runner.calls == [["--strategy", "immediate", "--yes"]]
+    # Session injects --attempt-id att_test (see ctx fixture).
+    assert runner.calls == [["--strategy", "immediate", "--yes", "--attempt-id", "att_test"]]
     assert any("/deploy complete" in _strip_ansi(l) for l in echo.lines)
 
 
@@ -363,7 +375,8 @@ def test_handler_skips_prompt_on_dry_run(
 
     assert prompter.messages == []
     # No -y appended on dry-run — the subprocess itself won't prompt.
-    assert runner.calls == [["--dry-run"]]
+    # Session injects --attempt-id att_test (see ctx fixture).
+    assert runner.calls == [["--dry-run", "--attempt-id", "att_test"]]
 
 
 def test_handler_reports_subprocess_failure(
@@ -448,3 +461,223 @@ def test_summary_dataclass_is_frozen() -> None:
     summary = DeploySummary(events=1)
     with pytest.raises(Exception):
         summary.events = 2  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# R4.6 — in-process runner: subprocess-free, session-aware, error-bounded
+# ---------------------------------------------------------------------------
+
+
+def test_deploy_slash_does_not_spawn_subprocess() -> None:
+    """The refactored /deploy handler must NOT invoke ``subprocess.Popen``."""
+    import subprocess
+    from unittest.mock import patch
+
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    echo = _EchoCapture()
+    registry = CommandRegistry()
+    ctx = SlashContext(echo=echo, registry=registry)
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_test")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "deploy"},
+            {
+                "event": "deploy_complete",
+                "attempt_id": "att_test",
+                "deployment_id": "canary-v001",
+                "status": "ok",
+                "verdict": "approved",
+            },
+        ]
+    )
+    registry.register(
+        build_deploy_command(runner=runner, prompter=_Prompter(decision=True))
+    )
+
+    with patch.object(subprocess, "Popen") as popen_mock:
+        popen_mock.side_effect = AssertionError("subprocess spawned!")
+        dispatch(ctx, "/deploy -y")
+
+    popen_mock.assert_not_called()
+
+
+def test_deploy_slash_auto_injects_session_attempt_id() -> None:
+    """When session has last_attempt_id, it's auto-injected into kwargs."""
+    from cli.workbench_app.deploy_slash import (
+        _args_to_kwargs,
+        _resolve_session_attempt_id,
+    )
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_abc")
+
+    kwargs = _args_to_kwargs(["--dry-run"])
+    resolved = _resolve_session_attempt_id(kwargs, session)
+    assert resolved["attempt_id"] == "att_abc"
+
+
+def test_deploy_slash_user_override_beats_session() -> None:
+    """User --attempt-id wins over session state."""
+    from cli.workbench_app.deploy_slash import (
+        _args_to_kwargs,
+        _resolve_session_attempt_id,
+    )
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    kwargs = _args_to_kwargs(["--attempt-id", "att_user"])
+    resolved = _resolve_session_attempt_id(kwargs, session)
+    assert resolved["attempt_id"] == "att_user"
+
+
+def test_deploy_slash_errors_when_session_missing_attempt_id(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """No user flag and no session id → transcript error + no runner call."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()  # no last_attempt_id
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner([])
+    _install_deploy(ctx, runner)
+
+    result = dispatch(ctx, "/deploy -y")
+
+    plain = "\n".join(echo.plain)
+    assert "no attempt in session" in plain
+    assert runner.calls == []
+    assert isinstance(result, DispatchResult)
+    assert result.display == "skip"
+
+
+def test_deploy_slash_handles_missing_session_gracefully(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """No session in ctx.meta + explicit --attempt-id must not raise."""
+    ctx.meta.pop("workbench_session", None)
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "deploy"},
+            {
+                "event": "deploy_complete",
+                "attempt_id": "att_x",
+                "deployment_id": "canary-v001",
+                "status": "ok",
+                "verdict": "approved",
+            },
+        ]
+    )
+    _install_deploy(ctx, runner)
+
+    result = dispatch(ctx, "/deploy --attempt-id att_x -y")
+    assert isinstance(result, DispatchResult)
+
+
+def test_deploy_slash_preserves_verdict_gate_block(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Verdict-blocked from the runner must surface as a transcript error."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_x")
+    ctx.meta["workbench_session"] = session
+
+    runner = _failing_runner(DeployCommandError("deploy blocked: verdict=blocked"))
+    _install_deploy(ctx, runner)
+
+    result = dispatch(ctx, "/deploy -y")
+
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "/deploy failed" in plain
+    assert "blocked" in plain
+    assert result.display == "skip"
+    assert result.raw_result is not None
+
+
+def test_deploy_slash_error_boundary_catches_unexpected(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Unexpected exception from runner must be caught and rendered."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_x")
+    ctx.meta["workbench_session"] = session
+
+    runner = _failing_runner(ValueError("boom"))
+    _install_deploy(ctx, runner)
+
+    result = dispatch(ctx, "/deploy -y")
+
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "crashed" in plain.lower() or "/deploy failed" in plain
+    assert result.raw_result is not None
+
+
+def test_args_to_kwargs_parses_attempt_id_and_environment() -> None:
+    """Unit test: /deploy argv → kwargs maps --attempt-id + --strategy."""
+    from cli.workbench_app.deploy_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(
+        [
+            "--attempt-id",
+            "att_42",
+            "--strategy",
+            "immediate",
+            "--dry-run",
+        ]
+    )
+    assert kwargs["attempt_id"] == "att_42"
+    assert kwargs["strategy"] == "immediate"
+    assert kwargs["dry_run"] is True
+
+
+def test_resolve_session_attempt_id_injects_from_session() -> None:
+    from cli.workbench_app.deploy_slash import _resolve_session_attempt_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    kwargs: dict = {"attempt_id": None}
+    resolved = _resolve_session_attempt_id(kwargs, session)
+    assert resolved["attempt_id"] == "att_session"
+
+
+def test_resolve_session_attempt_id_preserves_user_value() -> None:
+    from cli.workbench_app.deploy_slash import _resolve_session_attempt_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    kwargs = {"attempt_id": "att_user"}
+    resolved = _resolve_session_attempt_id(kwargs, session)
+    assert resolved["attempt_id"] == "att_user"
+
+
+def test_resolve_session_attempt_id_raises_when_both_missing() -> None:
+    from cli.workbench_app.deploy_slash import (
+        DeployCommandError,
+        _resolve_session_attempt_id,
+    )
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()  # no attempt id
+    kwargs: dict = {"attempt_id": None}
+    with pytest.raises(DeployCommandError, match="no attempt in session"):
+        _resolve_session_attempt_id(kwargs, session)
