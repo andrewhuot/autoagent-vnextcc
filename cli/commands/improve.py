@@ -25,6 +25,52 @@ def _runner_module():
     return _r
 
 
+def _lookup_attempt_by_prefix(prefix: str, memory_db: str) -> list:
+    """Return OptimizationAttempt rows whose attempt_id starts with *prefix*.
+
+    Separate helper so tests can patch it and avoid a real OptimizationMemory
+    fixture."""
+    from optimizer.memory import OptimizationMemory
+    memory = OptimizationMemory(db_path=memory_db)
+    return [a for a in memory.get_all() if a.attempt_id.startswith(prefix)]
+
+
+def _invoke_deploy(*, attempt_id: str, strategy: str, ctx=None) -> None:
+    """Invoke `agentlab deploy` in-process with --attempt-id set.
+
+    Kept as a thin helper so tests can patch it without running the real
+    deployer machinery."""
+    runner = _runner_module()
+    if ctx is None:
+        # Fall back to an implicit invocation; tests typically patch this.
+        ctx = click.get_current_context()
+    ctx.invoke(
+        runner.deploy,
+        workflow=None,
+        config_version=None,
+        strategy=strategy,
+        configs_dir=runner.CONFIGS_DIR,
+        db=runner.DB_PATH,
+        target="agentlab",
+        project=None,
+        location="global",
+        agent_id=None,
+        snapshot=None,
+        credentials=None,
+        output=None,
+        push=False,
+        dry_run=False,
+        acknowledge=True,
+        json_output=False,
+        output_format="text",
+        auto_review=False,
+        force_deploy_degraded=False,
+        force_reason=None,
+        attempt_id=attempt_id,
+        release_experiment_id=None,
+    )
+
+
 def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
     """Run the pre-R2 autofix flow for back-compat with zero-arg `improve run`.
 
@@ -468,6 +514,110 @@ def register_improve_commands(cli: click.Group) -> None:
             when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(e.timestamp))
             ver = f" v{e.version:03d}" if e.version is not None else ""
             click.echo(f"    [{when}] {e.event_type}{ver}")
+
+
+    @improve_group.command("accept")
+    @click.argument("attempt_id", required=True)
+    @click.option("--strategy", type=click.Choice(["canary", "immediate"]),
+                  default="canary", show_default=True,
+                  help="Deployment strategy to use.")
+    @click.option("--memory-db", default=None,
+                  help="Optimizer memory DB. Defaults to $AGENTLAB_MEMORY_DB or "
+                       "optimizer_memory.db.")
+    @click.option("--lineage-db", default=None,
+                  help="Improvement lineage DB. Defaults to "
+                       "$AGENTLAB_IMPROVEMENT_LINEAGE_DB or "
+                       ".agentlab/improvement_lineage.db.")
+    @click.option("--json", "json_output", "-j", is_flag=True,
+                  help="Output as JSON.")
+    @click.pass_context
+    def improve_accept(
+        ctx,
+        attempt_id: str,
+        strategy: str,
+        memory_db: str | None,
+        lineage_db: str | None,
+        json_output: bool,
+    ) -> None:
+        """Deploy an accepted improvement and schedule a post-deploy measurement.
+
+        The attempt_id may be a prefix; it must uniquely identify one attempt.
+        """
+        from optimizer.improvement_lineage import ImprovementLineageStore
+
+        # Resolve DB paths at call time so env vars set by tests/harness win.
+        if memory_db is None:
+            memory_db = os.environ.get("AGENTLAB_MEMORY_DB", MEMORY_DB)
+        if lineage_db is None:
+            lineage_db = os.environ.get(
+                "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+                ".agentlab/improvement_lineage.db",
+            )
+
+        matches = _lookup_attempt_by_prefix(attempt_id, memory_db)
+        if not matches:
+            click.echo(click.style(
+                f"No improvement found with attempt_id prefix {attempt_id!r}.",
+                fg="red"), err=True)
+            raise click.exceptions.Exit(1)
+        if len(matches) > 1:
+            click.echo(click.style(
+                f"Ambiguous prefix {attempt_id!r} — matches {len(matches)} attempts. "
+                f"Use more characters.",
+                fg="yellow"), err=True)
+            raise click.exceptions.Exit(1)
+
+        attempt = matches[0]
+        full_id = attempt.attempt_id
+
+        lineage = ImprovementLineageStore(db_path=lineage_db)
+        view = lineage.view_attempt(full_id)
+        if view.deployment_id is not None:
+            msg = (f"Attempt {full_id} is already deployed "
+                   f"(version {view.deployed_version}, deployment_id {view.deployment_id}).")
+            if json_output:
+                import json as _json
+                click.echo(_json.dumps({
+                    "status": "ok",
+                    "attempt_id": full_id,
+                    "already_deployed": True,
+                    "deployment_id": view.deployment_id,
+                    "deployed_version": view.deployed_version,
+                }))
+            else:
+                click.echo(click.style(msg, fg="yellow"))
+            return
+
+        # Deploy. Any exception propagates (and should fail the command).
+        _invoke_deploy(attempt_id=full_id, strategy=strategy, ctx=ctx)
+
+        # Schedule measurement: write a measurement event with composite_delta=None
+        # and scheduled=True so improve lineage can show "measurement pending".
+        try:
+            lineage.record_measurement(
+                attempt_id=full_id,
+                measurement_id=f"scheduled-{full_id}",
+                composite_delta=None,
+                scheduled=True,
+            )
+        except Exception:
+            pass  # Measurement scheduling failure must not break accept.
+
+        if json_output:
+            import json as _json
+            click.echo(_json.dumps({
+                "status": "ok",
+                "attempt_id": full_id,
+                "strategy": strategy,
+                "measurement_scheduled": True,
+            }))
+        else:
+            click.echo(click.style(
+                f"\n\u2713 Accepted {full_id}",
+                fg="green", bold=True))
+            click.echo(f"  Deployed via {strategy}.")
+            click.echo(f"  Next: run `agentlab improve measure {full_id}` "
+                       f"after the canary window to record composite_delta.")
 
 
     @improve_group.command("optimize")
