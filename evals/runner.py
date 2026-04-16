@@ -41,6 +41,7 @@ class TestCase:
     expected_tool: str | None = None
     split: str | None = None
     reference_answer: str = ""
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -156,10 +157,16 @@ class EvalRunner:
                     seen_case_ids,
                     source_label=yaml_file.stem,
                 )
+                category = entry.get("category", "unknown")
+                raw_tags = entry.get("tags")
+                if isinstance(raw_tags, list) and raw_tags:
+                    tags = [str(tag) for tag in raw_tags]
+                else:
+                    tags = [category]
                 cases.append(
                     TestCase(
                         id=case_id,
-                        category=entry.get("category", "unknown"),
+                        category=category,
                         user_message=entry["user_message"],
                         expected_specialist=entry.get("expected_specialist", "support"),
                         expected_behavior=entry.get("expected_behavior", "answer"),
@@ -168,6 +175,7 @@ class EvalRunner:
                         expected_tool=entry.get("expected_tool"),
                         split=entry.get("split"),
                         reference_answer=entry.get("reference_answer", ""),
+                        tags=tags,
                     )
                 )
         return cases
@@ -241,9 +249,18 @@ class EvalRunner:
         if isinstance(safety_probe, str):
             safety_probe = safety_probe.strip().lower() in {"1", "true", "yes", "y"}
 
+        category = str(row.get("category") or "dataset")
+        raw_tags = row.get("tags")
+        if isinstance(raw_tags, str):
+            tags = [item.strip() for item in raw_tags.split(",") if item.strip()]
+        elif isinstance(raw_tags, list) and raw_tags:
+            tags = [str(item).strip() for item in raw_tags if str(item).strip()]
+        else:
+            tags = [category]
+
         return TestCase(
             id=case_id,
-            category=str(row.get("category") or "dataset"),
+            category=category,
             user_message=str(row.get("user_message") or row.get("prompt") or ""),
             expected_specialist=str(row.get("expected_specialist") or "support"),
             expected_behavior=str(row.get("expected_behavior") or "answer"),
@@ -252,6 +269,7 @@ class EvalRunner:
             expected_tool=(str(row.get("expected_tool")).strip() if row.get("expected_tool") else None),
             split=explicit_split,
             reference_answer=str(row.get("reference_answer") or row.get("expected_answer") or ""),
+            tags=tags,
         )
 
     @staticmethod
