@@ -230,7 +230,7 @@ def _run_optimize_step(*, ctx, config_path, cycles, mode, strict_live, json_outp
     """Invoke `agentlab optimize --config <path> --cycles N` via ctx.invoke."""
     runner = _runner_module()
     ctx.invoke(
-        runner.optimize,
+        runner.cli.commands["optimize"],
         cycles=cycles,
         continuous=False,
         mode=mode,
@@ -972,7 +972,7 @@ def register_improve_commands(cli: click.Group) -> None:
     ) -> None:
         """Compatibility alias for `agentlab optimize`."""
         ctx.invoke(
-            runner.optimize,
+            runner.cli.commands["optimize"],
             cycles=cycles,
             continuous=continuous,
             mode=mode,
