@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
 from evals.scorer import CompositeScore
 
 
@@ -120,3 +124,52 @@ class Gates:
             f"latency {candidate.latency - baseline.latency:+.4f}, "
             f"cost {candidate.cost - baseline.cost:+.4f}"
         )
+
+
+class RejectionReason(str, Enum):
+    """Structured reason an optimization proposal was rejected."""
+
+    SAFETY_VIOLATION = "safety_violation"
+    REGRESSION_DETECTED = "regression_detected"
+    NO_SIGNIFICANT_IMPROVEMENT = "no_significant_improvement"
+    GATE_FAILED = "gate_failed"
+    COVERAGE_INSUFFICIENT = "coverage_insufficient"
+
+
+@dataclass
+class RejectionRecord:
+    """Structured record of why a candidate was rejected by the gate evaluator."""
+
+    attempt_id: str
+    reason: RejectionReason
+    detail: str
+    baseline_score: float | None = None
+    candidate_score: float | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "attempt_id": self.attempt_id,
+            "reason": self.reason.value,
+            "detail": self.detail,
+            "baseline_score": self.baseline_score,
+            "candidate_score": self.candidate_score,
+            "metadata": dict(self.metadata),
+        }
+
+
+def rejection_from_status(status: str) -> RejectionReason:
+    """Map a legacy ``Gates.evaluate`` status string to a :class:`RejectionReason`.
+
+    Lets R1.7 callers convert without re-running the gates. Raises ``ValueError``
+    for ``"accepted"`` or any other non-rejection status.
+    """
+    if status == "rejected_constraints":
+        return RejectionReason.SAFETY_VIOLATION
+    if status == "rejected_regression":
+        return RejectionReason.REGRESSION_DETECTED
+    if status == "rejected_no_improvement":
+        return RejectionReason.NO_SIGNIFICANT_IMPROVEMENT
+    if status.startswith("rejected_"):
+        return RejectionReason.GATE_FAILED
+    raise ValueError(f"Not a rejection status: {status!r}")
