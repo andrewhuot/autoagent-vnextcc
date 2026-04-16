@@ -54,6 +54,7 @@ class MockLoopProposer:
         failure_samples: list[dict],
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        **kwargs,
     ) -> Proposal:
         candidate = deepcopy(current_config)
         candidate["quality_boost"] = True
