@@ -6082,6 +6082,36 @@ def _open_in_editor(file_path: Path) -> None:
 # agentlab deploy
 # ---------------------------------------------------------------------------
 
+def _emit_deploy_lineage(
+    *,
+    attempt_id: str | None,
+    deployment_id: str,
+    version: int,
+    strategy: str,
+) -> None:
+    """Emit a deployment event to the improvement lineage store. Guarded."""
+    import os
+    if not attempt_id:
+        return
+    db_path = os.environ.get(
+        "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+        ".agentlab/improvement_lineage.db",
+    )
+    if not db_path:
+        return
+    try:
+        from optimizer.improvement_lineage import ImprovementLineageStore
+        store = ImprovementLineageStore(db_path=db_path)
+        store.record_deployment(
+            attempt_id=attempt_id,
+            deployment_id=deployment_id,
+            version=version,
+            strategy=strategy,
+        )
+    except Exception:
+        pass
+
+
 @cli.command("deploy")
 @click.argument("workflow", required=False, type=click.Choice(["canary", "immediate", "release", "rollback", "status"]))
 @click.option("--config-version", type=int, default=None,
@@ -6128,6 +6158,11 @@ def _open_in_editor(file_path: Path) -> None:
     default=None,
     help="Required justification when using --force-deploy-degraded (min 10 chars).",
 )
+@click.option(
+    "--attempt-id",
+    default=None,
+    help="Link this deployment to a specific improve attempt for lineage tracking.",
+)
 @click.option("--release-experiment-id", default=None, hidden=True)
 def deploy(
     workflow: str | None,
@@ -6150,6 +6185,7 @@ def deploy(
     auto_review: bool = False,
     force_deploy_degraded: bool = False,
     force_reason: str | None = None,
+    attempt_id: str | None = None,
     release_experiment_id: str | None = None,
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
@@ -6315,6 +6351,12 @@ def deploy(
                 click.echo(f"  Target:  {target}")
             return
         deployer.version_manager.rollback(rollback_version)
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=f"rollback-v{rollback_version:03d}",
+            version=rollback_version,
+            strategy="rollback",
+        )
         if json_output:
             click.echo(json_response("ok", {"version": rollback_version, "strategy": "rollback", "status": "rolled_back"}, next_cmd="agentlab status"))
         else:
@@ -6400,6 +6442,12 @@ def deploy(
 
     if strategy == "immediate":
         deployer.version_manager.promote(config_version)
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=f"promote-v{config_version:03d}",
+            version=config_version,
+            strategy="immediate",
+        )
         progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} immediately")
         progress.next_action("agentlab status")
         if resolved_output_format == "stream-json":
@@ -6415,6 +6463,12 @@ def deploy(
             click.echo(click.style(f"Applied: deployed v{config_version:03d} immediately (promoted to active).", fg="green"))
     else:
         deployer.version_manager.mark_canary(config_version)
+        _emit_deploy_lineage(
+            attempt_id=attempt_id,
+            deployment_id=f"canary-v{config_version:03d}",
+            version=config_version,
+            strategy="canary",
+        )
         result = f"Deployed v{config_version:03d} as canary (10% traffic)"
         progress.phase_completed("deploy", message=f"Deployed v{config_version:03d} as canary")
         progress.next_action("agentlab status")

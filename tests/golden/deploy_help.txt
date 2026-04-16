@@ -38,4 +38,6 @@ Options:
                                   --reason.
   --reason TEXT                   Required justification when using --force-
                                   deploy-degraded (min 10 chars).
+  --attempt-id TEXT               Link this deployment to a specific improve
+                                  attempt for lineage tracking.
   --help                          Show this message and exit.
