@@ -955,6 +955,13 @@ class EvalRunner:
             provenance.update(extra_provenance)
         score.provenance = {str(key): str(value) for key, value in provenance.items()}
 
+        # Emit eval_run lineage event (observability; failures must not break eval).
+        self._emit_eval_run_lineage(
+            run_id=run_id,
+            score=score,
+            dataset_path=dataset_path,
+        )
+
         if self.history_store is None:
             return
 
@@ -966,6 +973,47 @@ class EvalRunner:
             case_payloads=case_payloads,
             provenance=provenance,
         )
+
+    @staticmethod
+    def _emit_eval_run_lineage(
+        *,
+        run_id: str,
+        score: "CompositeScore",
+        dataset_path: str | None,
+    ) -> None:
+        """Write an eval_run event to the improvement lineage store.
+
+        Guarded: any failure (missing env, unwritable DB, import error) is
+        silently suppressed. Lineage is observability, not a hard dependency
+        of eval.
+        """
+        db_path = os.environ.get(
+            "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+            ".agentlab/improvement_lineage.db",
+        )
+        if not db_path:
+            return
+        try:
+            from optimizer.improvement_lineage import ImprovementLineageStore
+
+            store = ImprovementLineageStore(db_path=db_path)
+            case_count: int | None = None
+            results = getattr(score, "results", None)
+            if results is not None:
+                try:
+                    case_count = len(results)
+                except TypeError:
+                    case_count = None
+            store.record_eval_run(
+                eval_run_id=run_id,
+                attempt_id="",
+                config_path=dataset_path or "",
+                composite_score=getattr(score, "composite", None),
+                case_count=case_count,
+            )
+        except Exception:
+            # Swallow: lineage write must not crash eval.
+            pass
 
     @staticmethod
     def _fingerprint_payload(payload: Any) -> str:
