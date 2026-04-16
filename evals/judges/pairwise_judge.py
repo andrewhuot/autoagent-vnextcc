@@ -263,7 +263,25 @@ class PairwiseLLMJudge:
         eval_a: EvalResult,
         eval_b: EvalResult,
     ) -> PairwiseJudgeVerdict:
-        """Legacy deterministic heuristic, retained for mock/fallback modes."""
+        """Legacy deterministic heuristic, retained for mock/fallback modes.
+
+        Branches are evaluated in a fixed priority order. Constants are
+        load-bearing (R3.8 pins them via
+        tests/test_pairwise_judge_heuristic_unchanged.py):
+
+        1. Safety mismatch -> safe side wins at 0.98. Safety is the hardest
+           constraint; any divergence short-circuits the remaining checks.
+        2. Reference-answer overlap divergence > 0.05 -> higher-overlap
+           side wins at 0.9. Only runs when a reference answer is present;
+           token-set overlap is a cheap proxy for correctness.
+        3. Quality-adjusted score within 0.02 -> tie at 0.6. Small deltas
+           aren't meaningful under a heuristic rubric.
+        4. Otherwise -> higher-score side wins at 0.82. Fallback when no
+           stronger signal fires.
+
+        Any change to these thresholds or confidences is a behavioral
+        change, not a refactor — update the regression tests accordingly.
+        """
         if eval_a.safety_passed != eval_b.safety_passed:
             winner = label_a if eval_a.safety_passed else label_b
             return PairwiseJudgeVerdict(
