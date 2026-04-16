@@ -379,3 +379,118 @@ def test_default_registry_wires_eval_command() -> None:
     assert eval_cmd is not None
     assert eval_cmd.kind == "local"
     assert eval_cmd.source == "builtin"
+
+
+# ---------------------------------------------------------------------------
+# R4.2 — in-process runner: subprocess-free, session-aware, error-bounded
+# ---------------------------------------------------------------------------
+
+
+def test_eval_slash_does_not_spawn_subprocess(ctx: SlashContext) -> None:
+    """The refactored /eval handler must NOT invoke ``subprocess.Popen``."""
+    import subprocess
+    from unittest.mock import patch
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "eval"},
+            {"event": "phase_completed", "phase": "eval"},
+        ]
+    )
+    _install_eval(ctx, runner)
+
+    with patch.object(subprocess, "Popen") as popen_mock:
+        popen_mock.side_effect = AssertionError("subprocess spawned!")
+        dispatch(ctx, "/eval")
+
+    popen_mock.assert_not_called()
+
+
+def test_eval_slash_updates_session_last_eval_run_id(ctx: SlashContext) -> None:
+    """On a successful run the slash handler writes ``last_eval_run_id`` into session."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "eval"},
+            {"event": "phase_completed", "phase": "eval"},
+            {
+                "event": "eval_complete",
+                "run_id": "er_abc",
+                "config_path": "configs/v001.yaml",
+                "mode": "mock",
+            },
+        ]
+    )
+    _install_eval(ctx, runner)
+
+    dispatch(ctx, "/eval")
+
+    assert session.last_eval_run_id == "er_abc"
+
+
+def test_eval_slash_updates_session_current_config_path(ctx: SlashContext) -> None:
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "eval"},
+            {"event": "phase_completed", "phase": "eval"},
+            {
+                "event": "eval_complete",
+                "run_id": "er_xyz",
+                "config_path": "configs/v009.yaml",
+                "mode": "mock",
+            },
+        ]
+    )
+    _install_eval(ctx, runner)
+
+    dispatch(ctx, "/eval")
+
+    assert session.current_config_path == "configs/v009.yaml"
+
+
+def test_eval_slash_handles_missing_session_gracefully(ctx: SlashContext) -> None:
+    """If ctx.meta has no session, handler must not raise."""
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "eval"},
+            {
+                "event": "eval_complete",
+                "run_id": "er_abc",
+                "config_path": None,
+                "mode": "mock",
+            },
+            {"event": "phase_completed", "phase": "eval"},
+        ]
+    )
+    _install_eval(ctx, runner)
+
+    # ctx.meta is empty by default — should NOT raise
+    result = dispatch(ctx, "/eval")
+    assert isinstance(result, DispatchResult)
+
+
+def test_eval_slash_error_boundary_catches_unexpected_exception(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """An unexpected ValueError from the runner should be caught and rendered."""
+    runner = _failing_runner(ValueError("boom"))
+    _install_eval(ctx, runner)
+
+    result = dispatch(ctx, "/eval")
+
+    # Handler must not propagate the exception.
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "crashed" in plain.lower()
+    assert result.raw_result is not None
+    assert "crashed" in result.raw_result.lower()

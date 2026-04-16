@@ -1,34 +1,34 @@
-"""`/eval` slash command — streams ``agentlab eval run`` into the transcript.
+"""`/eval` slash command — runs ``agentlab eval run`` **in-process** (R4.2).
 
-T09 adds a streaming slash command that shells out to the existing
-``agentlab eval run`` Click subcommand, pipes its ``--output-format stream-json``
-output through :func:`cli.workbench_render.format_workbench_event`, and
-surfaces a one-line summary when the run finishes.
+The handler no longer spawns a subprocess. Instead it calls
+:func:`cli.commands.eval.run_eval_in_process` on a background thread and
+bridges its ``on_event`` callback into a :class:`queue.Queue` so the
+existing synchronous-generator renderer + spinner machinery keeps its
+shape. On a successful run, ``ctx.meta["workbench_session"]``'s session
+is updated with the run's ``run_id`` and ``config_path``.
 
-The subprocess runner is an injectable seam (:data:`StreamRunner`) so tests
-don't need to spawn a real process — they hand in a callable that yields
-pre-baked event dicts. The default runner uses :mod:`subprocess` with a
-line-buffered pipe and ``sys.executable -m`` so the child picks up the same
-interpreter + venv as the workbench.
+The runner remains an injectable seam (:data:`StreamRunner`) so tests
+can hand in a callable that yields pre-baked event dicts without
+touching the real eval stack.
 """
 
 from __future__ import annotations
 
+import queue
 import shlex
-import sys
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
-from cli.workbench_app._subprocess import (
-    DEFAULT_STALL_TIMEOUT_S,
-    SubprocessStreamError,
-    stream_subprocess,
-)
+from cli.workbench_app._subprocess import DEFAULT_STALL_TIMEOUT_S
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
+
+
+_SENTINEL: Any = object()
 
 
 StreamEvent = dict[str, Any]
@@ -59,11 +59,84 @@ class EvalSummary:
     errors: int = 0
     next_action: str | None = None
     exit_code: int | None = None
+    run_id: str | None = None
+    config_path: str | None = None
 
 
 # ---------------------------------------------------------------------------
 # Default subprocess runner
 # ---------------------------------------------------------------------------
+
+
+def _args_to_kwargs(args: Sequence[str]) -> dict[str, Any]:
+    """Translate the ``/eval`` argv shape into ``run_eval_in_process`` kwargs.
+
+    Mirrors the Click wrapper's argument spec so the slash handler can
+    drive the exact same business logic. Unknown flags are dropped — the
+    slash command surface is deliberately narrower than the full CLI.
+    """
+    kwargs: dict[str, Any] = {
+        "config_path": None,
+        "suite": None,
+        "category": None,
+        "dataset": None,
+        "dataset_split": "all",
+        "output_path": None,
+        "instruction_overrides_path": None,
+        "real_agent": False,
+        "force_mock": False,
+        "require_live": False,
+        "strict_live": False,
+    }
+    it = iter(args)
+    for token in it:
+        if token == "--config":
+            try:
+                kwargs["config_path"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--suite":
+            try:
+                kwargs["suite"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--category":
+            try:
+                kwargs["category"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--dataset":
+            try:
+                kwargs["dataset"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--split":
+            try:
+                kwargs["dataset_split"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--output":
+            try:
+                kwargs["output_path"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--instruction-overrides":
+            try:
+                kwargs["instruction_overrides_path"] = next(it)
+            except StopIteration:
+                break
+        elif token == "--real-agent":
+            kwargs["real_agent"] = True
+        elif token == "--mock":
+            kwargs["force_mock"] = True
+        elif token == "--require-live":
+            kwargs["require_live"] = True
+        elif token == "--strict-live":
+            kwargs["strict_live"] = True
+        elif token == "--no-strict-live":
+            kwargs["strict_live"] = False
+        # Unknown flags are intentionally ignored for the slash surface.
+    return kwargs
 
 
 def _default_stream_runner(
@@ -72,39 +145,43 @@ def _default_stream_runner(
     cancellation: CancellationToken | None = None,
     stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
-    """Spawn ``agentlab eval run`` and yield stream-json events line by line.
+    """Run ``eval run`` in-process on a background thread; yield events.
 
-    Delegates to :func:`cli.workbench_app._subprocess.stream_subprocess` for
-    the transport layer: line-buffered pipe, stall-timeout detection, and
-    cancellation-aware cleanup. This handler keeps ownership of:
-
-    - the ``eval run`` argv (including the ``--output-format stream-json``
-      suffix the helper does not know about),
-    - the flat ``{"event": "warning", "message": ...}`` synthetic envelope
-      used for lines that fail JSON parsing,
-    - translating :class:`SubprocessStreamError` into ``EvalCommandError`` so
-      the handler's existing ``except EvalCommandError:`` catch still fires.
+    Parses ``args`` into :func:`cli.commands.eval.run_eval_in_process`
+    kwargs, spins up a worker thread, and bridges the worker's
+    ``on_event`` callback into this generator via a :class:`queue.Queue`.
+    Domain exceptions (``MockFallbackError``, ``LiveEvalRequiredError``,
+    anything else) are captured and re-raised as :class:`EvalCommandError`
+    at the boundary — matching the subprocess runner's failure class so
+    the handler's existing ``except EvalCommandError:`` catch still fires.
     """
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "runner",
-        "eval",
-        "run",
-        "--output-format",
-        "stream-json",
-        *args,
-    ]
+    from cli.commands.eval import run_eval_in_process
+
+    kwargs = _args_to_kwargs(args)
+    q: queue.Queue = queue.Queue()
+    error_holder: dict[str, BaseException] = {}
+
+    def _worker() -> None:
+        try:
+            run_eval_in_process(**kwargs, on_event=q.put)
+        except BaseException as exc:  # capture domain + unexpected errors
+            error_holder["value"] = exc
+        finally:
+            q.put(_SENTINEL)
+
+    t = threading.Thread(target=_worker, daemon=True, name="eval-in-process")
+    t.start()
     try:
-        yield from stream_subprocess(
-            cmd,
-            stall_timeout_s=stall_timeout_s,
-            cancellation=cancellation,
-            on_nonjson=lambda line: {"event": "warning", "message": line},
-        )
-    except SubprocessStreamError as exc:
-        # Keep the error class runners expect while preserving kind/tail
-        # so higher layers can tell a stall apart from a non-zero exit.
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            yield item
+    finally:
+        t.join(timeout=5.0)
+
+    if "value" in error_holder:
+        exc = error_holder["value"]
         raise EvalCommandError(f"eval run: {exc}") from exc
 
 
@@ -161,6 +238,8 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
     }
     artifacts: list[str] = []
     next_action: str | None = None
+    run_id: str | None = None
+    config_path: str | None = None
     for event in events:
         counters["events"] += 1
         name = event.get("event")
@@ -188,6 +267,15 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
             message = event.get("message")
             if message:
                 next_action = str(message)
+        elif name == "eval_complete":
+            # R4.2 — terminal event carrying the run-level identifiers the
+            # slash handler uses to update the WorkbenchSession.
+            candidate_run_id = event.get("run_id")
+            if candidate_run_id:
+                run_id = str(candidate_run_id)
+            candidate_config_path = event.get("config_path")
+            if candidate_config_path:
+                config_path = str(candidate_config_path)
         yield event, EvalSummary(
             events=counters["events"],
             cases_completed=counters["cases_completed"],
@@ -197,6 +285,8 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Eva
             warnings=counters["warnings"],
             errors=counters["errors"],
             next_action=next_action,
+            run_id=run_id,
+            config_path=config_path,
         )
 
 
@@ -272,11 +362,36 @@ def make_eval_handler(
         except FileNotFoundError as exc:  # missing binary / wrong cwd
             echo(theme.error(f"  /eval failed: {exc}"))
             return on_done(result=None, display="skip")
+        except Exception as exc:  # error boundary (to be upgraded in R4.13)
+            # R4.2 §1.6 — an in-process handler must never crash the TUI.
+            # This catch is placed AFTER the existing domain-error catches
+            # so FileNotFoundError / EvalCommandError still take precedence.
+            echo(theme.error(f"  /eval crashed: {type(exc).__name__}: {exc}"))
+            return on_done(
+                result=f"  /eval crashed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
 
         if cancelled:
             message = "  /eval cancelled — ctrl-c; no changes persisted."
             echo(theme.warning(message))
             return on_done(result=message, display="skip")
+
+        # R4.2 — propagate run identifiers to the shared WorkbenchSession so
+        # downstream slash commands (e.g. /optimize) can auto-inject them.
+        session = ctx.meta.get("workbench_session") if isinstance(ctx.meta, dict) else None
+        if session is not None:
+            updates: dict[str, Any] = {}
+            if final_summary.run_id:
+                updates["last_eval_run_id"] = final_summary.run_id
+            if final_summary.config_path:
+                updates["current_config_path"] = final_summary.config_path
+            if updates:
+                try:
+                    session.update(**updates)
+                except Exception as exc:  # don't let a session error crash /eval
+                    echo(theme.warning(f"  /eval: session update failed: {exc}"))
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -352,7 +467,7 @@ def build_eval_command(
         argument_hint="[--config VERSION | --run-id ID]",
         when_to_use="Use after changing prompts, configs, or evaluators.",
         effort="medium",
-        allowed_tools=("subprocess",),
+        allowed_tools=("in-process",),
     )
 
 
