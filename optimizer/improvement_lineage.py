@@ -42,6 +42,30 @@ class LineageEvent:
     payload: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class AttemptLineageView:
+    """Denormalized view of one attempt's full lineage chain.
+
+    Derived from the append-only lineage_events stream by
+    ``ImprovementLineageStore.view_attempt()``. Any field may be ``None``
+    when the corresponding event has not yet been emitted.
+    """
+    attempt_id: str
+    eval_run_id: str | None = None
+    deployment_id: str | None = None
+    deployed_version: int | None = None
+    measurement_id: str | None = None
+    composite_delta: float | None = None
+    status: str | None = None
+    score_before: float | None = None
+    score_after: float | None = None
+    parent_attempt_id: str | None = None
+    rejection_reason: str | None = None
+    rejection_detail: str | None = None
+    rolled_back: bool = False
+    events: list[LineageEvent] = field(default_factory=list)
+
+
 class ImprovementLineageStore:
     """Append-only store of post-proposal lineage events."""
 
@@ -190,6 +214,50 @@ class ImprovementLineageStore:
                 (attempt_id,),
             ).fetchall()
         return [self._row_to_event(row) for row in rows]
+
+    def view_attempt(self, attempt_id: str) -> AttemptLineageView:
+        """Flatten the event stream for *attempt_id* into a denormalized view.
+
+        Events are processed in chronological order; later events of the
+        same kind overwrite earlier values. Recognises both new event types
+        (``attempt``, ``deployment``, ``measurement``, ``rejection``,
+        ``eval_run``) and legacy types still emitted by the API path
+        (``promote``, ``deploy_canary``, ``rollback``).
+        """
+        events = self.events_for(attempt_id)
+        view = AttemptLineageView(attempt_id=attempt_id, events=events)
+        for ev in events:
+            t = ev.event_type
+            p = ev.payload
+            if t == EVENT_EVAL_RUN:
+                if p.get("eval_run_id"):
+                    view.eval_run_id = p["eval_run_id"]
+            elif t == EVENT_ATTEMPT:
+                view.status = p.get("status", view.status)
+                if p.get("eval_run_id"):
+                    view.eval_run_id = p["eval_run_id"]
+                if p.get("parent_attempt_id"):
+                    view.parent_attempt_id = p["parent_attempt_id"]
+                if p.get("score_before") is not None:
+                    view.score_before = p["score_before"]
+                if p.get("score_after") is not None:
+                    view.score_after = p["score_after"]
+            elif t == EVENT_REJECTION:
+                view.rejection_reason = p.get("reason", view.rejection_reason)
+                view.rejection_detail = p.get("detail", view.rejection_detail)
+            elif t in (EVENT_DEPLOYMENT, "promote", "deploy_canary"):
+                if p.get("deployment_id"):
+                    view.deployment_id = p["deployment_id"]
+                if ev.version is not None:
+                    view.deployed_version = ev.version
+            elif t == "rollback":
+                view.rolled_back = True
+            elif t == EVENT_MEASUREMENT:
+                if p.get("measurement_id"):
+                    view.measurement_id = p["measurement_id"]
+                if p.get("composite_delta") is not None:
+                    view.composite_delta = p["composite_delta"]
+        return view
 
     def recent(self, limit: int = 50) -> list[LineageEvent]:
         with sqlite3.connect(self.db_path) as conn:
