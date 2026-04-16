@@ -2972,6 +2972,11 @@ def build_group() -> None:
     help="Connector to include (repeatable). Example: --connector Shopify",
 )
 @click.option("--output-dir", default=".", show_default=True, help="Directory for generated build artifacts.")
+@click.option(
+    "--strict-live/--no-strict-live",
+    default=False,
+    help="Exit non-zero (12) if the build falls back to pattern matcher (no live LLM).",
+)
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output artifact as JSON only.")
 @click.option(
     "--output-format",
@@ -2984,6 +2989,7 @@ def build_agent(
     prompt: str,
     connectors: tuple[str, ...],
     output_dir: str,
+    strict_live: bool = False,
     json_output: bool = False,
     output_format: str = "text",
 ) -> None:
@@ -3021,6 +3027,16 @@ def build_agent(
                 message=f"Generated via {live_model_label}" if live_model_label else "Generated via live LLM",
             )
         else:
+            if strict_live:
+                from cli.exit_codes import EXIT_MOCK_FALLBACK
+                from cli.strict_live import MockFallbackError
+
+                msg = (
+                    f"build: live LLM unavailable ({live_failure_reason or 'no provider key'}), "
+                    "pattern fallback would be used"
+                )
+                click.echo(MockFallbackError([msg]).args[0], err=True)
+                sys.exit(EXIT_MOCK_FALLBACK)
             service = TranscriptIntelligenceService()
             artifact = service.build_agent_artifact(prompt, resolved_connectors)
             progress.phase_completed(
@@ -4493,6 +4509,11 @@ def _run_optimize_cycle(
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 @click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
 @click.option(
+    "--strict-live/--no-strict-live",
+    default=False,
+    help="Exit non-zero (12) if optimizer would run in mock mode (no provider key).",
+)
+@click.option(
     "--output-format",
     type=click.Choice(["text", "json", "stream-json"], case_sensitive=False),
     default="text",
@@ -4521,6 +4542,7 @@ def optimize(
     dry_run: bool,
     json_output: bool = False,
     max_budget_usd: float | None = None,
+    strict_live: bool = False,
     output_format: str = "text",
     ui: str | None = None,
     harness: Any | None = None,
@@ -4659,6 +4681,14 @@ def optimize(
     reflection_engine = None
     failure_analyzer = None
     agent_card_markdown = ""
+
+    if strict_live and proposer.use_mock:
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
+        from cli.strict_live import MockFallbackError
+
+        msg = "optimize: proposer is in mock mode (no provider key or use_mock=true in config)"
+        click.echo(MockFallbackError([msg]).args[0], err=True)
+        sys.exit(EXIT_MOCK_FALLBACK)
 
     if not proposer.use_mock:
         reflection_engine = ReflectionEngine(
