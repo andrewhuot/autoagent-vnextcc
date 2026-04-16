@@ -112,6 +112,49 @@ def test_yaml_mutation_does_not_affect_historical_render(tmp_path, monkeypatch) 
     assert rerendered.composite == frozen_composite
 
 
+def test_weights_snapshot_survives_score_to_dict_round_trip() -> None:
+    """R3.11 invariant: snapshot must survive the runner's JSON serializer so
+    historical scores reloaded from disk still rerender stably."""
+    from runner import _score_to_dict, _weights_snapshot_from_dict
+
+    w = CompositeWeights(quality=0.5, safety=0.2, latency=0.15, cost=0.15)
+    score = CompositeScorer(weights=w).score([_result(quality=1.0)])
+
+    payload = _score_to_dict(score)
+    assert payload["weights_snapshot"] is not None
+    assert payload["weights_snapshot"]["quality"] == 0.5
+    assert payload["weights_snapshot"]["safety"] == 0.2
+    assert payload["weights_snapshot"]["latency"] == 0.15
+    assert payload["weights_snapshot"]["cost"] == 0.15
+
+    # Round-trip: dict → CompositeWeights
+    restored = _weights_snapshot_from_dict(payload["weights_snapshot"])
+    assert restored == w
+
+    # A CompositeScore reconstructed with the restored snapshot rerenders under
+    # the original weights, not the CompositeWeights() defaults.
+    reconstructed = CompositeScore(
+        quality=score.quality, safety=score.safety, latency=score.latency,
+        cost=score.cost, composite=score.composite,
+        results=list(score.results), weights_snapshot=restored,
+    )
+    rerendered = CompositeScore.rerender(reconstructed)
+    assert rerendered.composite == pytest.approx(score.composite, abs=1e-4)
+
+
+def test_score_to_dict_handles_missing_snapshot() -> None:
+    """Pre-R3 CompositeScore (no snapshot) serializes with None, not a crash."""
+    from runner import _score_to_dict, _weights_snapshot_from_dict
+
+    score = CompositeScore(
+        quality=0.5, safety=0.5, latency=0.5, cost=0.5, composite=0.5,
+        results=[_result(quality=0.5)], weights_snapshot=None,
+    )
+    payload = _score_to_dict(score)
+    assert payload["weights_snapshot"] is None
+    assert _weights_snapshot_from_dict(payload["weights_snapshot"]) is None
+
+
 def test_rerender_supports_override_for_forensic_replay() -> None:
     """Allow an explicit `weights=` override on rerender for forensic/what-if
     analyses — e.g., 'what would this score be under today's weights?'.

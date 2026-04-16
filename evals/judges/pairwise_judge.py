@@ -168,7 +168,13 @@ class PairwiseLLMJudge:
                 response_a=response_a,
                 response_b=response_b,
             )
-        except Exception as exc:
+        except (
+            json.JSONDecodeError,
+            ValueError,
+            RuntimeError,
+            OSError,
+            TimeoutError,
+        ) as exc:
             if self._strict_live:
                 raise RuntimeError(
                     f"pairwise LLM judge failed under --strict-live: {exc}"

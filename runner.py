@@ -643,6 +643,15 @@ def _persist_best_score(
 
 def _score_to_dict(score) -> dict:
     """Convert CompositeScore-like object into deployable score dictionary."""
+    snapshot = getattr(score, "weights_snapshot", None)
+    weights_payload: dict | None = None
+    if snapshot is not None:
+        weights_payload = {
+            "quality": snapshot.quality,
+            "safety": snapshot.safety,
+            "latency": snapshot.latency,
+            "cost": snapshot.cost,
+        }
     return {
         "quality": score.quality,
         "safety": score.safety,
@@ -654,7 +663,31 @@ def _score_to_dict(score) -> dict:
         "total_tokens": getattr(score, "total_tokens", 0),
         "estimated_cost_usd": getattr(score, "estimated_cost_usd", 0.0),
         "warnings": getattr(score, "warnings", []),
+        "weights_snapshot": weights_payload,
     }
+
+
+def _weights_snapshot_from_dict(payload) -> "CompositeWeights | None":
+    """Reconstruct a CompositeWeights from a serialized score dict.
+
+    WHY: R3.11's historical-reproducibility contract requires the snapshot to
+    survive a JSON round-trip. A dict-valued snapshot is common on reload
+    because generic ``**json_dict`` construction doesn't know it should rebuild
+    the dataclass.
+    """
+    if payload is None:
+        return None
+    from evals.composite_weights import CompositeWeights
+    if isinstance(payload, CompositeWeights):
+        return payload
+    if isinstance(payload, dict):
+        return CompositeWeights(
+            quality=float(payload.get("quality", 0.40)),
+            safety=float(payload.get("safety", 0.25)),
+            latency=float(payload.get("latency", 0.20)),
+            cost=float(payload.get("cost", 0.15)),
+        )
+    return None
 
 
 def _merge_unique_warnings(existing: list[str] | None, additions: list[str]) -> list[str]:
