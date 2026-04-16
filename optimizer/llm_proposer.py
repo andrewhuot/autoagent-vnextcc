@@ -143,6 +143,7 @@ def _build_user_prompt(
     objective: str | None,
     constraints: dict[str, Any] | None,
     available_mutations: list[dict[str, str]],
+    coverage_signal: list[tuple[str, str, int]] | None = None,
 ) -> str:
     """Assemble the structured user prompt with all context sections."""
     sections: list[str] = []
@@ -181,6 +182,19 @@ def _build_user_prompt(
             sections.append(f"### Summary\n{summary}\n")
     else:
         sections.append("No failure analysis available.\n")
+
+    # -- Coverage Gaps --
+    if coverage_signal:
+        sections.append("## Eval Coverage Gaps\n")
+        sections.append(
+            "These surfaces have under-tested components — prefer proposals that "
+            "improve behavior on them:\n"
+        )
+        for surface, severity, delta in coverage_signal:
+            sections.append(
+                f"- [{severity.upper()}] {surface}: {delta} cases short of target"
+            )
+        sections.append("")
 
     # -- Past Attempts --
     sections.append("## Past Optimization Attempts (most recent first)\n")
@@ -260,6 +274,7 @@ class LLMProposer:
         past_attempts: list[dict[str, Any]] | None = None,
         objective: str | None = None,
         constraints: dict[str, Any] | None = None,
+        coverage_signal: list[tuple[str, str, int]] | None = None,
     ) -> Proposal | None:
         """Generate an LLM-driven proposal.
 
@@ -279,6 +294,7 @@ class LLMProposer:
             objective=objective,
             constraints=constraints,
             available_mutations=available_mutations,
+            coverage_signal=coverage_signal,
         )
 
         # 2. Call LLM
