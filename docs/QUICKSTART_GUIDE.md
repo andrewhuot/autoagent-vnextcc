@@ -93,6 +93,39 @@ To apply seeded review cards automatically and canary the latest version:
 agentlab deploy --auto-review --yes
 ```
 
+## Trusting the loop: strict-live mode
+
+By default, every AgentLab command (`build`, `eval run`, `optimize`) will
+fall back to deterministic mock execution when a live provider isn't
+configured or a provider call fails mid-flight. This is fine for smoke
+testing, but catastrophic in CI: a green eval against mock doesn't mean
+the agent works against the real provider.
+
+Pass `--strict-live` to force a hard failure instead:
+
+```bash
+agentlab eval run --strict-live
+agentlab build "my agent description" --strict-live
+agentlab optimize --cycles 3 --strict-live
+```
+
+If any step would have silently fallen back to a mock, AgentLab now exits
+with code `12` and prints the warnings that would have been swallowed.
+This makes it safe to wire `--strict-live` into CI gates.
+
+Other exit codes worth knowing:
+
+- `13` — deploy was attempted on a workspace whose latest eval verdict is Degraded or Needs Attention. Either run `agentlab eval run` after a fix, or override with `--force-deploy-degraded --reason "<reason>"`.
+- `14` — live mode requested but no provider credentials are configured. Run `agentlab doctor` for setup help.
+
+### Diagnosing why mock mode kicked in
+
+`agentlab doctor` now tells you WHY you're in mock mode:
+
+- **Disabled** — live; all good.
+- **Configured** — your `agentlab.yaml` says `optimizer.use_mock: true`. Set it to `false` when you're ready for production.
+- **Missing provider key** — no `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY` / `GEMINI_API_KEY` detected. Export one and rerun, or paste one during `agentlab init`.
+
 ## What next?
 
 - `agentlab status` — see workspace health and next recommended commands

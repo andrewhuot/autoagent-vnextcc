@@ -49,6 +49,10 @@ Subcommands:
 
 - `show` — show the latest or selected build artifact
 
+Key options:
+
+- `--strict-live` — same as `eval run`, applied to build execution. Exits `12` if any step would fall back to mock.
+
 ### `agentlab workbench`
 
 Build, inspect, iterate, and materialize a Workbench candidate from the terminal.
@@ -132,6 +136,7 @@ Useful `eval run` options:
 - `--instruction-overrides TEXT`
 - `--real-agent`
 - `--require-live`
+- `--strict-live` — exit with code `12` if any step would fall back to mock execution. Implies `--require-live`.
 - `--json`
 - `--output-format [text|json|stream-json]`
 
@@ -175,6 +180,7 @@ Key options:
 - `--full-auto`
 - `--dry-run`
 - `--max-budget-usd FLOAT`
+- `--strict-live` — exit with code `12` at startup if the proposer would use mock mode.
 - `--json`
 - `--output-format [text|json|stream-json]`
 
@@ -206,6 +212,10 @@ Key options:
 - `--json`
 - `--output-format [text|json|stream-json]`
 - `--auto-review`
+- `--force-deploy-degraded` — deploy despite a Degraded or Needs Attention eval verdict. Requires `--reason`.
+- `--reason <string>` — justification for `--force-deploy-degraded` (minimum 10 characters).
+
+`agentlab deploy` exits with code `13` when the latest eval verdict is Degraded or Needs Attention unless overridden by `--force-deploy-degraded --reason "<justification>"`. The override is recorded for audit, and `--dry-run` is not exempt from the gate.
 
 ### `agentlab status`
 
@@ -234,6 +244,14 @@ agentlab doctor
 agentlab doctor --fix
 agentlab doctor --json
 ```
+
+Output includes a tri-state **mock reason** so you can tell at a glance why (or whether) mock mode is active:
+
+- `disabled` — running live; all good.
+- `configured` — `optimizer.use_mock: true` is set in `agentlab.yaml`; explicit opt-in.
+- `missing_provider_key` — no provider credentials detected in the environment; live was requested but fell back.
+
+`--json` output exposes this as `mock_reason` and `mock_reason_detail`; text output surfaces a `Fix:` hint tailored to each state.
 
 Key options:
 
@@ -461,7 +479,7 @@ Run `agentlab advanced` to see these in the CLI.
 | `explain` | Plain-English agent summary |
 | `full-auto` | Full-auto optimization mode |
 | `import` | Compatibility aliases for imports |
-| `improve` | Deprecated alias; use `optimize` |
+| `improve` | `improve list` surfaces optimizer rejections (see below); bare `improve` remains a deprecated alias for `optimize` |
 | `init` | Deprecated alias; use `new` |
 | `intelligence` | Transcript intelligence workflows |
 | `judges` | Judge Ops workflows |
@@ -492,6 +510,35 @@ Run `agentlab advanced` to see these in the CLI.
 | `trace` | Trace analysis and blame maps |
 | `unpin` | Remove a surface lock |
 | `usage` | Eval/optimize cost and budget reporting |
+
+### `agentlab improve list`
+
+List recent optimizer rejections with their structured reason codes. The `improve` group was previously hidden; `improve list` is now surfaced as a first-class command for inspecting why candidate changes were discarded.
+
+```bash
+agentlab improve list
+agentlab improve list --reason regression_detected
+agentlab improve list --json
+```
+
+Key options:
+
+- `--reason <value>` — filter to improvements rejected for the given reason. Values: `safety_violation`, `regression_detected`, `no_significant_improvement`, `gate_failed`, `coverage_insufficient`.
+- `--json` — machine-readable output; each record includes the `reason` field alongside `attempt_id`, `detail`, and optional baseline/candidate scores.
+
+---
+
+## Exit Codes
+
+AgentLab uses distinct exit codes so CI can distinguish a genuine failure from a policy violation.
+
+| Code | Meaning |
+|------|---------|
+| `0` | Success |
+| `1` | Generic error |
+| `12` | Mock fallback occurred under `--strict-live` |
+| `13` | `agentlab deploy` blocked by a Degraded or Needs Attention eval verdict (override with `--force-deploy-degraded --reason`) |
+| `14` | Live mode requested but no provider credentials were configured |
 
 ---
 

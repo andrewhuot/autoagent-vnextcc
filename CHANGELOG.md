@@ -1,5 +1,60 @@
 # Changelog
 
+## [4.0.0-R1] — 2026-04-16 — Trust the Loop: Strict-Live Enforcement
+
+The first slice of the R1–R6 roadmap turns every silent mock fallback into
+a loud, actionable signal. The loop now refuses to pretend.
+
+### Added
+
+**Strict-Live Policy** (`cli/strict_live.py`, `cli/exit_codes.py`)
+- `--strict-live` flag on `agentlab eval run`, `agentlab build`, and `agentlab optimize` — abort instead of silently falling back to mock execution
+- Distinct exit codes for CI: `12` (mock fallback under strict-live), `13` (deploy on degraded eval), `14` (live mode requested but no provider key)
+- `MockFallbackError` raised with a formatted breakdown of every mock warning the run accumulated
+
+**Structured Rejection Records** (`optimizer/gates.py`, `optimizer/loop.py`)
+- `RejectionReason` enum: `SAFETY_VIOLATION`, `REGRESSION_DETECTED`, `NO_SIGNIFICANT_IMPROVEMENT`, `GATE_FAILED`, `COVERAGE_INSUFFICIENT`
+- `RejectionRecord` dataclass with `attempt_id`, `reason`, `detail`, optional baseline/candidate scores, metadata
+- `Optimizer.recent_rejections(limit=None)` returns a 200-entry ring buffer (newest first)
+- Matching `attempt_id` across `RejectionRecord` and the persisted `OptimizationAttempt` for correlation
+
+**Improvement List Surfacing** (`agentlab improve list`)
+- `improve` group is now visible in `--help` (was hidden)
+- REASON column in text output, `reason` field in JSON
+- `--reason <value>` filter (values: `safety_violation`, `regression_detected`, `no_significant_improvement`, `gate_failed`, `coverage_insufficient`)
+- `AGENTLAB_TEST_FORCE_REJECTION` env var for CLI e2e testing
+
+**Deploy Verdict Gate**
+- `agentlab deploy` blocks when the latest eval verdict is `Degraded` or `Needs Attention` (exits `13`)
+- Override: `--force-deploy-degraded --reason "<justification>"` (minimum 10 chars)
+- Dry-run is NOT exempt — a dry-run of an unsafe deploy is still unsafe
+
+**Provider Key Validation** (`cli/provider_keys.py`)
+- Conservative validator: rejects keys < 20 chars, keys with whitespace, and clearly mismatched prefixes (e.g. `sk-ant-...` pasted into `OPENAI_API_KEY`)
+- Onboarding retries up to 3 times on bad input, then aborts instead of silently saving garbage
+- `agentlab init` now prompts for a provider key when interactive and the environment is bare; `InitFlow(interactive=False)` added for scripted use
+
+**Doctor Mock-Reason Clarity** (`cli/mock_reason.py`)
+- `agentlab doctor` distinguishes three states: `disabled` (green), `configured` (yellow; YAML opt-in), `missing_provider_key` (red; forced by missing env var)
+- JSON output: `mock_reason` and `mock_reason_detail` fields
+- Text output: a `Fix:` hint specific to each reason
+
+### Changed
+
+- `optimizer.proposer.Proposer()` default is now `use_mock=False`. The optimizer loop no longer silently constructs a mock proposer when the caller omits one.
+- Loud errors replace silent skips across eval/build/optimize when `--strict-live` is in effect.
+
+### Tests
+
+Over 80 new tests across `test_exit_codes.py`, `test_strict_live.py`, `test_eval_strict_live.py`, `test_strict_live_propagation.py`, `test_proposer_default_live.py`, `test_gates_rejection.py`, `test_loop_rejections.py`, `test_improve_list_rejections.py`, `test_deploy_verdict_gate.py`, `test_provider_keys.py`, `test_onboarding_validation.py`, `test_init_flow_provider.py`, `test_template_mock_audit.py`, `test_mock_reason.py`, `test_doctor_mock_reason.py`.
+
+### Migration notes
+
+- Existing `--require-live` flag on `eval run` is preserved for backwards compatibility; `--strict-live` is the new canonical name and implies `--require-live`.
+- No config changes required. Users who depend on mock mode in automation should pass `--no-strict-live` (the default) or set `optimizer.use_mock: true` explicitly — which will now show up as "configured" rather than "missing key" in `agentlab doctor`.
+
+---
+
 ## [3.0.0] — 2026-03-24 — Modular Registry, Trace Grading + Blame Map, NL Scorer (1,131 tests)
 
 ### Added
