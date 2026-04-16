@@ -20,6 +20,28 @@ class SignificanceResult:
     n_pairs: int
     alpha: float
     min_effect_size: float
+    confidence_interval: tuple[float, float] | None = None
+    calibrated_effect_size: float | None = None
+
+
+def _calibrated_effect_size(diffs: list[float]) -> float | None:
+    """Standardized effect size for paired diffs: mean / population-stddev.
+
+    Returns inf when diffs have zero variance but non-zero mean (a perfectly
+    stable improvement is maximally significant). Returns 0.0 when both mean
+    and variance are zero. Returns None for empty input.
+    """
+    if not diffs:
+        return None
+    n = len(diffs)
+    mean = sum(diffs) / n
+    if n < 2:
+        return float("inf") if mean != 0.0 else 0.0
+    variance = sum((d - mean) ** 2 for d in diffs) / n
+    sd = variance ** 0.5
+    if sd == 0.0:
+        return float("inf") if mean != 0.0 else 0.0
+    return mean / sd
 
 
 def paired_significance(
@@ -30,11 +52,19 @@ def paired_significance(
     min_effect_size: float = 0.005,
     iterations: int = 5000,
     seed: int = 7,
+    bootstrap_ci: bool = True,
+    n_bootstrap: int = 2000,
+    min_calibrated_effect: float = 0.0,
 ) -> SignificanceResult:
     """Run a paired sign-flip permutation test for candidate improvement.
 
     The null hypothesis is zero-mean paired difference. We estimate one-sided
     p-value P(diff >= observed | H0).
+
+    Also reports (R3.12) a bootstrap confidence interval on the mean paired
+    diff and (R3.13) a variance-calibrated effect size (mean / stddev of
+    diffs). The calibrated gate is opt-in via ``min_calibrated_effect``; the
+    default of 0.0 preserves pre-R3 gating semantics.
     """
     n_pairs = min(len(baseline_values), len(candidate_values))
     if n_pairs == 0:
@@ -45,6 +75,8 @@ def paired_significance(
             n_pairs=0,
             alpha=alpha,
             min_effect_size=min_effect_size,
+            confidence_interval=None,
+            calibrated_effect_size=None,
         )
 
     baseline = baseline_values[:n_pairs]
@@ -52,34 +84,59 @@ def paired_significance(
     diffs = [cand - base for base, cand in zip(baseline, candidate)]
     observed = sum(diffs) / n_pairs
 
+    # Calibrated effect size: delta / stddev(diffs). Zero variance → infinity
+    # (mean != 0) or zero (mean == 0).
+    calibrated = _calibrated_effect_size(diffs)
+
+    # Sign-flip permutation test. Preserve the pre-R3 fast path where the raw
+    # effect is below threshold — p_value=1.0 short-circuits the expensive
+    # permutation loop, but downstream fields still get populated.
     if observed < min_effect_size:
-        return SignificanceResult(
-            observed_delta=observed,
-            p_value=1.0,
-            is_significant=False,
-            n_pairs=n_pairs,
-            alpha=alpha,
-            min_effect_size=min_effect_size,
-        )
+        p_value = 1.0
+    else:
+        rng = random.Random(seed)
+        exceedances = 0
+        rounds = max(100, int(iterations))
+        for _ in range(rounds):
+            signed = [delta if rng.random() >= 0.5 else -delta for delta in diffs]
+            sample_mean = sum(signed) / n_pairs
+            if sample_mean >= observed:
+                exceedances += 1
+        p_value = (exceedances + 1) / (rounds + 1)
 
-    rng = random.Random(seed)
-    exceedances = 0
-    rounds = max(100, int(iterations))
+    # Bootstrap CI (R3.12). Uses a SEPARATE random stream (seed offset by a
+    # large prime) so CI reproducibility is independent of the permutation
+    # RNG — each sub-computation is reproducible in isolation.
+    ci: tuple[float, float] | None = None
+    if bootstrap_ci and n_pairs >= 2:
+        ci_rng = random.Random(seed + 1000003)
+        resamples: list[float] = []
+        for _ in range(n_bootstrap):
+            sample_sum = 0.0
+            for _ in range(n_pairs):
+                sample_sum += diffs[ci_rng.randrange(n_pairs)]
+            resamples.append(sample_sum / n_pairs)
+        resamples.sort()
+        lo_idx = max(0, int((alpha / 2) * n_bootstrap))
+        hi_idx = min(n_bootstrap - 1, int((1 - alpha / 2) * n_bootstrap))
+        ci = (resamples[lo_idx], resamples[hi_idx])
 
-    for _ in range(rounds):
-        signed = [delta if rng.random() >= 0.5 else -delta for delta in diffs]
-        sample_mean = sum(signed) / n_pairs
-        if sample_mean >= observed:
-            exceedances += 1
+    # Final significance gate: classical p-value AND raw effect AND calibrated.
+    is_sig = (
+        p_value < alpha
+        and observed >= min_effect_size
+        and (calibrated is None or abs(calibrated) >= min_calibrated_effect)
+    )
 
-    p_value = (exceedances + 1) / (rounds + 1)
     return SignificanceResult(
         observed_delta=observed,
         p_value=p_value,
-        is_significant=p_value < alpha,
+        is_significant=is_sig,
         n_pairs=n_pairs,
         alpha=alpha,
         min_effect_size=min_effect_size,
+        confidence_interval=ci,
+        calibrated_effect_size=calibrated,
     )
 
 
