@@ -940,3 +940,7 @@ def register_eval_commands(cli: click.Group) -> None:
     # R5 Slice A.6: nested `agentlab eval dataset {import,export}` subgroup.
     from .dataset import register_dataset_commands
     register_dataset_commands(eval_group)
+
+    # R5 Slice C.4: `agentlab eval ingest --from-traces` with mandatory redaction.
+    from .ingest import register_ingest_command
+    register_ingest_command(eval_group)
