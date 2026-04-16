@@ -491,3 +491,155 @@ def test_handler_surfaces_fallback_in_meta_and_summary(
     assert any("LLM fallback" in l for l in plain_lines)
     plain_meta = [_strip_ansi(m) for m in result.meta_messages]
     assert any("LLM fallback" in m and "provider_error" in m for m in plain_meta)
+
+
+# ---------------------------------------------------------------------------
+# R4.3 — in-process runner: subprocess-free, session-aware, error-bounded
+# ---------------------------------------------------------------------------
+
+
+def test_build_slash_does_not_spawn_subprocess(ctx: SlashContext) -> None:
+    """The refactored /build handler must NOT invoke ``subprocess.Popen``."""
+    import subprocess
+    from unittest.mock import patch
+
+    runner = _fake_runner(
+        [
+            {"event": "task.started", "data": {"task_id": "t1", "title": "Design"}},
+            {"event": "run.completed", "data": {"project_id": "p1", "version": "1"}},
+        ]
+    )
+    _install_build(ctx, runner)
+
+    with patch.object(subprocess, "Popen") as popen_mock:
+        popen_mock.side_effect = AssertionError("subprocess spawned!")
+        dispatch(ctx, "/build \"Add a tool\"")
+
+    popen_mock.assert_not_called()
+
+
+def test_build_slash_updates_session_current_config_path(ctx: SlashContext) -> None:
+    """On a successful build the slash handler writes ``current_config_path`` into session."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "task.started", "data": {"task_id": "t1", "title": "Design"}},
+            {"event": "run.completed", "data": {"project_id": "p1", "version": "1"}},
+            {
+                "event": "build_complete",
+                "project_id": "p1",
+                "config_path": ".agentlab/build_artifact_latest.json",
+                "status": "ok",
+            },
+        ]
+    )
+    _install_build(ctx, runner)
+
+    dispatch(ctx, "/build \"Add a tool\"")
+
+    assert session.current_config_path == ".agentlab/build_artifact_latest.json"
+
+
+def test_build_slash_handles_missing_session_gracefully(ctx: SlashContext) -> None:
+    """If ctx.meta has no session, handler must not raise."""
+    runner = _fake_runner(
+        [
+            {"event": "task.started", "data": {"task_id": "t1", "title": "Design"}},
+            {"event": "run.completed", "data": {"project_id": "p1", "version": "1"}},
+            {
+                "event": "build_complete",
+                "project_id": "p1",
+                "config_path": "x.json",
+                "status": "ok",
+            },
+        ]
+    )
+    _install_build(ctx, runner)
+
+    # ctx.meta is empty by default — should NOT raise
+    result = dispatch(ctx, "/build \"Add a tool\"")
+    assert isinstance(result, DispatchResult)
+
+
+def test_build_slash_error_boundary_catches_unexpected(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """An unexpected ValueError from the runner should be caught and rendered."""
+    runner = _failing_runner(ValueError("boom"))
+    _install_build(ctx, runner)
+
+    result = dispatch(ctx, "/build \"Add a tool\"")
+
+    # Handler must not propagate the exception.
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "crashed" in plain.lower()
+    assert result.raw_result is not None
+    assert "crashed" in result.raw_result.lower()
+
+
+def test_args_to_kwargs_parses_brief_and_flags() -> None:
+    """Unit-test the ``/build`` argv→kwargs parser."""
+    from cli.workbench_app.build_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(
+        [
+            "Add a flight status tool",
+            "--project-id",
+            "p9",
+            "--target",
+            "adk",
+            "--environment",
+            "staging",
+            "--mock",
+            "--require-live",
+            "--no-auto-iterate",
+            "--max-iterations",
+            "2",
+            "--max-seconds",
+            "90",
+            "--max-tokens",
+            "5000",
+            "--max-cost-usd",
+            "0.50",
+        ]
+    )
+    assert kwargs["brief"] == "Add a flight status tool"
+    assert kwargs["project_id"] == "p9"
+    assert kwargs["target"] == "adk"
+    assert kwargs["environment"] == "staging"
+    assert kwargs["mock"] is True
+    assert kwargs["require_live"] is True
+    assert kwargs["auto_iterate"] is False
+    assert kwargs["max_iterations"] == 2
+    assert kwargs["max_seconds"] == 90
+    assert kwargs["max_tokens"] == 5000
+    assert kwargs["max_cost_usd"] == pytest.approx(0.50)
+
+
+def test_args_to_kwargs_accepts_new_flag() -> None:
+    from cli.workbench_app.build_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(["My brief", "--new"])
+    assert kwargs["brief"] == "My brief"
+    assert kwargs["start_new"] is True
+
+
+def test_args_to_kwargs_defaults_auto_iterate_true() -> None:
+    from cli.workbench_app.build_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(["A brief"])
+    assert kwargs["auto_iterate"] is True
+
+
+def test_args_to_kwargs_rejects_empty_brief() -> None:
+    """The parser must raise on empty argv (caller prints transcript error)."""
+    from cli.workbench_app.build_slash import _args_to_kwargs
+
+    with pytest.raises(ValueError):
+        _args_to_kwargs([])
