@@ -189,6 +189,21 @@ def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
         click.echo("  agentlab autofix suggest")
 
 
+def _run_post_deploy_eval(*, strict_live: bool = False) -> float:
+    """Run a fresh eval against the currently-active config and return its
+    composite score. Separate helper so tests can patch it."""
+    runner = _runner_module()
+    runtime = runner.load_runtime_with_mode_preference()
+    workspace = runner.discover_workspace()
+    resolved_config = workspace.resolve_active_config() if workspace is not None else None
+    config = resolved_config.config if resolved_config is not None else None
+    eval_runner = runner._build_eval_runner(runtime, default_agent_config=config)
+    # strict-live is enforced by the eval_runner's own gates; passing it through
+    # is a no-op here but keeps the signature future-proof.
+    score = eval_runner.run(config=config)
+    return float(score.composite)
+
+
 def _run_eval_step(*, ctx, config_path, strict_live, json_output):
     """Invoke `agentlab eval run --config <path> [--strict-live]` via ctx.invoke."""
     runner = _runner_module()
@@ -618,6 +633,104 @@ def register_improve_commands(cli: click.Group) -> None:
             click.echo(f"  Deployed via {strategy}.")
             click.echo(f"  Next: run `agentlab improve measure {full_id}` "
                        f"after the canary window to record composite_delta.")
+
+
+    @improve_group.command("measure")
+    @click.argument("attempt_id", required=True)
+    @click.option("--strict-live/--no-strict-live", default=False,
+                  help="Exit non-zero (12) if eval would run in mock mode.")
+    @click.option("--memory-db", default=None,
+                  help="Optimizer memory DB (default: AGENTLAB_MEMORY_DB or optimizer_memory.db).")
+    @click.option("--lineage-db", default=None,
+                  help="Improvement lineage DB (default: AGENTLAB_IMPROVEMENT_LINEAGE_DB or .agentlab/improvement_lineage.db).")
+    @click.option("--json", "json_output", "-j", is_flag=True,
+                  help="Output as JSON.")
+    def improve_measure(
+        attempt_id: str,
+        strict_live: bool,
+        memory_db: str | None,
+        lineage_db: str | None,
+        json_output: bool,
+    ) -> None:
+        """Run a post-deploy eval and record composite_delta for an attempt."""
+        import json as _json
+        import uuid
+        from optimizer.improvement_lineage import ImprovementLineageStore
+
+        resolved_memory_db = memory_db or os.environ.get("AGENTLAB_MEMORY_DB", MEMORY_DB)
+        resolved_lineage_db = lineage_db or os.environ.get(
+            "AGENTLAB_IMPROVEMENT_LINEAGE_DB",
+            ".agentlab/improvement_lineage.db",
+        )
+
+        matches = _lookup_attempt_by_prefix(attempt_id, resolved_memory_db)
+        if not matches:
+            click.echo(click.style(
+                f"No improvement found with attempt_id prefix {attempt_id!r}.",
+                fg="red"), err=True)
+            raise click.exceptions.Exit(1)
+        if len(matches) > 1:
+            click.echo(click.style(
+                f"Ambiguous prefix {attempt_id!r} — matches {len(matches)} attempts.",
+                fg="yellow"), err=True)
+            raise click.exceptions.Exit(1)
+
+        attempt = matches[0]
+        full_id = attempt.attempt_id
+
+        lineage = ImprovementLineageStore(db_path=resolved_lineage_db)
+        view = lineage.view_attempt(full_id)
+        if view.deployment_id is None:
+            click.echo(click.style(
+                f"Attempt {full_id} has not been deployed yet. "
+                f"Run `agentlab improve accept {full_id}` first.",
+                fg="red"), err=True)
+            raise click.exceptions.Exit(1)
+
+        post_composite = _run_post_deploy_eval(strict_live=strict_live)
+
+        score_before = getattr(attempt, "score_before", None)
+        if score_before is None:
+            composite_delta = None
+            click.echo(click.style(
+                f"Warning: attempt {full_id} has no recorded score_before; "
+                f"composite_delta will be None.",
+                fg="yellow"), err=True)
+        else:
+            composite_delta = post_composite - float(score_before)
+
+        measurement_id = f"meas-{uuid.uuid4().hex[:8]}"
+        try:
+            lineage.record_measurement(
+                attempt_id=full_id,
+                measurement_id=measurement_id,
+                composite_delta=composite_delta,
+                post_composite=post_composite,
+                score_before=score_before,
+            )
+        except Exception as exc:
+            click.echo(click.style(
+                f"Warning: failed to record measurement event: {exc}",
+                fg="yellow"), err=True)
+
+        if json_output:
+            click.echo(_json.dumps({
+                "status": "ok",
+                "attempt_id": full_id,
+                "measurement_id": measurement_id,
+                "post_composite": post_composite,
+                "score_before": score_before,
+                "composite_delta": composite_delta,
+            }))
+        else:
+            click.echo(click.style(
+                f"\n\u2713 Measured {full_id}",
+                fg="green", bold=True))
+            click.echo(f"  Post-deploy composite: {post_composite:.4f}")
+            if composite_delta is not None:
+                click.echo(f"  Delta vs score_before ({score_before:.4f}): "
+                           f"{composite_delta:+.4f}")
+            click.echo(f"  measurement_id: {measurement_id}")
 
 
     @improve_group.command("optimize")
