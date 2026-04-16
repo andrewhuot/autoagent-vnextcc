@@ -1,0 +1,45 @@
+/* Ocean theme — deep blues and aqua tones.
+ * Matches the "ocean" palette from theme.py. */
+
+WorkbenchTUIApp {
+    background: #0a1628;
+}
+
+WelcomeCard {
+    height: auto;
+    max-width: 80;
+    margin: 1 2;
+    padding: 1 2;
+    border: round #4488cc;
+    background: #0f2040;
+}
+WelcomeCard .welcome-title { color: #4488cc; text-style: bold; }
+WelcomeCard .welcome-meta { color: #7799bb; }
+
+MessageList { height: 1fr; min-height: 4; scrollbar-size-vertical: 1; }
+
+MessageWidget { height: auto; padding: 0 1; }
+MessageWidget.role-user { color: #4488cc; }
+MessageWidget.role-assistant { color: #c0d0e0; }
+MessageWidget.role-system { color: #556677; }
+MessageWidget.role-tool { color: #c0d0e0; }
+MessageWidget.role-error { color: #cc66aa; text-style: bold; }
+MessageWidget.role-warning { color: #ccaa44; }
+MessageWidget.role-meta { color: #556677; }
+
+StreamingIndicator { height: auto; padding: 0 1; color: #556677; }
+StreamingMessage { height: auto; padding: 0 1; display: none; }
+CoordinatorPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+EffortIndicatorWidget { height: 1; padding: 0 1; display: none; }
+BackgroundPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+
+InputArea { dock: bottom; height: 3; padding: 0 1; border-top: solid #4488cc 50%; }
+InputArea Input { background: #0a1628; border: none; color: #c0d0e0; }
+InputArea Input:focus { border: none; }
+InputArea .input-chevron { color: #44cccc; text-style: bold; width: 3; height: 1; }
+
+StatusFooter { dock: bottom; height: 2; padding: 0 1; background: #0f2040; color: #7799bb; }
+StatusFooter .footer-divider { color: #556677; }
+StatusFooter .footer-workspace { color: #4488cc; text-style: bold; }
+StatusFooter .footer-mode { color: #ccaa44; }
+StatusFooter .footer-activity { color: #7799bb; }

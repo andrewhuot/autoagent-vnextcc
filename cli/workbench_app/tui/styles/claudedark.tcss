@@ -1,0 +1,45 @@
+/* Claude Dark theme — vibrant cyans on dark background.
+ * Matches the "claudedark" palette from theme.py. */
+
+WorkbenchTUIApp {
+    background: #1a1a2e;
+}
+
+WelcomeCard {
+    height: auto;
+    max-width: 80;
+    margin: 1 2;
+    padding: 1 2;
+    border: round #00ffff;
+    background: #16213e;
+}
+WelcomeCard .welcome-title { color: #00ffff; text-style: bold; }
+WelcomeCard .welcome-meta { color: #8899aa; }
+
+MessageList { height: 1fr; min-height: 4; scrollbar-size-vertical: 1; }
+
+MessageWidget { height: auto; padding: 0 1; }
+MessageWidget.role-user { color: #00ffff; }
+MessageWidget.role-assistant { color: #e0e0e0; }
+MessageWidget.role-system { color: #667788; }
+MessageWidget.role-tool { color: #e0e0e0; }
+MessageWidget.role-error { color: #ff4444; text-style: bold; }
+MessageWidget.role-warning { color: #ffcc00; }
+MessageWidget.role-meta { color: #667788; }
+
+StreamingIndicator { height: auto; padding: 0 1; color: #667788; }
+StreamingMessage { height: auto; padding: 0 1; display: none; }
+CoordinatorPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+EffortIndicatorWidget { height: 1; padding: 0 1; display: none; }
+BackgroundPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+
+InputArea { dock: bottom; height: 3; padding: 0 1; border-top: solid #00ffff 50%; }
+InputArea Input { background: #1a1a2e; border: none; color: #e0e0e0; }
+InputArea Input:focus { border: none; }
+InputArea .input-chevron { color: #00ffff; text-style: bold; width: 3; height: 1; }
+
+StatusFooter { dock: bottom; height: 2; padding: 0 1; background: #16213e; color: #8899aa; }
+StatusFooter .footer-divider { color: #667788; }
+StatusFooter .footer-workspace { color: #00ffff; text-style: bold; }
+StatusFooter .footer-mode { color: #ffcc00; }
+StatusFooter .footer-activity { color: #8899aa; }

@@ -1086,6 +1086,23 @@ def launch_workbench(
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
 
+    # ---- TUI feature flag ----
+    # When AGENTLAB_TUI=1 is set and a TTY is available, launch the Textual
+    # TUI instead of the legacy REPL loop. The TUI codepath is fully
+    # independent — it wires its own store, widgets, and event bridge.
+    if (
+        os.environ.get("AGENTLAB_TUI", "").lower() in ("1", "true")
+        and input_provider is None
+        and sys.stdin.isatty()
+    ):
+        try:
+            from cli.workbench_app.tui.app import run_tui_app
+
+            return run_tui_app(workspace, show_banner=show_banner, echo=echo)
+        except ImportError:
+            # Textual not installed — fall through to legacy REPL.
+            pass
+
     # Gate onboarding on env escape hatch, an explicit input_provider
     # (tests drive the REPL synchronously), and a TTY check so piped
     # stdin doesn't get consumed by the wizard prompts.

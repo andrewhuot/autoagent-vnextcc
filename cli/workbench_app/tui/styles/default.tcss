@@ -1,0 +1,179 @@
+/* Default theme for the AgentLab TUI workbench.
+ *
+ * Layout:
+ *   WelcomeCard — top, auto-height, centered
+ *   MessageList — flex-grow, scrollable
+ *   InputArea   — dock bottom, 3 rows
+ *   StatusFooter — dock bottom, 2 rows
+ *
+ * Color roles match cli/workbench_app/theme.py Palette defaults:
+ *   workspace/accent = cyan, success = green, warning = yellow,
+ *   error = red, meta = dim, border = dim grey
+ */
+
+/* ---- App root ---- */
+WorkbenchTUIApp {
+    background: $surface;
+}
+
+/* ---- Welcome card ---- */
+WelcomeCard {
+    height: auto;
+    max-width: 80;
+    margin: 1 2;
+    padding: 1 2;
+    border: round $accent;
+    background: $panel;
+}
+
+WelcomeCard .welcome-title {
+    color: $accent;
+    text-style: bold;
+}
+
+WelcomeCard .welcome-meta {
+    color: $text-muted;
+}
+
+/* ---- Message list ---- */
+MessageList {
+    height: 1fr;
+    min-height: 4;
+    scrollbar-size-vertical: 1;
+}
+
+/* ---- Message widget ---- */
+MessageWidget {
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 0 0;
+}
+
+MessageWidget.role-user {
+    color: $accent;
+}
+
+MessageWidget.role-assistant {
+    color: $text;
+}
+
+MessageWidget.role-system {
+    color: $text-muted;
+}
+
+MessageWidget.role-tool {
+    color: $text;
+}
+
+MessageWidget.role-error {
+    color: $error;
+    text-style: bold;
+}
+
+MessageWidget.role-warning {
+    color: $warning;
+}
+
+MessageWidget.role-meta {
+    color: $text-muted;
+}
+
+/* ---- Streaming message (in MessageList) ---- */
+StreamingIndicator {
+    height: auto;
+    padding: 0 1;
+    color: $text-muted;
+}
+
+/* ---- Streaming message (standalone widget) ---- */
+StreamingMessage {
+    height: auto;
+    padding: 0 1;
+    display: none;
+}
+
+/* ---- Coordinator panel ---- */
+CoordinatorPanel {
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    display: none;
+}
+
+/* ---- Effort indicator ---- */
+EffortIndicatorWidget {
+    height: 1;
+    padding: 0 1;
+    display: none;
+}
+
+/* ---- Background panel ---- */
+BackgroundPanel {
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    display: none;
+}
+
+/* ---- Input area ---- */
+InputArea {
+    dock: bottom;
+    height: 3;
+    padding: 0 1;
+    border-top: solid $accent 50%;
+}
+
+InputArea Input {
+    background: $surface;
+    border: none;
+}
+
+InputArea Input:focus {
+    border: none;
+}
+
+InputArea .input-chevron {
+    color: $accent;
+    text-style: bold;
+    width: 3;
+    height: 1;
+    content-align: center middle;
+}
+
+/* ---- Status footer ---- */
+StatusFooter {
+    dock: bottom;
+    height: 2;
+    padding: 0 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+StatusFooter .footer-divider {
+    color: $text-muted;
+}
+
+StatusFooter .footer-workspace {
+    color: $accent;
+    text-style: bold;
+}
+
+StatusFooter .footer-model {
+    color: $text;
+}
+
+StatusFooter .footer-mode {
+    color: $warning;
+}
+
+StatusFooter .footer-reviews {
+    color: $warning;
+}
+
+StatusFooter .footer-score {
+    color: $success;
+}
+
+StatusFooter .footer-activity {
+    color: $text-muted;
+}

@@ -1,0 +1,45 @@
+/* Claude Light theme — warm blues and muted tones.
+ * Matches the "claudelight" palette from theme.py. */
+
+WorkbenchTUIApp {
+    background: #fafafa;
+}
+
+WelcomeCard {
+    height: auto;
+    max-width: 80;
+    margin: 1 2;
+    padding: 1 2;
+    border: round #3366cc;
+    background: #f0f4ff;
+}
+WelcomeCard .welcome-title { color: #3366cc; text-style: bold; }
+WelcomeCard .welcome-meta { color: #666666; }
+
+MessageList { height: 1fr; min-height: 4; scrollbar-size-vertical: 1; }
+
+MessageWidget { height: auto; padding: 0 1; }
+MessageWidget.role-user { color: #3366cc; }
+MessageWidget.role-assistant { color: #222222; }
+MessageWidget.role-system { color: #888888; }
+MessageWidget.role-tool { color: #222222; }
+MessageWidget.role-error { color: #cc3333; text-style: bold; }
+MessageWidget.role-warning { color: #cc8800; }
+MessageWidget.role-meta { color: #888888; }
+
+StreamingIndicator { height: auto; padding: 0 1; color: #888888; }
+StreamingMessage { height: auto; padding: 0 1; display: none; }
+CoordinatorPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+EffortIndicatorWidget { height: 1; padding: 0 1; display: none; }
+BackgroundPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+
+InputArea { dock: bottom; height: 3; padding: 0 1; border-top: solid #3366cc 50%; }
+InputArea Input { background: #fafafa; border: none; }
+InputArea Input:focus { border: none; }
+InputArea .input-chevron { color: #3366cc; text-style: bold; width: 3; height: 1; }
+
+StatusFooter { dock: bottom; height: 2; padding: 0 1; background: #f0f4ff; color: #666666; }
+StatusFooter .footer-divider { color: #888888; }
+StatusFooter .footer-workspace { color: #3366cc; text-style: bold; }
+StatusFooter .footer-mode { color: #cc8800; }
+StatusFooter .footer-activity { color: #666666; }

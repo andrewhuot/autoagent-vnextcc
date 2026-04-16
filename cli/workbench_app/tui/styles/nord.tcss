@@ -1,0 +1,46 @@
+/* Nord theme — Arctic, north-bluish palette.
+ * Matches the "nord" palette from theme.py.
+ * Colors from https://www.nordtheme.com/ */
+
+WorkbenchTUIApp {
+    background: #2e3440;
+}
+
+WelcomeCard {
+    height: auto;
+    max-width: 80;
+    margin: 1 2;
+    padding: 1 2;
+    border: round #88c0d0;
+    background: #3b4252;
+}
+WelcomeCard .welcome-title { color: #88c0d0; text-style: bold; }
+WelcomeCard .welcome-meta { color: #d8dee9; }
+
+MessageList { height: 1fr; min-height: 4; scrollbar-size-vertical: 1; }
+
+MessageWidget { height: auto; padding: 0 1; }
+MessageWidget.role-user { color: #88c0d0; }
+MessageWidget.role-assistant { color: #eceff4; }
+MessageWidget.role-system { color: #4c566a; }
+MessageWidget.role-tool { color: #eceff4; }
+MessageWidget.role-error { color: #bf616a; text-style: bold; }
+MessageWidget.role-warning { color: #ebcb8b; }
+MessageWidget.role-meta { color: #4c566a; }
+
+StreamingIndicator { height: auto; padding: 0 1; color: #4c566a; }
+StreamingMessage { height: auto; padding: 0 1; display: none; }
+CoordinatorPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+EffortIndicatorWidget { height: 1; padding: 0 1; display: none; }
+BackgroundPanel { height: auto; padding: 0 1; margin: 0 0 1 0; display: none; }
+
+InputArea { dock: bottom; height: 3; padding: 0 1; border-top: solid #88c0d0 50%; }
+InputArea Input { background: #2e3440; border: none; color: #eceff4; }
+InputArea Input:focus { border: none; }
+InputArea .input-chevron { color: #88c0d0; text-style: bold; width: 3; height: 1; }
+
+StatusFooter { dock: bottom; height: 2; padding: 0 1; background: #3b4252; color: #d8dee9; }
+StatusFooter .footer-divider { color: #4c566a; }
+StatusFooter .footer-workspace { color: #88c0d0; text-style: bold; }
+StatusFooter .footer-mode { color: #ebcb8b; }
+StatusFooter .footer-activity { color: #d8dee9; }
