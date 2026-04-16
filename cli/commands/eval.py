@@ -59,6 +59,18 @@ def register_eval_commands(cli: click.Group) -> None:
                   show_default=True,
                   help="Dataset split to evaluate when using --dataset.")
     @click.option("--category", default=None, help="Run only a specific category.")
+    @click.option(
+        "--tag",
+        "tag",
+        multiple=True,
+        help="Filter cases by tag (repeatable, OR semantics). Case-sensitive.",
+    )
+    @click.option(
+        "--exclude-tag",
+        "exclude_tag",
+        multiple=True,
+        help="Exclude cases with matching tag (repeatable). Case-sensitive.",
+    )
     @click.option("--output", default=None, help="Write results JSON to file.")
     @click.option(
         "--instruction-overrides",
@@ -100,7 +112,10 @@ def register_eval_commands(cli: click.Group) -> None:
         help="Render text, a final JSON envelope, or stream JSON progress events.",
     )
     def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
-                 category: str | None, output: str | None, instruction_overrides_path: str | None,
+                 category: str | None,
+                 tag: tuple[str, ...] = (),
+                 exclude_tag: tuple[str, ...] = (),
+                 output: str | None = None, instruction_overrides_path: str | None = None,
                  real_agent: bool = False,
                  force_mock: bool = False,
                  require_live: bool = False,
@@ -123,6 +138,10 @@ def register_eval_commands(cli: click.Group) -> None:
         # AND additionally enforces a post-hoc check on score.warnings.
         if strict_live:
             require_live = True
+
+        # Convert click's tuple to list (or None when unset) for the runner kwargs.
+        tag_filter = list(tag) if tag else None
+        exclude_tag_filter = list(exclude_tag) if exclude_tag else None
 
         resolved_output_format = resolve_output_format(output_format, json_output=json_output)
         progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
@@ -237,6 +256,8 @@ def register_eval_commands(cli: click.Group) -> None:
                     config=config,
                     dataset_path=dataset,
                     split=dataset_split,
+                    tags=tag_filter,
+                    exclude_tags=exclude_tag_filter,
                     progress_callback=_progress_callback,
                 )
                 return score_result, f"Category '{category}' complete", f"Category: {category}"
@@ -245,6 +266,8 @@ def register_eval_commands(cli: click.Group) -> None:
                 config=config,
                 dataset_path=dataset,
                 split=dataset_split,
+                tags=tag_filter,
+                exclude_tags=exclude_tag_filter,
                 progress_callback=_progress_callback,
             )
             return score_result, "Full eval suite complete", "Full eval suite"
@@ -267,6 +290,8 @@ def register_eval_commands(cli: click.Group) -> None:
                                 config=config,
                                 dataset_path=dataset,
                                 split=dataset_split,
+                                tags=tag_filter,
+                                exclude_tags=exclude_tag_filter,
                                 progress_callback=_text_progress_callback,
                             )
                             return score_result, f"Category '{category}' complete", f"Category: {category}"
@@ -275,6 +300,8 @@ def register_eval_commands(cli: click.Group) -> None:
                             config=config,
                             dataset_path=dataset,
                             split=dataset_split,
+                            tags=tag_filter,
+                            exclude_tags=exclude_tag_filter,
                             progress_callback=_text_progress_callback,
                         )
                         return score_result, "Full eval suite complete", "Full eval suite"

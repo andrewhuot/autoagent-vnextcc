@@ -545,13 +545,20 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run all test cases and return composite score."""
         if dataset_path:
-            cases = self.load_dataset_cases(dataset_path, split=split)
+            cases = self.load_dataset_cases(
+                dataset_path,
+                split=split,
+                tags=tags,
+                exclude_tags=exclude_tags,
+            )
         else:
-            cases = self.load_cases()
+            cases = self.load_cases(tags=tags, exclude_tags=exclude_tags)
             self._last_dataset_integrity = DatasetIntegrityReport()
         return self._run_cases_with_harness(
             cases,
@@ -569,13 +576,20 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run test cases for a specific category only."""
         if dataset_path:
-            source_cases = self.load_dataset_cases(dataset_path, split=split)
+            source_cases = self.load_dataset_cases(
+                dataset_path,
+                split=split,
+                tags=tags,
+                exclude_tags=exclude_tags,
+            )
         else:
-            source_cases = self.load_cases()
+            source_cases = self.load_cases(tags=tags, exclude_tags=exclude_tags)
             self._last_dataset_integrity = DatasetIntegrityReport()
         cases = [case for case in source_cases if case.category == category]
         return self._run_cases_with_harness(
