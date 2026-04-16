@@ -19,7 +19,9 @@ def register_all(cli: "click.Group") -> None:
     from cli.commands.build import register_build_commands
     from cli.commands.eval import register_eval_commands
     from cli.commands.optimize import register_optimize_commands
+    from cli.commands.deploy import register_deploy_commands
     register_improve_commands(cli)
     register_build_commands(cli)
     register_eval_commands(cli)
     register_optimize_commands(cli)
+    register_deploy_commands(cli)

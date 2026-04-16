@@ -45,7 +45,7 @@ def _invoke_deploy(*, attempt_id: str, strategy: str, ctx=None) -> None:
         # Fall back to an implicit invocation; tests typically patch this.
         ctx = click.get_current_context()
     ctx.invoke(
-        runner.deploy,
+        runner.cli.commands["deploy"],
         workflow=None,
         config_version=None,
         strategy=strategy,
