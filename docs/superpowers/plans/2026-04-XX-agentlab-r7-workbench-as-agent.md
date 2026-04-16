@@ -211,14 +211,22 @@ class ToolRegistry:
         Raises :class:`KeyError` for unknown names and
         :class:`TypeError` for arg-shape mismatches. The conversation
         loop catches both and feeds an error back to the model.
+
+        Implementation note: the in-process command functions all
+        require an ``on_event`` callback (and optionally a
+        ``text_writer``). The model never sees those parameters — the
+        registry injects no-op defaults so the model only specifies
+        domain arguments (``config_path``, ``attempt_id``, etc.).
         """
         descriptor = self.get(name)
         sig = inspect.signature(descriptor.fn)
-        # Filter to parameters the function actually accepts; ignore
-        # extras the model may have invented. Missing required args
-        # surface as a normal TypeError on call, which the loop
-        # translates back to the model.
-        accepted = {k: v for k, v in args.items() if k in sig.parameters}
+        accepted: dict[str, Any] = {
+            k: v for k, v in args.items() if k in sig.parameters
+        }
+        if "on_event" in sig.parameters and "on_event" not in accepted:
+            accepted["on_event"] = lambda _e: None
+        if "text_writer" in sig.parameters and "text_writer" not in accepted:
+            accepted["text_writer"] = None
         result = descriptor.fn(**accepted)
         return descriptor.shape_result(result)
 
