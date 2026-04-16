@@ -19,6 +19,194 @@ import time
 import click
 
 
+def _runner_module():
+    """Late-bound import of runner to avoid circular imports."""
+    import runner as _r
+    return _r
+
+
+def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
+    """Run the pre-R2 autofix flow for back-compat with zero-arg `improve run`.
+
+    Replicates the behavior the hidden command had before R2 Slice B.1.
+    """
+    runner = _runner_module()
+    from cli.stream2_helpers import apply_autofix_to_config, json_response
+    from optimizer.autofix import AutoFixEngine, AutoFixStore
+    from optimizer.autofix_proposers import (
+        CostOptimizationProposer,
+        FailurePatternProposer,
+        RegressionProposer,
+    )
+    from optimizer.diagnose_session import DiagnoseSession
+    from optimizer.mutations import create_default_registry
+
+    click.echo(click.style(
+        "Tip: use `agentlab optimize --cycles 1` for the same result.",
+        fg="yellow",
+    ))
+
+    runtime = runner.load_runtime_with_mode_preference()
+    workspace = runner.discover_workspace()
+    resolved_config = workspace.resolve_active_config() if workspace is not None else None
+    config = resolved_config.config if resolved_config is not None else None
+    eval_runner = runner._build_eval_runner(runtime, default_agent_config=config)
+    score = eval_runner.run(config=config)
+
+    store = runner.ConversationStore(db_path=runner.DB_PATH)
+    observer = runner.Observer(store)
+    deployer = runner.Deployer(configs_dir=runner.CONFIGS_DIR, store=store)
+    diagnose_session = DiagnoseSession(store=store, observer=observer, deployer=deployer)
+    diagnosis_summary = diagnose_session.start()
+
+    proposal_store = AutoFixStore()
+    engine = AutoFixEngine(
+        proposers=[FailurePatternProposer(), RegressionProposer(), CostOptimizationProposer()],
+        mutation_registry=create_default_registry(),
+        store=proposal_store,
+    )
+    current_config = config or runner._ensure_active_config(deployer)
+    proposals = engine.suggest(runner._build_failure_samples(store), current_config)
+    proposal_payload = [
+        {
+            "proposal_id": proposal.proposal_id,
+            "mutation_name": proposal.mutation_name,
+            "surface": proposal.surface,
+            "risk_class": proposal.risk_class,
+            "expected_lift": proposal.expected_lift,
+            "status": getattr(proposal, "status", "pending"),
+        }
+        for proposal in proposals
+    ]
+
+    applied: dict | None = None
+    top_proposal = proposals[0] if proposals else None
+    should_apply = bool(top_proposal and auto)
+    if top_proposal and not auto and not json_output:
+        should_apply = click.confirm(f"Apply the top proposal now ({top_proposal.proposal_id})?", default=False)
+
+    if should_apply and top_proposal is not None:
+        new_config, status_msg = engine.apply(top_proposal.proposal_id, current_config)
+        if new_config:
+            version_info = apply_autofix_to_config(top_proposal.proposal_id, new_config, configs_dir=runner.CONFIGS_DIR)
+            applied = {
+                "proposal_id": top_proposal.proposal_id,
+                "status": status_msg,
+                "config_version": version_info["version"],
+                "config_path": version_info["path"],
+            }
+        else:
+            applied = {
+                "proposal_id": top_proposal.proposal_id,
+                "status": status_msg,
+                "config_version": None,
+            }
+
+    payload = {
+        "eval": runner._score_to_dict(score),
+        "diagnosis": diagnose_session.to_dict(),
+        "diagnosis_summary": diagnosis_summary,
+        "proposal_count": len(proposal_payload),
+        "proposals": proposal_payload,
+        "applied": applied,
+    }
+    if json_output:
+        next_cmd = "agentlab status"
+        if applied and applied.get("config_path"):
+            next_cmd = f"agentlab eval run --config {applied['config_path']}"
+        click.echo(json_response("ok", payload, next_cmd=next_cmd))
+        return
+
+    click.echo(click.style("\n\u2726 Improve", fg="cyan", bold=True))
+    click.echo("")
+    click.echo(f"Eval composite: {runner._score_to_dict(score)['composite']:.4f}")
+    click.echo(diagnosis_summary)
+    if proposal_payload:
+        click.echo(f"\nSuggested fixes: {len(proposal_payload)}")
+        top = proposal_payload[0]
+        click.echo(
+            f"  Top proposal: {top['proposal_id']} "
+            f"({top['mutation_name']}, risk={top['risk_class']}, expected_lift={top['expected_lift']:.1%})"
+        )
+    else:
+        click.echo("\nSuggested fixes: none")
+
+    if applied is not None:
+        click.echo("")
+        click.echo(f"Applied: {applied['status']}")
+        if applied.get("config_version") is not None:
+            click.echo(f"  New config version: v{applied['config_version']:03d}")
+            click.echo(f"  Path: {applied['config_path']}")
+    else:
+        click.echo("")
+        click.echo("Next step:")
+        click.echo("  agentlab autofix suggest")
+
+
+def _run_eval_step(*, ctx, config_path, strict_live, json_output):
+    """Invoke `agentlab eval run --config <path> [--strict-live]` via ctx.invoke."""
+    runner = _runner_module()
+    eval_run_fn = runner.cli.commands["eval"].commands["run"]
+    ctx.invoke(
+        eval_run_fn,
+        config_path=config_path,
+        suite=None,
+        dataset=None,
+        dataset_split="all",
+        category=None,
+        output=None,
+        instruction_overrides_path=None,
+        real_agent=False,
+        force_mock=False,
+        require_live=False,
+        strict_live=strict_live,
+        json_output=json_output,
+        output_format="json" if json_output else "text",
+    )
+
+
+def _run_optimize_step(*, ctx, config_path, cycles, mode, strict_live, json_output):
+    """Invoke `agentlab optimize --config <path> --cycles N` via ctx.invoke."""
+    runner = _runner_module()
+    ctx.invoke(
+        runner.optimize,
+        cycles=cycles,
+        continuous=False,
+        mode=mode,
+        strategy=None,
+        db=runner.DB_PATH,
+        configs_dir=runner.CONFIGS_DIR,
+        config_path=config_path,
+        eval_run_id=None,
+        require_eval_evidence=False,
+        memory_db=runner.MEMORY_DB,
+        full_auto=False,
+        dry_run=False,
+        json_output=json_output,
+        max_budget_usd=None,
+        strict_live=strict_live,
+        output_format="json" if json_output else "text",
+        ui=None,
+    )
+    return {}
+
+
+def _present_top_attempt(*, result, json_output):
+    """Print a summary of the top attempt.
+
+    When `result` is empty, fall back to a pointer at `agentlab improve list`.
+    """
+    if json_output:
+        click.echo(json.dumps({"status": "ok", **(result or {})}))
+        return
+    click.echo(click.style("\n\u2726 Improve", fg="cyan", bold=True))
+    click.echo("")
+    click.echo(
+        "Next step: run `agentlab improve list` to review proposals, "
+        "then `agentlab improve accept <attempt_id>`."
+    )
+
+
 def register_improve_commands(cli: click.Group) -> None:
     """Register the `improve` group and its subcommands on *cli*.
 
@@ -38,120 +226,53 @@ def register_improve_commands(cli: click.Group) -> None:
         """Improvement workflows and compatibility aliases."""
 
 
-    @improve_group.command("run", hidden=True)
-    @click.option("--auto", is_flag=True, help="Apply the top suggested fix without prompting.")
-    @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
-    def improve_run(auto: bool, json_output: bool = False) -> None:
-        """Run the eval -> diagnose -> suggest -> optional apply improvement flow."""
-        click.echo(click.style(
-            "Tip: use `agentlab optimize --cycles 1` for the same result.",
-            fg="yellow",
-        ))
-        from cli.stream2_helpers import apply_autofix_to_config, json_response
-        from optimizer.autofix import AutoFixEngine, AutoFixStore
-        from optimizer.autofix_proposers import (
-            CostOptimizationProposer,
-            FailurePatternProposer,
-            RegressionProposer,
-        )
-        from optimizer.diagnose_session import DiagnoseSession
-        from optimizer.mutations import create_default_registry
+    @improve_group.command("run")
+    @click.argument("config_path", required=False, type=click.Path())
+    @click.option("--cycles", default=1, type=int, show_default=True,
+                  help="Number of optimization cycles.")
+    @click.option("--mode", default=None,
+                  type=click.Choice(["standard", "advanced", "research"]),
+                  help="Optimization mode.")
+    @click.option("--strict-live/--no-strict-live", default=False,
+                  help="Exit non-zero (12) if eval or optimize would run in mock mode.")
+    @click.option("--auto", is_flag=True,
+                  help="(Legacy, zero-arg mode only) apply top autofix proposal.")
+    @click.option("--json", "json_output", "-j", is_flag=True,
+                  help="Output as JSON.")
+    @click.pass_context
+    def improve_run(
+        ctx: click.Context,
+        config_path: str | None,
+        cycles: int,
+        mode: str | None,
+        strict_live: bool,
+        auto: bool,
+        json_output: bool,
+    ) -> None:
+        """Run the improve loop: eval, optimize 1 cycle, present top proposal.
 
-        runtime = runner.load_runtime_with_mode_preference()
-        workspace = runner.discover_workspace()
-        resolved_config = workspace.resolve_active_config() if workspace is not None else None
-        config = resolved_config.config if resolved_config is not None else None
-        eval_runner = runner._build_eval_runner(runtime, default_agent_config=config)
-        score = eval_runner.run(config=config)
-
-        store = runner.ConversationStore(db_path=DB_PATH)
-        observer = runner.Observer(store)
-        deployer = runner.Deployer(configs_dir=CONFIGS_DIR, store=store)
-        diagnose_session = DiagnoseSession(store=store, observer=observer, deployer=deployer)
-        diagnosis_summary = diagnose_session.start()
-
-        proposal_store = AutoFixStore()
-        engine = AutoFixEngine(
-            proposers=[FailurePatternProposer(), RegressionProposer(), CostOptimizationProposer()],
-            mutation_registry=create_default_registry(),
-            store=proposal_store,
-        )
-        current_config = config or runner._ensure_active_config(deployer)
-        proposals = engine.suggest(runner._build_failure_samples(store), current_config)
-        proposal_payload = [
-            {
-                "proposal_id": proposal.proposal_id,
-                "mutation_name": proposal.mutation_name,
-                "surface": proposal.surface,
-                "risk_class": proposal.risk_class,
-                "expected_lift": proposal.expected_lift,
-                "status": getattr(proposal, "status", "pending"),
-            }
-            for proposal in proposals
-        ]
-
-        applied: dict | None = None
-        top_proposal = proposals[0] if proposals else None
-        should_apply = bool(top_proposal and auto)
-        if top_proposal and not auto and not json_output:
-            should_apply = click.confirm(f"Apply the top proposal now ({top_proposal.proposal_id})?", default=False)
-
-        if should_apply and top_proposal is not None:
-            new_config, status_msg = engine.apply(top_proposal.proposal_id, current_config)
-            if new_config:
-                version_info = apply_autofix_to_config(top_proposal.proposal_id, new_config, configs_dir=CONFIGS_DIR)
-                applied = {
-                    "proposal_id": top_proposal.proposal_id,
-                    "status": status_msg,
-                    "config_version": version_info["version"],
-                    "config_path": version_info["path"],
-                }
-            else:
-                applied = {
-                    "proposal_id": top_proposal.proposal_id,
-                    "status": status_msg,
-                    "config_version": None,
-                }
-
-        payload = {
-            "eval": runner._score_to_dict(score),
-            "diagnosis": diagnose_session.to_dict(),
-            "diagnosis_summary": diagnosis_summary,
-            "proposal_count": len(proposal_payload),
-            "proposals": proposal_payload,
-            "applied": applied,
-        }
-        if json_output:
-            next_cmd = "agentlab status"
-            if applied and applied.get("config_path"):
-                next_cmd = f"agentlab eval run --config {applied['config_path']}"
-            click.echo(json_response("ok", payload, next_cmd=next_cmd))
+        With no config argument, prints a deprecation notice and falls back
+        to the legacy autofix workflow. Prefer `agentlab autofix apply`.
+        """
+        if config_path is None:
+            click.echo(click.style(
+                "Note: `agentlab improve run` with no arguments is deprecated. "
+                "Use `agentlab autofix apply` for the legacy autofix workflow.",
+                fg="yellow",
+            ), err=True)
+            _invoke_legacy_autofix(auto=auto, json_output=json_output)
             return
 
-        click.echo(click.style("\n✦ Improve", fg="cyan", bold=True))
-        click.echo("")
-        click.echo(f"Eval composite: {runner._score_to_dict(score)['composite']:.4f}")
-        click.echo(diagnosis_summary)
-        if proposal_payload:
-            click.echo(f"\nSuggested fixes: {len(proposal_payload)}")
-            top = proposal_payload[0]
-            click.echo(
-                f"  Top proposal: {top['proposal_id']} "
-                f"({top['mutation_name']}, risk={top['risk_class']}, expected_lift={top['expected_lift']:.1%})"
-            )
-        else:
-            click.echo("\nSuggested fixes: none")
-
-        if applied is not None:
-            click.echo("")
-            click.echo(f"Applied: {applied['status']}")
-            if applied.get("config_version") is not None:
-                click.echo(f"  New config version: v{applied['config_version']:03d}")
-                click.echo(f"  Path: {applied['config_path']}")
-        else:
-            click.echo("")
-            click.echo("Next step:")
-            click.echo("  agentlab autofix suggest")
+        _run_eval_step(
+            ctx=ctx, config_path=config_path,
+            strict_live=strict_live, json_output=json_output,
+        )
+        result = _run_optimize_step(
+            ctx=ctx, config_path=config_path,
+            cycles=cycles, mode=mode,
+            strict_live=strict_live, json_output=json_output,
+        )
+        _present_top_attempt(result=result, json_output=json_output)
 
 
     @improve_group.command("list")
