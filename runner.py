@@ -7199,6 +7199,7 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     import sqlite3
 
     from cli.mcp_runtime import mcp_status_snapshot
+    from cli.mock_reason import compute_mock_reason
     from cli.stream2_helpers import json_response
     from core.project_memory import load_layered_project_context
 
@@ -7212,6 +7213,10 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     if json_output:
         runtime = load_runtime_config(config_path)
         mode_summary = summarize_mode_state(config_path)
+        mock_info = compute_mock_reason(
+            runtime_use_mock=runtime.optimizer.use_mock,
+            config_path=config_path,
+        )
         memory_snapshot = (
             load_layered_project_context(workspace.root).summary()
             if workspace is not None
@@ -7224,6 +7229,8 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             issues.append("No AgentLab workspace found")
         if harness_snapshot is not None and harness_snapshot.health == "blocked":
             issues.extend(harness_snapshot.issues)
+        if mock_info.is_blocking:
+            issues.append("Mock mode forced: no provider key set")
         data = {
             "workspace": str(workspace.root) if workspace is not None else None,
             "issues": issues,
@@ -7232,6 +7239,8 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             "memory": memory_snapshot,
             "mcp": mcp_snapshot,
             "harness": harness_snapshot.to_dict() if harness_snapshot is not None else None,
+            "mock_reason": mock_info.reason,
+            "mock_reason_detail": mock_info.detail,
         }
         click.echo(json_response("ok", data, next_cmd="agentlab status"))
         return
@@ -7286,18 +7295,25 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     mode_summary = summarize_mode_state(config_path)
     click.echo(f"  CLI mode:           {mode_summary['message']}")
     click.echo(f"  Mode source:        {mode_summary['mode_source']}")
-    if runtime.optimizer.use_mock:
+    mock_info = compute_mock_reason(
+        runtime_use_mock=runtime.optimizer.use_mock,
+        config_path=config_path,
+    )
+    if mock_info.reason == "disabled":
+        click.echo("  Mock mode:          " + click.style("\u2713 Disabled", fg="green"))
+    elif mock_info.reason == "configured":
         click.echo(
             "  Mock mode:          "
-            + click.style(
-                "\u26a0 Enabled (set optimizer.use_mock: false in agentlab.yaml for production)",
-                fg="yellow",
-            )
+            + click.style(f"\u26a0 Enabled (configured). {mock_info.detail}", fg="yellow")
         )
-    else:
+        click.echo("  Fix:                Set optimizer.use_mock: false in agentlab.yaml for production.")
+    else:  # missing_provider_key
+        issues.append("Mock mode forced: no provider key set")
         click.echo(
-            "  Mock mode:          " + click.style("\u2713 Disabled", fg="green")
+            "  Mock mode:          "
+            + click.style(f"\u2717 Forced ({mock_info.reason}). {mock_info.detail}", fg="red")
         )
+        click.echo("  Fix:                Set one of OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY and rerun.")
 
     # ------------------------------------------------------------------
     # Active Provider
