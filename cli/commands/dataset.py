@@ -6,6 +6,7 @@ A.6 — the dataset subgroup is nested under the existing `eval` group.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -341,6 +342,86 @@ def register_dataset_commands(eval_group: click.Group) -> None:
 
         # Rewrite the source directory in place.
         _rewrite_source_dir(src_dir, report.kept, case_sources, file_order)
+
+    @dataset_group.command("balance")
+    @click.option(
+        "--source",
+        default=_DEFAULT_OUTPUT_DIR,
+        show_default=True,
+        help="Directory of YAML case files to read.",
+    )
+    @click.option(
+        "--by",
+        type=click.Choice(["category", "tag"]),
+        default="category",
+        show_default=True,
+        help="Bucket key: category (disjoint) or tag (multi-bucket).",
+    )
+    @click.option(
+        "--json",
+        "json_output",
+        is_flag=True,
+        default=False,
+        help="Emit the balance report as JSON (for scripting).",
+    )
+    def dataset_balance(source: str, by: str, json_output: bool) -> None:
+        """Report the histogram of cases per category or per tag.
+
+        Read-only — prints recommendations targeting the median bucket size
+        but never modifies files. Use --json for a machine-readable dict with
+        keys by, histogram, median, recommendations.
+
+        Examples:
+          agentlab eval dataset balance
+          agentlab eval dataset balance --by tag
+          agentlab eval dataset balance --json
+        """
+        from evals.dataset.balance import balance as _balance
+        from evals.runner import EvalRunner
+
+        src_dir = Path(source)
+        if not src_dir.is_dir():
+            raise click.ClickException(f"Source directory not found: {src_dir}")
+
+        eval_runner = EvalRunner(cases_dir=source)
+        cases = eval_runner.load_cases()
+        if not cases:
+            raise click.ClickException(f"No cases found under {src_dir}")
+
+        report = _balance(cases, by=by)
+
+        if json_output:
+            click.echo(
+                json.dumps(
+                    {
+                        "by": report.by,
+                        "histogram": report.histogram,
+                        "median": report.median,
+                        "recommendations": report.recommendations,
+                    }
+                )
+            )
+            return
+
+        click.echo(f"Balance by {report.by} (median: {report.median})")
+        # Alphabetical bucket listing. Align counts with a width derived from
+        # the longest bucket name so humans can scan quickly.
+        if report.histogram:
+            name_width = max(len(name) for name in report.histogram) + 1
+            for name in sorted(report.histogram):
+                count = report.histogram[name]
+                if count == report.median:
+                    annotation = "(at median)"
+                elif count < report.median:
+                    annotation = f"[+{report.median - count}]"
+                else:
+                    annotation = f"[-{count - report.median} recommended]"
+                click.echo(f"  {name:<{name_width}} {count:>4}  {annotation}")
+
+        if report.recommendations:
+            click.echo("Recommendations:")
+            for rec in report.recommendations:
+                click.echo(f"  {rec}")
 
     @dataset_group.command("export")
     @click.argument("output", required=True, type=click.Path())
