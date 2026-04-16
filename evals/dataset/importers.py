@@ -1,10 +1,11 @@
-"""JSONL importer for eval cases.
+"""JSONL and CSV importers for eval cases.
 
-Free-function entry point; returns ``list[TestCase]``. No ``Dataset`` class.
+Free-function entry points; each returns ``list[TestCase]``. No ``Dataset`` class.
 """
 
 from __future__ import annotations
 
+import csv
 import json
 from pathlib import Path
 from typing import Any
@@ -62,6 +63,123 @@ def load_jsonl(path: str | Path) -> list[TestCase]:
         cases.append(_row_to_testcase(row))
 
     return cases
+
+
+def load_csv(path: str | Path) -> list[TestCase]:
+    """Load eval cases from a CSV file with a required header row.
+
+    Column names correspond to the JSONL keys (see :func:`load_jsonl`).
+    Required columns: ``id``, ``category``, ``user_message``. Other columns
+    are optional — an empty/whitespace cell means "use the JSONL default."
+
+    ``expected_keywords`` and ``tags`` cells are **pipe-delimited** strings,
+    e.g. ``"order|tracking"`` → ``["order", "tracking"]``. An empty string
+    means an empty list; ``tags`` then falls back to ``[category]`` per the
+    A.1 contract. ``safety_probe`` is ``"true"``/``"false"``
+    (case-insensitive); any other non-empty value raises ``ValueError``.
+
+    Raises:
+        ValueError: If the file has no header row, if required column
+            headers are missing, if a required value is empty in a data row
+            (message names the field and the 1-indexed data-row number), or
+            if ``safety_probe`` contains an invalid boolean literal.
+    """
+    file_path = Path(path)
+    text = file_path.read_text(encoding="utf-8")
+
+    reader = csv.reader(text.splitlines())
+    try:
+        header = next(reader)
+    except StopIteration:
+        raise ValueError(f"CSV has no header row in {file_path}") from None
+
+    missing_headers = [f for f in _REQUIRED_FIELDS if f not in header]
+    if missing_headers:
+        raise ValueError(
+            f"CSV {file_path} is missing required column(s): "
+            f"{', '.join(missing_headers)}"
+        )
+
+    cases: list[TestCase] = []
+    for data_row_number, raw_row in enumerate(reader, start=1):
+        # Pad short rows with empty strings so zip doesn't truncate.
+        padded = list(raw_row) + [""] * (len(header) - len(raw_row))
+        row = dict(zip(header, padded))
+
+        for field_name in _REQUIRED_FIELDS:
+            if not row.get(field_name, "").strip():
+                raise ValueError(
+                    f"Missing required value for '{field_name}' on data row "
+                    f"{data_row_number} of {file_path}"
+                )
+
+        cases.append(_csv_row_to_testcase(row, data_row_number, file_path))
+
+    return cases
+
+
+def _parse_csv_bool(value: str, data_row_number: int, file_path: Path) -> bool:
+    normalized = value.strip().lower()
+    if normalized == "true":
+        return True
+    if normalized == "false":
+        return False
+    raise ValueError(
+        f"Invalid boolean '{value}' for 'safety_probe' on data row "
+        f"{data_row_number} of {file_path} (expected 'true' or 'false')"
+    )
+
+
+def _split_pipe_list(value: str) -> list[str]:
+    stripped = value.strip()
+    if not stripped:
+        return []
+    return [part.strip() for part in stripped.split("|") if part.strip()]
+
+
+def _csv_row_to_testcase(
+    row: dict[str, str], data_row_number: int, file_path: Path
+) -> TestCase:
+    """Materialize a CSV row dict into a TestCase with spec'd defaults."""
+    category = row["category"].strip()
+
+    tags_raw = row.get("tags", "")
+    tags = _split_pipe_list(tags_raw)
+    if not tags:
+        tags = [category]
+
+    expected_keywords = _split_pipe_list(row.get("expected_keywords", ""))
+
+    safety_probe_raw = row.get("safety_probe", "").strip()
+    if safety_probe_raw:
+        safety_probe = _parse_csv_bool(safety_probe_raw, data_row_number, file_path)
+    else:
+        safety_probe = False
+
+    expected_specialist = row.get("expected_specialist", "").strip() or "support"
+    expected_behavior = row.get("expected_behavior", "").strip() or "answer"
+
+    expected_tool_raw = row.get("expected_tool", "").strip()
+    expected_tool = expected_tool_raw if expected_tool_raw else None
+
+    split_raw = row.get("split", "").strip()
+    split = split_raw if split_raw else None
+
+    reference_answer = row.get("reference_answer", "")
+
+    return TestCase(
+        id=row["id"].strip(),
+        category=category,
+        user_message=row["user_message"],
+        expected_specialist=expected_specialist,
+        expected_behavior=expected_behavior,
+        safety_probe=safety_probe,
+        expected_keywords=expected_keywords,
+        expected_tool=expected_tool,
+        split=split,
+        reference_answer=reference_answer,
+        tags=tags,
+    )
 
 
 def _row_to_testcase(row: dict[str, Any]) -> TestCase:
