@@ -54,60 +54,79 @@ agentlab build "customer support agent for order tracking, refunds, and cancella
 
 This stages a new config, generates build artifacts, and writes starter eval cases you can run immediately.
 
-## 4. Run evals
+## 4. Improve: the unified loop (recommended)
+
+`agentlab improve` is the one command that owns the full lifecycle from
+"I have an agent" to "I shipped a measured improvement." Each step
+threads the same `attempt_id` through eval → optimize → deploy →
+measurement, so you can always trace a live release back to the
+proposal that created it.
 
 ```bash
-agentlab eval run
+agentlab improve run configs/my-agent.yaml
 ```
 
-Check the latest run again any time with:
+This runs eval, runs one optimization cycle, and shows you the top
+proposal (with its `attempt_id` and diff). If it looks right:
 
 ```bash
-agentlab eval show latest
+agentlab improve accept <attempt_id>
 ```
 
-## 5. Optimize
+Canary-deploys the config tied to that attempt and schedules a
+post-deploy measurement. After the canary window settles:
 
 ```bash
-agentlab optimize --cycles 1
+agentlab improve measure <attempt_id>
 ```
 
-Two normal outcomes:
-
-- AgentLab proposes and evaluates a change
-- AgentLab says `Latest eval passed; no optimization needed.` if the current workspace is already healthy enough for that cycle
-
-Both outcomes are valid first-run behavior.
-
-## 6. Review and deploy
-
-To inspect the current review queue:
+Runs a fresh eval against the live config and records the actual
+`composite_delta`. You can now trace the full chain:
 
 ```bash
-agentlab review list
+agentlab improve lineage <attempt_id>
+# eval_run → attempt → deployment → measurement
+
+agentlab improve diff <attempt_id>
+# full config diff + rationale
+
+agentlab improve list
+# every attempt with its status and deployment state
 ```
 
-To apply seeded review cards automatically and canary the latest version:
+### Running pieces individually
+
+If you want to drive each step by hand instead of through `improve run`:
 
 ```bash
-agentlab deploy --auto-review --yes
+agentlab eval run          # just the eval
+agentlab optimize --cycles 1   # just the optimizer
+agentlab deploy --auto-review --yes  # deploy the latest accepted config
 ```
+
+All three still emit lineage events, so `agentlab improve lineage` and
+`agentlab improve list` reflect their output regardless of whether you
+went through the unified command or the per-step commands.
 
 ## Trusting the loop: strict-live mode
 
-By default, every AgentLab command (`build`, `eval run`, `optimize`) will
-fall back to deterministic mock execution when a live provider isn't
-configured or a provider call fails mid-flight. This is fine for smoke
-testing, but catastrophic in CI: a green eval against mock doesn't mean
-the agent works against the real provider.
+By default, every AgentLab command (`build`, `eval run`, `optimize`,
+`improve run`) will fall back to deterministic mock execution when a
+live provider isn't configured or a provider call fails mid-flight.
+This is fine for smoke testing, but catastrophic in CI: a green eval
+against mock doesn't mean the agent works against the real provider.
 
 Pass `--strict-live` to force a hard failure instead:
 
 ```bash
+agentlab improve run configs/my-agent.yaml --strict-live
 agentlab eval run --strict-live
 agentlab build "my agent description" --strict-live
 agentlab optimize --cycles 3 --strict-live
 ```
+
+`--strict-live` flows from `improve run` into the underlying eval and
+optimize steps automatically, so you only need to set it in one place.
 
 If any step would have silently fallen back to a mock, AgentLab now exits
 with code `12` and prints the warnings that would have been swallowed.
@@ -128,6 +147,8 @@ Other exit codes worth knowing:
 
 ## What next?
 
+- `agentlab improve list` — see every proposal, its status, and deployment state
+- `agentlab improve lineage <attempt_id>` — trace an attempt's full chain
 - `agentlab status` — see workspace health and next recommended commands
 - `agentlab build show latest` — inspect the latest build artifact
 - `agentlab instruction edit` — open the active XML instruction in your editor
