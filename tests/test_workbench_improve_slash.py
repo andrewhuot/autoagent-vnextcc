@@ -325,3 +325,297 @@ def test_default_registry_wires_improve_command() -> None:
     assert improve_cmd is not None
     assert improve_cmd.kind == "local"
     assert improve_cmd.source == "builtin"
+
+
+# ---------------------------------------------------------------------------
+# R4.5 — in-process runner: subprocess-free, session-aware, error-bounded
+# ---------------------------------------------------------------------------
+
+
+def test_improve_slash_does_not_spawn_subprocess(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """The refactored /improve handler must NOT invoke ``subprocess.Popen``."""
+    import subprocess
+    from unittest.mock import patch as _patch
+
+    runner = _fake_runner([{"event": "improve_list_complete", "status": "ok"}])
+    _install_improve(ctx, runner)
+
+    with _patch.object(subprocess, "Popen") as popen_mock:
+        popen_mock.side_effect = AssertionError("subprocess spawned!")
+        dispatch(ctx, "/improve list")
+
+    popen_mock.assert_not_called()
+
+
+@pytest.mark.parametrize("sub", ["accept", "measure", "diff"])
+def test_improve_auto_injects_session_attempt_id(
+    ctx: SlashContext, echo: _EchoCapture, sub: str
+) -> None:
+    """When session has last_attempt_id, it's injected into argv."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [{"event": f"improve_{sub}_complete", "attempt_id": "att_session", "status": "ok"}]
+    )
+    _install_improve(ctx, runner)
+
+    dispatch(ctx, f"/improve {sub}")
+
+    # Session-injected attempt_id appears as the positional argument right
+    # after the subcommand token.
+    assert runner.calls == [[sub, "att_session"]]
+
+
+@pytest.mark.parametrize("sub", ["accept", "measure", "diff"])
+def test_improve_user_override_beats_session(
+    ctx: SlashContext, echo: _EchoCapture, sub: str
+) -> None:
+    """User-provided <attempt_id> wins over session state."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [{"event": f"improve_{sub}_complete", "attempt_id": "att_user", "status": "ok"}]
+    )
+    _install_improve(ctx, runner)
+
+    dispatch(ctx, f"/improve {sub} att_user")
+
+    assert runner.calls == [[sub, "att_user"]]
+
+
+@pytest.mark.parametrize("sub", ["accept", "measure", "diff"])
+def test_improve_errors_when_session_missing_attempt_id(
+    ctx: SlashContext, echo: _EchoCapture, sub: str
+) -> None:
+    """No user arg and no session value → transcript error + no runner call."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()  # no last_attempt_id
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner([])
+    _install_improve(ctx, runner)
+
+    result = dispatch(ctx, f"/improve {sub}")
+
+    plain = "\n".join(echo.plain)
+    assert "no attempt in session" in plain or "no attempt" in plain
+    assert runner.calls == []  # type: ignore[attr-defined]
+    assert isinstance(result, DispatchResult)
+    assert result.display == "skip"
+
+
+def test_improve_run_updates_session_last_attempt_id(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """On terminal improve_run_complete, session.last_attempt_id is updated."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {
+                "event": "improve_run_complete",
+                "attempt_id": "att_new",
+                "config_path": "c.yaml",
+                "eval_run_id": "er_x",
+                "status": "ok",
+            }
+        ]
+    )
+    _install_improve(ctx, runner)
+
+    dispatch(ctx, "/improve run c.yaml")
+
+    assert session.last_attempt_id == "att_new"
+
+
+def test_improve_accept_updates_session_last_attempt_id(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """On terminal improve_accept_complete, session.last_attempt_id is updated."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_old")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {
+                "event": "improve_accept_complete",
+                "attempt_id": "att_old",  # same id, idempotent update
+                "deployment_id": "dep_1",
+                "status": "ok",
+            }
+        ]
+    )
+    _install_improve(ctx, runner)
+
+    dispatch(ctx, "/improve accept att_old")
+
+    assert session.last_attempt_id == "att_old"
+
+
+def test_improve_list_does_not_update_session(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Read-only subcommands (list) must not mutate session state."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_preserved")
+    ctx.meta["workbench_session"] = session
+
+    # Even if the runner emits an attempt_id on improve_list_complete, the
+    # slash handler must only update session for run/accept.
+    runner = _fake_runner(
+        [
+            {
+                "event": "improve_list_complete",
+                "attempts_total": 0,
+                "status": "ok",
+            }
+        ]
+    )
+    _install_improve(ctx, runner)
+
+    dispatch(ctx, "/improve list")
+
+    assert session.last_attempt_id == "att_preserved"
+
+
+def test_improve_slash_handles_missing_session_gracefully(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """No session in ctx.meta + explicit <attempt_id> must not raise."""
+    ctx.meta.pop("workbench_session", None)
+    runner = _fake_runner(
+        [{"event": "improve_diff_complete", "attempt_id": "att_x", "status": "ok"}]
+    )
+    _install_improve(ctx, runner)
+
+    result = dispatch(ctx, "/improve diff att_x")
+    assert isinstance(result, DispatchResult)
+
+
+def test_improve_slash_error_boundary_catches_unexpected(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Unexpected exception from runner must be caught and rendered."""
+    runner = _failing_runner(ValueError("boom"))
+    _install_improve(ctx, runner)
+
+    result = dispatch(ctx, "/improve list")
+
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "crashed" in plain.lower()
+
+
+def test_args_to_kwargs_parses_run_config_path() -> None:
+    from cli.workbench_app.improve_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs("run", ["configs/foo.yaml", "--cycles", "3"])
+    assert kwargs["config_path"] == "configs/foo.yaml"
+    assert kwargs["cycles"] == 3
+
+
+def test_args_to_kwargs_parses_accept_strategy() -> None:
+    from cli.workbench_app.improve_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs("accept", ["att_abc", "--strategy", "immediate"])
+    assert kwargs["attempt_id"] == "att_abc"
+    assert kwargs["strategy"] == "immediate"
+
+
+def test_args_to_kwargs_parses_measure_strict_live() -> None:
+    from cli.workbench_app.improve_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs("measure", ["att_abc", "--strict-live"])
+    assert kwargs["attempt_id"] == "att_abc"
+    assert kwargs["strict_live"] is True
+
+
+def test_args_to_kwargs_parses_list_filters() -> None:
+    from cli.workbench_app.improve_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(
+        "list",
+        ["--status", "accepted", "--reason", "regression_detected", "--limit", "5"],
+    )
+    assert kwargs["status"] == "accepted"
+    assert kwargs["reason"] == "regression_detected"
+    assert kwargs["limit"] == 5
+
+
+def test_args_to_kwargs_diff_positional() -> None:
+    from cli.workbench_app.improve_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs("diff", ["att_abc"])
+    assert kwargs["attempt_id"] == "att_abc"
+
+
+def test_resolve_session_attempt_id_injects_for_accept() -> None:
+    from cli.workbench_app.improve_slash import _resolve_session_attempt_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    kwargs: dict[str, object] = {}
+    resolved = _resolve_session_attempt_id("accept", kwargs, session)
+    assert resolved["attempt_id"] == "att_session"
+
+
+def test_resolve_session_attempt_id_preserves_user_value() -> None:
+    from cli.workbench_app.improve_slash import _resolve_session_attempt_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    kwargs: dict[str, object] = {"attempt_id": "att_user"}
+    resolved = _resolve_session_attempt_id("accept", kwargs, session)
+    assert resolved["attempt_id"] == "att_user"
+
+
+def test_resolve_session_attempt_id_raises_when_both_missing() -> None:
+    from cli.workbench_app.improve_slash import (
+        _resolve_session_attempt_id,
+        ImproveCommandError as _ImpErr,
+    )
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    kwargs: dict[str, object] = {}
+    with pytest.raises(_ImpErr, match="no attempt in session"):
+        _resolve_session_attempt_id("measure", kwargs, session)
+
+
+def test_resolve_session_attempt_id_noop_for_list_and_run() -> None:
+    """list + run don't auto-inject attempt_id (they take other inputs)."""
+    from cli.workbench_app.improve_slash import _resolve_session_attempt_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_attempt_id="att_session")
+
+    for sub in ("list", "run", "lineage", "show"):
+        kwargs: dict[str, object] = {}
+        resolved = _resolve_session_attempt_id(sub, kwargs, session)
+        # list + run + lineage + show don't auto-inject; attempt_id stays absent.
+        assert "attempt_id" not in resolved

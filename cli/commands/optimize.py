@@ -22,6 +22,8 @@ from typing import Any, Callable
 
 import click
 
+from cli.commands._in_process import make_event_writer as _make_event_writer
+
 
 def _runner_module():
     """Late-bound import of runner to avoid circular imports."""
@@ -60,26 +62,6 @@ class OptimizeRunResult:
     composite_after: float | None
     warnings: tuple[str, ...]
     artifacts: tuple[str, ...]
-
-
-def _make_event_writer(on_event: Callable[[dict[str, Any]], None]) -> Callable[[str], None]:
-    """Adapter: turn a ``Callable[[str], None]`` that receives a JSON-encoded
-    line into a structured ``Callable[[dict], None]`` fanout.
-
-    ``ProgressRenderer`` with ``output_format="stream-json"`` serializes
-    each event to JSON and calls ``writer(line)``. We parse it back into a
-    dict so the in-process caller receives structured events without having
-    to re-parse. This keeps ``ProgressRenderer`` itself unmodified.
-    """
-    def _writer(line: str) -> None:
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            return
-        if isinstance(event, dict):
-            on_event(event)
-
-    return _writer
 
 
 def run_optimize_in_process(

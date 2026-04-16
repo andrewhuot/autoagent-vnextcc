@@ -22,6 +22,8 @@ from typing import Any, Callable
 import click
 import yaml
 
+from cli.commands._in_process import make_event_writer as _make_event_writer
+
 
 def _runner_module():
     """Late-bound import of runner to avoid circular imports."""
@@ -54,26 +56,6 @@ class EvalRunResult:
     # render the historical envelope shape (quality/safety/latency/cost/…).
     # The slash handler ignores this field.
     score_payload: dict[str, Any] | None = None
-
-
-def _make_event_writer(on_event: Callable[[dict], None]) -> Callable[[str], None]:
-    """Adapter: turn a ``Callable[[str], None]`` (which ``emit_stream_json``
-    hands a JSON-encoded line) into a ``Callable[[dict], None]`` fanout.
-
-    ``ProgressRenderer`` with ``output_format="stream-json"`` serializes each
-    event to JSON and calls ``writer(line)``. We parse it back into a dict
-    so the slash handler's queue receives structured events without having
-    to re-parse. This keeps ``ProgressRenderer`` itself unmodified.
-    """
-    def _writer(line: str) -> None:
-        try:
-            event = json.loads(line)
-        except (TypeError, ValueError):
-            return
-        if isinstance(event, dict):
-            on_event(event)
-
-    return _writer
 
 
 def run_eval_in_process(
