@@ -114,6 +114,7 @@ class CompositeScore:
     dimensions: DimensionScores | None = None
     per_agent_scores: list[PerAgentScores] = field(default_factory=list)
     confidence_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
+    weights_snapshot: "CompositeWeights | None" = None
     total_tokens: int = 0
     estimated_cost_usd: float = 0.0
     warnings: list[str] = field(default_factory=list)
@@ -194,6 +195,38 @@ class CompositeScore:
             "reported_composite": round(self.composite, 4),
             "optimization_mode": self.optimization_mode,
         }
+
+    @classmethod
+    def rerender(
+        cls,
+        score: "CompositeScore",
+        weights: "CompositeWeights | None" = None,
+    ) -> "CompositeScore":
+        """Rebuild a CompositeScore using the snapshot weights (or an explicit override).
+
+        When ``weights`` is None, uses ``score.weights_snapshot`` — this is the
+        historical-reproducibility contract: a stored score always renders with
+        the weights it was scored under, regardless of what the current
+        workspace yaml says.
+
+        When ``weights`` is provided, forensic/what-if replay: recomputes the
+        composite under the override. The returned score's ``weights_snapshot``
+        reflects the weights actually used for the replay.
+
+        If neither is available (``score.weights_snapshot is None`` and no
+        override), returns *score* unchanged — pre-R3 persisted scores had no
+        snapshot; preserving them as-is is the safer default than guessing.
+        """
+        effective = weights if weights is not None else score.weights_snapshot
+        if effective is None:
+            return score
+
+        # Re-score the preserved per-case results under the effective weights.
+        rescored = CompositeScorer(weights=effective).score(list(score.results))
+        # The rescore already sets weights_snapshot=effective via score()'s path,
+        # but make it explicit for the forensic-override branch's determinism.
+        rescored.weights_snapshot = effective
+        return rescored
 
 
 def composite_breakdown(score: CompositeScore) -> dict[str, dict[str, float] | float | str]:
@@ -309,6 +342,7 @@ class CompositeScorer:
             optimization_mode="weighted",
             confidence_intervals=confidence_intervals,
             total_tokens=sum(r.token_count for r in results),
+            weights_snapshot=self._weights,
         )
 
     def _bootstrap_mean_ci(self, values: list[float]) -> tuple[float, float]:
