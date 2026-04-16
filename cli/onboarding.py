@@ -21,11 +21,14 @@ from typing import Optional
 
 import click
 
+from cli.provider_keys import validate_provider_key
 from cli.workspace_env import (
     PROVIDER_API_KEY_ENV_VARS,
     hydrate_provider_key_aliases,
     write_workspace_env_values,
 )
+
+_MAX_KEY_ATTEMPTS = 3
 
 
 @dataclass
@@ -82,16 +85,29 @@ def _prompt_for_provider_key() -> tuple[str, Optional[str]]:
         "OPENAI_API_KEY",
     )
     key_value = ""
+    attempts = 0
     while not key_value:
-        key_value = click.prompt(
+        raw = click.prompt(
             f"  Paste your {env_name}",
             hide_input=True,
             confirmation_prompt=False,
             default="",
             show_default=False,
         ).strip()
-        if not key_value:
-            click.echo(click.style("  API key is required to continue.", fg="yellow"))
+        attempts += 1
+        validation = validate_provider_key(env_name, raw)
+        if validation.ok:
+            key_value = raw
+            break
+        click.echo(click.style(f"  {validation.message}", fg="yellow"))
+        if attempts >= _MAX_KEY_ATTEMPTS:
+            click.echo(
+                click.style(
+                    f"  Too many invalid attempts ({attempts}). Aborting onboarding.",
+                    fg="red",
+                )
+            )
+            raise click.Abort()
 
     write_workspace_env_values({env_name: key_value})
     os.environ[env_name] = key_value

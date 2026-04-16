@@ -7,9 +7,19 @@ Invoked via `agentlab init [PATH]`. Takes a user from "I have an agent" to
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from cli.provider_keys import validate_provider_key
+from cli.workspace_env import (
+    PROVIDER_API_KEY_ENV_VARS,
+    hydrate_provider_key_aliases,
+    write_workspace_env_values,
+)
+
+_MAX_KEY_ATTEMPTS = 3
 
 
 @dataclass
@@ -36,12 +46,14 @@ class InitFlow:
         skip_eval: bool = False,
         skip_generate: bool = False,
         force_mock: bool = False,
+        interactive: bool = True,
         output_fn: Any = None,
     ) -> None:
         self.workspace = Path(workspace)
         self.skip_eval = skip_eval
         self.skip_generate = skip_generate
         self.force_mock = force_mock
+        self.interactive = interactive
         self._print = output_fn or print
 
     def run(self, agent_source: str | None = None) -> InitResult:
@@ -65,6 +77,10 @@ class InitFlow:
                 # Step 4: Coverage analysis + gap fill
                 if cases:
                     self._step_coverage(card, cases, result)
+
+            # Step 4.5: Provider key setup (inline) — ensures users don't
+            # silently land in mock mode just because they skipped key entry.
+            self._step_provider_key(result)
 
             # Step 5: Suggest next steps
             self._step_suggest(result)
@@ -259,14 +275,119 @@ class InitFlow:
             self._print(f"  Coverage analysis failed: {exc}")
             result.warnings.append(str(exc))
 
+    def _step_provider_key(self, result: InitResult) -> None:
+        """Inline provider-key setup so users don't silently fall into mock mode."""
+        if self.force_mock:
+            self._print("\n[4.5/5] Provider key: skipped (mock mode requested).")
+            result.eval_mode = "mock"
+            result.steps_completed.append("provider_key:skipped:force_mock")
+            return
+
+        # Refresh aliases so e.g. GEMINI_API_KEY is promoted to GOOGLE_API_KEY.
+        hydrate_provider_key_aliases()
+        existing = next(
+            (v for v in PROVIDER_API_KEY_ENV_VARS if str(os.environ.get(v) or "").strip()),
+            None,
+        )
+        if existing:
+            self._print(f"\n[4.5/5] Provider key: detected {existing} (live mode).")
+            result.eval_mode = "real"
+            result.steps_completed.append(f"provider_key:detected:{existing}")
+            return
+
+        if not self.interactive:
+            self._print(
+                "\n[4.5/5] Provider key: none detected and non-interactive; "
+                "falling back to mock mode."
+            )
+            result.eval_mode = "mock"
+            result.warnings.append(
+                "No provider API key detected; eval mode will be mock. "
+                "Set OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY and rerun."
+            )
+            result.steps_completed.append("provider_key:skipped:noninteractive")
+            return
+
+        self._print("\n[4.5/5] Provider key setup")
+        try:
+            import click
+        except Exception as exc:  # pragma: no cover — click is a hard dep
+            self._print(f"  Could not load click ({exc}); skipping key prompt.")
+            result.eval_mode = "mock"
+            result.warnings.append("click unavailable; eval mode will be mock.")
+            result.steps_completed.append("provider_key:skipped:no_click")
+            return
+
+        provider_choices = (
+            ("1", "OpenAI", "OPENAI_API_KEY"),
+            ("2", "Anthropic", "ANTHROPIC_API_KEY"),
+            ("3", "Google / Gemini", "GOOGLE_API_KEY"),
+        )
+        for number, label, env_name in provider_choices:
+            self._print(f"    {number}) Paste {label} key ({env_name})")
+
+        try:
+            choice = click.prompt(
+                "  Choose",
+                type=click.Choice(["1", "2", "3"]),
+                default="1",
+                show_choices=False,
+            )
+        except click.Abort:
+            result.eval_mode = "mock"
+            result.warnings.append("Provider-key selection aborted; eval mode will be mock.")
+            result.steps_completed.append("provider_key:aborted")
+            return
+
+        env_name = next(
+            (env for number, _label, env in provider_choices if number == choice),
+            "OPENAI_API_KEY",
+        )
+
+        key_value = ""
+        attempts = 0
+        while not key_value:
+            raw = click.prompt(
+                f"  Paste your {env_name}",
+                hide_input=True,
+                confirmation_prompt=False,
+                default="",
+                show_default=False,
+            ).strip()
+            attempts += 1
+            validation = validate_provider_key(env_name, raw)
+            if validation.ok:
+                key_value = raw
+                break
+            self._print(f"  {validation.message}")
+            if attempts >= _MAX_KEY_ATTEMPTS:
+                self._print(
+                    f"  Too many invalid attempts ({attempts}); falling back to mock mode."
+                )
+                result.eval_mode = "mock"
+                result.warnings.append(
+                    "Too many invalid provider-key attempts; eval mode will be mock."
+                )
+                result.steps_completed.append("provider_key:failed")
+                return
+
+        write_workspace_env_values({env_name: key_value})
+        os.environ[env_name] = key_value
+        hydrate_provider_key_aliases()
+        self._print(f"  Saved {env_name} to .agentlab/.env (mode: live).")
+        result.eval_mode = "real"
+        result.steps_completed.append(f"provider_key:saved:{env_name}")
+
     def _step_suggest(self, result: InitResult) -> None:
         """Print next-step suggestions."""
         self._print("\n[5/5] Ready!")
 
-        mode = "mock"
-        if not self.force_mock and _has_credentials():
-            mode = "real"
-        result.eval_mode = mode
+        if not result.eval_mode:
+            mode = "mock"
+            if not self.force_mock and _has_credentials():
+                mode = "real"
+            result.eval_mode = mode
+        mode = result.eval_mode
 
         self._print(f"\n  Agent: {result.agent_name}")
         self._print(f"  Card:  {result.card_path}")

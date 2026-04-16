@@ -35,14 +35,15 @@ def test_onboarding_detects_existing_key_and_defaults_to_live(monkeypatch: pytes
 def test_onboarding_without_key_prompts_and_saves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    with patch("click.prompt", side_effect=["2", "3", "fake-google-key"]):
+    google_key = "AIzaSy" + "x" * 35
+    with patch("click.prompt", side_effect=["2", "3", google_key]):
         result = run_onboarding()
     assert result.workspace == "empty"
     assert result.mode == "live"
     assert result.saved_key_env == "GOOGLE_API_KEY"
     env_file = tmp_path / ".agentlab" / ".env"
     assert env_file.exists()
-    assert "GOOGLE_API_KEY=fake-google-key" in env_file.read_text(encoding="utf-8")
+    assert f"GOOGLE_API_KEY={google_key}" in env_file.read_text(encoding="utf-8")
 
 
 def test_onboarding_provider_prompt_requires_api_key_collection(
@@ -60,7 +61,7 @@ def test_onboarding_provider_prompt_requires_api_key_collection(
             return "1"
         if len(defaults) == 2:
             return "1"
-        return "fake-openai-key"
+        return "sk-" + "a" * 40
 
     with patch("click.prompt", side_effect=fake_prompt):
         result = run_onboarding()
@@ -73,7 +74,7 @@ def test_onboarding_provider_prompt_requires_api_key_collection(
 def test_onboarding_does_not_offer_mock_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    with patch("click.prompt", side_effect=["1", "4", "fake-openai-key"]):
+    with patch("click.prompt", side_effect=["1", "4", "sk-" + "a" * 40]):
         result = run_onboarding()
     assert result.workspace == "demo"
     assert result.mode == "live"
@@ -84,7 +85,7 @@ def test_onboarding_does_not_offer_mock_mode(monkeypatch: pytest.MonkeyPatch, tm
 def test_onboarding_empty_key_input_reprompts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _clear_keys(monkeypatch)
     monkeypatch.chdir(tmp_path)
-    with patch("click.prompt", side_effect=["1", "1", "   ", "fake-openai-key"]):
+    with patch("click.prompt", side_effect=["1", "1", "   ", "sk-" + "a" * 40]):
         result = run_onboarding()
     assert result.mode == "live"
     assert result.saved_key_env == "OPENAI_API_KEY"
