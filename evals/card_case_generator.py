@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +23,7 @@ import yaml
 from agent_card.schema import AgentCardModel
 
 if TYPE_CHECKING:
+    from optimizer.failure_analyzer import FailureCluster
     from optimizer.providers import LLMRouter
 
 logger = logging.getLogger(__name__)
@@ -157,6 +159,112 @@ class CardCaseGenerator:
         if self.llm_router:
             cases.extend(self._llm_enhanced_cases(card, count_per_category))
         return cases
+
+    # ------------------------------------------------------------------
+    # Failure-cluster variant generation (R5 C.5)
+    # ------------------------------------------------------------------
+
+    def generate_variants_from_cluster(
+        self,
+        cluster: "FailureCluster",
+        *,
+        count: int = 4,
+        strict_live: bool = False,
+    ) -> list[GeneratedCase]:
+        """Produce 3-5 variant cases derived from a failure cluster.
+
+        Each variant carries metadata marking its origin so downstream code
+        can filter: the returned ``GeneratedCase`` uses its ``source`` field
+        to record ``failure_cluster:<cluster.id>``.
+
+        Parameters
+        ----------
+        cluster:
+            Failure cluster seed. If it exposes representative ``user_message``
+            samples (via ``cluster.failure_samples`` or similar), those seed
+            template mutation. Otherwise generic phrasing is used.
+        count:
+            Requested variant count. Must be in ``[3, 5]`` (inclusive);
+            values outside that range raise ``ValueError``.
+        strict_live:
+            If ``True`` *and* ``self.llm_router`` is set, verify a provider
+            API key is present in the environment; raise ``RuntimeError``
+            otherwise. If ``False`` LLM failures fall back silently to the
+            template path.
+
+        Returns
+        -------
+        A list of ``count`` ``GeneratedCase`` instances, each with
+        ``source = f"failure_cluster:{cluster.id}"`` and a deterministic id
+        ``fc_<cluster_id>_<index:03d>``.
+
+        Notes
+        -----
+        * Clusters with zero seed cases still return ``count`` template-only
+          variants based on generic phrasing.
+        * Calling the method twice with the same cluster (and no LLM) produces
+          identical output.
+        """
+        if count < 3 or count > 5:
+            raise ValueError(
+                f"count must be in [3, 5] inclusive; got {count}."
+            )
+
+        cluster_id = getattr(cluster, "cluster_id", None) or getattr(
+            cluster, "id", "unknown"
+        )
+
+        # Strict-live guard: if caller wired an LLM router but no provider key
+        # is present, surface a clear error rather than silently falling back.
+        if strict_live and self.llm_router is not None:
+            if not _has_any_provider_key():
+                raise RuntimeError(
+                    "strict_live=True: CardCaseGenerator has an llm_router "
+                    "attached but no provider API key is set in the "
+                    "environment (OPENAI_API_KEY / ANTHROPIC_API_KEY / "
+                    "GOOGLE_API_KEY)."
+                )
+
+        # Extract seed user messages from the cluster, if any.
+        seeds = _extract_cluster_seed_messages(cluster)
+        seed_text = seeds[0] if seeds else "this request failed"
+
+        # Inherit category / specialist / behavior from the seed or defaults.
+        sample_meta = _extract_cluster_sample_meta(cluster)
+        category = sample_meta.get("category") or "failure_variant"
+        expected_specialist = sample_meta.get("expected_specialist") or getattr(
+            cluster, "affected_agent", ""
+        ) or "support"
+        expected_behavior = sample_meta.get("expected_behavior") or "answer"
+
+        # Deterministic template mutations. Exactly 5 available so any
+        # ``count`` in [3, 5] slices cleanly.
+        templates = [
+            "Could you help with: {X}",
+            "I'm trying to {X}",
+            "{X} — can you assist?",
+            "I still haven't been able to {X}. Please help.",
+            "Not {X} — what should I do instead?",
+        ]
+
+        variants: list[GeneratedCase] = []
+        for i in range(count):
+            tpl = templates[i % len(templates)]
+            # Use the i-th seed when available for extra diversity; otherwise
+            # fall back to the first seed (or the generic phrase).
+            seed_i = seeds[i % len(seeds)] if seeds else seed_text
+            variants.append(
+                GeneratedCase(
+                    id=f"fc_{cluster_id}_{i:03d}",
+                    category=category,
+                    user_message=tpl.format(X=_strip_trailing_punct(seed_i)),
+                    expected_specialist=expected_specialist,
+                    expected_behavior=expected_behavior,
+                    source=f"failure_cluster:{cluster_id}",
+                )
+            )
+
+        return variants
 
     # ------------------------------------------------------------------
     # Routing cases (most important)
@@ -710,6 +818,70 @@ def _parse_json_response(raw: str) -> list[dict[str, Any]]:
 
     logger.warning("Failed to parse LLM response as JSON")
     return []
+
+
+# ---------------------------------------------------------------------------
+# Failure-cluster helpers (R5 C.5)
+# ---------------------------------------------------------------------------
+
+_PROVIDER_KEY_ENV_NAMES = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GOOGLE_API_KEY",
+)
+
+
+def _has_any_provider_key() -> bool:
+    """Return True if any supported LLM provider key is set in env."""
+    return any(os.environ.get(name) for name in _PROVIDER_KEY_ENV_NAMES)
+
+
+def _extract_cluster_seed_messages(cluster: Any) -> list[str]:
+    """Best-effort extract user_message seeds from a FailureCluster.
+
+    The baseline ``FailureCluster`` dataclass only keeps ``sample_ids``; richer
+    callers may attach a ``failure_samples`` / ``samples`` / ``cases`` list of
+    dicts carrying ``user_message``. We look up whichever is available and
+    return the non-empty user messages in order.
+    """
+    for attr in ("failure_samples", "samples", "cases", "members", "traces"):
+        payload = getattr(cluster, attr, None)
+        if not payload:
+            continue
+        messages: list[str] = []
+        for item in payload:
+            if isinstance(item, dict):
+                msg = item.get("user_message")
+            else:
+                msg = getattr(item, "user_message", None)
+            if msg:
+                messages.append(str(msg))
+        if messages:
+            return messages
+    # Fall back to the cluster description if no sample user_messages.
+    description = getattr(cluster, "description", "") or ""
+    return [description] if description else []
+
+
+def _extract_cluster_sample_meta(cluster: Any) -> dict[str, str]:
+    """Inherit category/specialist/behavior from the first dict-shaped sample."""
+    for attr in ("failure_samples", "samples", "cases", "members", "traces"):
+        payload = getattr(cluster, attr, None)
+        if not payload:
+            continue
+        for item in payload:
+            if isinstance(item, dict):
+                return {
+                    "category": str(item.get("category", "") or ""),
+                    "expected_specialist": str(item.get("expected_specialist", "") or ""),
+                    "expected_behavior": str(item.get("expected_behavior", "") or ""),
+                }
+    return {}
+
+
+def _strip_trailing_punct(text: str) -> str:
+    """Remove trailing punctuation for cleaner template composition."""
+    return text.rstrip(" .!?,").strip()
 
 
 # ---------------------------------------------------------------------------
