@@ -27,6 +27,39 @@ if TYPE_CHECKING:
 ProgressCallback = Callable[[int, int], None]
 
 
+def _apply_tag_filters(
+    cases: list["TestCase"],
+    include: list[str] | None,
+    exclude: list[str] | None,
+) -> list["TestCase"]:
+    """Filter ``cases`` by include/exclude tag lists.
+
+    Semantics (see R5 §1.1):
+      * ``include`` is OR across tags — a case is kept if *any* include tag is
+        in ``case.tags``.
+      * ``exclude`` drops a case if *any* exclude tag is in ``case.tags``
+        (equivalent to "each exclude filter is applied conjunctively").
+      * ``None`` or empty lists mean "no-op" for that side.
+      * Tag comparison is case-sensitive.
+
+    The input list is never mutated — a new list is returned.
+    """
+    include_tags = list(include) if include else []
+    exclude_tags = list(exclude) if exclude else []
+    if not include_tags and not exclude_tags:
+        return list(cases)
+
+    result: list[TestCase] = []
+    for case in cases:
+        case_tags = case.tags or []
+        if include_tags and not any(tag in case_tags for tag in include_tags):
+            continue
+        if exclude_tags and any(tag in case_tags for tag in exclude_tags):
+            continue
+        result.append(case)
+    return result
+
+
 @dataclass
 class TestCase:
     """A single eval test case."""
@@ -124,8 +157,18 @@ class EvalRunner:
             raise ValueError("Evaluator name must be non-empty")
         self._custom_evaluators[name] = evaluator
 
-    def load_cases(self) -> list[TestCase]:
-        """Load all test cases from YAML files in cases_dir."""
+    def load_cases(
+        self,
+        *,
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
+    ) -> list[TestCase]:
+        """Load all test cases from YAML files in cases_dir.
+
+        Optionally filter by tag include/exclude lists (see
+        ``_apply_tag_filters`` for semantics). Tag comparison is
+        case-sensitive.
+        """
         cases = self._load_cases_from_dir(self.cases_dir)
         if cases:
             fixture_dir = Path(__file__).resolve().parents[1] / "tests" / "evals" / "cases"
@@ -136,8 +179,8 @@ class EvalRunner:
             ):
                 fixture_cases = self._load_cases_from_dir(fixture_dir)
                 if fixture_cases:
-                    return fixture_cases
-        return cases
+                    cases = fixture_cases
+        return _apply_tag_filters(cases, tags, exclude_tags)
 
     def _load_cases_from_dir(self, directory: Path) -> list[TestCase]:
         """Load all test cases from a specific YAML directory."""
@@ -186,8 +229,15 @@ class EvalRunner:
         *,
         split: str = "all",
         train_ratio: float = 0.8,
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
     ) -> list[TestCase]:
-        """Load dataset cases from JSONL/CSV/YAML and optionally filter by split."""
+        """Load dataset cases from JSONL/CSV/YAML and optionally filter by split.
+
+        ``tags`` / ``exclude_tags`` apply the same tag filter semantics as
+        :meth:`load_cases` (case-sensitive, OR across includes, case dropped
+        if any exclude tag matches).
+        """
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
@@ -208,7 +258,7 @@ class EvalRunner:
                 continue
             cases.append(case)
 
-        return cases
+        return _apply_tag_filters(cases, tags, exclude_tags)
 
     @staticmethod
     def _make_unique_case_id(
