@@ -809,6 +809,80 @@ def register_eval_commands(cli: click.Group) -> None:
             )
 
 
+    # ------------------------------------------------------------------
+    # R3.10 — `agentlab eval weights {show|set|validate}`
+    # ------------------------------------------------------------------
+
+    @eval_group.group("weights", invoke_without_command=False)
+    def eval_weights_group() -> None:
+        """Manage composite score weights (eval.composite.weights in agentlab.yaml)."""
+
+    @eval_weights_group.command("show")
+    def eval_weights_show() -> None:
+        """Print the current composite weights (defaults when yaml absent)."""
+        from evals.composite_weights import load_from_workspace
+        w = load_from_workspace("agentlab.yaml")
+        click.echo(f"quality: {w.quality}")
+        click.echo(f"safety:  {w.safety}")
+        click.echo(f"latency: {w.latency}")
+        click.echo(f"cost:    {w.cost}")
+
+    @eval_weights_group.command("set")
+    @click.option("--quality", type=float, required=True, help="Quality weight (0..1).")
+    @click.option("--safety", type=float, required=True, help="Safety weight (0..1).")
+    @click.option("--latency", type=float, required=True, help="Latency weight (0..1).")
+    @click.option("--cost", type=float, required=True, help="Cost weight (0..1).")
+    @click.option("--config-path", default="agentlab.yaml", show_default=True,
+                  help="Workspace yaml to modify.")
+    def eval_weights_set(
+        quality: float, safety: float, latency: float, cost: float, config_path: str,
+    ) -> None:
+        """Write composite weights to agentlab.yaml after validating sum==1.0."""
+        from evals.composite_weights import CompositeWeights, validate_weights
+        w = CompositeWeights(quality=quality, safety=safety, latency=latency, cost=cost)
+        try:
+            validate_weights(w)
+        except ValueError as exc:
+            click.echo(f"ERROR: {exc}", err=True)
+            raise SystemExit(2)
+        _write_weights_to_yaml(config_path, w)
+        click.echo(f"Wrote weights to {config_path}")
+
+    @eval_weights_group.command("validate")
+    @click.option("--config-path", default="agentlab.yaml", show_default=True,
+                  help="Workspace yaml to validate.")
+    def eval_weights_validate(config_path: str) -> None:
+        """Check that composite weights in the workspace yaml sum to 1.0."""
+        from evals.composite_weights import load_from_workspace, validate_weights
+        w = load_from_workspace(config_path)
+        try:
+            validate_weights(w)
+        except ValueError as exc:
+            click.echo(f"ERROR: {exc}", err=True)
+            raise SystemExit(2)
+        click.echo("weights OK (sum=1.0, all non-negative)")
+
+
+    def _write_weights_to_yaml(config_path: str, weights) -> None:
+        """Round-trip a yaml file, overwriting only eval.composite.weights.*."""
+        import yaml as _yaml
+        from pathlib import Path
+        path = Path(config_path)
+        if path.exists():
+            data = _yaml.safe_load(path.read_text()) or {}
+        else:
+            data = {}
+        eval_section = data.setdefault("eval", {})
+        composite_section = eval_section.setdefault("composite", {})
+        composite_section["weights"] = {
+            "quality": weights.quality,
+            "safety": weights.safety,
+            "latency": weights.latency,
+            "cost": weights.cost,
+        }
+        path.write_text(_yaml.safe_dump(data, default_flow_style=False, sort_keys=False))
+
+
     @eval_group.command("breakdown")
     @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
     def eval_breakdown(json_output: bool = False) -> None:

@@ -17,3 +17,4 @@ Commands:
   results    Inspect structured eval results from the CLI Results Explorer.
   run        Run eval suite against a config.
   show       Show eval results.
+  weights    Manage composite score weights (eval.composite.weights in...
