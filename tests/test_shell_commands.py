@@ -153,8 +153,10 @@ def test_shell_status_slash_command_runs_embedded_cli(tmp_path: Path, monkeypatc
     assert "unexpected keyword argument 'mix_stderr'" not in result.output
 
 
-def test_shell_free_text_build_routes_to_coordinator_workbench(tmp_path: Path, monkeypatch) -> None:
-    """Free-text build requests should now run through the Workbench coordinator."""
+def test_shell_plain_text_build_request_guides_without_coordinator_fanout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Bare text should not start the Workbench coordinator."""
     workspace = tmp_path / "ws"
     runner = CliRunner()
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
@@ -169,13 +171,17 @@ def test_shell_free_text_build_routes_to_coordinator_workbench(tmp_path: Path, m
 
     assert result.exit_code == 0, result.output
     assert "AgentLab Workbench" in result.output
-    assert "Coordinator plan" in result.output
-    assert "build engineer" in result.output
+    assert "Plain prompts need a chat model" in result.output
+    assert "/build <brief>" in result.output
+    assert "Coordinator plan" not in result.output
+    assert "build engineer" not in result.output
     assert "unexpected keyword argument 'mix_stderr'" not in result.output
 
 
-def test_shell_free_text_deploy_routes_to_coordinator_workbench(tmp_path: Path, monkeypatch) -> None:
-    """Free-text deploy requests should prepare deploy gates through the coordinator."""
+def test_shell_plain_text_deploy_request_guides_without_coordinator_fanout(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Bare deploy-like text should not infer a coordinator workflow."""
     workspace = tmp_path / "ws"
     runner = CliRunner()
     init_result = runner.invoke(cli, ["init", "--dir", str(workspace)])
@@ -185,5 +191,6 @@ def test_shell_free_text_deploy_routes_to_coordinator_workbench(tmp_path: Path, 
     result = runner.invoke(cli, ["shell"], input="deploy\n/exit\n")
 
     assert result.exit_code == 0, result.output
-    assert "Coordinator plan" in result.output
-    assert "deployment engineer" in result.output
+    assert "Plain prompts need a chat model" in result.output
+    assert "Coordinator plan" not in result.output
+    assert "deployment engineer" not in result.output

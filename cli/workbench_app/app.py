@@ -2,8 +2,9 @@
 
 T04 started as a banner/status/input echo-only stub. This module now wires
 the slash-command registry (T05) into the loop so ``/help``, ``/status``,
-``/build`` etc. dispatch real handlers instead of echoing the raw line —
-and routes natural-language turns into the builder coordinator runtime.
+``/build`` etc. dispatch real handlers instead of echoing the raw line.
+Plain text is kept on the chat path; coordinator fan-out is reserved for
+explicit workflow commands.
 
 The loop is intentionally minimal but exposes the seams downstream tasks
 need: an injectable ``input_provider`` and ``echo`` so tests drive it
@@ -27,6 +28,7 @@ from cli.terminal_renderer import render_box, terminal_width
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.help_text import render_shortcuts_help
+from cli.workbench_app.input_router import EXIT_TOKENS, InputKind, route_user_input
 from cli.workbench_app.status_bar import StatusBar, render_snapshot, snapshot_from_workspace
 
 
@@ -47,7 +49,6 @@ EchoFn = Callable[[str], None]
 """Write one line to the transcript. Defaults to :func:`click.echo`."""
 
 DEFAULT_PROMPT = "› "
-EXIT_TOKENS = frozenset({"/exit", "/quit", ":q", "exit", "quit"})
 WORKFLOW_COMMANDS = frozenset({"build", "eval", "optimize", "deploy", "ship", "skills"})
 RESUME_HINT_MAX_AGE_SECONDS = 24 * 60 * 60
 """Cap for the '/resume' startup hint: sessions older than 24h stay quiet."""
@@ -62,11 +63,22 @@ class StubAppResult:
     interrupts: int = 0
 
 
+@dataclass(frozen=True)
+class _ChatModelChoice:
+    """Resolved model for the Workbench chat runtime."""
+
+    model: str
+    active_model: str
+    api_key: str | None = None
+
+
 def build_status_line(
     workspace: Any | None,
     *,
     color: bool = True,
     agent_runtime: Any | None = None,
+    chat_runtime: Any | None = None,
+    show_chat_badge: bool = False,
 ) -> str:
     """Render the one-line status shown under the banner.
 
@@ -84,6 +96,9 @@ def build_status_line(
         badge = _worker_mode_badge(agent_runtime)
         if badge is not None:
             snapshot = replace_snapshot_extras(snapshot, ("worker", badge))
+    if show_chat_badge:
+        chat_badge = "configured" if chat_runtime is not None else "unconfigured"
+        snapshot = replace_snapshot_extras(snapshot, ("chat", chat_badge))
     return render_snapshot(snapshot, color=color)
 
 
@@ -191,6 +206,7 @@ def _render_banner(
     workspace: Any | None,
     *,
     agent_runtime: Any | None = None,
+    chat_runtime: Any | None = None,
 ) -> None:
     """Render the branded ASCII-logo intro + Claude-Code-style welcome card.
 
@@ -211,7 +227,13 @@ def _render_banner(
     # wide monitors — it feels lighter when capped.
     card_width = min(terminal_width(), 76)
     mode_label = theme.format_mode(_permission_mode_for_workspace(workspace), color=False)
-    status = build_status_line(workspace, color=False, agent_runtime=agent_runtime)
+    status = build_status_line(
+        workspace,
+        color=False,
+        agent_runtime=agent_runtime,
+        chat_runtime=chat_runtime,
+        show_chat_badge=True,
+    )
     body_lines: list[str] = [
         theme.accent(f"✻ Welcome to AgentLab Workbench  v{version}"),
         "",
@@ -219,7 +241,7 @@ def _render_banner(
         theme.meta(f"status: {status}"),
         "",
         theme.meta(f"{mode_label} permissions on · ? for shortcuts · / for commands"),
-        theme.meta("Type /help for commands, /exit to leave."),
+        theme.meta("Type /help for commands. Plain text is chat. /exit to leave."),
     ]
     for line in render_box(body_lines, width=card_width, padding=2):
         echo(line)
@@ -332,28 +354,35 @@ def run_workbench_app(
     else:
         reader = _iter_input_provider(input_provider)  # type: ignore[arg-type]
 
-    # Build the agent runtime before the banner so the welcome card can show
+    # Build the workflow runtime before the banner so the welcome card can show
     # the active worker mode (llm vs stub). The runtime resolves this from
     # harness.models.worker + credentials; hiding it behind a post-banner
     # notice means users don't realize they're on canned stubs until a
     # turn completes with suspiciously fast, uniform output.
-    active_agent_runtime = agent_runtime
-    if active_agent_runtime is None and workspace is not None:
+    active_workflow_runtime = agent_runtime
+    if active_workflow_runtime is None and workspace is not None:
         try:
             from cli.workbench_app.runtime import build_default_agent_runtime
 
-            active_agent_runtime = build_default_agent_runtime(workspace)
+            active_workflow_runtime = build_default_agent_runtime(workspace)
         except Exception:  # pragma: no cover - defensive startup path
-            active_agent_runtime = None
+            active_workflow_runtime = None
+
+    active_orchestrator = _resolve_orchestrator(orchestrator)
 
     if show_banner:
-        _render_banner(out, workspace, agent_runtime=active_agent_runtime)
+        _render_banner(
+            out,
+            workspace,
+            agent_runtime=active_workflow_runtime,
+            chat_runtime=active_orchestrator,
+        )
         hint = resume_hint(session_store, current=session)
         if hint is not None:
             out(theme.meta(hint))
             out("")
-        if active_agent_runtime is not None:
-            degraded = getattr(active_agent_runtime, "worker_mode_degraded_reason", None)
+        if active_workflow_runtime is not None:
+            degraded = getattr(active_workflow_runtime, "worker_mode_degraded_reason", None)
             if degraded:
                 out(theme.warning(f"⚠ Worker mode: deterministic stub — {degraded}"))
                 out(theme.meta("  Run /doctor for provider + credential diagnostics."))
@@ -404,16 +433,15 @@ def run_workbench_app(
         if ctx.cancellation is None:
             ctx.cancellation = token
 
-    if ctx is not None and active_agent_runtime is not None:
-        ctx.meta["agent_runtime"] = active_agent_runtime
-        ctx.coordinator_session = getattr(active_agent_runtime, "coordinator_session", None)
+    if ctx is not None and active_workflow_runtime is not None:
+        ctx.meta["agent_runtime"] = active_workflow_runtime
+        ctx.coordinator_session = getattr(active_workflow_runtime, "coordinator_session", None)
 
     # When an orchestrator is supplied, publish its subsystems onto the
     # slash context so /plan, /skill, /transcript-*, /background, /usage
     # all see the live state the orchestrator is using. Without this the
     # slash layer would fall back to "not configured" warnings even
     # though the REPL is running with a full orchestrator stack.
-    active_orchestrator = _resolve_orchestrator(orchestrator)
     if ctx is not None and active_orchestrator is not None:
         _publish_orchestrator_meta(ctx, orchestrator)
 
@@ -466,24 +494,24 @@ def run_workbench_app(
         interrupts = 0
         token.reset()
 
-        line = raw.strip()
-        if not line:
+        route = route_user_input(raw)
+        if route.kind is InputKind.EMPTY:
             continue
 
         lines_read += 1
 
-        if line.lower() in EXIT_TOKENS:
+        if route.kind is InputKind.EXIT:
             exited_via = "/exit"
             out(theme.meta("  Goodbye."))
             break
 
-        if line == "?":
+        if route.kind is InputKind.SHORTCUTS:
             out(render_shortcuts_help())
             _maybe_render_turn_footer()
             continue
 
         # `!cmd` — shell-mode passthrough, gated by permission mode.
-        if line.startswith("!"):
+        if route.kind is InputKind.SHELL:
             current_mode = (
                 getattr(prompt_state, "mode", None)
                 or _permission_mode_for_workspace(workspace)
@@ -491,7 +519,7 @@ def run_workbench_app(
             _run_shell_turn(
                 ctx=ctx,
                 workspace=workspace,
-                line=line,
+                line=route.payload,
                 permission_mode=current_mode,
                 echo=out,
                 reader=reader,
@@ -500,37 +528,38 @@ def run_workbench_app(
             continue
 
         # `&cmd` — dispatch the remainder as a background coordinator turn.
-        if line.startswith("&"):
+        if route.kind is InputKind.BACKGROUND:
             _run_background_turn(
-                runtime=active_agent_runtime,
+                runtime=active_workflow_runtime,
                 ctx=ctx,
-                line=line[1:].strip(),
+                line=route.payload,
                 echo=out,
             )
             _maybe_render_turn_footer()
             continue
 
         # Route ``/command`` input through the slash registry when one is
-        # bound. Non-slash input uses the coordinator runtime when available;
-        # the echo fallback remains only for tests/embedders without a runtime.
+        # bound. Plain text is handled below as chat and never falls through
+        # to the workflow coordinator.
         handled_as_slash = False
-        if ctx is not None and line.startswith("/"):
+        if route.kind is InputKind.SLASH and ctx is not None:
             from cli.workbench_app.slash import dispatch, parse_slash_line
 
+            line = route.payload
             parsed = parse_slash_line(line)
-            command_name = parsed[0] if parsed else ""
+            command_name = route.command_name or (parsed[0] if parsed else "")
             current_mode = (
                 getattr(prompt_state, "mode", None)
                 or _permission_mode_for_workspace(workspace)
             )
             if (
-                active_agent_runtime is not None
+                active_workflow_runtime is not None
                 and command_name in WORKFLOW_COMMANDS
                 and _should_gate_with_plan(ctx, current_mode)
             ):
                 args = parsed[1] if parsed else []
                 _run_plan_gated_turn(
-                    runtime=active_agent_runtime,
+                    runtime=active_workflow_runtime,
                     ctx=ctx,
                     line=" ".join(args).strip() or _default_workflow_message(command_name),
                     echo=out,
@@ -545,7 +574,7 @@ def run_workbench_app(
                         exited_via = "/exit"
                         break
                     _run_follow_up_turns(
-                        runtime=active_agent_runtime,
+                        orchestrator=active_orchestrator,
                         ctx=ctx,
                         result=result,
                         echo=out,
@@ -555,7 +584,14 @@ def run_workbench_app(
                 exited_via = "/exit"
                 break
 
-        if not handled_as_slash:
+        if route.kind is InputKind.SLASH:
+            if not handled_as_slash:
+                out(theme.warning("  Slash commands are not available in this session."))
+            _maybe_render_turn_footer()
+            continue
+
+        if route.kind is InputKind.CHAT:
+            line = route.payload
             _persist_user_turn(
                 ctx=ctx,
                 session_store=session_store,
@@ -573,28 +609,8 @@ def run_workbench_app(
                     line=line,
                     echo=out,
                 )
-            elif active_agent_runtime is not None:
-                current_mode = (
-                    getattr(prompt_state, "mode", None)
-                    or _permission_mode_for_workspace(workspace)
-                )
-                if _should_gate_with_plan(ctx, current_mode):
-                    _run_plan_gated_turn(
-                        runtime=active_agent_runtime,
-                        ctx=ctx,
-                        line=line,
-                        echo=out,
-                        reader=reader,
-                    )
-                else:
-                    _run_agent_turn(
-                        runtime=active_agent_runtime,
-                        ctx=ctx,
-                        line=line,
-                        echo=out,
-                    )
             else:
-                out(theme.user(f"  AgentLab received: {line}", bold=False))
+                _run_chat_unavailable_turn(echo=out)
 
         _maybe_render_turn_footer()
 
@@ -939,6 +955,16 @@ def _run_background_turn(
             ctx.meta["active_tasks"] = len(queue)
 
 
+def _run_chat_unavailable_turn(*, echo: EchoFn) -> None:
+    """Tell the user why plain text cannot be answered locally yet."""
+    echo(theme.warning("  Plain prompts need a chat model before I can answer here."))
+    echo(theme.meta(
+        "  Try /help for commands, /build <brief> for coordinator workflows, "
+        "or /model to inspect model setup."
+    ))
+    echo(theme.meta("  Run /doctor for provider and credential diagnostics."))
+
+
 def _default_workflow_message(command_name: str) -> str:
     """Return a useful prompt when a workflow slash command has no args."""
     defaults = {
@@ -961,29 +987,28 @@ def _workflow_command_intent(command_name: str) -> str:
 
 def _run_follow_up_turns(
     *,
-    runtime: Any | None,
+    orchestrator: Any | None,
     ctx: "SlashContext | None",
     result: Any,
     echo: EchoFn,
 ) -> None:
-    """Process command-requested follow-up prompts through the coordinator."""
-    if runtime is None:
-        return
+    """Process command-requested follow-up prompts through the chat path."""
+    prompt: str | None = None
     if getattr(result, "submit_next_input", False) and getattr(result, "next_input", None):
-        _run_agent_turn(
-            runtime=runtime,
-            ctx=ctx,
-            line=str(result.next_input),
-            echo=echo,
-        )
+        prompt = str(result.next_input)
+    elif getattr(result, "should_query", False) and getattr(result, "raw_result", None):
+        prompt = str(result.raw_result)
+    if not prompt:
         return
-    if getattr(result, "should_query", False) and getattr(result, "raw_result", None):
-        _run_agent_turn(
-            runtime=runtime,
-            ctx=ctx,
-            line=str(result.raw_result),
-            echo=echo,
-        )
+    if orchestrator is None:
+        _run_chat_unavailable_turn(echo=echo)
+        return
+    _run_orchestrator_turn(
+        orchestrator=orchestrator,
+        ctx=ctx,
+        line=prompt,
+        echo=echo,
+    )
 
 
 def _maybe_run_first_run_onboarding(workspace: Any | None) -> None:
@@ -1138,42 +1163,178 @@ def _maybe_build_orchestrator(
     store: "SessionStore | None",
     echo: EchoFn,
 ) -> Any | None:
-    """Build the :class:`WorkbenchRuntime` bundle when the user has opted
-    in via ``AGENTLAB_LLM_ORCHESTRATOR`` or has an explicit model set.
+    """Build the :class:`WorkbenchRuntime` bundle when chat can really run.
 
-    Defaults to ``None`` so the classic coordinator path keeps running —
-    existing tests and workspaces that haven't opted in notice no change.
-    Set ``AGENTLAB_CLASSIC_COORDINATOR=1`` to force-disable even with the
-    opt-in env var present (useful for debugging by bisecting between
-    the two paths)."""
+    Plain text now belongs to the chat path, so startup should attach the
+    orchestrator whenever a usable model is configured. Missing keys or
+    unsupported adapters return ``None`` and the REPL renders local guidance
+    instead of silently falling back to an echo model or coordinator workers.
+    Set ``AGENTLAB_CLASSIC_COORDINATOR=1`` to force-disable chat while
+    debugging.
+    """
     import os
 
     if os.environ.get("AGENTLAB_CLASSIC_COORDINATOR"):
         return None
-    opt_in = bool(os.environ.get("AGENTLAB_LLM_ORCHESTRATOR"))
-    if not opt_in:
-        return None
     if workspace is None:
         return None
+
+    choice = _select_chat_model(workspace, session)
+    if choice is None:
+        return None
+
     try:
         from cli.llm.providers import create_model_client
         from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
 
-        model_name = os.environ.get("AGENTLAB_MODEL", "claude-sonnet-4-5")
-        model = create_model_client(
-            model=model_name,
-            echo_fallback_on_missing_keys=True,
-        )
+        model_kwargs: dict[str, Any] = {
+            "model": choice.model,
+            "echo_fallback_on_missing_keys": False,
+        }
+        if choice.api_key is not None:
+            model_kwargs["api_key"] = choice.api_key
+        model = create_model_client(**model_kwargs)
         return build_workbench_runtime(
             workspace_root=Path(workspace.root) if hasattr(workspace, "root") else Path.cwd(),
             model=model,
             session=session,
             session_store=store,
-            active_model=model_name,
+            active_model=choice.active_model,
             echo=echo,
         )
-    except Exception:  # pragma: no cover — opt-in must never crash boot
+    except Exception:  # pragma: no cover — chat setup must never crash boot
         return None
+
+
+def _select_chat_model(
+    workspace: Any | None,
+    session: "Session | None",
+) -> _ChatModelChoice | None:
+    """Return the first usable chat model for the active Workbench session."""
+    import os
+
+    root: Path | None = None
+    if workspace is not None:
+        root = Path(getattr(workspace, "root", Path.cwd()))
+        try:
+            from cli.workspace_env import load_workspace_env
+
+            load_workspace_env(root)
+        except Exception:
+            pass
+
+    env_model = os.environ.get("AGENTLAB_MODEL")
+    if env_model:
+        model_name = _strip_provider_prefix(env_model)
+        if _model_name_can_run_without_echo(model_name):
+            return _ChatModelChoice(model=model_name, active_model=model_name)
+        return None
+
+    if root is None:
+        return None
+
+    try:
+        from cli.model import list_available_models
+
+        available = list_available_models(root)
+    except Exception:
+        return None
+
+    override = _session_model_override(session)
+    if override:
+        matched = _match_available_model(available, override)
+        if matched is not None:
+            return _choice_from_model_item(matched)
+        model_name = _strip_provider_prefix(override)
+        if _model_name_can_run_without_echo(model_name):
+            return _ChatModelChoice(model=model_name, active_model=model_name)
+        return None
+
+    for item in available:
+        choice = _choice_from_model_item(item)
+        if choice is not None:
+            return choice
+    return None
+
+
+def _session_model_override(session: "Session | None") -> str | None:
+    """Return the session-local model override set by ``/model``."""
+    overrides = getattr(session, "settings_overrides", None) if session else None
+    if not isinstance(overrides, dict):
+        return None
+    value = overrides.get("model")
+    return str(value) if value else None
+
+
+def _match_available_model(
+    available: list[dict[str, Any]],
+    requested: str,
+) -> dict[str, Any] | None:
+    """Find a model by full provider key or bare model name."""
+    normalized = requested.strip().lower()
+    for item in available:
+        if str(item.get("key", "")).lower() == normalized:
+            return item
+    matches = [
+        item
+        for item in available
+        if str(item.get("model", "")).lower() == normalized
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _choice_from_model_item(item: dict[str, Any]) -> _ChatModelChoice | None:
+    """Return a chat choice when an agentlab.yaml model can run now."""
+    import os
+
+    env_name = str(item.get("api_key_env") or "").strip()
+    api_key = os.environ.get(env_name) if env_name else None
+    if env_name and not api_key:
+        return None
+    model_name = str(item.get("model") or "").strip()
+    if not model_name or not _model_name_can_run_without_echo(
+        model_name,
+        api_key=api_key,
+    ):
+        return None
+    return _ChatModelChoice(model=model_name, active_model=model_name, api_key=api_key)
+
+
+def _model_name_can_run_without_echo(
+    model_name: str,
+    *,
+    api_key: str | None = None,
+) -> bool:
+    """Return whether the provider adapter can answer without echo fallback."""
+    import os
+
+    try:
+        from cli.llm.providers import resolve_provider
+
+        provider = resolve_provider(model_name)
+    except Exception:
+        return False
+    if provider == "anthropic":
+        return bool(api_key or os.environ.get("ANTHROPIC_API_KEY"))
+    if provider == "openai":
+        return bool(api_key or os.environ.get("OPENAI_API_KEY"))
+    if provider == "echo":
+        return bool(os.environ.get("AGENTLAB_ALLOW_ECHO_CHAT"))
+    # Gemini is intentionally false until the adapter exists; otherwise a
+    # configured GOOGLE_API_KEY would create a runtime that can only fail at
+    # turn time.
+    return False
+
+
+def _strip_provider_prefix(model: str) -> str:
+    """Accept either ``provider:model`` keys or bare model names."""
+    cleaned = model.strip()
+    if ":" not in cleaned:
+        return cleaned
+    _provider, model_name = cleaned.split(":", 1)
+    return model_name.strip()
 
 
 def uuid_hex() -> str:

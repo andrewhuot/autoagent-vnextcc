@@ -415,7 +415,7 @@ def test_run_workbench_app_exits_via_slash_exit_directly() -> None:
 
     assert result.exited_via == "/exit"
     assert result.lines_read == 2  # "hello" then "/exit" — third line never read.
-    # The echo-only branch printed "hello"; the exit branch printed Goodbye.
+    # Plain text gets local chat guidance; the exit branch printed Goodbye.
     joined = "\n".join(lines)
-    assert "hello" in joined
+    assert "Plain prompts need a chat model" in joined
     assert "Goodbye" in joined

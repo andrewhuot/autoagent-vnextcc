@@ -247,13 +247,12 @@ def test_orchestrator_exception_does_not_kill_repl(workspace: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Backwards compatibility — no orchestrator means no change
+# No orchestrator means graceful local guidance, never coordinator fallback
 # ---------------------------------------------------------------------------
 
 
-def test_no_orchestrator_preserves_echo_fallback() -> None:
-    """Without an orchestrator or agent runtime the REPL still runs, and
-    free-text input still echoes back (the headless default)."""
+def test_no_orchestrator_guides_plain_text_without_echo_fallback() -> None:
+    """Without an orchestrator the REPL keeps running and guides the user."""
     lines, echo = _capture_sink()
     run_workbench_app(
         workspace=None,
@@ -262,4 +261,6 @@ def test_no_orchestrator_preserves_echo_fallback() -> None:
         show_banner=False,
     )
     combined = "\n".join(lines)
-    assert "AgentLab received: hi" in combined
+    assert "Plain prompts need a chat model" in combined
+    assert "/build <brief>" in combined
+    assert "AgentLab received: hi" not in combined

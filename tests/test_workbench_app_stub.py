@@ -81,7 +81,7 @@ def _capture_echo():
     return lines, echo
 
 
-def test_stub_loop_echoes_input_and_exits_on_exit_token() -> None:
+def test_stub_loop_guides_plain_input_without_chat_runtime() -> None:
     lines, echo = _capture_echo()
     result = run_workbench_app(
         workspace=None,
@@ -92,7 +92,10 @@ def test_stub_loop_echoes_input_and_exits_on_exit_token() -> None:
     assert isinstance(result, StubAppResult)
     assert result.lines_read == 2
     assert result.exited_via == "/exit"
-    assert any("hello world" in click.unstyle(line) for line in lines)
+    joined = click.unstyle("\n".join(lines))
+    assert "Plain prompts need a chat model" in joined
+    assert "/build <brief>" in joined
+    assert "AgentLab received" not in joined
     assert any("Goodbye" in line for line in lines)
 
 
@@ -105,8 +108,9 @@ def test_stub_loop_skips_blank_lines() -> None:
         show_banner=False,
     )
     assert result.lines_read == 2  # "ping" + "/exit"
-    echoed = [click.unstyle(line) for line in lines if "ping" in click.unstyle(line)]
-    assert echoed == ["  AgentLab received: ping"]
+    joined = click.unstyle("\n".join(lines))
+    assert "Plain prompts need a chat model" in joined
+    assert "AgentLab received: ping" not in joined
 
 
 def test_stub_loop_exits_on_eof() -> None:

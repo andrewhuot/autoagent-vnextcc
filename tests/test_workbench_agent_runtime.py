@@ -73,8 +73,8 @@ class _PromptState:
     mode: str
 
 
-def test_free_text_routes_to_agent_runtime_instead_of_echoing() -> None:
-    """Default Workbench text should become a coordinator turn, not an echo."""
+def test_plain_text_does_not_route_to_coordinator_when_chat_is_unavailable() -> None:
+    """Default Workbench text should never fan out to coordinator workers."""
     runtime = _FakeTurnRuntime()
     lines, echo = _capture_echo()
 
@@ -88,10 +88,13 @@ def test_free_text_routes_to_agent_runtime_instead_of_echoing() -> None:
 
     joined = click.unstyle("\n".join(lines))
     assert result.exited_via == "/exit"
-    assert runtime.calls == ["I want to build my agent"]
-    assert "coordinator handled: I want to build my agent" in joined
+    assert runtime.calls == []
+    assert "Plain prompts need a chat model" in joined
+    assert "/build <brief>" in joined
+    assert "Coordinator started" not in joined
+    assert "Coordinator plan" not in joined
+    assert "coordinator handled" not in joined
     assert "AgentLab received" not in joined
-    assert "1 task" in joined
 
 
 def test_plan_mode_gates_workflow_slash_commands() -> None:
@@ -122,11 +125,11 @@ def test_tasks_command_renders_latest_coordinator_turn() -> None:
     """Users need a Claude Code-style task view for the latest coordinator run."""
     runtime = _FakeTurnRuntime()
     lines, echo = _capture_echo()
-    ctx = SlashContext(registry=build_builtin_registry(include_streaming=False))
+    ctx = SlashContext(registry=build_builtin_registry())
 
     run_workbench_app(
         workspace=None,
-        input_provider=iter(["Build an agent", "/tasks", "/exit"]),
+        input_provider=iter(["/build Build an agent", "/tasks", "/exit"]),
         echo=echo,
         show_banner=False,
         slash_context=ctx,
@@ -150,12 +153,12 @@ def test_tasks_command_renders_persisted_coordinator_session_state(tmp_path: Pat
         orchestrator=BuilderOrchestrator(store=store),
         events=EventBroker(),
     )
-    ctx = SlashContext(registry=build_builtin_registry(include_streaming=False))
+    ctx = SlashContext(registry=build_builtin_registry())
     lines, echo = _capture_echo()
 
     run_workbench_app(
         workspace=None,
-        input_provider=iter(["Build a support agent", "/tasks", "/exit"]),
+        input_provider=iter(["/build Build a support agent", "/tasks", "/exit"]),
         echo=echo,
         show_banner=False,
         slash_context=ctx,
