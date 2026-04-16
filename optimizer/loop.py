@@ -9,7 +9,10 @@ import uuid
 from collections import deque
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from optimizer.improvement_lineage import ImprovementLineageStore
 
 from agent.config.schema import AgentConfig, config_diff, validate_config
 from evals.anti_goodhart import AntiGoodhartConfig, AntiGoodhartGuard
@@ -113,6 +116,8 @@ class Optimizer:
         failure_analyzer: Any | None = None,
         reflection_engine: Any | None = None,
         agent_card_markdown: str = "",
+        # R2: improvement lineage store (observability; never blocks loop).
+        lineage_store: "ImprovementLineageStore | None" = None,
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
@@ -143,6 +148,10 @@ class Optimizer:
         self.failure_analyzer = failure_analyzer
         self.reflection_engine = reflection_engine
         self.agent_card_markdown = agent_card_markdown
+        # R2: optional lineage store for observability. When None, emission
+        # helpers are no-ops. When set, store failures are swallowed so
+        # lineage issues cannot crash the optimizer loop.
+        self.lineage_store = lineage_store
 
         try:
             self.search_strategy = SearchStrategy(search_strategy)
@@ -696,6 +705,15 @@ class Optimizer:
         )
         self.memory.log(attempt)
 
+        # R2: emit attempt event to lineage store (observability).
+        self._emit_attempt_lineage(
+            attempt_id=attempt.attempt_id,
+            status=attempt.status,
+            score_before=attempt.score_before,
+            score_after=attempt.score_after,
+            eval_run_id=getattr(baseline_score, "run_id", None),
+        )
+
         # R1.7: mirror inline gates-evaluate rejections to the structured
         # ring buffer so they can be surfaced via Optimizer.recent_rejections.
         if not accepted:
@@ -715,6 +733,12 @@ class Optimizer:
                         "status": status,
                     },
                 )
+            )
+            # R2: emit rejection event to lineage store.
+            self._emit_rejection_lineage(
+                attempt_id=attempt.attempt_id,
+                reason=rejection_reason_enum,
+                detail=reason,
             )
 
         # Reflection: analyze why the attempt succeeded or failed
@@ -1023,6 +1047,48 @@ class Optimizer:
         best_card = max(search_result.accepted, key=lambda card: card.significance_delta)
         return best_card.experiment_id
 
+    def _emit_attempt_lineage(
+        self,
+        *,
+        attempt_id: str,
+        status: str,
+        score_before: float | None = None,
+        score_after: float | None = None,
+        eval_run_id: str | None = None,
+    ) -> None:
+        """Emit an ``attempt`` event to the lineage store. Guarded: never raises."""
+        if self.lineage_store is None:
+            return
+        try:
+            self.lineage_store.record_attempt(
+                attempt_id=attempt_id,
+                status=status,
+                score_before=score_before,
+                score_after=score_after,
+                eval_run_id=eval_run_id,
+            )
+        except Exception:
+            pass
+
+    def _emit_rejection_lineage(
+        self,
+        *,
+        attempt_id: str,
+        reason: RejectionReason,
+        detail: str,
+    ) -> None:
+        """Emit a ``rejection`` event. Guarded: never raises."""
+        if self.lineage_store is None:
+            return
+        try:
+            self.lineage_store.record_rejection(
+                attempt_id=attempt_id,
+                reason=reason.value,
+                detail=detail,
+            )
+        except Exception:
+            pass
+
     def _log_rejected_attempt(
         self,
         *,
@@ -1063,6 +1129,12 @@ class Optimizer:
         )
         self.memory.log(attempt)
 
+        # R2: emit attempt event to lineage store (observability).
+        self._emit_attempt_lineage(
+            attempt_id=attempt_id,
+            status=rejection_status,
+        )
+
         # Mirror to the structured rejection ring buffer (R1.7).
         try:
             reason = rejection_from_status(rejection_status)
@@ -1082,6 +1154,13 @@ class Optimizer:
                     "status": rejection_status,
                 },
             )
+        )
+
+        # R2: emit rejection event to lineage store.
+        self._emit_rejection_lineage(
+            attempt_id=attempt_id,
+            reason=reason,
+            detail=rejection_reason,
         )
 
     def recent_rejections(
