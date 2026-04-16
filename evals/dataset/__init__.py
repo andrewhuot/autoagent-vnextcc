@@ -12,6 +12,7 @@ from .bootstrap import BootstrapReport, bootstrap
 from .embedder import CachedEmbedder, Embedder, FakeEmbedder, OpenAIEmbedder
 from .exporters import export_csv, export_jsonl
 from .importers import load_csv, load_huggingface, load_jsonl
+from .redact import Hit, PIIKind, redact, scan, scan_case
 
 
 def get_default_embedder() -> Embedder:
@@ -34,7 +35,9 @@ __all__ = [
     "CachedEmbedder",
     "Embedder",
     "FakeEmbedder",
+    "Hit",
     "OpenAIEmbedder",
+    "PIIKind",
     "balance",
     "bootstrap",
     "export_csv",
@@ -45,4 +48,7 @@ __all__ = [
     "load_huggingface",
     "load_jsonl",
     "recommendations",
+    "redact",
+    "scan",
+    "scan_case",
 ]
