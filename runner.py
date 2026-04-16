@@ -1387,6 +1387,79 @@ def _score_status_label(score: float | None) -> str:
     return "Needs Attention"
 
 
+def _deploy_gate_check(
+    *,
+    force_deploy_degraded: bool,
+    force_reason: str | None,
+    output_format: str,
+) -> None:
+    """R1.9: block deploy if latest eval verdict is Degraded/Needs Attention.
+
+    Exits with EXIT_DEGRADED_DEPLOY unless the user passes
+    --force-deploy-degraded with a --reason of at least 10 chars.
+    """
+    from cli.exit_codes import EXIT_DEGRADED_DEPLOY
+
+    _path, payload = _latest_eval_payload()
+    if payload is None:
+        return  # no eval, nothing to gate
+
+    composite = payload.get("composite") if isinstance(payload, dict) else None
+    if composite is None and isinstance(payload, dict):
+        nested = payload.get("score") or {}
+        if isinstance(nested, dict):
+            composite = nested.get("composite")
+    if composite is None:
+        return  # no composite score, nothing to gate
+
+    try:
+        composite = float(composite)
+    except (TypeError, ValueError):
+        return
+
+    verdict = _score_status_label(composite)
+    if verdict not in ("Degraded", "Needs Attention"):
+        return
+
+    if force_deploy_degraded:
+        reason = (force_reason or "").strip()
+        if len(reason) < 10:
+            click.echo(
+                click.style(
+                    "--force-deploy-degraded requires --reason with at least 10 characters "
+                    f"(got {len(reason)}).",
+                    fg="red",
+                ),
+                err=True,
+            )
+            sys.exit(2)
+        if output_format == "text":
+            click.echo(
+                click.style(
+                    f"  ⚠  Overriding degraded-eval gate ({verdict}, composite={composite:.3f})",
+                    fg="yellow",
+                )
+            )
+            click.echo(f"     Reason: {reason}")
+        return
+
+    click.echo(
+        click.style(
+            f"Deploy blocked: latest eval verdict is {verdict} (composite={composite:.3f}).",
+            fg="red",
+        ),
+        err=True,
+    )
+    click.echo("Next steps:", err=True)
+    click.echo("  - Run `agentlab eval run` after your fix", err=True)
+    click.echo("  - Or `agentlab optimize --cycles 3` to auto-improve", err=True)
+    click.echo(
+        "  - Or override with `--force-deploy-degraded --reason \"...\"` (min 10 chars)",
+        err=True,
+    )
+    sys.exit(EXIT_DEGRADED_DEPLOY)
+
+
 def _print_cli_plan(title: str, steps: list[str]) -> None:
     """Print a compact plan block similar to coding-agent style preambles."""
     click.echo(click.style(f"\n{title}", fg="cyan", bold=True))
@@ -6043,6 +6116,18 @@ def _open_in_editor(file_path: Path) -> None:
 )
 @click.option("--auto-review", is_flag=True, default=False,
               help="Apply all pending review cards before deploying (replicates ship behavior).")
+@click.option(
+    "--force-deploy-degraded",
+    is_flag=True,
+    default=False,
+    help="Override the degraded-eval gate. Requires --reason.",
+)
+@click.option(
+    "--reason",
+    "force_reason",
+    default=None,
+    help="Required justification when using --force-deploy-degraded (min 10 chars).",
+)
 @click.option("--release-experiment-id", default=None, hidden=True)
 def deploy(
     workflow: str | None,
@@ -6063,6 +6148,8 @@ def deploy(
     json_output: bool = False,
     output_format: str = "text",
     auto_review: bool = False,
+    force_deploy_degraded: bool = False,
+    force_reason: str | None = None,
     release_experiment_id: str | None = None,
 ) -> None:
     """Deploy a config version with canary, release, and rollback-friendly workflows.
@@ -6093,6 +6180,12 @@ def deploy(
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
     progress.phase_started("deploy", message="Prepare deployment")
+
+    _deploy_gate_check(
+        force_deploy_degraded=force_deploy_degraded,
+        force_reason=force_reason,
+        output_format=resolved_output_format,
+    )
 
     if workflow is not None:
         if workflow == "release":
