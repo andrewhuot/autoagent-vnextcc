@@ -1,4 +1,4 @@
-"""JSONL and CSV importers for eval cases.
+"""JSONL, CSV, and HuggingFace importers for eval cases.
 
 Free-function entry points; each returns ``list[TestCase]``. No ``Dataset`` class.
 """
@@ -6,6 +6,7 @@ Free-function entry points; each returns ``list[TestCase]``. No ``Dataset`` clas
 from __future__ import annotations
 
 import csv
+import importlib
 import json
 from pathlib import Path
 from typing import Any
@@ -116,6 +117,88 @@ def load_csv(path: str | Path) -> list[TestCase]:
         cases.append(_csv_row_to_testcase(row, data_row_number, file_path))
 
     return cases
+
+
+def _load_hf_dataset(
+    name: str, split: str, cache_dir: str | Path | None
+) -> Any:
+    """Single seam for tests to monkeypatch — lazy-imports ``datasets``.
+
+    Delegates to :func:`datasets.load_dataset`. Kept deliberately thin so the
+    public loader can intercept both the optional-import failure and any
+    network/auth error from the call in one place.
+    """
+    datasets_mod = importlib.import_module("datasets")
+    return datasets_mod.load_dataset(name, split=split, cache_dir=cache_dir)
+
+
+def load_huggingface(
+    name: str,
+    split: str = "train",
+    cache_dir: str | Path | None = None,
+    column_mapping: dict[str, str] | None = None,
+) -> list[TestCase]:
+    """Load eval cases from a HuggingFace dataset.
+
+    Uses the ``datasets`` library when available. Rows are mapped into
+    :class:`TestCase` via ``column_mapping`` (HF column name -> TestCase
+    field name). Columns not present in the mapping are passed through
+    unchanged; required ``TestCase`` fields (``id``, ``category``,
+    ``user_message``) must be produced by the mapping or already match
+    existing HF columns.
+
+    Raises:
+        ImportError: If the optional ``datasets`` package is not installed.
+        RuntimeError: If the dataset download fails for any reason
+            (network, auth, not found). The message includes both the
+            underlying exception's message and a cache-path hint.
+        ValueError: If a mapped row is missing a required field; the
+            message names the 0-indexed row position within the split.
+    """
+    try:
+        raw_rows = _load_hf_dataset(name, split, cache_dir)
+    except ImportError as exc:
+        raise ImportError(
+            "HuggingFace importer requires 'datasets'. "
+            "Install with: pip install datasets"
+        ) from exc
+    except Exception as exc:
+        hint_path = str(cache_dir) if cache_dir is not None else "default HF cache"
+        raise RuntimeError(
+            f"Failed to load HuggingFace dataset '{name}' (split={split!r}): "
+            f"{exc}. Check the cache at {hint_path}."
+        ) from exc
+
+    mapping = column_mapping or {}
+
+    cases: list[TestCase] = []
+    for row_index, raw_row in enumerate(raw_rows):
+        mapped = _apply_hf_mapping(raw_row, mapping)
+        for field_name in _REQUIRED_FIELDS:
+            if field_name not in mapped or mapped[field_name] in (None, ""):
+                raise ValueError(
+                    f"Missing required field '{field_name}' on HuggingFace row "
+                    f"{row_index} of dataset '{name}' (split={split!r})"
+                )
+        cases.append(_row_to_testcase(mapped))
+
+    return cases
+
+
+def _apply_hf_mapping(
+    row: Any, mapping: dict[str, str]
+) -> dict[str, Any]:
+    """Rename row keys per ``mapping``; unmapped keys pass through."""
+    # HF rows behave like dicts but may be Row/LazyRow — coerce to dict.
+    base: dict[str, Any] = dict(row) if not isinstance(row, dict) else dict(row)
+    if not mapping:
+        return base
+
+    out: dict[str, Any] = {}
+    for key, value in base.items():
+        dest = mapping.get(key, key)
+        out[dest] = value
+    return out
 
 
 def _parse_csv_bool(value: str, data_row_number: int, file_path: Path) -> bool:
