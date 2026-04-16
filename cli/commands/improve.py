@@ -733,6 +733,91 @@ def register_improve_commands(cli: click.Group) -> None:
             click.echo(f"  measurement_id: {measurement_id}")
 
 
+    @improve_group.command("diff")
+    @click.argument("attempt_id", required=True)
+    @click.option("--memory-db", default=None,
+                  help="Optimizer memory DB (default: AGENTLAB_MEMORY_DB or optimizer_memory.db).")
+    @click.option("--json", "json_output", "-j", is_flag=True,
+                  help="Output as JSON.")
+    def improve_diff(
+        attempt_id: str,
+        memory_db: str | None,
+        json_output: bool,
+    ) -> None:
+        """Show the full config diff and rationale for an attempt."""
+        import json as _json
+
+        resolved_memory_db = memory_db or os.environ.get(
+            "AGENTLAB_MEMORY_DB", MEMORY_DB
+        )
+
+        matches = _lookup_attempt_by_prefix(attempt_id, resolved_memory_db)
+        if not matches:
+            click.echo(click.style(
+                f"No improvement found with attempt_id prefix {attempt_id!r}.",
+                fg="red"), err=True)
+            raise click.exceptions.Exit(1)
+        if len(matches) > 1:
+            click.echo(click.style(
+                f"Ambiguous prefix {attempt_id!r} — matches {len(matches)} attempts.",
+                fg="yellow"), err=True)
+            raise click.exceptions.Exit(1)
+
+        attempt = matches[0]
+        patch_bundle_parsed = None
+        raw_bundle = getattr(attempt, "patch_bundle", "") or ""
+        if raw_bundle:
+            try:
+                patch_bundle_parsed = _json.loads(raw_bundle)
+            except Exception:
+                patch_bundle_parsed = None
+
+        if json_output:
+            click.echo(_json.dumps({
+                "status": "ok",
+                "attempt_id": attempt.attempt_id,
+                "change_description": attempt.change_description,
+                "config_section": getattr(attempt, "config_section", None),
+                "config_diff": attempt.config_diff,
+                "patch_bundle": patch_bundle_parsed,
+                "score_before": getattr(attempt, "score_before", None),
+                "score_after": getattr(attempt, "score_after", None),
+                "status_raw": getattr(attempt, "status", None),
+            }))
+            return
+
+        click.echo(click.style(
+            f"\nImprovement {attempt.attempt_id}",
+            fg="cyan", bold=True))
+        click.echo(f"  Section:  {getattr(attempt, 'config_section', None) or '—'}")
+        click.echo(f"  Status:   {getattr(attempt, 'status', '—')}")
+        score_before = getattr(attempt, "score_before", None)
+        score_after = getattr(attempt, "score_after", None)
+        if score_before is not None or score_after is not None:
+            before = f"{score_before:.4f}" if score_before is not None else "n/a"
+            after = f"{score_after:.4f}" if score_after is not None else "n/a"
+            click.echo(f"  Scores:   before={before} after={after}")
+        click.echo("")
+        click.echo(click.style("Rationale:", bold=True))
+        click.echo(f"  {attempt.change_description or '(no description)'}")
+        click.echo("")
+        click.echo(click.style("Config diff:", bold=True))
+        if attempt.config_diff:
+            for line in attempt.config_diff.splitlines():
+                if line.startswith("+"):
+                    click.echo(click.style(line, fg="green"))
+                elif line.startswith("-"):
+                    click.echo(click.style(line, fg="red"))
+                else:
+                    click.echo(line)
+        else:
+            click.echo("  (no diff recorded — empty config_diff)")
+        if patch_bundle_parsed is not None:
+            click.echo("")
+            click.echo(click.style("Patch bundle:", bold=True))
+            click.echo(_json.dumps(patch_bundle_parsed, indent=2, sort_keys=True))
+
+
     @improve_group.command("optimize")
     @click.option("--cycles", default=1, show_default=True, type=int, help="Number of optimization cycles.")
     @click.option("--continuous", is_flag=True, default=False, help="Loop indefinitely until Ctrl+C.")
