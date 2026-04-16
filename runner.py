@@ -4919,7 +4919,7 @@ def optimize(
                 )
 
 
-@cli.group("improve", cls=DefaultCommandGroup, default_command="run", default_on_empty=True, hidden=True)
+@cli.group("improve", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
 def improve_group() -> None:
     """Improvement workflows and compatibility aliases."""
 
@@ -5042,20 +5042,32 @@ def improve_run(auto: bool, json_output: bool = False) -> None:
 
 @improve_group.command("list")
 @click.option("--status", default=None, help="Filter by classified status (proposed, pending_review, accepted, rejected, deployed_canary, promoted, rolled_back, measured).")
+@click.option("--reason", default=None, help="Filter rejected rows by RejectionReason value (e.g. regression_detected, safety_violation).")
 @click.option("--limit", default=20, show_default=True, type=int, help="Max rows to show.")
 @click.option("--memory-db", default=MEMORY_DB, show_default=True, help="Optimizer memory DB.")
 @click.option("--lineage-db", default=os.environ.get("AGENTLAB_IMPROVEMENT_LINEAGE_DB", ".agentlab/improvement_lineage.db"), show_default=True, help="Improvement lineage DB.")
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 def improve_list(
     status: str | None,
+    reason: str | None,
     limit: int,
     memory_db: str,
     lineage_db: str,
     json_output: bool,
 ) -> None:
     """List improvements with their lineage (proposal -> deploy -> measurement)."""
+    from optimizer.gates import RejectionReason, rejection_from_status
     from optimizer.improvement_lineage import ImprovementLineageStore
     from optimizer.memory import OptimizationMemory
+
+    valid_reasons = [r.value for r in RejectionReason]
+    if reason is not None and reason not in valid_reasons:
+        click.echo(
+            f"Error: invalid --reason value {reason!r}. "
+            f"Valid values: {', '.join(valid_reasons)}",
+            err=True,
+        )
+        sys.exit(1)
 
     memory = OptimizationMemory(db_path=memory_db)
     lineage = ImprovementLineageStore(db_path=lineage_db)
@@ -5076,17 +5088,44 @@ def improve_list(
         return "proposed"
 
     rows: list[dict] = []
+
+    forced = os.environ.get("AGENTLAB_TEST_FORCE_REJECTION")
+    if forced:
+        try:
+            forced_reason = RejectionReason(forced)
+        except ValueError:
+            pass  # silently ignore invalid forced value in test hook
+        else:
+            rows.append({
+                "attempt_id": "test-forced",
+                "status": "rejected",
+                "raw_status": f"rejected_{forced_reason.value}",
+                "reason": forced_reason.value,
+                "change": "[test] forced rejection via env var",
+                "section": "prompt",
+                "score_before": None,
+                "score_after": None,
+                "deployed_version": None,
+                "measurement": None,
+                "lineage": [],
+            })
+
     for attempt in attempts:
         events = lineage.events_for(attempt.attempt_id)
         types = [e.event_type for e in events]
         classified = classify(attempt.status, types)
         if status and classified != status:
             continue
+        try:
+            row_reason = rejection_from_status(attempt.status).value
+        except ValueError:
+            row_reason = None
         rows.append(
             {
                 "attempt_id": attempt.attempt_id,
                 "status": classified,
                 "raw_status": attempt.status,
+                "reason": row_reason,
                 "change": attempt.change_description,
                 "section": attempt.config_section,
                 "score_before": attempt.score_before,
@@ -5105,6 +5144,9 @@ def improve_list(
         if len(rows) >= limit:
             break
 
+    if reason:
+        rows = [r for r in rows if r.get("reason") == reason]
+
     if json_output:
         click.echo(json.dumps({"total": len(rows), "items": rows}, indent=2))
         return
@@ -5115,14 +5157,15 @@ def improve_list(
 
     click.echo(click.style(f"Improvements ({len(rows)} shown):", fg="cyan", bold=True))
     click.echo(
-        f"{'ID':<10} {'STATUS':<18} {'SECTION':<22} {'v':>4}  CHANGE"
+        f"{'ID':<10} {'STATUS':<18} {'REASON':<28} {'SECTION':<22} {'v':>4}  CHANGE"
     )
-    click.echo("-" * 100)
+    click.echo("-" * 120)
     for row in rows:
         ver = f"v{row['deployed_version']:03d}" if row["deployed_version"] is not None else "—"
         click.echo(
             f"{row['attempt_id'][:8]:<10} "
             f"{row['status']:<18} "
+            f"{(row.get('reason') or '—')[:28]:<28} "
             f"{(row['section'] or '—')[:22]:<22} "
             f"{ver:>4}  "
             f"{(row['change'] or '')[:60]}"
