@@ -3279,6 +3279,12 @@ def eval_group() -> None:
     default=False,
     help="Require live providers for this eval and fail instead of falling back to mock mode.",
 )
+@click.option(
+    "--strict-live/--no-strict-live",
+    default=False,
+    help="Exit non-zero (12) if any step falls back to mock execution. "
+         "Implies --require-live and additionally fails on post-hoc fallbacks.",
+)
 @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
 @click.option(
     "--output-format",
@@ -3292,6 +3298,7 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
              real_agent: bool = False,
              force_mock: bool = False,
              require_live: bool = False,
+             strict_live: bool = False,
              json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
 
@@ -3305,6 +3312,11 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     from cli.stream2_helpers import json_response
     from cli.output import resolve_output_format
     from cli.progress import PhaseSpinner, ProgressRenderer
+
+    # --strict-live is the canonical user-facing flag; it implies --require-live
+    # AND additionally enforces a post-hoc check on score.warnings.
+    if strict_live:
+        require_live = True
 
     resolved_output_format = resolve_output_format(output_format, json_output=json_output)
     progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
@@ -3510,6 +3522,19 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
     if eval_mode == "mixed":
         for warning in list(getattr(runner, "mock_mode_messages", []) or []):
             LOG.warning("eval_run.live_fallback_to_mock: %s", warning)
+
+    # R1.3: --strict-live post-hoc gate. Any mock fallback warning that
+    # accumulated in score.warnings causes a hard exit with code 12.
+    if strict_live:
+        from cli.strict_live import StrictLivePolicy, MockFallbackError
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
+        policy = StrictLivePolicy(enabled=True)
+        policy.ingest_existing_warnings(getattr(score, "warnings", []) or [])
+        try:
+            policy.check()
+        except MockFallbackError as err:
+            click.echo(str(err), err=True)
+            sys.exit(EXIT_MOCK_FALLBACK)
 
     if resolved_output_format == "text":
         click.echo(f"\n{_eval_results_heading(eval_mode)}")
