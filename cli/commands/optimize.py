@@ -489,6 +489,12 @@ def register_optimize_commands(cli: click.Group) -> None:
     @click.option("--full-auto", is_flag=True, default=False,
                   help="Danger mode: auto-promote accepted configs without manual review.")
     @click.option("--dry-run", is_flag=True, help="Preview the optimization run without mutating state.")
+    @click.option(
+        "--explain-strategy",
+        is_flag=True,
+        default=False,
+        help="Print one line per ranked strategy showing why it was chosen.",
+    )
     @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
     @click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
     @click.option(
@@ -523,6 +529,7 @@ def register_optimize_commands(cli: click.Group) -> None:
         memory_db: str,
         full_auto: bool,
         dry_run: bool,
+        explain_strategy: bool = False,
         json_output: bool = False,
         max_budget_usd: float | None = None,
         strict_live: bool = False,
@@ -617,6 +624,19 @@ def register_optimize_commands(cli: click.Group) -> None:
                 click.echo(f"  mode:        {mode or 'default'}")
                 click.echo(f"  full_auto:   {full_auto}")
                 click.echo(f"  configs_dir: {configs_dir}")
+            if explain_strategy:
+                from optimizer.proposer import (
+                    _LAST_EXPLANATION as _module_last_explanation,
+                    format_strategy_explanation,
+                )
+
+                if _module_last_explanation:
+                    for entry in _module_last_explanation:
+                        click.echo(format_strategy_explanation(entry))
+                else:
+                    click.echo(
+                        "No strategy explanation available (reflection data empty or mock mode)."
+                    )
             return
 
         budget_ok, budget_message, budget_snapshot = enforce_workspace_budget(max_budget_usd)
@@ -888,6 +908,29 @@ def register_optimize_commands(cli: click.Group) -> None:
             click.echo(click.style("\n  ⚡ Recommended next steps:", fg="cyan", bold=True))
             for rec in recs:
                 click.echo(rec)
+
+        if explain_strategy:
+            # The proposer stashes the last ranking explanation on itself and
+            # on a module-level slot in `optimizer.proposer`. We check the
+            # instance first (works for live runs and unit tests that reach
+            # this exact `proposer` object) and fall back to the module slot,
+            # which survives the full optimize pipeline without needing us to
+            # thread the proposer object through runner glue.
+            from optimizer.proposer import (
+                _LAST_EXPLANATION as _module_last_explanation,
+                format_strategy_explanation,
+            )
+
+            explanation = getattr(proposer, "_last_explanation", None) or list(
+                _module_last_explanation
+            )
+            if explanation:
+                for entry in explanation:
+                    click.echo(format_strategy_explanation(entry))
+            else:
+                click.echo(
+                    "No strategy explanation available (reflection data empty or mock mode)."
+                )
 
         if proposer.llm_router is not None:
             summary = proposer.llm_router.cost_summary()

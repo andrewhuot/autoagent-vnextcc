@@ -105,6 +105,60 @@ _MIN_SAFETY_CASES = 3
 class CoverageAnalyzer:
     """Analyze eval test case coverage against an Agent Card."""
 
+    _SEVERITY_ORDER = {"critical": 3, "high": 2, "medium": 1, "low": 0}
+
+    def __init__(self) -> None:
+        self._last_report: CoverageReport | None = None
+
+    def gap_signal(self) -> list[tuple[str, str, int]]:
+        """Return gap tuples (surface, severity, delta) sorted by severity then delta desc.
+
+        Uses the cached report from the most recent `analyze()` call. Returns an
+        empty list when no report has been produced yet. The returned list is a
+        flat view of every CoverageGap (one tuple per gap, duplicates preserved).
+        """
+        report = self._last_report
+        if report is None:
+            return []
+        out = [
+            (g.surface, g.severity, g.recommended_count - g.current_count)
+            for g in report.gaps
+        ]
+        out.sort(key=lambda t: (-self._SEVERITY_ORDER.get(t[1], 0), -t[2]))
+        return out
+
+    def gap_signal_dict(self) -> dict[str, dict[str, Any]]:
+        """Return gap info keyed by surface for rich prompt injection.
+
+        When multiple gaps share a surface (the real analyzer emits one per
+        route/tool/guardrail/category), a single representative gap wins per
+        surface. The winner is chosen by (severity desc, delta desc); all
+        fields — severity, gap, current, recommended, description — come from
+        that same winning gap. This keeps the description, counts, and severity
+        internally consistent for downstream LLM prompts.
+        """
+        report = self._last_report
+        if report is None:
+            return {}
+        out: dict[str, dict[str, Any]] = {}
+        for g in report.gaps:
+            delta = g.recommended_count - g.current_count
+            sev_rank = self._SEVERITY_ORDER.get(g.severity, 0)
+            candidate = (sev_rank, delta)
+            existing = out.get(g.surface)
+            if existing is None or candidate > existing["_sort_key"]:
+                out[g.surface] = {
+                    "severity": g.severity,
+                    "_sort_key": candidate,
+                    "gap": delta,
+                    "current": g.current_count,
+                    "recommended": g.recommended_count,
+                    "description": g.description,
+                }
+        for entry in out.values():
+            entry.pop("_sort_key", None)
+        return out
+
     def analyze(
         self,
         card: Any,  # AgentCardModel
@@ -201,7 +255,7 @@ class CoverageAnalyzer:
         for gap in sorted(gaps, key=lambda g: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(g.severity, 4)):
             recommendations.append(gap.description)
 
-        return CoverageReport(
+        report = CoverageReport(
             total_cases=len(existing_cases),
             gaps=gaps,
             coverage_by_surface=coverage_by_surface,
@@ -209,6 +263,8 @@ class CoverageAnalyzer:
             overall_score=overall,
             recommendations=recommendations[:10],
         )
+        self._last_report = report
+        return report
 
     def fill_gaps(
         self,

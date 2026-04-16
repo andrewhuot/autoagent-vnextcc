@@ -710,3 +710,34 @@ def _parse_json_response(raw: str) -> list[dict[str, Any]]:
 
     logger.warning("Failed to parse LLM response as JSON")
     return []
+
+
+# ---------------------------------------------------------------------------
+# R3.6: surface -> generator dispatcher used by the optimizer auto-grow hook.
+# ---------------------------------------------------------------------------
+
+
+def grow_cases_for_surface(
+    generator: "CardCaseGenerator",
+    card: "AgentCardModel",
+    surface: str,
+    *,
+    count: int = 3,
+) -> list["GeneratedCase"]:
+    """Map a coverage surface name to the generator method that grows it.
+
+    Falls back to an empty list when the surface doesn't map to a specific
+    generator. Unknown surfaces generate zero new cases and return [].
+    """
+    surface_normalized = (surface or "").lower()
+    if surface_normalized == "routing":
+        return generator.generate_routing_cases(card, count=count)
+    if surface_normalized == "tools":
+        return generator.generate_tool_cases(card, count=count)
+    if surface_normalized == "safety":
+        return generator.generate_safety_cases(card, count=count)
+    if surface_normalized == "edge_cases":
+        return generator.generate_edge_cases(card)
+    if surface_normalized in ("sub_agent", "sub_agents"):
+        return generator.generate_sub_agent_cases(card, count=count)
+    return []

@@ -4,13 +4,60 @@ from __future__ import annotations
 
 import copy
 import json
+import random
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from shared.canonical_ir_convert import from_config_dict
 from shared.canonical_patch import ComponentPatchOperation, TypedPatchBundle, find_component_reference
 
 from .providers import LLMRequest, LLMRouter
+
+if TYPE_CHECKING:
+    from .reflection import ReflectionEngine
+
+# Strategy -> mutation-surface mapping. Used by _rank_strategies to look up
+# historical effectiveness on the surface a strategy targets. Seed mapping;
+# extend as new strategies are registered.
+STRATEGY_TO_SURFACE: dict[str, str] = {
+    "tighten_prompt": "prompting",
+    "add_tool": "tools",
+    "refactor": "architecture",
+    "expand_card": "agent_card",
+}
+
+
+@dataclass
+class StrategyExplanation:
+    """Rationale for why a strategy was chosen during ranking."""
+
+    strategy: str
+    surface: str | None
+    effectiveness: float
+    samples: int
+    explored: bool  # True if this ranking came from the epsilon exploration branch
+
+
+def format_strategy_explanation(e: StrategyExplanation) -> str:
+    """Render a one-line rationale for `--explain-strategy` output."""
+    if e.explored:
+        return (
+            f"selected mutation {e.strategy} via random exploration "
+            f"(epsilon-greedy; past effectiveness={e.effectiveness:.2f})"
+        )
+    return (
+        f"selected mutation {e.strategy} because "
+        f"effectiveness={e.effectiveness:.2f} on similar surfaces "
+        f"(n={e.samples} samples)"
+    )
+
+
+# Module-level slot read by `agentlab optimize --explain-strategy`.
+# Populated by `Proposer._rank_strategies` on each call so the CLI can
+# surface the last ranking rationale without threading the proposer instance
+# through the full optimize pipeline.
+_LAST_EXPLANATION: list[StrategyExplanation] = []
 
 _ROUTING_STOP_WORDS = {
     "and",
@@ -80,6 +127,9 @@ class Proposer:
         self.use_mock = use_mock
         self.llm_router = llm_router
         self.mock_reason = mock_reason
+        # Populated by `_rank_strategies`; surfaced by the CLI
+        # `--explain-strategy` flag. Empty until a ranking happens.
+        self._last_explanation: list[StrategyExplanation] = []
 
     def propose(
         self,
@@ -117,6 +167,95 @@ class Proposer:
         if not non_zero:
             return None
         return max(non_zero, key=non_zero.get)
+
+    def _rank_strategies(
+        self,
+        available_strategies: list[str],
+        reflection_engine: "ReflectionEngine | None",
+        epsilon: float = 0.1,
+        rng: random.Random | None = None,
+    ) -> list[str]:
+        """Rank strategies by historical effectiveness with epsilon-greedy exploration.
+
+        With probability ``epsilon``, returns a random shuffle of the input
+        (exploration). Otherwise ranks strategies by the ``avg_improvement`` of
+        the surface each strategy targets (exploitation), pulled from the
+        reflection engine's surface-level effectiveness table.
+
+        Ties break by ``attempts`` (more evidence wins), then by strategy name
+        for determinism.
+
+        WHY: Without epsilon exploration, the optimizer will over-pick whichever
+        strategy worked in its first successes and starve alternatives - a known
+        reflection-feedback-loop failure mode.
+        """
+        global _LAST_EXPLANATION
+        rng = rng or random.Random()
+        self._last_explanation = []
+
+        if reflection_engine is None:
+            _LAST_EXPLANATION = []
+            return list(available_strategies)
+
+        # Epsilon-greedy branch: shuffle and return.
+        if rng.random() < epsilon:
+            shuffled = list(available_strategies)
+            rng.shuffle(shuffled)
+            # Build explanations reflecting what would have ranked — so users
+            # still see the effectiveness signal even when exploring.
+            for s in shuffled:
+                surface = STRATEGY_TO_SURFACE.get(s)
+                eff = (
+                    reflection_engine.read_surface_effectiveness(surface)
+                    if surface
+                    else None
+                )
+                self._last_explanation.append(
+                    StrategyExplanation(
+                        strategy=s,
+                        surface=surface,
+                        effectiveness=eff.avg_improvement if eff else 0.0,
+                        samples=eff.attempts if eff else 0,
+                        explored=True,
+                    )
+                )
+            _LAST_EXPLANATION = list(self._last_explanation)
+            return shuffled
+
+        # Exploitation branch: sort by (avg_improvement, attempts, name) desc.
+        def _key(strategy: str) -> tuple[float, int, str]:
+            surface = STRATEGY_TO_SURFACE.get(strategy)
+            if surface is None:
+                # Unknown strategies sort last but stably.
+                return (float("-inf"), 0, strategy)
+            eff = reflection_engine.read_surface_effectiveness(surface)
+            if eff is None:
+                return (0.0, 0, strategy)
+            return (eff.avg_improvement, eff.attempts, strategy)
+
+        # Stable tie-break on name ascending requires sorting by name first,
+        # then by the primary keys reverse (Python sort is stable).
+        staged = sorted(available_strategies, key=lambda s: s)
+        ranked = sorted(staged, key=_key, reverse=True)
+
+        for s in ranked:
+            surface = STRATEGY_TO_SURFACE.get(s)
+            eff = (
+                reflection_engine.read_surface_effectiveness(surface)
+                if surface
+                else None
+            )
+            self._last_explanation.append(
+                StrategyExplanation(
+                    strategy=s,
+                    surface=surface,
+                    effectiveness=eff.avg_improvement if eff else 0.0,
+                    samples=eff.attempts if eff else 0,
+                    explored=False,
+                )
+            )
+        _LAST_EXPLANATION = list(self._last_explanation)
+        return ranked
 
     @staticmethod
     def _append_unique_keywords(existing: list[str], additions: list[str]) -> list[str]:

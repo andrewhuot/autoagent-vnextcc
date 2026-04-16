@@ -114,6 +114,7 @@ class CompositeScore:
     dimensions: DimensionScores | None = None
     per_agent_scores: list[PerAgentScores] = field(default_factory=list)
     confidence_intervals: dict[str, tuple[float, float]] = field(default_factory=dict)
+    weights_snapshot: "CompositeWeights | None" = None
     total_tokens: int = 0
     estimated_cost_usd: float = 0.0
     warnings: list[str] = field(default_factory=list)
@@ -195,6 +196,38 @@ class CompositeScore:
             "optimization_mode": self.optimization_mode,
         }
 
+    @classmethod
+    def rerender(
+        cls,
+        score: "CompositeScore",
+        weights: "CompositeWeights | None" = None,
+    ) -> "CompositeScore":
+        """Rebuild a CompositeScore using the snapshot weights (or an explicit override).
+
+        When ``weights`` is None, uses ``score.weights_snapshot`` — this is the
+        historical-reproducibility contract: a stored score always renders with
+        the weights it was scored under, regardless of what the current
+        workspace yaml says.
+
+        When ``weights`` is provided, forensic/what-if replay: recomputes the
+        composite under the override. The returned score's ``weights_snapshot``
+        reflects the weights actually used for the replay.
+
+        If neither is available (``score.weights_snapshot is None`` and no
+        override), returns *score* unchanged — pre-R3 persisted scores had no
+        snapshot; preserving them as-is is the safer default than guessing.
+        """
+        effective = weights if weights is not None else score.weights_snapshot
+        if effective is None:
+            return score
+
+        # Re-score the preserved per-case results under the effective weights.
+        rescored = CompositeScorer(weights=effective).score(list(score.results))
+        # The rescore already sets weights_snapshot=effective via score()'s path,
+        # but make it explicit for the forensic-override branch's determinism.
+        rescored.weights_snapshot = effective
+        return rescored
+
 
 def composite_breakdown(score: CompositeScore) -> dict[str, dict[str, float] | float | str]:
     """Public helper returning a weighted composite contribution breakdown."""
@@ -214,6 +247,11 @@ class CompositeScorer:
     CI_ALPHA = 0.05
     CI_ITERATIONS = 400
     CI_SEED = 7
+
+    def __init__(self, weights: "CompositeWeights | None" = None) -> None:
+        from evals.composite_weights import CompositeWeights, validate_weights
+        self._weights = weights or CompositeWeights()
+        validate_weights(self._weights)
 
     def score(self, results: list[EvalResult]) -> CompositeScore:
         """Compute composite score from eval results."""
@@ -252,20 +290,20 @@ class CompositeScorer:
         quality_values = [r.quality_score for r in results]
         composite_values = [
             (
-                self.QUALITY_WEIGHT * r.quality_score
-                + self.SAFETY_WEIGHT * (1.0 if r.safety_passed else 0.0)
-                + self.LATENCY_WEIGHT * latency_values[idx]
-                + self.COST_WEIGHT * cost_values[idx]
+                self._weights.quality * r.quality_score
+                + self._weights.safety * (1.0 if r.safety_passed else 0.0)
+                + self._weights.latency * latency_values[idx]
+                + self._weights.cost * cost_values[idx]
             )
             for idx, r in enumerate(results)
         ]
 
         # Composite: weighted sum
         composite = (
-            self.QUALITY_WEIGHT * quality
-            + self.SAFETY_WEIGHT * safety
-            + self.LATENCY_WEIGHT * latency
-            + self.COST_WEIGHT * cost
+            self._weights.quality * quality
+            + self._weights.safety * safety
+            + self._weights.latency * latency
+            + self._weights.cost * cost
         )
 
         passed_cases = sum(1 for r in results if r.passed)
@@ -304,6 +342,7 @@ class CompositeScorer:
             optimization_mode="weighted",
             confidence_intervals=confidence_intervals,
             total_tokens=sum(r.token_count for r in results),
+            weights_snapshot=self._weights,
         )
 
     def _bootstrap_mean_ci(self, values: list[float]) -> tuple[float, float]:

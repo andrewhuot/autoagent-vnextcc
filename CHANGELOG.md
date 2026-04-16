@@ -1,5 +1,34 @@
 # Changelog
 
+## [4.0.0-R3] — 2026-04-16 — Optimizer that Learns
+
+R3 makes the optimizer target its own weak spots, makes the pairwise judge LLM-backed with a cache, and moves composite scoring from hardcoded constants to per-workspace yaml. Slice A (R3.1–R3.6) and Slice B (R3.7–R3.13) are both shipped.
+
+**Expansion plan:** [docs/superpowers/plans/2026-04-XX-agentlab-r3-smart-optimizer.md](docs/superpowers/plans/2026-04-XX-agentlab-r3-smart-optimizer.md) — source of truth for acceptance tests (§7) and risk/mitigation matrix (§8).
+
+### Added — Slice A: Coverage-aware proposer + reflection feedback
+
+- **Coverage-gap signal** (`evals/coverage.py`) — `CoverageAnalyzer.gap_signal()` / `gap_signal_dict()` surface under-tested components ranked by severity.
+- **Coverage signal in proposer prompt** (`optimizer/llm_proposer.py`) — `LLMProposer` receives a `coverage_signal` kwarg and injects a "Surface X has only N cases" block into the prompt.
+- **Reflection wrapper** (`optimizer/reflection.py`) — `ReflectionEngine.read_surface_effectiveness(surface)` returns `{strategy: effectiveness_score}` from the existing `surface_effectiveness` table (no schema migration — see deferred list).
+- **Epsilon-greedy strategy ranking** (`optimizer/proposer.py`) — `Proposer._rank_strategies` weights by reflection effectiveness with ε=0.1 exploration. Deterministic under a seeded `random.Random`.
+- **`--explain-strategy`** (`agentlab optimize`) — prints one rationale line per ranked strategy with effectiveness scores and any exploration picks.
+- **Auto-grown eval cases** (`optimizer/loop.py`) — `Optimizer._maybe_auto_grow_cases()` fires `CardCaseGenerator` per surface when coverage drops below 30%. Gated on `auto_grow_cases` flag; defaults off in test.
+
+### Added — Slice B: LLM judge + configurable weights + calibrated statistics
+
+- **LLM pairwise judge** (`evals/judges/pairwise_judge.py`) — `PairwiseLLMJudge` now routes to an LLM backend with structured output (`{winner, confidence, rationale}`), a SQLite-backed cache (`.agentlab/llm_judge_cache.db`, 30-day TTL keyed on sha256 of both inputs+outputs), and a strict-live escalation mode. Heuristic path remains the default and the fallback.
+- **Composite weights yaml** (`evals/composite_weights.py`) — `CompositeWeights` loads from `eval.composite.weights.{quality,safety,latency,cost}` in `agentlab.yaml`. Defaults match pre-R3 constants, validator rejects `sum != 1.0`.
+- **`agentlab eval weights`** (`cli/commands/eval.py`) — new `show / set / validate` subcommands for reading and mutating the weights block.
+- **Weights snapshot per score** (`evals/scorer.py`) — `CompositeScore.weights_snapshot` freezes the weights used at scoring time. `CompositeScore.rerender(score, weights=None)` classmethod re-renders a historical score under its snapshot (or an override), immune to yaml mutations.
+- **Richer paired significance** (`evals/statistics.py`) — `paired_significance()` gained `confidence_interval` (bootstrap, `n_bootstrap=2000` default, seedable) and `calibrated_effect_size` (delta / stddev_diffs). New kwargs: `bootstrap_ci=True`, `n_bootstrap=2000`, `min_calibrated_effect=0.0`. The `is_significant` gate now requires `p < alpha AND abs(calibrated_effect) >= min_calibrated_effect`.
+
+### Deferred (tracked in plan §11)
+
+Strategy-dimension reflection schema; persistence of auto-grown cases back into the workspace dataset; yaml comment preservation on `eval weights set`; `ConstrainedScorer` objective-weight migration; JSON round-trip of `CompositeWeights` inside `CompositeScore.weights_snapshot`; live LLM judge calibration harness; strategy-level lineage events.
+
+---
+
 ## [4.0.0-R1] — 2026-04-16 — Trust the Loop: Strict-Live Enforcement
 
 The first slice of the R1–R6 roadmap turns every silent mock fallback into
