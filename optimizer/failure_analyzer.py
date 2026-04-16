@@ -12,9 +12,15 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
+
+import yaml
 
 from optimizer.providers import LLMRequest, LLMRouter
+
+if TYPE_CHECKING:
+    from evals.card_case_generator import CardCaseGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -354,6 +360,24 @@ def _deterministic_analysis(
 
 
 # ---------------------------------------------------------------------------
+# Cluster-size helper (R5 C.6)
+# ---------------------------------------------------------------------------
+
+
+def _cluster_size(cluster: FailureCluster) -> int:
+    """Return the effective size of a FailureCluster.
+
+    Prefers the ``count`` attribute (the canonical member count on the
+    dataclass); falls back to ``len(sample_ids)`` when ``count`` is zero.
+    """
+    count = int(getattr(cluster, "count", 0) or 0)
+    if count > 0:
+        return count
+    sample_ids = getattr(cluster, "sample_ids", None) or []
+    return len(sample_ids)
+
+
+# ---------------------------------------------------------------------------
 # FailureAnalyzer
 # ---------------------------------------------------------------------------
 
@@ -373,6 +397,10 @@ class FailureAnalyzer:
         eval_results: dict[str, Any],
         agent_card_markdown: str,
         past_attempts: list[dict[str, Any]] | None = None,
+        *,
+        case_generator: "CardCaseGenerator | None" = None,
+        min_cluster_size: int = 3,
+        generated_cases_path: str | Path = "evals/cases/generated_failures.yaml",
     ) -> FailureAnalysis:
         """Run failure analysis on eval results.
 
@@ -386,6 +414,19 @@ class FailureAnalyzer:
             The rendered agent card in markdown form.
         past_attempts:
             Previous optimization attempt records, each a dict.
+        case_generator:
+            Optional ``CardCaseGenerator``. When provided, every cluster in
+            the resulting analysis whose size is ``>= min_cluster_size`` drives
+            ``generate_variants_from_cluster`` and the variants are appended
+            (idempotently) to ``generated_cases_path`` as eval YAML cases
+            tagged ``generated_from:failure_cluster:<cluster_id>``.
+            When ``None`` (the default), behavior is unchanged.
+        min_cluster_size:
+            Minimum cluster size to trigger variant generation. Defaults to 3.
+        generated_cases_path:
+            Where to persist generated variants. Defaults to
+            ``evals/cases/generated_failures.yaml`` so the runner picks them
+            up on next ``load_cases()``.
 
         Returns
         -------
@@ -402,9 +443,10 @@ class FailureAnalyzer:
             return FailureAnalysis(summary="No failures detected in eval results.")
 
         # Try LLM-driven analysis first.
+        analysis: FailureAnalysis | None = None
         if self.llm_router is not None:
             try:
-                return self._llm_analyze(
+                analysis = self._llm_analyze(
                     agent_card_markdown=agent_card_markdown,
                     failure_samples=failure_samples,
                     failure_buckets=failure_buckets,
@@ -417,7 +459,102 @@ class FailureAnalyzer:
                     exc_info=True,
                 )
 
-        return _deterministic_analysis(failure_buckets, failure_samples)
+        if analysis is None:
+            analysis = _deterministic_analysis(failure_buckets, failure_samples)
+
+        # Optional failure-driven variant persistence (R5 C.6).
+        if case_generator is not None:
+            try:
+                self.persist_variants(
+                    analysis,
+                    case_generator=case_generator,
+                    min_cluster_size=min_cluster_size,
+                    generated_cases_path=generated_cases_path,
+                )
+            except Exception:
+                logger.warning(
+                    "Failure-cluster variant persistence failed; "
+                    "continuing without writing generated cases.",
+                    exc_info=True,
+                )
+
+        return analysis
+
+    # ------------------------------------------------------------------
+    # R5 C.6 — persist variants derived from failure clusters
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def persist_variants(
+        analysis: FailureAnalysis,
+        *,
+        case_generator: "CardCaseGenerator",
+        min_cluster_size: int = 3,
+        generated_cases_path: str | Path = "evals/cases/generated_failures.yaml",
+    ) -> list[str]:
+        """Write variant cases for each large cluster into the YAML catalog.
+
+        For every cluster in ``analysis.clusters`` with size ``>= min_cluster_size``,
+        calls ``case_generator.generate_variants_from_cluster(cluster)`` and
+        appends the variants (as YAML case dicts tagged
+        ``generated_from:failure_cluster:<cluster_id>``) to
+        ``generated_cases_path``. The append is idempotent: variants whose ids
+        already exist in the file are skipped. Existing cases are preserved.
+        Creates the file (with ``{cases: [...]}`` shape) when missing.
+
+        Returns the list of variant ids that were newly appended.
+        """
+        path = Path(generated_cases_path)
+
+        # Collect eligible clusters first so we don't touch the filesystem
+        # when everything is filtered out.
+        eligible = [c for c in analysis.clusters if _cluster_size(c) >= min_cluster_size]
+        if not eligible:
+            return []
+
+        # Load existing cases (if any).
+        existing_cases: list[dict[str, Any]] = []
+        if path.exists():
+            raw = path.read_text(encoding="utf-8")
+            if raw.strip():
+                data = yaml.safe_load(raw) or {}
+                if isinstance(data, dict) and isinstance(data.get("cases"), list):
+                    existing_cases = [
+                        dict(entry) for entry in data["cases"] if isinstance(entry, dict)
+                    ]
+
+        seen_ids: set[str] = {
+            str(case.get("id"))
+            for case in existing_cases
+            if isinstance(case.get("id"), str)
+        }
+
+        new_ids: list[str] = []
+        for cluster in eligible:
+            variants = case_generator.generate_variants_from_cluster(cluster)
+            cluster_id = getattr(cluster, "cluster_id", None) or getattr(
+                cluster, "id", "unknown"
+            )
+            tag = f"generated_from:failure_cluster:{cluster_id}"
+            for variant in variants:
+                if variant.id in seen_ids:
+                    continue
+                case_dict = variant.to_dict()
+                case_dict["tags"] = [tag]
+                existing_cases.append(case_dict)
+                seen_ids.add(variant.id)
+                new_ids.append(variant.id)
+
+        if not new_ids and path.exists():
+            # Nothing to write; preserve file as-is.
+            return []
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump({"cases": existing_cases}, sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+        return new_ids
 
     def _llm_analyze(
         self,
