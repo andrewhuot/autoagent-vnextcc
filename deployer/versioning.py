@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import time
@@ -171,3 +172,68 @@ class ConfigVersionManager:
 
     def get_version_history(self) -> list[dict]:
         return list(self.manifest["versions"])
+
+    # ------------------------------------------------------------------
+    # Enhanced inspection helpers
+    # ------------------------------------------------------------------
+
+    def diff_versions(self, version_a: int, version_b: int) -> str:
+        """Produce a human-readable diff between two config versions.
+
+        Returns a unified diff string, or a descriptive error message.
+        """
+        entry_a = self._find_version(version_a)
+        entry_b = self._find_version(version_b)
+
+        if entry_a is None:
+            return f"Error: version {version_a} not found"
+        if entry_b is None:
+            return f"Error: version {version_b} not found"
+
+        path_a = self.configs_dir / entry_a["filename"]
+        path_b = self.configs_dir / entry_b["filename"]
+
+        if not path_a.exists():
+            return f"Error: config file {entry_a['filename']} missing from disk"
+        if not path_b.exists():
+            return f"Error: config file {entry_b['filename']} missing from disk"
+
+        text_a = path_a.read_text(encoding="utf-8").splitlines(keepends=True)
+        text_b = path_b.read_text(encoding="utf-8").splitlines(keepends=True)
+
+        diff_lines = list(
+            difflib.unified_diff(
+                text_a,
+                text_b,
+                fromfile=entry_a["filename"],
+                tofile=entry_b["filename"],
+            )
+        )
+
+        if not diff_lines:
+            return "No changes"
+
+        return "".join(diff_lines)
+
+    def get_version_summary(self, version: int) -> dict:
+        """Return a summary dict for a version (scores, status, timestamp, etc)."""
+        entry = self._find_version(version)
+        if entry is None:
+            return {"error": f"version {version} not found"}
+        return {
+            "version": entry["version"],
+            "config_hash": entry["config_hash"],
+            "filename": entry["filename"],
+            "timestamp": entry["timestamp"],
+            "scores": entry.get("scores", {}),
+            "status": entry["status"],
+        }
+
+    def list_versions(self, limit: int = 20) -> list[dict]:
+        """Return recent versions with metadata, newest first."""
+        versions = sorted(
+            self.manifest["versions"],
+            key=lambda v: v["version"],
+            reverse=True,
+        )
+        return versions[:limit]

@@ -26,6 +26,7 @@ class StubProposer:
         failure_samples: list[dict],
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        **kwargs,
     ) -> Proposal | None:
         return self.proposal
 
@@ -57,6 +58,7 @@ class CapturingProposer:
         failure_samples: list[dict],
         failure_buckets: dict[str, int],
         past_attempts: list[dict],
+        **kwargs,
     ) -> Proposal:
         self.captured_past_attempts.append(past_attempts)
         return self.proposal

@@ -1586,6 +1586,16 @@ def _scope_runtime_to_workspace(runtime, workspace: Path):
     return scoped
 
 
+def _has_llm_credentials() -> bool:
+    """Check if any LLM provider credentials are available."""
+    credential_vars = [
+        "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS",
+        "ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+    return any(os.environ.get(var) for var in credential_vars)
+
+
 def _build_eval_runner(
     runtime,
     *,
@@ -3257,6 +3267,13 @@ def eval_group() -> None:
     help="Force the real-agent eval path even if optimizer.use_mock is enabled.",
 )
 @click.option(
+    "--mock",
+    "force_mock",
+    is_flag=True,
+    default=False,
+    help="Force mock agent (no LLM calls).",
+)
+@click.option(
     "--require-live",
     is_flag=True,
     default=False,
@@ -3273,6 +3290,7 @@ def eval_group() -> None:
 def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
              category: str | None, output: str | None, instruction_overrides_path: str | None,
              real_agent: bool = False,
+             force_mock: bool = False,
              require_live: bool = False,
              json_output: bool = False, output_format: str = "text") -> None:
     """Run eval suite against a config.
@@ -3332,10 +3350,35 @@ def eval_run(config_path: str | None, suite: str | None, dataset: str | None, da
             config = {}
         config["_instruction_overrides"] = overrides
 
+    # Resolve agent mode: --mock > --real-agent > auto-detect via credentials
+    if force_mock:
+        use_real_agent = False
+        _auto_detect_reason = "mock-forced"
+    elif real_agent:
+        use_real_agent = True
+        _auto_detect_reason = "real-forced"
+    else:
+        use_real_agent = _has_llm_credentials()
+        _auto_detect_reason = "auto-real" if use_real_agent else "auto-mock"
+
+    if resolved_output_format == "text":
+        if _auto_detect_reason == "real-forced":
+            click.echo(click.style("Running evals with real agent (--real-agent flag)", fg="green"))
+        elif _auto_detect_reason == "auto-real":
+            click.echo(click.style("Running evals with real agent (credentials auto-detected)", fg="green"))
+        elif _auto_detect_reason == "mock-forced":
+            click.echo(click.style("Running evals with mock agent (--mock flag)", fg="yellow"))
+        elif _auto_detect_reason == "auto-mock":
+            click.echo(click.style(
+                "Running evals with mock agent (no LLM credentials found."
+                " Set GOOGLE_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY for real evals)",
+                fg="yellow",
+            ))
+
     runner = _build_eval_runner(
         runtime,
         cases_dir=resolved_suite,
-        use_real_agent=real_agent,
+        use_real_agent=use_real_agent,
         default_agent_config=config,
         **({"require_live": True} if require_live else {}),
     )
@@ -4583,6 +4626,33 @@ def optimize(
         daily_budget_dollars=daily_dollars,
         stall_threshold_cycles=stall_threshold_cycles,
     )
+
+    # Build reflection engine and failure analyzer for LLM-driven optimization
+    from optimizer.failure_analyzer import FailureAnalyzer
+    from optimizer.reflection import ReflectionEngine
+
+    reflection_engine = None
+    failure_analyzer = None
+    agent_card_markdown = ""
+
+    if not proposer.use_mock:
+        reflection_engine = ReflectionEngine(
+            llm_router=proposer.llm_router,
+            db_path=str(Path(memory_db).parent / "reflections.db"),
+        )
+        failure_analyzer = FailureAnalyzer(llm_router=proposer.llm_router)
+
+        # Generate Agent Card from current config for LLM context
+        try:
+            from agent_card.converter import from_config_dict as card_from_config
+            from agent_card.renderer import render_to_markdown as card_to_md
+
+            if resolution.snapshot:
+                card_obj = card_from_config(resolution.snapshot)
+                agent_card_markdown = card_to_md(card_obj)
+        except Exception:
+            pass  # Agent Card generation is best-effort
+
     optimizer = Optimizer(
         eval_runner=eval_runner,
         memory=memory,
@@ -4598,6 +4668,9 @@ def optimize(
         adversarial_simulator=adversarial_simulator,
         skill_autolearner=skill_autolearner,
         auto_learn_skills=runtime.optimizer.skill_autolearn_enabled,
+        failure_analyzer=failure_analyzer,
+        reflection_engine=reflection_engine,
+        agent_card_markdown=agent_card_markdown,
     )
 
     # Track all-time best score

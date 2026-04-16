@@ -108,6 +108,10 @@ class Optimizer:
         skill_autolearner: SkillAutoLearner | None = None,
         auto_learn_skills: bool = True,
         significance_min_pairs: int = 5,
+        # Phase 5: LLM-driven optimization integration
+        failure_analyzer: Any | None = None,
+        reflection_engine: Any | None = None,
+        agent_card_markdown: str = "",
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
@@ -135,6 +139,9 @@ class Optimizer:
         self.adversarial_simulator = adversarial_simulator
         self.skill_autolearner = skill_autolearner
         self.auto_learn_skills = auto_learn_skills
+        self.failure_analyzer = failure_analyzer
+        self.reflection_engine = reflection_engine
+        self.agent_card_markdown = agent_card_markdown
 
         try:
             self.search_strategy = SearchStrategy(search_strategy)
@@ -321,9 +328,27 @@ class Optimizer:
                 "change_description": attempt.change_description,
                 "config_section": attempt.config_section,
                 "status": attempt.status,
+                "score_before": attempt.score_before,
+                "score_after": attempt.score_after,
+                "score_delta": attempt.score_after - attempt.score_before
+                if attempt.score_after and attempt.score_before else 0,
             }
             for attempt in self.memory.recent(limit=20)
         ]
+
+        # Enrich with reflection context if available
+        reflection_context: dict[str, list[str]] | None = None
+        if self.reflection_engine is not None:
+            try:
+                ctx = self.reflection_engine.get_context_for_next_cycle(limit=5)
+                reflection_context = {
+                    "recent_reflections": [
+                        str(r) for r in ctx.get("recent_reflections", [])
+                    ],
+                    "patterns": ctx.get("patterns", []),
+                }
+            except Exception:
+                pass
 
         proposal = self.proposer.propose(
             current_config=current_config,
@@ -331,6 +356,7 @@ class Optimizer:
             failure_samples=normalized_failure_samples,
             failure_buckets=health_report.failure_buckets,
             past_attempts=past_attempts,
+            project_memory_context=reflection_context,
         )
         if proposal is None:
             return None, "No proposal generated"
@@ -663,6 +689,31 @@ class Optimizer:
             else "",
         )
         self.memory.log(attempt)
+
+        # Reflection: analyze why the attempt succeeded or failed
+        if self.reflection_engine is not None:
+            try:
+                reflection = self.reflection_engine.reflect(
+                    attempt={
+                        "attempt_id": attempt.attempt_id,
+                        "status": attempt.status,
+                        "change_description": attempt.change_description,
+                        "config_section": attempt.config_section,
+                        "score_before": attempt.score_before,
+                        "score_after": attempt.score_after,
+                    },
+                    proposal_reasoning=self._last_strategy_diagnostics.proposal_reasoning or "",
+                    failure_context=change_description,
+                    agent_card_markdown=self.agent_card_markdown,
+                )
+                self._log_event("reflection_completed", {
+                    "attempt_id": attempt.attempt_id,
+                    "outcome": reflection.outcome,
+                    "score_delta": reflection.score_delta,
+                    "confidence": reflection.confidence,
+                })
+            except Exception:
+                pass  # Don't let reflection failures block the loop
 
         if accepted and self.auto_learn_skills and self.skill_autolearner is not None:
             dominant_failure = self._get_dominant_failure_family(health_report.failure_buckets)

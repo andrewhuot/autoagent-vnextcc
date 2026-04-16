@@ -292,81 +292,82 @@ class Proposer:
         guardrails: list[str] | None = None,
         project_memory_context: dict[str, list[str]] | None = None,
     ) -> Proposal | None:
-        """Generate a proposal via configured router and parse structured JSON."""
+        """Generate a proposal via LLMProposer with Agent Card context.
+
+        Delegates to the full LLMProposer which uses structured prompts,
+        the Agent Card representation, failure analysis, and validation.
+        Falls back to mock on any error to keep the loop alive.
+        """
         if self.llm_router is None:
             return self._mock_propose(current_config, health_metrics, failure_buckets, past_attempts)
 
-        payload: dict = {
-            "current_config": current_config,
-            "health_metrics": health_metrics,
-            "failure_buckets": failure_buckets,
-            "failure_samples": failure_samples[:10],
-            "past_attempts": past_attempts[:10],
-            "requirements": [
-                "Return JSON only",
-                "Preserve config schema compatibility",
-                "Prioritize safety first, then measurable quality lift",
-                "Include one concrete change that can be evaluated",
-            ],
-            "response_schema": {
-                "change_description": "string",
-                "config_section": "string",
-                "reasoning": "string",
-                "new_config": "object (full config)",
-                "new_config_patch": "optional object for patch-style updates",
-            },
-        }
-
-        # Inject optimization context when available
-        if optimization_mode or objective or guardrails or project_memory_context:
-            payload["optimization_context"] = {
-                "mode": optimization_mode or "standard",
-                "objective": objective or "",
-                "guardrails": guardrails or [],
-            }
-            if project_memory_context:
-                payload["project_memory_context"] = project_memory_context
-
-        system = (
-            "You are an expert LLM operations optimizer. "
-            "Propose one high-leverage, safe config improvement."
-        )
-        prompt = json.dumps(payload, sort_keys=True)
-
         try:
-            response = self.llm_router.generate(
-                LLMRequest(
-                    prompt=prompt,
-                    system=system,
-                    temperature=0.1,
-                    max_tokens=1500,
-                    metadata={"task": "optimizer_proposal"},
-                )
+            from agent_card.converter import from_config_dict
+            from agent_card.renderer import render_to_markdown
+            from optimizer.failure_analyzer import FailureAnalyzer
+            from optimizer.llm_proposer import LLMProposer
+
+            # Build Agent Card for rich context
+            agent_card = from_config_dict(current_config, name=current_config.get("name", "agent"))
+            agent_card_markdown = render_to_markdown(agent_card)
+
+            # Run failure analysis
+            analyzer = FailureAnalyzer(llm_router=self.llm_router)
+            eval_results = {
+                "failure_buckets": failure_buckets,
+                "failure_samples": failure_samples,
+            }
+            analysis = analyzer.analyze(
+                eval_results=eval_results,
+                agent_card_markdown=agent_card_markdown,
+                past_attempts=past_attempts,
             )
-            parsed = self._extract_json_payload(response.text)
-            if parsed is None:
-                return self._mock_propose(
-                    current_config,
-                    health_metrics,
-                    failure_buckets,
-                    past_attempts,
-                    failure_samples=failure_samples,
-                )
 
-            new_config = parsed.get("new_config")
-            if not isinstance(new_config, dict):
-                patch = parsed.get("new_config_patch")
-                if isinstance(patch, dict):
-                    new_config = self._apply_patch(current_config, patch)
-                else:
-                    new_config = copy.deepcopy(current_config)
+            # Build failure analysis dict for the proposer
+            failure_analysis_dict = {
+                "clusters": [
+                    {
+                        "id": c.cluster_id,
+                        "count": c.count,
+                        "summary": c.description,
+                        "recommended_surface": c.failure_type,
+                    }
+                    for c in analysis.clusters
+                ],
+                "surface_recommendations": {
+                    r.surface: r.reasoning
+                    for r in analysis.surface_recommendations
+                },
+                "summary": analysis.summary,
+            }
 
-            return Proposal(
-                change_description=str(parsed.get("change_description") or "LLM-generated proposal"),
-                config_section=str(parsed.get("config_section") or "unknown"),
-                new_config=new_config,
-                reasoning=str(parsed.get("reasoning") or "No reasoning provided"),
-                patch_bundle=parsed.get("patch_bundle") if isinstance(parsed.get("patch_bundle"), dict) else None,
+            # Build constraints
+            constraints = {}
+            if hasattr(self, "_immutable_surfaces") and self._immutable_surfaces:
+                constraints["immutable_surfaces"] = list(self._immutable_surfaces)
+            if guardrails:
+                constraints["guardrails"] = guardrails
+
+            # Generate proposal via LLMProposer
+            proposer = LLMProposer(llm_router=self.llm_router)
+            proposal = proposer.propose(
+                current_config=current_config,
+                agent_card_markdown=agent_card_markdown,
+                failure_analysis=failure_analysis_dict,
+                past_attempts=past_attempts,
+                objective=objective,
+                constraints=constraints if constraints else None,
+            )
+            if proposal is not None:
+                return proposal
+
+            # LLMProposer returned None (invalid response) — fall back
+            return self._mock_propose(
+                current_config,
+                health_metrics,
+                failure_buckets,
+                past_attempts,
+                failure_samples=failure_samples,
             )
         except Exception:
             # Production-safe fallback keeps loop alive during provider outages.
