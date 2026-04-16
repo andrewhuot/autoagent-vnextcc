@@ -25,6 +25,8 @@ Options:
                                   without manual review.
   --dry-run                       Preview the optimization run without
                                   mutating state.
+  --explain-strategy              Print one line per ranked strategy showing
+                                  why it was chosen.
   -j, --json                      Output as JSON.
   --max-budget-usd FLOAT          Stop before running when workspace spend
                                   reaches this amount.
