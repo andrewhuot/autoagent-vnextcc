@@ -19,6 +19,7 @@ WelcomeCard .welcome-meta { color: #7799bb; }
 MessageList { height: 1fr; min-height: 4; scrollbar-size-vertical: 1; }
 
 MessageWidget { height: auto; padding: 0 1; }
+MessageWidget Markdown { margin: 0; padding: 0; }
 MessageWidget.role-user { color: #4488cc; }
 MessageWidget.role-assistant { color: #c0d0e0; }
 MessageWidget.role-system { color: #556677; }

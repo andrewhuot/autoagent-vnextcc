@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from textual.widgets import Static
+from textual.widget import Widget
+from textual.widgets import Markdown
 
 from cli.workbench_app.transcript import (
     TranscriptEntry,
@@ -23,22 +24,24 @@ _ROLE_CSS_CLASS: dict[TranscriptRole, str] = {
 }
 
 
-class MessageWidget(Static):
-    """Renders a single :class:`TranscriptEntry` as a styled Static widget.
+class MessageWidget(Widget):
+    """Renders a single :class:`TranscriptEntry` as a Markdown widget.
+
+    Uses the same pattern as :class:`StreamingMessage` — composes a child
+    ``Markdown`` widget for rich rendering of transcript content.
 
     The CSS class ``role-<role>`` is applied so the theme can style each
     role differently (user = cyan, error = red, etc.).
     """
 
     def __init__(self, entry: TranscriptEntry, **kwargs: object) -> None:
-        prefix = _ROLE_PREFIX.get(entry.role, "")
         css_class = _ROLE_CSS_CLASS.get(entry.role, "role-system")
-        super().__init__(
-            f"{prefix}{entry.content}",
-            classes=css_class,
-            **kwargs,
-        )
+        super().__init__(classes=css_class, **kwargs)
         self._entry = entry
+        self._prefix = _ROLE_PREFIX.get(entry.role, "")
+
+    def compose(self):
+        yield Markdown(f"{self._prefix}{self._entry.content}")
 
     @property
     def entry(self) -> TranscriptEntry:

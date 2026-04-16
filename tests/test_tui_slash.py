@@ -128,15 +128,17 @@ class TestSlashAdapterRouting:
         assert route.kind == InputKind.EMPTY
         assert len(store.get_state().messages) == 0
 
-    def test_shell_command_shows_warning(self) -> None:
+    def test_shell_command_echoes_and_warns_without_app(self) -> None:
         store: Store[AppState] = Store(get_default_app_state())
         adapter = TUISlashAdapter(store)
 
         route = adapter.handle_input("!ls")
         assert route.kind == InputKind.SHELL
         msgs = store.get_state().messages
-        assert len(msgs) >= 1
-        assert msgs[0].role == "warning"
+        assert len(msgs) >= 2
+        # First message is the user echo, second is warning (no app ref).
+        assert msgs[0].role == "user"
+        assert msgs[1].role == "warning"
 
     def test_unknown_slash_command(self) -> None:
         store: Store[AppState] = Store(get_default_app_state())

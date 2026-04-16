@@ -337,6 +337,13 @@ def set_coordinator_status(status: CoordinatorStatus) -> Updater[AppState]:
     return _update
 
 
+def set_background_tasks(tasks: tuple[Any, ...]) -> Updater[AppState]:
+    """Return an updater that replaces the background task snapshot."""
+    def _update(state: AppState) -> AppState:
+        return replace(state, background_tasks=tasks)
+    return _update
+
+
 def update_worker(worker_id: str, **fields: Any) -> Updater[AppState]:
     """Return an updater that patches a single worker's state.
 

@@ -28,7 +28,7 @@ import itertools
 import time
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Iterable
+from typing import Callable, Iterable
 
 
 class TaskStatus(str, Enum):
@@ -79,6 +79,18 @@ class BackgroundTaskRegistry:
 
     tasks: dict[str, BackgroundTask] = field(default_factory=dict)
     _id_seq: itertools.count = field(default_factory=lambda: itertools.count(1))
+    _on_change: Callable[[], None] | None = None
+
+    def set_on_change(self, callback: Callable[[], None] | None) -> None:
+        """Register a callback invoked after every mutation.
+
+        The TUI uses this to sync registry state into the reactive store
+        so the ``BackgroundPanel`` widget re-renders automatically."""
+        self._on_change = callback
+
+    def _notify(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
 
     def register(
         self,
@@ -100,6 +112,7 @@ class BackgroundTaskRegistry:
             detail=detail,
         )
         self.tasks[task_id] = task
+        self._notify()
         return task
 
     def update(
@@ -116,6 +129,7 @@ class BackgroundTaskRegistry:
         if task is None:
             return None
         task.touch(status=status, detail=detail)
+        self._notify()
         return task
 
     def get(self, task_id: str) -> BackgroundTask | None:
@@ -161,6 +175,8 @@ class BackgroundTaskRegistry:
         ]
         for task_id in to_remove:
             self.tasks.pop(task_id, None)
+        if to_remove:
+            self._notify()
         return len(to_remove)
 
 

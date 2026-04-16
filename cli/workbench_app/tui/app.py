@@ -209,7 +209,15 @@ def run_tui_app(
     except Exception:
         logger.debug("Could not read permission mode", exc_info=True)
 
-    # Build slash adapter with command registry.
+    # Build the full workbench runtime (same logic as CLI path).
+    runtime = _maybe_build_tui_runtime(workspace, store)
+    orchestrator = runtime.orchestrator if runtime else None
+
+    # Wire the background task registry → store so the panel updates live.
+    if runtime is not None:
+        _wire_background_registry(runtime.background_tasks, store)
+
+    # Build slash adapter with command registry and orchestrator.
     slash_adapter = None
     try:
         from cli.workbench_app.slash import build_builtin_registry
@@ -220,11 +228,97 @@ def run_tui_app(
             store,
             workspace=workspace,
             registry=registry,
+            orchestrator=orchestrator,
+            background_registry=runtime.background_tasks if runtime else None,
         )
     except Exception:
         logger.warning("Could not build slash adapter", exc_info=True)
 
     app = WorkbenchTUIApp(store=store, slash_adapter=slash_adapter)
+
+    # Give the adapter a reference to the app for suspend/resume.
+    if slash_adapter is not None:
+        slash_adapter.app = app
+
     app.run()
 
     return StubAppResult(lines_read=0, exited_via="tui")
+
+
+def _wire_background_registry(
+    registry: Any,
+    store: Store[AppState],
+) -> None:
+    """Connect a :class:`BackgroundTaskRegistry` to the store.
+
+    Every mutation on the registry pushes the current task list into
+    ``AppState.background_tasks`` so the ``BackgroundPanel`` widget
+    re-renders automatically.
+    """
+    from cli.workbench_app.store import set_background_tasks
+
+    def _on_registry_changed() -> None:
+        snapshot = tuple(registry.list())
+        store.set_state(set_background_tasks(snapshot))
+
+    registry.set_on_change(_on_registry_changed)
+
+
+def _maybe_build_tui_runtime(
+    workspace: Any | None,
+    store: Store[AppState],
+) -> Any | None:
+    """Build a :class:`WorkbenchRuntime` for the TUI when a model is available.
+
+    Mirrors :func:`cli.workbench_app.app._maybe_build_orchestrator` but
+    returns the full runtime so callers can access all subsystems
+    (orchestrator, background registry, etc.). Returns ``None`` if no
+    model is configured.
+    """
+    import os
+
+    if os.environ.get("AGENTLAB_CLASSIC_COORDINATOR"):
+        return None
+    if workspace is None:
+        return None
+
+    try:
+        from cli.workbench_app.app import _select_chat_model
+    except ImportError:
+        return None
+
+    choice = _select_chat_model(workspace, None)
+    if choice is None:
+        return None
+
+    try:
+        from pathlib import Path
+
+        from cli.llm.providers import create_model_client
+        from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
+
+        model_kwargs: dict[str, Any] = {
+            "model": choice.model,
+            "echo_fallback_on_missing_keys": False,
+        }
+        if getattr(choice, "api_key", None) is not None:
+            model_kwargs["api_key"] = choice.api_key
+
+        model = create_model_client(**model_kwargs)
+        workspace_root = Path(workspace.root) if hasattr(workspace, "root") else Path.cwd()
+
+        runtime = build_workbench_runtime(
+            workspace_root=workspace_root,
+            model=model,
+            active_model=choice.active_model,
+            echo=lambda _line: None,
+        )
+
+        # Update the store with the active model name.
+        store.set_state(lambda s: replace(s, model=choice.model))
+
+        logger.info("TUI runtime built with model %s", choice.model)
+        return runtime
+    except Exception:
+        logger.debug("Could not build TUI runtime", exc_info=True)
+        return None

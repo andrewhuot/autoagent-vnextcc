@@ -49,6 +49,11 @@ MessageWidget {
     margin: 0 0 0 0;
 }
 
+MessageWidget Markdown {
+    margin: 0;
+    padding: 0;
+}
+
 MessageWidget.role-user {
     color: $accent;
 }
