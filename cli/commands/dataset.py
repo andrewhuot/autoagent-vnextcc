@@ -62,6 +62,107 @@ def _write_cases_yaml(cases: Iterable, path: Path) -> None:
     )
 
 
+def _load_cases_with_sources(src_dir: Path):
+    """Read YAML case files under *src_dir* and track each case's source file.
+
+    Returns ``(cases, case_sources, file_order)`` where ``case_sources`` maps
+    ``case.id -> Path`` and ``file_order`` is the sorted list of YAML files.
+    We don't reuse ``EvalRunner.load_cases()`` because it doesn't expose
+    source-file provenance, which the rewrite step needs.
+    """
+    from evals.runner import TestCase
+
+    file_order = sorted(p for p in src_dir.iterdir() if p.suffix in (".yaml", ".yml"))
+    cases: list = []
+    case_sources: dict[str, Path] = {}
+    seen_ids: set[str] = set()
+
+    for yaml_path in file_order:
+        try:
+            data = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+        except yaml.YAMLError as exc:
+            raise click.ClickException(
+                f"Failed to parse {yaml_path}: {exc}"
+            ) from exc
+        entries = data.get("cases") or []
+        if not isinstance(entries, list):
+            raise click.ClickException(
+                f"{yaml_path}: 'cases' must be a list (got {type(entries).__name__})"
+            )
+        for entry in entries:
+            if not isinstance(entry, dict) or "id" not in entry:
+                raise click.ClickException(
+                    f"{yaml_path}: every case must be a mapping with an 'id'"
+                )
+            case_id = str(entry["id"])
+            if case_id in seen_ids:
+                raise click.ClickException(
+                    f"Duplicate case id '{case_id}' found across YAML files "
+                    "(cannot dedupe with ambiguous ids)"
+                )
+            seen_ids.add(case_id)
+            case = TestCase(
+                id=case_id,
+                category=str(entry.get("category", "")),
+                user_message=str(entry.get("user_message", "")),
+                expected_specialist=str(entry.get("expected_specialist", "")),
+                expected_behavior=str(entry.get("expected_behavior", "")),
+                safety_probe=bool(entry.get("safety_probe", False)),
+                expected_keywords=list(entry.get("expected_keywords", []) or []),
+                expected_tool=entry.get("expected_tool"),
+                split=entry.get("split"),
+                reference_answer=str(entry.get("reference_answer", "")),
+                tags=list(entry.get("tags", []) or []),
+            )
+            cases.append(case)
+            case_sources[case_id] = yaml_path
+
+    return cases, case_sources, file_order
+
+
+def _print_dedupe_report(report, threshold: float) -> None:
+    """Print the dedupe summary as specified in the plan."""
+    click.echo(f"Dedupe @ threshold={threshold}")
+    click.echo(f"Kept: {len(report.kept)}")
+    click.echo(f"Dropped: {len(report.dropped_ids)}")
+    for kept_id, dropped_id, sim in report.dropped_pairs:
+        click.echo(f"  {kept_id} \u2190 {dropped_id} (sim={sim:.3f})")
+
+
+def _rewrite_source_dir(
+    src_dir: Path,
+    kept_cases: list,
+    case_sources: dict,
+    file_order: list,
+) -> None:
+    """Rewrite each source YAML to contain only its surviving cases.
+
+    YAML files that end up with zero cases are deleted.
+    """
+    kept_ids = {c.id for c in kept_cases}
+    # Group kept cases by source file, preserving each file's original order
+    # (we iterate kept_cases which is already in original load order).
+    by_file: dict[Path, list] = {p: [] for p in file_order}
+    for case in kept_cases:
+        src = case_sources.get(case.id)
+        if src is None:  # pragma: no cover — defensive
+            continue
+        by_file.setdefault(src, []).append(case)
+
+    for yaml_path in file_order:
+        remaining = by_file.get(yaml_path, [])
+        if not remaining:
+            # Entire file dropped — remove it.
+            if yaml_path.exists():
+                yaml_path.unlink()
+            continue
+        _write_cases_yaml(remaining, yaml_path)
+    # Sanity: every kept case must have been written somewhere.
+    assert kept_ids.issubset(
+        {c.id for cases in by_file.values() for c in cases}
+    ), "dedupe rewrite dropped a kept case"
+
+
 def register_dataset_commands(eval_group: click.Group) -> None:
     """Attach the `dataset` subgroup (import/export) to *eval_group*."""
 
@@ -165,6 +266,81 @@ def register_dataset_commands(eval_group: click.Group) -> None:
 
         _write_cases_yaml(cases, out_path)
         click.echo(f"Imported {len(cases)} cases from {source} \u2192 {out_path}")
+
+    @dataset_group.command("dedupe")
+    @click.option(
+        "--source",
+        default=_DEFAULT_OUTPUT_DIR,
+        show_default=True,
+        help="Directory of YAML case files to read.",
+    )
+    @click.option(
+        "--threshold",
+        type=float,
+        default=0.95,
+        show_default=True,
+        help="Cosine similarity threshold.",
+    )
+    @click.option(
+        "--dry-run",
+        is_flag=True,
+        default=False,
+        help="Report drops without modifying any files.",
+    )
+    @click.option(
+        "--output",
+        default=None,
+        type=click.Path(),
+        help="If set, write kept cases to a single YAML at this path "
+             "instead of rewriting --source.",
+    )
+    def dataset_dedupe(
+        source: str,
+        threshold: float,
+        dry_run: bool,
+        output: str | None,
+    ) -> None:
+        """Remove near-duplicate eval cases by cosine similarity.
+
+        Examples:
+          agentlab eval dataset dedupe --source evals/cases --dry-run
+          agentlab eval dataset dedupe --threshold 0.9
+          agentlab eval dataset dedupe --output deduped.yaml
+        """
+        from evals.dataset import get_default_embedder
+        from evals.dataset.dedupe import dedupe as _dedupe
+
+        src_dir = Path(source)
+        if not src_dir.is_dir():
+            raise click.ClickException(f"Source directory not found: {src_dir}")
+
+        cases, case_sources, file_order = _load_cases_with_sources(src_dir)
+        if not cases:
+            raise click.ClickException(f"No cases found under {src_dir}")
+
+        try:
+            embedder = get_default_embedder()
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        try:
+            report = _dedupe(cases, embedder, threshold=threshold)
+        except ValueError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        _print_dedupe_report(report, threshold)
+
+        if dry_run:
+            return
+
+        if output:
+            out_path = Path(output)
+            _write_cases_yaml(report.kept, out_path)
+            click.echo(f"Wrote {len(report.kept)} kept cases \u2192 {out_path}")
+            return
+
+        # Rewrite the source directory in place.
+        _rewrite_source_dir(src_dir, report.kept, case_sources, file_order)
 
     @dataset_group.command("export")
     @click.argument("output", required=True, type=click.Path())
