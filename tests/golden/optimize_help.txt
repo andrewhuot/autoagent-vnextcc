@@ -1,0 +1,40 @@
+Usage: agentlab optimize [OPTIONS]
+
+  Run optimization cycles to improve agent config.
+
+  Examples:   agentlab optimize   agentlab optimize --cycles 5   agentlab
+  optimize --continuous   agentlab optimize --mode advanced --cycles 3
+
+Options:
+  --cycles INTEGER                Number of optimization cycles.  [default: 1]
+  --continuous                    Loop indefinitely until Ctrl+C.
+  --mode [standard|advanced|research]
+                                  Optimization mode (replaces --strategy).
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --config TEXT                   Optimize a specific config path instead of
+                                  the active config.
+  --eval-run-id TEXT              Use a specific eval run as optimization
+                                  evidence.
+  --require-eval-evidence         Fail if no completed eval evidence is
+                                  available for this optimization.
+  --memory-db TEXT                Optimizer memory DB.  [default:
+                                  optimizer_memory.db]
+  --full-auto                     Danger mode: auto-promote accepted configs
+                                  without manual review.
+  --dry-run                       Preview the optimization run without
+                                  mutating state.
+  -j, --json                      Output as JSON.
+  --max-budget-usd FLOAT          Stop before running when workspace spend
+                                  reaches this amount.
+  --strict-live / --no-strict-live
+                                  Exit non-zero (12) if optimizer would run in
+                                  mock mode (no provider key).
+  --output-format [text|json|stream-json]
+                                  Render text, a final JSON envelope, or
+                                  stream JSON progress events.  [default:
+                                  text]
+  --ui [auto|claude|classic]      Interactive UI mode for text output.
+                                  [default: (auto)]
+  --help                          Show this message and exit.

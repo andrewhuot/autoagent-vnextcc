@@ -1,0 +1,47 @@
+  o   o      _                _   _         _
+   \ /      /_\  __ _ ___ _ _| |_| |   __ _| |__
+    O      / _ \/ _` / -_) ' \  _| |__/ _` | '_ \
+   / \    /_/ \_\__, \___|_||_\__|____\__,_|_.__/
+  o   o         |___/
+          Experiment. Evaluate. Refine.   v1.0.0
+Usage: agentlab [OPTIONS] COMMAND [ARGS]...
+
+  AgentLab VNextCC — agent optimization platform.
+
+  A product-grade platform for iterating ADK agent quality. CLI-first, API-
+  ready, with a web console for visual insight.
+
+Options:
+  --version    Show the version and exit.
+  --classic    Launch the classic REPL shell instead of the new Workbench UI.
+  --quiet      Suppress the branded startup banner.
+  --no-banner  Suppress the branded startup banner.
+  --help       Show this message and exit.
+
+Primary Commands:
+  build        Build agent artifacts or inspect the latest build output.
+  deploy       Deploy a config version with canary, release, and...
+  doctor       Check system health and configuration.
+  eval         Evaluate agent configs against test suites.
+  new          Create a new starter workspace and print the recommended...
+  optimize     Run optimization cycles to improve agent config.
+  shell        Launch the interactive AgentLab Workbench shell.
+  ship         Apply pending review, create a release, and deploy the...
+  status       Show system health, config versions, and recent activity.
+  workbench    Build, inspect, iterate, and materialize Workbench...
+
+Secondary Commands:
+  config       Manage agent config versions and related edit, pin, and...
+  connect      Connect existing agent runtimes and transcript exports...
+  context      Context Engineering Workbench — diagnose and tune agent...
+  harness      Inspect long-running harness lifecycle, evidence, and...
+  instruction  Inspect, edit, validate, generate, and migrate agent...
+  memory       Project memory — manage AGENTLAB.md persistent context.
+  mode         Show or set explicit CLI execution mode.
+  model        Inspect and override workspace model preferences.
+  provider     Configure and validate workspace provider settings.
+  review       Review proposed change cards from the optimizer.
+  template     List and apply bundled starter workspace templates.
+
+  Run `agentlab advanced` to see all commands.
+

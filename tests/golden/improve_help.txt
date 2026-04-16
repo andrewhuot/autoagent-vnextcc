@@ -1,0 +1,11 @@
+Usage: agentlab improve [OPTIONS] COMMAND [ARGS]...
+
+  Improvement workflows and compatibility aliases.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  list      List improvements with their lineage (proposal -> deploy ->...
+  optimize  Compatibility alias for `agentlab optimize`.
+  show      Show a single improvement with its full lineage.
