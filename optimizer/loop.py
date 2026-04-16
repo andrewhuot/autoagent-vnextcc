@@ -6,6 +6,7 @@ import json
 import hashlib
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
@@ -20,7 +21,7 @@ from observer.opportunities import FailureClusterer, OptimizationOpportunity
 from data.event_log import EventLog
 from .adversarial import AdversarialSimulator
 from .cost_tracker import CostTracker
-from .gates import Gates
+from .gates import Gates, RejectionReason, RejectionRecord, rejection_from_status
 from .human_control import HumanControlStore
 from .memory import OptimizationAttempt, OptimizationMemory
 from .mutations import create_default_registry
@@ -169,6 +170,11 @@ class Optimizer:
         self.failure_clusterer = FailureClusterer()
         self.anti_goodhart = AntiGoodhartGuard(anti_goodhart_config)
         self._rolling_holdout_offset = 0
+        # Bounded ring buffer of structured rejection records (R1.7) so
+        # downstream surfaces (e.g. ``agentlab improve list``) can correlate
+        # rejected attempts with the OptimizationAttempt rows persisted to
+        # memory via the shared ``attempt_id``.
+        self._recent_rejections: deque[RejectionRecord] = deque(maxlen=200)
         self._last_strategy_diagnostics = StrategyDiagnostics(
             strategy=self.search_strategy.value,
             selected_operator_family=None,
@@ -690,6 +696,27 @@ class Optimizer:
         )
         self.memory.log(attempt)
 
+        # R1.7: mirror inline gates-evaluate rejections to the structured
+        # ring buffer so they can be surfaced via Optimizer.recent_rejections.
+        if not accepted:
+            try:
+                rejection_reason_enum = rejection_from_status(status)
+            except ValueError:
+                rejection_reason_enum = RejectionReason.GATE_FAILED
+            self._recent_rejections.append(
+                RejectionRecord(
+                    attempt_id=attempt.attempt_id,
+                    reason=rejection_reason_enum,
+                    detail=reason,
+                    baseline_score=baseline_score.composite,
+                    candidate_score=candidate_score.composite,
+                    metadata={
+                        "config_section": config_section,
+                        "status": status,
+                    },
+                )
+            )
+
         # Reflection: analyze why the attempt succeeded or failed
         if self.reflection_engine is not None:
             try:
@@ -1006,15 +1033,26 @@ class Optimizer:
         rejection_reason: str,
         config_diff: str | None = None,
     ) -> None:
-        """Persist a rejected attempt with a standardized record shape."""
+        """Persist a rejected attempt with a standardized record shape.
+
+        Also appends a structured :class:`RejectionRecord` to the bounded
+        ``self._recent_rejections`` ring buffer so downstream surfaces can
+        correlate it with the persisted ``OptimizationAttempt`` via the
+        shared ``attempt_id``.
+        """
         # Build skills_applied JSON array from current cycle skills
         skills_applied_json = "[]"
         if self._current_cycle_skills:
             skill_ids = [skill.id for skill in self._current_cycle_skills]
             skills_applied_json = json.dumps(skill_ids)
 
+        # Generate the attempt id once and reuse it for both the persisted
+        # OptimizationAttempt and the in-memory RejectionRecord so callers
+        # can join them.
+        attempt_id = str(uuid.uuid4())[:8]
+
         attempt = OptimizationAttempt(
-            attempt_id=str(uuid.uuid4())[:8],
+            attempt_id=attempt_id,
             timestamp=time.time(),
             change_description=change_description,
             config_diff=config_diff or rejection_reason,
@@ -1024,6 +1062,41 @@ class Optimizer:
             skills_applied=skills_applied_json,
         )
         self.memory.log(attempt)
+
+        # Mirror to the structured rejection ring buffer (R1.7).
+        try:
+            reason = rejection_from_status(rejection_status)
+        except ValueError:
+            # Defensive: not a rejection status — should not happen here,
+            # but fall back to GATE_FAILED rather than crashing the loop.
+            reason = RejectionReason.GATE_FAILED
+        self._recent_rejections.append(
+            RejectionRecord(
+                attempt_id=attempt_id,
+                reason=reason,
+                detail=rejection_reason,
+                baseline_score=None,
+                candidate_score=None,
+                metadata={
+                    "config_section": config_section,
+                    "status": rejection_status,
+                },
+            )
+        )
+
+    def recent_rejections(
+        self, limit: int | None = None
+    ) -> list[RejectionRecord]:
+        """Return recent structured rejection records, newest first.
+
+        Args:
+            limit: Optional cap on the number of records returned. ``None``
+                returns all buffered records.
+        """
+        ordered = list(reversed(self._recent_rejections))
+        if limit is None:
+            return ordered
+        return ordered[:limit]
 
     def set_immutable_surfaces(self, surfaces: list[str]) -> None:
         """Update immutable surfaces from human control state."""
