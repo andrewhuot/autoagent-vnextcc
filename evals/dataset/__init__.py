@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 
+from .balance import BalanceReport, balance, histogram, recommendations
 from .embedder import CachedEmbedder, Embedder, FakeEmbedder, OpenAIEmbedder
 from .exporters import export_csv, export_jsonl
 from .importers import load_csv, load_huggingface, load_jsonl
@@ -27,14 +28,18 @@ def get_default_embedder() -> Embedder:
 
 
 __all__ = [
+    "BalanceReport",
     "CachedEmbedder",
     "Embedder",
     "FakeEmbedder",
     "OpenAIEmbedder",
+    "balance",
     "export_csv",
     "export_jsonl",
     "get_default_embedder",
+    "histogram",
     "load_csv",
     "load_huggingface",
     "load_jsonl",
+    "recommendations",
 ]
