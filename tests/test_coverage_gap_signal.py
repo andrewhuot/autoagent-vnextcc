@@ -65,22 +65,43 @@ def test_gap_signal_dict_keys_surfaces() -> None:
 
 
 def test_gap_signal_dict_aggregates_same_surface() -> None:
-    """When multiple gaps share a surface, aggregate to max severity and max delta.
+    """When multiple gaps share a surface, a single representative wins.
 
     The real analyzer emits one gap per route/tool/guardrail/category, all sharing
     the same `surface` string (e.g., "routing_rule", "guardrail", "category"). The
-    dict keys by surface, so duplicates must aggregate rather than collapse to last.
+    dict keys by surface; duplicates collapse to the gap with (highest severity,
+    then largest delta). All fields — severity, gap, current, recommended,
+    description — come from that winning gap so the representation stays
+    internally consistent for downstream LLM prompts.
     """
     analyzer = _analyzer_with_report([
         _gap("routing_rule", "high", 1, 2),       # delta=1
-        _gap("routing_rule", "critical", 0, 5),   # delta=5, higher severity
+        _gap("routing_rule", "critical", 0, 5),   # delta=5, higher severity — winner
         _gap("routing_rule", "medium", 0, 10),    # delta=10, but lower severity
     ])
     d = analyzer.gap_signal_dict()
     assert set(d.keys()) == {"routing_rule"}
-    # Aggregated: highest severity wins, and largest delta tracked independently
+    # Winning gap: severity=critical, delta=5. All fields co-vary with that winner.
     assert d["routing_rule"]["severity"] == "critical"
-    assert d["routing_rule"]["gap"] == 10  # max delta across entries
+    assert d["routing_rule"]["gap"] == 5
+    assert d["routing_rule"]["current"] == 0
+    assert d["routing_rule"]["recommended"] == 5
+    # Description comes from the same winning gap (contains "0/5").
+    assert "0/5" in d["routing_rule"]["description"]
+
+
+def test_gap_signal_dict_same_severity_breaks_by_delta() -> None:
+    """When severities tie, the gap with the largest delta wins."""
+    analyzer = _analyzer_with_report([
+        _gap("routing_rule", "high", 4, 6),   # delta=2
+        _gap("routing_rule", "high", 0, 8),   # delta=8 — winner on delta tie-break
+        _gap("routing_rule", "high", 1, 3),   # delta=2
+    ])
+    d = analyzer.gap_signal_dict()
+    assert d["routing_rule"]["severity"] == "high"
+    assert d["routing_rule"]["gap"] == 8
+    assert d["routing_rule"]["current"] == 0
+    assert d["routing_rule"]["recommended"] == 8
 
 
 def test_analyze_caches_last_report() -> None:

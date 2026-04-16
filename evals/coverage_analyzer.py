@@ -131,10 +131,11 @@ class CoverageAnalyzer:
         """Return gap info keyed by surface for rich prompt injection.
 
         When multiple gaps share a surface (the real analyzer emits one per
-        route/tool/guardrail/category), entries aggregate: severity collapses to
-        the highest-severity gap for that surface, gap/current/recommended track
-        the largest delta, and description comes from the gap that determined the
-        aggregated severity.
+        route/tool/guardrail/category), a single representative gap wins per
+        surface. The winner is chosen by (severity desc, delta desc); all
+        fields — severity, gap, current, recommended, description — come from
+        that same winning gap. This keeps the description, counts, and severity
+        internally consistent for downstream LLM prompts.
         """
         report = self._last_report
         if report is None:
@@ -143,29 +144,19 @@ class CoverageAnalyzer:
         for g in report.gaps:
             delta = g.recommended_count - g.current_count
             sev_rank = self._SEVERITY_ORDER.get(g.severity, 0)
+            candidate = (sev_rank, delta)
             existing = out.get(g.surface)
-            if existing is None:
+            if existing is None or candidate > existing["_sort_key"]:
                 out[g.surface] = {
                     "severity": g.severity,
-                    "_severity_rank": sev_rank,
+                    "_sort_key": candidate,
                     "gap": delta,
                     "current": g.current_count,
                     "recommended": g.recommended_count,
                     "description": g.description,
                 }
-                continue
-            # Take highest severity; description follows the severity winner.
-            if sev_rank > existing["_severity_rank"]:
-                existing["severity"] = g.severity
-                existing["_severity_rank"] = sev_rank
-                existing["description"] = g.description
-            # Track the largest delta (and its current/recommended counts).
-            if delta > existing["gap"]:
-                existing["gap"] = delta
-                existing["current"] = g.current_count
-                existing["recommended"] = g.recommended_count
         for entry in out.values():
-            entry.pop("_severity_rank", None)
+            entry.pop("_sort_key", None)
         return out
 
     def analyze(
