@@ -1,49 +1,56 @@
-"""`/optimize` slash command — streams ``agentlab optimize`` into the transcript.
+"""`/optimize` slash command — runs ``agentlab optimize`` **in-process** (R4.4).
 
-T10 adds a streaming slash command that shells out to the existing
-``agentlab optimize`` Click command, pipes its ``--output-format stream-json``
-output through :func:`cli.workbench_render.format_workbench_event`, and
-surfaces a per-cycle summary when the run finishes.
+The handler no longer spawns a subprocess. It calls
+:func:`cli.commands.optimize.run_optimize_in_process` on a background
+thread and bridges its ``on_event`` callback into a :class:`queue.Queue`
+so the existing synchronous-generator renderer + spinner machinery keeps
+its shape. On a successful run, ``ctx.meta["workbench_session"]``'s
+session is updated with ``last_attempt_id``, ``last_eval_run_id`` and
+``current_config_path``.
 
-The subprocess runner is an injectable seam (:data:`StreamRunner`) so tests
-don't need to spawn a real process — they hand in a callable that yields
-pre-baked event dicts. The default runner uses :mod:`subprocess` with a
-line-buffered pipe and ``sys.executable -m`` so the child picks up the same
-interpreter + venv as the workbench.
+The R4.4 extra wrinkle: ``/optimize`` auto-injects
+``session.last_eval_run_id`` into the runner kwargs when the user omits
+``--eval-run-id``. If neither source provides one, the handler renders a
+transcript error (``"run /eval first"``) rather than letting the run
+start without evidence.
+
+The runner remains an injectable seam (:data:`StreamRunner`) so tests
+can hand in a callable that yields pre-baked event dicts without
+touching the real optimizer stack.
 """
 
 from __future__ import annotations
 
+import queue
 import shlex
-import sys
+import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
-from cli.workbench_app._subprocess import (
-    DEFAULT_STALL_TIMEOUT_S,
-    SubprocessStreamError,
-    stream_subprocess,
-)
+from cli.workbench_app._subprocess import DEFAULT_STALL_TIMEOUT_S
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
 
 
+_SENTINEL: Any = object()
+
+
 StreamEvent = dict[str, Any]
-"""One JSON event emitted by a stream-json subprocess."""
+"""One JSON event emitted by a stream-json source."""
 
 StreamRunner = Callable[..., Iterator[StreamEvent]]
-"""Given ``(args,)`` yield parsed JSON events until the process exits.
+"""Given ``(args,)`` yield parsed JSON events until the run exits.
 
 Raise :class:`OptimizeCommandError` for non-zero exits or parse failures.
-Tests inject a generator in place of the real subprocess.
+Tests inject a generator in place of the real in-process runner.
 """
 
 
 class OptimizeCommandError(RuntimeError):
-    """Raised by a :data:`StreamRunner` when the subprocess fails."""
+    """Raised by a :data:`StreamRunner` (or session resolver) on failure."""
 
 
 @dataclass(frozen=True)
@@ -58,17 +65,123 @@ class OptimizeSummary:
     errors: int = 0
     next_action: str | None = None
     exit_code: int | None = None
+    eval_run_id: str | None = None
+    attempt_id: str | None = None
+    config_path: str | None = None
+    status: str | None = None
 
 
 # The phase label ``optimize`` uses for per-cycle ``phase_completed`` events.
-# See ``runner.optimize`` (~line 4426) — every completed cycle emits one of
-# these with a "Cycle N <status>" message. Tracking this gives us a cycle
-# counter in the summary without re-implementing cycle bookkeeping.
+# See ``runner.optimize`` — every completed cycle emits one of these with a
+# "Cycle N <status>" message. Tracking this gives us a cycle counter in the
+# summary without re-implementing cycle bookkeeping.
 _CYCLE_PHASE = "optimize-cycle"
 
 
 # ---------------------------------------------------------------------------
-# Default subprocess runner
+# Argv parser + session resolver
+# ---------------------------------------------------------------------------
+
+
+def _args_to_kwargs(args: Sequence[str]) -> dict[str, Any]:
+    """Translate the ``/optimize`` argv shape into ``run_optimize_in_process`` kwargs.
+
+    Mirrors the Click wrapper's argument spec so the slash handler can
+    drive the exact same business logic. Unknown flags are dropped — the
+    slash command surface is deliberately narrower than the full CLI.
+    """
+    kwargs: dict[str, Any] = {
+        "cycles": 1,
+        "continuous": False,
+        "mode": None,
+        "strategy": None,
+        "config_path": None,
+        "eval_run_id": None,
+        "require_eval_evidence": False,
+        "full_auto": False,
+        "dry_run": False,
+        "explain_strategy": False,
+        "max_budget_usd": None,
+        "strict_live": False,
+        "force_mock": False,
+    }
+    it = iter(args)
+    for token in it:
+        if token == "--cycles":
+            value = next(it, None)
+            if value is not None:
+                try:
+                    kwargs["cycles"] = int(value)
+                except ValueError:
+                    pass
+        elif token == "--continuous":
+            kwargs["continuous"] = True
+        elif token == "--mode":
+            value = next(it, None)
+            if value is not None:
+                kwargs["mode"] = value
+        elif token == "--strategy":
+            value = next(it, None)
+            if value is not None:
+                kwargs["strategy"] = value
+        elif token == "--config":
+            value = next(it, None)
+            if value is not None:
+                kwargs["config_path"] = value
+        elif token == "--eval-run-id":
+            value = next(it, None)
+            if value is not None:
+                kwargs["eval_run_id"] = value
+        elif token == "--require-eval-evidence":
+            kwargs["require_eval_evidence"] = True
+        elif token == "--full-auto":
+            kwargs["full_auto"] = True
+        elif token == "--dry-run":
+            kwargs["dry_run"] = True
+        elif token == "--explain-strategy":
+            kwargs["explain_strategy"] = True
+        elif token == "--max-budget-usd":
+            value = next(it, None)
+            if value is not None:
+                try:
+                    kwargs["max_budget_usd"] = float(value)
+                except ValueError:
+                    pass
+        elif token == "--strict-live":
+            kwargs["strict_live"] = True
+        elif token == "--no-strict-live":
+            kwargs["strict_live"] = False
+        elif token == "--mock":
+            kwargs["force_mock"] = True
+        # Unknown flags are intentionally ignored for the slash surface.
+    return kwargs
+
+
+def _resolve_session_eval_run_id(
+    kwargs: dict[str, Any],
+    session: Any,
+) -> dict[str, Any]:
+    """Inject ``session.last_eval_run_id`` into kwargs when user omitted it.
+
+    User-provided ``eval_run_id`` in ``kwargs`` always wins. Raises
+    :class:`OptimizeCommandError` when neither the user nor the session
+    supplies one — ``/optimize`` without eval evidence is a command-shape
+    error, surfaced via transcript rather than an opaque run failure.
+    """
+    out = dict(kwargs)
+    if out.get("eval_run_id"):
+        return out
+    session_value = getattr(session, "last_eval_run_id", None) if session is not None else None
+    if not session_value:
+        raise OptimizeCommandError(
+            "/optimize needs an eval run — run /eval first or pass --eval-run-id <id>."
+        )
+    out["eval_run_id"] = session_value
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Default in-process runner (R4.4) — thread + queue bridge
 # ---------------------------------------------------------------------------
 
 
@@ -78,31 +191,49 @@ def _default_stream_runner(
     cancellation: CancellationToken | None = None,
     stall_timeout_s: float = DEFAULT_STALL_TIMEOUT_S,
 ) -> Iterator[StreamEvent]:
-    """Spawn ``agentlab optimize`` and yield stream-json events line by line.
+    """Run ``optimize`` in-process on a background thread; yield events.
 
-    Delegates the transport (pipe, stall timeout, cancellation) to
-    :func:`cli.workbench_app._subprocess.stream_subprocess`; this function
-    only owns the argv layout and error translation to
-    :class:`OptimizeCommandError` so existing handler ``except`` clauses
-    continue to work.
+    Parses ``args`` into :func:`cli.commands.optimize.run_optimize_in_process`
+    kwargs, spins up a worker thread, and bridges the worker's
+    ``on_event`` callback into this generator via a :class:`queue.Queue`.
+    Domain exceptions (``MockFallbackError``,
+    ``LiveOptimizeRequiredError``, anything else) are captured and re-
+    raised as :class:`OptimizeCommandError` at the boundary — matching
+    the prior subprocess runner's failure class so existing ``except``
+    clauses continue to work.
+
+    The ``cancellation`` and ``stall_timeout_s`` kwargs are preserved for
+    ``_invoke_runner`` API compatibility; ``stall_timeout_s`` is a no-op
+    in-process. Cancellation is observed by KeyboardInterrupt in the
+    worker (the outer handler wires ctx.cancellation to a ctrl-c signal).
     """
-    cmd: list[str] = [
-        sys.executable,
-        "-m",
-        "runner",
-        "optimize",
-        "--output-format",
-        "stream-json",
-        *args,
-    ]
+    from cli.commands.optimize import run_optimize_in_process
+
+    kwargs = _args_to_kwargs(args)
+    q: queue.Queue = queue.Queue()
+    error_holder: dict[str, BaseException] = {}
+
+    def _worker() -> None:
+        try:
+            run_optimize_in_process(**kwargs, on_event=q.put)
+        except BaseException as exc:  # capture domain + unexpected errors
+            error_holder["value"] = exc
+        finally:
+            q.put(_SENTINEL)
+
+    t = threading.Thread(target=_worker, daemon=True, name="optimize-in-process")
+    t.start()
     try:
-        yield from stream_subprocess(
-            cmd,
-            stall_timeout_s=stall_timeout_s,
-            cancellation=cancellation,
-            on_nonjson=lambda line: {"event": "warning", "message": line},
-        )
-    except SubprocessStreamError as exc:
+        while True:
+            item = q.get()
+            if item is _SENTINEL:
+                break
+            yield item
+    finally:
+        t.join(timeout=5.0)
+
+    if "value" in error_holder:
+        exc = error_holder["value"]
         raise OptimizeCommandError(f"optimize: {exc}") from exc
 
 
@@ -121,12 +252,7 @@ def _render_event(event: StreamEvent) -> str | None:
 
 
 def _advance_phase(spin: Any, event: StreamEvent) -> None:
-    """Update the spinner's phase label when a meaningful event arrives.
-
-    Optimize streams ``phase_started`` / ``phase_completed`` events from
-    :class:`cli.progress.ProgressRenderer`; bubble the phase name up to the
-    spinner so users see which optimizer stage is active.
-    """
+    """Update the spinner's phase label when a meaningful event arrives."""
     name = str(event.get("event", ""))
     data = {k: v for k, v in event.items() if k != "event"}
     if name == "phase_started":
@@ -149,6 +275,10 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Opt
     }
     artifacts: list[str] = []
     next_action: str | None = None
+    eval_run_id: str | None = None
+    attempt_id: str | None = None
+    config_path: str | None = None
+    status: str | None = None
     for event in events:
         counters["events"] += 1
         name = event.get("event")
@@ -168,6 +298,21 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Opt
             message = event.get("message")
             if message:
                 next_action = str(message)
+        elif name == "optimize_complete":
+            # R4.4 terminal event: flat-shape metadata the slash handler
+            # uses to update the shared WorkbenchSession.
+            candidate_eval = event.get("eval_run_id")
+            if candidate_eval:
+                eval_run_id = str(candidate_eval)
+            candidate_attempt = event.get("attempt_id")
+            if candidate_attempt:
+                attempt_id = str(candidate_attempt)
+            candidate_cfg = event.get("config_path")
+            if candidate_cfg:
+                config_path = str(candidate_cfg)
+            candidate_status = event.get("status")
+            if candidate_status:
+                status = str(candidate_status)
         yield event, OptimizeSummary(
             events=counters["events"],
             cycles_completed=counters["cycles_completed"],
@@ -176,6 +321,10 @@ def _summarise(events: Iterable[StreamEvent]) -> Iterator[tuple[StreamEvent, Opt
             warnings=counters["warnings"],
             errors=counters["errors"],
             next_action=next_action,
+            eval_run_id=eval_run_id,
+            attempt_id=attempt_id,
+            config_path=config_path,
+            status=status,
         )
 
 
@@ -204,20 +353,40 @@ def _format_summary(summary: OptimizeSummary) -> str:
 def make_optimize_handler(
     runner: StreamRunner | None = None,
 ) -> Callable[..., OnDoneResult]:
-    """Return a slash handler closed over ``runner`` (defaults to real subprocess)."""
+    """Return a slash handler closed over ``runner`` (defaults to real in-process)."""
     active_runner = runner or _default_stream_runner
 
     def _handle_optimize(ctx: SlashContext, *args: str) -> OnDoneResult:
-        stream_args = _parse_args(args)
         echo = ctx.echo
+
+        # Session-resolve eval_run_id BEFORE any runner invocation so a
+        # missing eval evidence signal never spawns a run.
+        session = (
+            ctx.meta.get("workbench_session") if isinstance(ctx.meta, dict) else None
+        )
+        parsed_kwargs = _args_to_kwargs(args)
+        try:
+            resolved_kwargs = _resolve_session_eval_run_id(parsed_kwargs, session)
+        except OptimizeCommandError as exc:
+            echo(theme.error(f"  /optimize failed: {exc}"))
+            return on_done(
+                result=f"  /optimize failed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
+
+        # Thread the resolved eval_run_id back into argv so the stream
+        # runner (real + fake) sees the canonical invocation. User flags
+        # are preserved — _args_to_kwargs already captured the override.
+        stream_args = _build_stream_args(args, resolved_kwargs)
         echo(theme.command_name(
             f"  /optimize starting — agentlab optimize {shlex.join(stream_args)}".rstrip(),
         ))
 
         cancellation = ctx.cancellation
         cancelled = False
+        final_summary = OptimizeSummary()
         try:
-            final_summary = OptimizeSummary()
             stream = _invoke_runner(active_runner, stream_args, cancellation)
             with ctx.spinner("optimizing") as spin:
                 for event, summary in _summarise(stream):
@@ -246,11 +415,36 @@ def make_optimize_handler(
         except FileNotFoundError as exc:
             echo(theme.error(f"  /optimize failed: {exc}"))
             return on_done(result=None, display="skip")
+        except Exception as exc:  # error boundary — must come AFTER domain catches
+            # R4.4 §1.6 — an in-process handler must never crash the TUI.
+            echo(theme.error(f"  /optimize crashed: {type(exc).__name__}: {exc}"))
+            return on_done(
+                result=f"  /optimize crashed: {exc}",
+                display="skip",
+                meta_messages=(str(exc),),
+            )
 
         if cancelled:
             message = "  /optimize cancelled — ctrl-c; no changes persisted."
             echo(theme.warning(message))
             return on_done(result=message, display="skip")
+
+        # R4.4 — propagate attempt/eval identifiers to the shared
+        # WorkbenchSession so downstream slash commands (e.g. /deploy)
+        # can auto-inject them.
+        if session is not None:
+            updates: dict[str, Any] = {}
+            if final_summary.attempt_id:
+                updates["last_attempt_id"] = final_summary.attempt_id
+            if final_summary.eval_run_id:
+                updates["last_eval_run_id"] = final_summary.eval_run_id
+            if final_summary.config_path:
+                updates["current_config_path"] = final_summary.config_path
+            if updates:
+                try:
+                    session.update(**updates)
+                except Exception as exc:  # don't let a session error crash /optimize
+                    echo(theme.warning(f"  /optimize: session update failed: {exc}"))
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
@@ -267,17 +461,30 @@ def make_optimize_handler(
     return _handle_optimize
 
 
+def _build_stream_args(
+    original_args: Sequence[str], resolved_kwargs: dict[str, Any]
+) -> list[str]:
+    """Append session-injected ``--eval-run-id`` to argv when absent.
+
+    Preserves the user's original argv order. If the user already passed
+    ``--eval-run-id``, argv is returned unchanged. Otherwise the resolver-
+    provided value is appended.
+    """
+    out = list(original_args)
+    if any(tok == "--eval-run-id" for tok in out):
+        return out
+    injected = resolved_kwargs.get("eval_run_id")
+    if injected:
+        out.extend(["--eval-run-id", str(injected)])
+    return out
+
+
 def _invoke_runner(
     runner: StreamRunner,
     args: Sequence[str],
     cancellation: CancellationToken | None,
 ) -> Iterator[StreamEvent]:
-    """Call ``runner`` with or without the cancellation kwarg.
-
-    Legacy runners accept a single positional ``args`` parameter; the
-    default runner gained a keyword-only ``cancellation`` parameter in T16.
-    Probe at call time so existing tests keep working.
-    """
+    """Call ``runner`` with or without the cancellation kwarg."""
     if cancellation is None:
         return iter(runner(args))
     try:
@@ -287,11 +494,11 @@ def _invoke_runner(
 
 
 def _parse_args(args: Sequence[str]) -> list[str]:
-    """Normalise `/optimize` args for the subprocess.
+    """Normalise `/optimize` args for the runner.
 
     Currently pass-through — ``optimize`` already accepts ``--cycles``,
-    ``--mode``, ``--continuous``, ``--config`` natively, so no aliasing is
-    required. Future alias handling (e.g. a shorter ``--run-id``) lives here.
+    ``--mode``, ``--continuous``, ``--config`` natively. Future alias
+    handling lives here.
     """
     return list(args)
 
@@ -307,10 +514,10 @@ def build_optimize_command(
         description=description,
         handler=make_optimize_handler(runner),
         source="builtin",
-        argument_hint="[--cycles N] [--mode MODE]",
+        argument_hint="[--cycles N] [--mode MODE] [--eval-run-id ID]",
         when_to_use="Use when a config needs automated improvement cycles.",
         effort="high",
-        allowed_tools=("subprocess",),
+        allowed_tools=("in-process",),
     )
 
 

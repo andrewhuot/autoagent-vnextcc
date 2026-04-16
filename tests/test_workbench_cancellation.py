@@ -259,7 +259,7 @@ def _strip(s: str) -> str:
     "make_handler,slash,ctx_arg",
     [
         (make_eval_handler, "/eval", ()),
-        (make_optimize_handler_, "/optimize", ()),
+        (make_optimize_handler_, "/optimize", ("--eval-run-id", "er_test")),
         (make_build_handler_, "/build", ("a brief",)),
         # /deploy needs a prompter-free path to avoid the y/N dialog.
         (
@@ -289,7 +289,7 @@ def test_handler_cancels_mid_stream_via_token(
     "make_handler,slash,ctx_arg",
     [
         (make_eval_handler, "/eval", ()),
-        (make_optimize_handler_, "/optimize", ()),
+        (make_optimize_handler_, "/optimize", ("--eval-run-id", "er_test")),
         (make_build_handler_, "/build", ("a brief",)),
         (
             lambda runner: make_deploy_handler_(

@@ -216,7 +216,16 @@ def echo() -> _EchoCapture:
 @pytest.fixture
 def ctx(echo: _EchoCapture) -> SlashContext:
     registry = CommandRegistry()
-    return SlashContext(echo=echo, registry=registry)
+    ctx = SlashContext(echo=echo, registry=registry)
+    # Install a session with a resolved eval_run_id so the new R4.4 session
+    # check doesn't short-circuit tests that predate it. Tests that exercise
+    # the session-missing path install their own empty session in ctx.meta.
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    _session = WorkbenchSession()
+    _session.update(last_eval_run_id="er_test")
+    ctx.meta["workbench_session"] = _session
+    return ctx
 
 
 def _install_optimize(ctx: SlashContext, runner) -> None:
@@ -243,7 +252,10 @@ def test_handler_streams_events_then_emits_summary(
     assert isinstance(result, DispatchResult)
     assert result.handled is True
     assert result.error is None
-    assert runner.calls == [[]]
+    # Session fixture provides last_eval_run_id="er_test", so the handler
+    # auto-injects --eval-run-id er_test into argv. The user-provided call
+    # was `/optimize` with no args.
+    assert runner.calls == [["--eval-run-id", "er_test"]]
     assert any("/optimize starting" in _strip_ansi(l) for l in echo.lines)
     plain = "\n".join(echo.plain)
     assert "[optimize] starting: go" in plain
@@ -264,7 +276,10 @@ def test_handler_forwards_args_verbatim(
 
     dispatch(ctx, "/optimize --cycles 3 --mode advanced")
 
-    assert runner.calls == [["--cycles", "3", "--mode", "advanced"]]
+    # Session auto-injects --eval-run-id er_test at the end.
+    assert runner.calls == [
+        ["--cycles", "3", "--mode", "advanced", "--eval-run-id", "er_test"],
+    ]
 
 
 def test_handler_reports_subprocess_failure(
@@ -354,3 +369,320 @@ def test_summary_dataclass_is_frozen() -> None:
     summary = OptimizeSummary(events=1)
     with pytest.raises(Exception):
         summary.events = 2  # type: ignore[misc]
+
+
+# ---------------------------------------------------------------------------
+# R4.4 — in-process runner: subprocess-free, session-aware, error-bounded
+# ---------------------------------------------------------------------------
+
+
+def _fake_runner_capturing_kwargs(events: Sequence[dict]):
+    """A runner stand-in that records the resolved kwargs it was handed."""
+
+    captured: dict[str, object] = {}
+
+    def _run(args: Sequence[str], *, resolved_kwargs=None, **_kw) -> Iterator[dict]:
+        captured["args"] = list(args)
+        captured["kwargs"] = dict(resolved_kwargs) if resolved_kwargs else None
+        yield from events
+
+    _run.captured = captured  # type: ignore[attr-defined]
+    return _run
+
+
+def test_optimize_slash_does_not_spawn_subprocess(ctx: SlashContext) -> None:
+    """The refactored /optimize handler must NOT invoke ``subprocess.Popen``."""
+    import subprocess
+    from unittest.mock import patch
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "optimize"},
+            {"event": "phase_completed", "phase": "optimize"},
+        ]
+    )
+    _install_optimize(ctx, runner)
+
+    with patch.object(subprocess, "Popen") as popen_mock:
+        popen_mock.side_effect = AssertionError("subprocess spawned!")
+        dispatch(ctx, "/optimize")
+
+    popen_mock.assert_not_called()
+
+
+def test_optimize_slash_auto_injects_eval_run_id_from_session(ctx: SlashContext) -> None:
+    """When session has last_eval_run_id, it's auto-injected into kwargs."""
+    from cli.workbench_app.session_state import WorkbenchSession
+    from cli.workbench_app.optimize_slash import (
+        _args_to_kwargs,
+        _resolve_session_eval_run_id,
+    )
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_x")
+    ctx.meta["workbench_session"] = session
+
+    kwargs = _args_to_kwargs(["--cycles", "1"])
+    resolved = _resolve_session_eval_run_id(kwargs, session)
+    assert resolved["eval_run_id"] == "er_x"
+
+
+def test_optimize_slash_user_override_beats_session(ctx: SlashContext) -> None:
+    """User --eval-run-id wins over session state."""
+    from cli.workbench_app.session_state import WorkbenchSession
+    from cli.workbench_app.optimize_slash import (
+        _args_to_kwargs,
+        _resolve_session_eval_run_id,
+    )
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_x")
+
+    kwargs = _args_to_kwargs(["--eval-run-id", "er_y"])
+    resolved = _resolve_session_eval_run_id(kwargs, session)
+    assert resolved["eval_run_id"] == "er_y"
+
+
+def test_optimize_slash_errors_when_session_missing_eval_run_id(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """No user flag and no session id → transcript error + no runner call."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()  # no last_eval_run_id
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner([])
+    _install_optimize(ctx, runner)
+
+    result = dispatch(ctx, "/optimize")
+
+    plain = "\n".join(echo.plain)
+    assert "run /eval first" in plain
+    assert runner.calls == []  # type: ignore[attr-defined]
+    assert isinstance(result, DispatchResult)
+    assert result.display == "skip"
+
+
+def test_optimize_slash_errors_when_no_session_and_no_flag(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """No session at all and no --eval-run-id → transcript error."""
+    # Remove the fixture-installed session.
+    ctx.meta.pop("workbench_session", None)
+    runner = _fake_runner([])
+    _install_optimize(ctx, runner)
+
+    result = dispatch(ctx, "/optimize")
+
+    plain = "\n".join(echo.plain)
+    assert "run /eval first" in plain
+    assert runner.calls == []  # type: ignore[attr-defined]
+    assert isinstance(result, DispatchResult)
+
+
+def test_optimize_slash_allows_run_without_session_when_flag_provided(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Explicit --eval-run-id lets /optimize run even with no session."""
+    ctx.meta.pop("workbench_session", None)
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "optimize"},
+            {
+                "event": "optimize_complete",
+                "eval_run_id": "er_y",
+                "attempt_id": "att_1",
+                "config_path": "configs/v001.yaml",
+                "status": "ok",
+            },
+        ]
+    )
+    _install_optimize(ctx, runner)
+
+    result = dispatch(ctx, "/optimize --eval-run-id er_y")
+
+    assert isinstance(result, DispatchResult)
+    assert runner.calls == [["--eval-run-id", "er_y"]]  # type: ignore[attr-defined]
+
+
+def test_optimize_slash_updates_session_last_attempt_id(ctx: SlashContext) -> None:
+    """On terminal optimize_complete, session.last_attempt_id is updated."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_abc")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "optimize"},
+            {
+                "event": "optimize_complete",
+                "eval_run_id": "er_abc",
+                "attempt_id": "att_123",
+                "config_path": "configs/v002.yaml",
+                "status": "ok",
+            },
+        ]
+    )
+    _install_optimize(ctx, runner)
+
+    dispatch(ctx, "/optimize")
+
+    assert session.last_attempt_id == "att_123"
+
+
+def test_optimize_slash_updates_session_last_eval_run_id_from_terminal_event(
+    ctx: SlashContext,
+) -> None:
+    """Terminal event can carry a new eval_run_id; session takes it."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_old")
+    ctx.meta["workbench_session"] = session
+
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "optimize"},
+            {
+                "event": "optimize_complete",
+                "eval_run_id": "er_new",
+                "attempt_id": "att_9",
+                "config_path": "configs/v003.yaml",
+                "status": "ok",
+            },
+        ]
+    )
+    _install_optimize(ctx, runner)
+
+    dispatch(ctx, "/optimize")
+
+    assert session.last_eval_run_id == "er_new"
+    assert session.current_config_path == "configs/v003.yaml"
+
+
+def test_optimize_slash_handles_missing_session_gracefully(
+    ctx: SlashContext,
+) -> None:
+    """No session in ctx.meta + explicit flag must not raise."""
+    ctx.meta.pop("workbench_session", None)
+    runner = _fake_runner(
+        [
+            {"event": "phase_started", "phase": "optimize"},
+            {
+                "event": "optimize_complete",
+                "eval_run_id": "er_x",
+                "attempt_id": "att_1",
+                "config_path": None,
+                "status": "ok",
+            },
+        ]
+    )
+    _install_optimize(ctx, runner)
+
+    result = dispatch(ctx, "/optimize --eval-run-id er_x")
+    assert isinstance(result, DispatchResult)
+
+
+def test_optimize_slash_error_boundary_catches_unexpected(
+    ctx: SlashContext, echo: _EchoCapture
+) -> None:
+    """Unexpected exception from runner must be caught and rendered."""
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_x")
+    ctx.meta["workbench_session"] = session
+
+    runner = _failing_runner(ValueError("boom"))
+    _install_optimize(ctx, runner)
+
+    result = dispatch(ctx, "/optimize")
+
+    assert isinstance(result, DispatchResult)
+    assert result.error is None
+    plain = "\n".join(echo.plain)
+    assert "crashed" in plain.lower()
+    assert result.raw_result is not None
+
+
+def test_args_to_kwargs_parses_eval_run_id() -> None:
+    """Unit test: /optimize argv → kwargs maps --eval-run-id."""
+    from cli.workbench_app.optimize_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs(
+        [
+            "--cycles",
+            "3",
+            "--mode",
+            "advanced",
+            "--eval-run-id",
+            "er_42",
+            "--strict-live",
+        ]
+    )
+    assert kwargs["cycles"] == 3
+    assert kwargs["mode"] == "advanced"
+    assert kwargs["eval_run_id"] == "er_42"
+    assert kwargs["strict_live"] is True
+
+
+def test_args_to_kwargs_defaults() -> None:
+    from cli.workbench_app.optimize_slash import _args_to_kwargs
+
+    kwargs = _args_to_kwargs([])
+    assert kwargs["cycles"] == 1
+    assert kwargs["eval_run_id"] is None
+    assert kwargs["strict_live"] is False
+    assert kwargs["force_mock"] is False
+
+
+def test_resolve_session_eval_run_id_injects_from_session() -> None:
+    from cli.workbench_app.optimize_slash import _resolve_session_eval_run_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_session")
+
+    kwargs = {"eval_run_id": None, "cycles": 1}
+    resolved = _resolve_session_eval_run_id(kwargs, session)
+    assert resolved["eval_run_id"] == "er_session"
+
+
+def test_resolve_session_eval_run_id_preserves_user_value() -> None:
+    from cli.workbench_app.optimize_slash import _resolve_session_eval_run_id
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()
+    session.update(last_eval_run_id="er_session")
+
+    kwargs = {"eval_run_id": "er_user", "cycles": 1}
+    resolved = _resolve_session_eval_run_id(kwargs, session)
+    assert resolved["eval_run_id"] == "er_user"
+
+
+def test_resolve_session_eval_run_id_raises_when_both_missing() -> None:
+    from cli.workbench_app.optimize_slash import (
+        _resolve_session_eval_run_id,
+        OptimizeCommandError,
+    )
+    from cli.workbench_app.session_state import WorkbenchSession
+
+    session = WorkbenchSession()  # no eval_run_id set
+
+    kwargs = {"eval_run_id": None, "cycles": 1}
+    with pytest.raises(OptimizeCommandError, match="run /eval first"):
+        _resolve_session_eval_run_id(kwargs, session)
+
+
+def test_resolve_session_eval_run_id_raises_when_no_session_and_no_value() -> None:
+    from cli.workbench_app.optimize_slash import (
+        _resolve_session_eval_run_id,
+        OptimizeCommandError,
+    )
+
+    kwargs = {"eval_run_id": None, "cycles": 1}
+    with pytest.raises(OptimizeCommandError, match="run /eval first"):
+        _resolve_session_eval_run_id(kwargs, None)
