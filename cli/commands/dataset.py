@@ -14,7 +14,10 @@ from typing import Iterable
 import click
 import yaml
 
+from evals.dataset.bootstrap import bootstrap as _bootstrap_impl
+
 _DEFAULT_OUTPUT_DIR = "evals/cases"
+_DEFAULT_BOOTSTRAP_OUTPUT = "evals/cases/bootstrapped.yaml"
 
 
 def _infer_format(source: str) -> str:
@@ -422,6 +425,98 @@ def register_dataset_commands(eval_group: click.Group) -> None:
             click.echo("Recommendations:")
             for rec in report.recommendations:
                 click.echo(f"  {rec}")
+
+    @dataset_group.command("bootstrap")
+    @click.option(
+        "--card",
+        required=True,
+        type=click.Path(exists=True, dir_okay=True, file_okay=True),
+        help="Path to an Agent Card (markdown file or workspace dir).",
+    )
+    @click.option(
+        "--target",
+        required=True,
+        type=click.IntRange(min=1),
+        help="Target number of cases to select.",
+    )
+    @click.option(
+        "--output",
+        default=_DEFAULT_BOOTSTRAP_OUTPUT,
+        show_default=True,
+        type=click.Path(),
+        help="Output YAML path.",
+    )
+    @click.option(
+        "--force",
+        is_flag=True,
+        default=False,
+        help="Overwrite the output YAML if it already exists.",
+    )
+    @click.option(
+        "--strict-live",
+        is_flag=True,
+        default=False,
+        help="Fail if an LLM generator is attached without OPENAI_API_KEY.",
+    )
+    def dataset_bootstrap(
+        card: str,
+        target: int,
+        output: str,
+        force: bool,
+        strict_live: bool,
+    ) -> None:
+        """Bootstrap a diverse subset of eval cases from an Agent Card.
+
+        Examples:
+          agentlab eval dataset bootstrap --card .agentlab/agent_card.md --target 50
+          agentlab eval dataset bootstrap --card ./my_agent_dir --target 20 --force
+        """
+        from agent_card.persistence import load_card
+        from agent_card.renderer import parse_from_markdown
+        from evals.dataset import get_default_embedder
+
+        out_path = Path(output)
+        if out_path.exists() and not force:
+            raise click.ClickException(
+                f"Refusing to overwrite existing file: {out_path} (pass --force to replace)."
+            )
+
+        card_path = Path(card)
+        try:
+            if card_path.is_file():
+                agent_card = parse_from_markdown(
+                    card_path.read_text(encoding="utf-8")
+                )
+            else:
+                agent_card = load_card(workspace=card_path)
+        except FileNotFoundError as exc:
+            raise click.ClickException(str(exc)) from exc
+        except Exception as exc:
+            raise click.ClickException(
+                f"Failed to load Agent Card from {card_path}: {exc}"
+            ) from exc
+
+        try:
+            embedder = get_default_embedder()
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        try:
+            report = _bootstrap_impl(
+                agent_card,
+                target,
+                embedder,
+                strict_live=strict_live,
+            )
+        except RuntimeError as exc:
+            raise click.ClickException(str(exc)) from exc
+
+        _write_cases_yaml(report.cases, out_path)
+
+        click.echo(f"Bootstrap from {card_path}")
+        click.echo(f"  Candidates generated: {report.selected_from_candidate_count}")
+        click.echo(f"  Selected (farthest-point): {len(report.cases)}")
+        click.echo(f"  Output: {out_path}")
 
     @dataset_group.command("export")
     @click.argument("output", required=True, type=click.Path())
