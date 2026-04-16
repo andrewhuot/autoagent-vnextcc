@@ -1,0 +1,43 @@
+Usage: agentlab deploy [OPTIONS] [[canary|immediate|release|rollback|status]]
+
+  Deploy a config version with canary, release, and rollback-friendly
+  workflows.
+
+  Examples:   agentlab deploy canary   agentlab deploy --config-version 5
+  --strategy canary   agentlab deploy --strategy immediate   agentlab deploy
+  canary --yes   agentlab deploy --target cx-studio
+
+Options:
+  --config-version INTEGER        Config version to deploy. Defaults to latest
+                                  accepted.
+  --strategy [canary|immediate]   Deployment strategy.  [default: canary]
+  --configs-dir TEXT              Configs directory.  [default: configs]
+  --db TEXT                       Conversation store DB.  [default:
+                                  conversations.db]
+  --target [agentlab|cx-studio]   Deployment target.  [default: agentlab]
+  --project TEXT                  GCP project ID (required for CX push).
+  --location TEXT                 CX agent location.  [default: global]
+  --agent-id TEXT                 CX agent ID (required for CX push).
+  --snapshot TEXT                 CX snapshot JSON path from `agentlab cx
+                                  import`.
+  --credentials TEXT              Path to service account JSON for CX calls.
+  --output TEXT                   Output path for CX export package JSON.
+  --push / --no-push              Push to CX now (otherwise package only).
+                                  [default: no-push]
+  --dry-run                       Preview the deployment plan without mutating
+                                  state.
+  -y, --yes                       Skip interactive deployment confirmation.
+  -j, --json                      Output as JSON.
+  --output-format [text|json|stream-json]
+                                  Render text, a final JSON envelope, or
+                                  stream JSON progress events.  [default:
+                                  text]
+  --auto-review                   Apply all pending review cards before
+                                  deploying (replicates ship behavior).
+  --force-deploy-degraded         Override the degraded-eval gate. Requires
+                                  --reason.
+  --reason TEXT                   Required justification when using --force-
+                                  deploy-degraded (min 10 chars).
+  --attempt-id TEXT               Link this deployment to a specific improve
+                                  attempt for lineage tracking.
+  --help                          Show this message and exit.

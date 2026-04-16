@@ -1,0 +1,19 @@
+Usage: agentlab eval [OPTIONS] COMMAND [ARGS]...
+
+  Evaluate agent configs against test suites.
+
+  Examples:   agentlab eval run   agentlab eval show latest   agentlab eval
+  compare left.json right.json   agentlab eval breakdown   agentlab eval
+  generate --config configs/v001.yaml --output generated_eval_suite.json
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  breakdown  Show score breakdown bars and failure clusters for the...
+  compare    Compare two eval runs or run a pairwise head-to-head config...
+  generate   AI-generate a comprehensive eval suite from agent config.
+  list       List recent eval runs.
+  results    Inspect structured eval results from the CLI Results Explorer.
+  run        Run eval suite against a config.
+  show       Show eval results.

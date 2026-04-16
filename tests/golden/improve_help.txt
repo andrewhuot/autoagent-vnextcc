@@ -1,0 +1,16 @@
+Usage: agentlab improve [OPTIONS] COMMAND [ARGS]...
+
+  Improvement workflows and compatibility aliases.
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  accept    Deploy an accepted improvement and schedule a post-deploy...
+  diff      Show the full config diff and rationale for an attempt.
+  lineage   Render the full lineage chain for an attempt.
+  list      List improvements with their lineage (proposal -> deploy ->...
+  measure   Run a post-deploy eval and record composite_delta for an...
+  optimize  Compatibility alias for `agentlab optimize`.
+  run       Run the improve loop: eval, optimize 1 cycle, present top...
+  show      Show a single improvement with its full lineage.

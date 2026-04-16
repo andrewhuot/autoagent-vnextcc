@@ -1,0 +1,12 @@
+Usage: agentlab build [OPTIONS] COMMAND [ARGS]...
+
+  Build agent artifacts or inspect the latest build output.
+
+  Examples:   agentlab build "Build a support agent for order tracking"
+  agentlab build show latest
+
+Options:
+  --help  Show this message and exit.
+
+Commands:
+  show  Show build output.
