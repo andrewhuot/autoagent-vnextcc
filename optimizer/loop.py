@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import time
 import uuid
 from collections import deque
@@ -12,7 +13,12 @@ from types import SimpleNamespace
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from agent_card.schema import AgentCardModel
+    from evals.card_case_generator import CardCaseGenerator
+    from evals.coverage_analyzer import CoverageAnalyzer
     from optimizer.improvement_lineage import ImprovementLineageStore
+
+logger = logging.getLogger(__name__)
 
 from agent.config.schema import AgentConfig, config_diff, validate_config
 from evals.anti_goodhart import AntiGoodhartConfig, AntiGoodhartGuard
@@ -118,6 +124,11 @@ class Optimizer:
         agent_card_markdown: str = "",
         # R2: improvement lineage store (observability; never blocks loop).
         lineage_store: "ImprovementLineageStore | None" = None,
+        # R3.6: auto-grow eval cases when coverage is low.
+        coverage_analyzer: "CoverageAnalyzer | None" = None,
+        card_case_generator: "CardCaseGenerator | None" = None,
+        agent_card: "AgentCardModel | None" = None,
+        auto_grow_cases: bool = True,
     ) -> None:
         self.eval_runner = eval_runner
         self.memory = memory or OptimizationMemory()
@@ -152,6 +163,14 @@ class Optimizer:
         # helpers are no-ops. When set, store failures are swallowed so
         # lineage issues cannot crash the optimizer loop.
         self.lineage_store = lineage_store
+
+        # R3.6: auto-grow eval cases when any surface is below coverage
+        # threshold. All three dependencies must be present for the hook to
+        # fire; otherwise it's a silent no-op.
+        self.coverage_analyzer = coverage_analyzer
+        self.card_case_generator = card_case_generator
+        self.agent_card = agent_card
+        self.auto_grow_cases = auto_grow_cases
 
         try:
             self.search_strategy = SearchStrategy(search_strategy)
@@ -308,6 +327,69 @@ class Optimizer:
         return self._last_strategy_diagnostics
 
     # ------------------------------------------------------------------
+    # R3.6: auto-grow eval cases on low-coverage surfaces
+    # ------------------------------------------------------------------
+
+    def _maybe_auto_grow_cases(self) -> int:
+        """Return number of cases generated this cycle (0 if skipped).
+
+        Fires only when:
+        - ``auto_grow_cases`` flag is True
+        - ``coverage_analyzer``, ``card_case_generator``, ``agent_card`` are set
+        - ``coverage_analyzer._last_report`` has been populated by a prior
+          ``analyze()`` call (first-cycle bootstrap deferred to follow-up)
+
+        Scope note: generated cases are returned and counted but NOT persisted
+        into the workspace case file here. Persistence is a separate concern
+        deferred to a follow-up change.
+        """
+        if not (
+            self.auto_grow_cases
+            and self.coverage_analyzer is not None
+            and self.card_case_generator is not None
+            and self.agent_card is not None
+        ):
+            return 0
+
+        report = getattr(self.coverage_analyzer, "_last_report", None)
+        if report is None:
+            return 0
+
+        try:
+            from evals.card_case_generator import grow_cases_for_surface
+        except Exception:
+            logger.warning("auto case-grow import failed", exc_info=True)
+            return 0
+
+        generated_total = 0
+        coverage_by_surface = getattr(report, "coverage_by_surface", {}) or {}
+        for surface, frac in coverage_by_surface.items():
+            try:
+                frac_value = float(frac)
+            except (TypeError, ValueError):
+                continue
+            if frac_value >= 0.30:
+                continue
+            try:
+                new_cases = grow_cases_for_surface(
+                    self.card_case_generator,
+                    self.agent_card,
+                    surface,
+                )
+                generated_total += len(new_cases)
+            except Exception:
+                logger.warning(
+                    "auto case-grow failed for surface %s", surface, exc_info=True
+                )
+
+        if generated_total:
+            logger.info(
+                "auto-grow: generated %d new cases across low-coverage surfaces",
+                generated_total,
+            )
+        return generated_total
+
+    # ------------------------------------------------------------------
     # Simple strategy (preserved behavior)
     # ------------------------------------------------------------------
 
@@ -364,6 +446,9 @@ class Optimizer:
                 }
             except Exception:
                 pass
+
+        # R3.6: auto-grow cases on low-coverage surfaces before proposing.
+        self._maybe_auto_grow_cases()
 
         proposal = self.proposer.propose(
             current_config=current_config,
