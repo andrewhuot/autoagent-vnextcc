@@ -317,6 +317,32 @@ def test_parse_llm_analysis_empty_payload() -> None:
     assert result.summary == ""
 
 
+def test_parse_llm_analysis_rejects_unknown_surface() -> None:
+    """Unknown mutation surfaces should be rejected before they steer the optimizer."""
+    payload = json.loads(_SAMPLE_LLM_RESPONSE)
+    payload["surface_recommendations"][0]["surface"] = "made_up_surface"
+
+    try:
+        _parse_llm_analysis(payload)
+    except ValueError as exc:
+        assert "unknown surface" in str(exc).lower()
+    else:  # pragma: no cover - explicit assertion path
+        raise AssertionError("Expected semantic payload validation to reject the surface")
+
+
+def test_parse_llm_analysis_rejects_out_of_range_severity() -> None:
+    """Cluster severities must stay within the documented 0-1 range."""
+    payload = json.loads(_SAMPLE_LLM_RESPONSE)
+    payload["clusters"][0]["severity"] = 1.5
+
+    try:
+        _parse_llm_analysis(payload)
+    except ValueError as exc:
+        assert "severity" in str(exc).lower()
+    else:  # pragma: no cover - explicit assertion path
+        raise AssertionError("Expected semantic payload validation to reject the severity")
+
+
 # ---------------------------------------------------------------------------
 # FailureAnalyzer integration tests
 # ---------------------------------------------------------------------------
@@ -363,6 +389,21 @@ def test_analyzer_falls_back_on_unparseable_response() -> None:
     )
 
     assert all(c.cluster_id.startswith("det-") for c in result.clusters)
+
+
+def test_analyzer_falls_back_on_semantically_invalid_payload() -> None:
+    """Malformed-but-JSON-valid payloads should trigger deterministic fallback."""
+    payload = json.loads(_SAMPLE_LLM_RESPONSE)
+    payload["clusters"][0]["sample_ids"] = ["unknown-sample-id"]
+    router = _make_router(response_text=json.dumps(payload))
+    analyzer = FailureAnalyzer(llm_router=router)
+
+    result = analyzer.analyze(
+        eval_results=_SAMPLE_EVAL_RESULTS,
+        agent_card_markdown=_SAMPLE_AGENT_CARD,
+    )
+
+    assert all(cluster.cluster_id.startswith("det-") for cluster in result.clusters)
 
 
 def test_analyzer_deterministic_when_no_router() -> None:

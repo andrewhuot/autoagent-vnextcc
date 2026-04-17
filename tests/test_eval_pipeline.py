@@ -250,6 +250,59 @@ def test_eval_runner_rejects_contaminated_dataset_in_strict_mode(tmp_path) -> No
         raise AssertionError("Expected strict integrity mode to reject contaminated dataset")
 
 
+def test_eval_runner_excludes_generated_failure_training_cases_by_default(tmp_path) -> None:
+    """Default directory-backed evals should not grade generated failure-cluster training cases."""
+    cases_dir = tmp_path / "cases"
+    training_dir = cases_dir / "training"
+    training_dir.mkdir(parents=True)
+
+    (cases_dir / "heldout.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "cases": [
+                    {
+                        "id": "heldout-1",
+                        "category": "routing",
+                        "user_message": "Route me to support",
+                        "expected_specialist": "support",
+                        "expected_behavior": "answer",
+                        "tags": ["heldout"],
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (training_dir / "generated_failures.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "cases": [
+                    {
+                        "id": "fc_cluster_001",
+                        "category": "routing",
+                        "user_message": "Generated from failure cluster",
+                        "expected_specialist": "support",
+                        "expected_behavior": "answer",
+                        "split": "train",
+                        "tags": ["generated_from:failure_cluster:cluster-1"],
+                    }
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+    runner = EvalRunner(cases_dir=str(cases_dir))
+
+    default_cases = runner.load_cases()
+    assert [case.id for case in default_cases] == ["heldout-1"]
+
+    training_cases = runner.load_cases(include_generated_training=True)
+    assert {case.id for case in training_cases} == {"heldout-1", "fc_cluster_001"}
+
+
 def test_eval_runner_disambiguates_duplicate_yaml_case_ids_before_saving_results(tmp_path) -> None:
     """Directory-based eval corpora should not crash when multiple files reuse case IDs."""
     from evals.results_store import EvalResultsStore

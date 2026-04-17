@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 from dataclasses import dataclass
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -31,6 +32,33 @@ def isolated_stores(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTLAB_MEMORY_DB", str(memory_db))
     monkeypatch.setenv("AGENTLAB_IMPROVEMENT_LINEAGE_DB", str(lineage_db))
     return memory_db, lineage_db
+
+
+def _seed_attempt_change_card(
+    workspace: Path,
+    *,
+    attempt_id: str,
+    candidate_version: int,
+    status: str = "pending",
+) -> None:
+    from optimizer.change_card import ChangeCardStore, ProposedChangeCard
+
+    agentlab_dir = workspace / ".agentlab"
+    agentlab_dir.mkdir(parents=True, exist_ok=True)
+    store = ChangeCardStore(db_path=str(agentlab_dir / "change_cards.db"))
+    store.save(
+        ProposedChangeCard(
+            card_id=f"card-{attempt_id[:6]}-{candidate_version}",
+            title=f"Attempt {attempt_id}",
+            why="test fixture",
+            attempt_id=attempt_id,
+            candidate_config_version=candidate_version,
+            candidate_config_path=str(
+                workspace / "configs" / f"v{candidate_version:03d}.yaml"
+            ),
+            status=status,
+        )
+    )
 
 
 def test_accept_exits_error_when_attempt_not_found(isolated_stores):
@@ -91,6 +119,40 @@ def test_accept_strategy_flag(isolated_stores):
     ), patch("cli.commands.improve._invoke_deploy", side_effect=fake_deploy):
         CliRunner().invoke(cli, ["improve", "accept", "a1b2c3d4", "--strategy", "immediate"])
     assert captured.get("strategy") == "immediate"
+
+
+def test_accept_passes_attempt_bound_candidate_version(
+    isolated_stores, tmp_path, monkeypatch
+):
+    """Accept should bind deploy selection to the chosen attempt's candidate version."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir(parents=True, exist_ok=True)
+    monkeypatch.chdir(workspace)
+    _seed_attempt_change_card(
+        workspace,
+        attempt_id="a1b2c3d4",
+        candidate_version=2,
+    )
+    _seed_attempt_change_card(
+        workspace,
+        attempt_id="z9y8x7w6",
+        candidate_version=3,
+    )
+
+    captured = {}
+
+    def fake_deploy(**kw):
+        captured.update(kw)
+
+    with patch(
+        "cli.commands.improve._lookup_attempt_by_prefix",
+        return_value=[FakeAttempt("a1b2c3d4")],
+    ), patch("cli.commands.improve._invoke_deploy", side_effect=fake_deploy):
+        result = CliRunner().invoke(cli, ["improve", "accept", "a1b2c3d4"])
+
+    assert result.exit_code == 0, result.output
+    assert captured.get("attempt_id") == "a1b2c3d4"
+    assert captured.get("config_version") == 2
 
 
 def test_accept_schedules_measurement_event(isolated_stores):

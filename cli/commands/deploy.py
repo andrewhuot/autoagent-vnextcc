@@ -235,12 +235,13 @@ def run_deploy_in_process(
         progress.warning(message="No config versions available", phase="deploy")
         warnings_collected.append("no config versions available")
         _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
-        return _emit_terminal(
+        _emit_terminal(
             status="failed",
             verdict=None,
             deployment_id=None,
             failure_reason="no config versions available",
         )
+        raise DeployCommandError("No config versions available. Run: agentlab optimize")
 
     if workflow == "rollback":
         rollback_version = config_version or deployer.version_manager.manifest.get(
@@ -326,12 +327,13 @@ def run_deploy_in_process(
         reason = f"Version {config_version} not found"
         progress.warning(message=reason, phase="deploy")
         _strict_live_gate(strict_live=strict_live, warnings=warnings_collected)
-        return _emit_terminal(
+        _emit_terminal(
             status="failed",
             verdict=None,
             deployment_id=None,
             failure_reason=reason,
         )
+        raise DeployCommandError(reason)
 
     if strategy == "canary" and config_version == active_version:
         reason = (
@@ -590,7 +592,7 @@ def register_deploy_commands(cli: click.Group) -> None:
                 click.echo(str(exc), err=True)
                 sys.exit(EXIT_MOCK_FALLBACK)
             except DeployCommandError as exc:
-                raise click.ClickException(str(exc)) from exc
+                raise click.exceptions.Exit(1) from exc
             return
 
         progress = ProgressRenderer(output_format=resolved_output_format, render_text=False)
@@ -710,7 +712,7 @@ def register_deploy_commands(cli: click.Group) -> None:
                 click.echo(json_response("error", {"message": "No config versions available"}))
             else:
                 click.echo("No config versions available. Run: agentlab optimize")
-            return
+            raise click.exceptions.Exit(1)
 
         if workflow == "rollback":
             rollback_version = config_version or deployer.version_manager.manifest.get("canary_version")
@@ -773,7 +775,7 @@ def register_deploy_commands(cli: click.Group) -> None:
                 click.echo(json_response("error", {"message": f"Version {config_version} not found"}))
             else:
                 click.echo(f"Version {config_version} not found.")
-            return
+            raise click.exceptions.Exit(1)
 
         if strategy == "canary" and config_version == active_version:
             raise click.ClickException(

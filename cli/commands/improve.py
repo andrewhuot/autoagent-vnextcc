@@ -26,6 +26,7 @@ import sys
 import time
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable
 
 import click
@@ -47,7 +48,13 @@ def _lookup_attempt_by_prefix(prefix: str, memory_db: str) -> list:
     return [a for a in memory.get_all() if a.attempt_id.startswith(prefix)]
 
 
-def _invoke_deploy(*, attempt_id: str, strategy: str, ctx=None) -> None:
+def _invoke_deploy(
+    *,
+    attempt_id: str,
+    strategy: str,
+    config_version: int | None = None,
+    ctx=None,
+) -> None:
     """Invoke `agentlab deploy` in-process with --attempt-id set.
 
     Kept as a thin helper so tests can patch it without running the real
@@ -59,7 +66,7 @@ def _invoke_deploy(*, attempt_id: str, strategy: str, ctx=None) -> None:
     ctx.invoke(
         runner.cli.commands["deploy"],
         workflow=None,
-        config_version=None,
+        config_version=config_version,
         strategy=strategy,
         configs_dir=runner.CONFIGS_DIR,
         db=runner.DB_PATH,
@@ -81,6 +88,72 @@ def _invoke_deploy(*, attempt_id: str, strategy: str, ctx=None) -> None:
         attempt_id=attempt_id,
         release_experiment_id=None,
     )
+
+
+def _resolve_improve_run_config_path(config_path: str | None) -> str:
+    """Resolve the config path for ``improve run``.
+
+    ``improve run`` without an explicit path should target the active workspace
+    config. Outside a workspace, fail clearly instead of falling back to the
+    unrelated legacy autofix subsystem.
+    """
+    if config_path is not None:
+        return config_path
+
+    runner = _runner_module()
+    workspace = runner.discover_workspace()
+    if workspace is None:
+        raise ImproveCommandError(
+            "improve run: no config path provided and no AgentLab workspace found."
+        )
+
+    resolved = workspace.resolve_active_config()
+    if resolved is None:
+        raise ImproveCommandError(
+            "improve run: no active config found for the current workspace."
+        )
+    return str(resolved.path)
+
+
+def _resolve_attempt_candidate_version(
+    attempt_id: str,
+    *,
+    change_cards_db: str | None = None,
+) -> int | None:
+    """Return the saved candidate version bound to ``attempt_id``, if any.
+
+    Modern optimize flows persist attempt-bound review cards. When present,
+    those cards are the durable source of truth for the candidate version that
+    should be deployed for a given attempt.
+    """
+    from optimizer.change_card import ChangeCardStore
+
+    db_path = change_cards_db
+    if db_path is None:
+        runner = _runner_module()
+        workspace = runner.discover_workspace()
+        if workspace is not None:
+            db_path = str(workspace.change_cards_db)
+        else:
+            db_path = ".agentlab/change_cards.db"
+
+    db_file = Path(db_path)
+    if not db_file.exists():
+        return None
+
+    store = ChangeCardStore(db_path=str(db_file))
+    matches = [
+        card
+        for card in store.list_all(limit=200)
+        if getattr(card, "attempt_id", None) == attempt_id
+        and card.status in {"pending", "applied"}
+        and card.candidate_config_version is not None
+    ]
+    if not matches:
+        return None
+
+    matches.sort(key=lambda card: float(getattr(card, "created_at", 0.0) or 0.0), reverse=True)
+    return int(matches[0].candidate_config_version)
 
 
 def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
@@ -470,12 +543,12 @@ def run_improve_run_in_process(
 ) -> ImproveRunResult:
     """Run ``improve run``: orchestrate eval → optimize for a config.
 
-    When ``config_path`` is ``None`` this raises
-    :class:`ImproveCommandError` — the zero-arg legacy autofix path is
-    reachable only through the Click wrapper and does not support the
-    in-process event seam.
+    When ``config_path`` is omitted, the active workspace config is used.
+    Outside a workspace, this raises :class:`ImproveCommandError`.
     """
-    if config_path is None:
+    try:
+        resolved_config_path = _resolve_improve_run_config_path(config_path)
+    except ImproveCommandError:
         terminal = {
             "event": "improve_run_complete",
             "attempt_id": None,
@@ -484,19 +557,17 @@ def run_improve_run_in_process(
             "status": "failed",
         }
         on_event(terminal)
-        raise ImproveCommandError(
-            "improve run: a config path is required for the in-process path."
-        )
+        raise
 
     from cli.commands.eval import run_eval_in_process
     from cli.commands.optimize import run_optimize_in_process
 
     on_event({"event": "phase_started", "phase": "improve-run", "message": "Run eval → optimize"})
-    _emit(text_writer, f"Improve run for {config_path}")
+    _emit(text_writer, f"Improve run for {resolved_config_path}")
 
     # Run eval.
     eval_result = run_eval_in_process(
-        config_path=config_path,
+        config_path=resolved_config_path,
         suite=None,
         category=None,
         dataset=None,
@@ -517,7 +588,7 @@ def run_improve_run_in_process(
         continuous=False,
         mode=mode,
         strategy=None,
-        config_path=config_path,
+        config_path=resolved_config_path,
         eval_run_id=eval_result.run_id,
         require_eval_evidence=False,
         full_auto=False,
@@ -534,14 +605,14 @@ def run_improve_run_in_process(
     terminal = {
         "event": "improve_run_complete",
         "attempt_id": optimize_result.attempt_id,
-        "config_path": config_path,
+        "config_path": resolved_config_path,
         "eval_run_id": eval_result.run_id,
         "status": optimize_result.status,
     }
     on_event(terminal)
     return ImproveRunResult(
         attempt_id=optimize_result.attempt_id,
-        config_path=config_path,
+        config_path=resolved_config_path,
         eval_run_id=eval_result.run_id,
         status=optimize_result.status,
     )
@@ -791,6 +862,7 @@ def run_improve_accept_in_process(
 
     attempt = _find_unique_attempt(attempt_id, resolved_memory_db)
     full_id = attempt.attempt_id
+    candidate_version = _resolve_attempt_candidate_version(full_id)
 
     lineage = ImprovementLineageStore(db_path=resolved_lineage_db)
     view = lineage.view_attempt(full_id)
@@ -823,9 +895,18 @@ def run_improve_accept_in_process(
     # Deploy via the injected invoker (Click wrapper uses ctx; slash uses a
     # thin wrapper). Any exception propagates.
     if deploy_invoker is not None:
-        deploy_invoker(attempt_id=full_id, strategy=strategy)
+        deploy_invoker(
+            attempt_id=full_id,
+            strategy=strategy,
+            config_version=candidate_version,
+        )
     else:
-        _invoke_deploy(attempt_id=full_id, strategy=strategy, ctx=None)
+        _invoke_deploy(
+            attempt_id=full_id,
+            strategy=strategy,
+            config_version=candidate_version,
+            ctx=None,
+        )
 
     # Schedule measurement (failure must not break accept).
     try:
@@ -1261,7 +1342,7 @@ def register_improve_commands(cli: click.Group) -> None:
     @click.option("--strict-live/--no-strict-live", default=False,
                   help="Exit non-zero (12) if eval or optimize would run in mock mode.")
     @click.option("--auto", is_flag=True,
-                  help="(Legacy, zero-arg mode only) apply top autofix proposal.")
+                  help="Compatibility flag accepted by the real improve loop.")
     @click.option("--json", "json_output", "-j", is_flag=True,
                   help="Output as JSON.")
     @click.pass_context
@@ -1276,24 +1357,21 @@ def register_improve_commands(cli: click.Group) -> None:
     ) -> None:
         """Run the improve loop: eval, optimize 1 cycle, present top proposal.
 
-        With no config argument, prints a deprecation notice and falls back
-        to the legacy autofix workflow. Prefer `agentlab autofix apply`.
+        With no config argument, resolves the active workspace config.
         """
-        if config_path is None:
-            click.echo(click.style(
-                "Note: `agentlab improve run` with no arguments is deprecated. "
-                "Use `agentlab autofix apply` for the legacy autofix workflow.",
-                fg="yellow",
-            ), err=True)
-            _invoke_legacy_autofix(auto=auto, json_output=json_output)
-            return
+        del auto
+
+        try:
+            resolved_config_path = _resolve_improve_run_config_path(config_path)
+        except ImproveCommandError as exc:
+            raise click.ClickException(str(exc)) from exc
 
         _run_eval_step(
-            ctx=ctx, config_path=config_path,
+            ctx=ctx, config_path=resolved_config_path,
             strict_live=strict_live, json_output=json_output,
         )
         result = _run_optimize_step(
-            ctx=ctx, config_path=config_path,
+            ctx=ctx, config_path=resolved_config_path,
             cycles=cycles, mode=mode,
             strict_live=strict_live, json_output=json_output,
         )
@@ -1548,6 +1626,7 @@ def register_improve_commands(cli: click.Group) -> None:
 
         attempt = matches[0]
         full_id = attempt.attempt_id
+        candidate_version = _resolve_attempt_candidate_version(full_id)
 
         lineage = ImprovementLineageStore(db_path=lineage_db)
         view = lineage.view_attempt(full_id)
@@ -1568,7 +1647,12 @@ def register_improve_commands(cli: click.Group) -> None:
             return
 
         # Deploy. Any exception propagates (and should fail the command).
-        _invoke_deploy(attempt_id=full_id, strategy=strategy, ctx=ctx)
+        _invoke_deploy(
+            attempt_id=full_id,
+            strategy=strategy,
+            config_version=candidate_version,
+            ctx=ctx,
+        )
 
         # Schedule measurement: write a measurement event with composite_delta=None
         # and scheduled=True so improve lineage can show "measurement pending".

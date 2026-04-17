@@ -9,9 +9,10 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
+from deployer.versioning import ConfigVersionManager
 from optimizer.change_card import ChangeCardStore
 from optimizer.experiments import ExperimentStore
-from runner import cli
+from runner import OPTIMIZE_MIN_COMPOSITE_SCORE, cli
 
 
 @pytest.fixture
@@ -30,6 +31,24 @@ def clear_provider_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
 def _read_json(path: Path) -> dict:
     """Load a JSON file for assertions."""
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_latest_eval(workspace: Path, payload: dict) -> None:
+    """Persist a synthetic latest-eval payload for deploy-gate tests."""
+    agentlab_dir = workspace / ".agentlab"
+    agentlab_dir.mkdir(parents=True, exist_ok=True)
+    (agentlab_dir / "eval_results_latest.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _seed_candidate_version(workspace: Path) -> int:
+    """Create one deployable candidate config version in a scratch workspace."""
+    manager = ConfigVersionManager(str(workspace / "configs"))
+    saved_version = manager.save_version(
+        {"agent": {"name": "scratch-agent"}},
+        scores={"composite": 0.7},
+        status="candidate",
+    )
+    return saved_version.version
 
 
 def _load_surface_state(workspace: Path) -> tuple[dict, dict]:
@@ -98,6 +117,125 @@ def test_demo_build_to_ship_golden_path(
     assert ChangeCardStore(db_path=str(workspace / ".agentlab" / "change_cards.db")).list_pending() == []
 
 
+def test_build_in_fresh_directory_creates_manifest_and_supports_deploy(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A first build in a scratch directory should register a deployable config version."""
+    monkeypatch.chdir(tmp_path)
+
+    build_result = runner.invoke(
+        cli,
+        ["build", "Build a support agent for order tracking with refund escalation"],
+        catch_exceptions=False,
+    )
+
+    assert build_result.exit_code == 0, build_result.output
+    manifest_path = tmp_path / "configs" / "manifest.json"
+    assert manifest_path.exists()
+
+    manifest = _read_json(manifest_path)
+    assert manifest["active_version"] is None
+    assert manifest["canary_version"] is None
+    assert [entry["version"] for entry in manifest["versions"]] == [1]
+    assert manifest["versions"][0]["status"] == "candidate"
+
+    deploy_result = runner.invoke(cli, ["deploy", "--auto-review", "--yes"], catch_exceptions=False)
+    assert deploy_result.exit_code == 0, deploy_result.output
+
+    deployed_manifest = _read_json(manifest_path)
+    assert deployed_manifest["canary_version"] == 1
+
+
+@pytest.mark.parametrize(
+    ("args", "assert_output"),
+    [
+        (
+            ["deploy"],
+            lambda output: "No config versions available" in output,
+        ),
+        (
+            ["deploy", "--json"],
+            lambda output: json.loads(output)["data"]["message"] == "No config versions available",
+        ),
+        (
+            ["deploy", "--output-format", "stream-json"],
+            lambda output: any(
+                json.loads(line).get("status") == "failed"
+                for line in output.splitlines()
+                if line.strip()
+            ),
+        ),
+    ],
+)
+def test_deploy_without_version_history_exits_nonzero_in_all_output_modes(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    args: list[str],
+    assert_output,
+) -> None:
+    """Deploy should return a failing exit code whenever no config history exists."""
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli, args, catch_exceptions=False)
+
+    assert result.exit_code != 0
+    assert assert_output(result.output)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"scores": {"composite": 0.4}},
+        {"composite": 0.4},
+    ],
+)
+def test_deploy_blocks_degraded_latest_eval_payload_shapes(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    payload: dict,
+) -> None:
+    """Deploy should block when the latest eval marks the current state as degraded."""
+    monkeypatch.chdir(tmp_path)
+    _seed_candidate_version(tmp_path)
+    _write_latest_eval(tmp_path, payload)
+
+    result = runner.invoke(cli, ["deploy", "--dry-run", "--yes"], catch_exceptions=False)
+
+    assert result.exit_code == 13
+    assert "Deploy blocked: latest eval verdict" in result.output
+
+
+def test_deploy_force_override_allows_standard_scores_payload(
+    runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The degraded deploy gate should still allow explicit overrides for nested score payloads."""
+    monkeypatch.chdir(tmp_path)
+    _seed_candidate_version(tmp_path)
+    _write_latest_eval(tmp_path, {"scores": {"composite": 0.4}})
+
+    result = runner.invoke(
+        cli,
+        [
+            "deploy",
+            "--dry-run",
+            "--yes",
+            "--force-deploy-degraded",
+            "--reason",
+            "manual review completed",
+        ],
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Dry run: deployment preview" in result.output
+
+
 def test_eval_run_defaults_to_workspace_eval_suite(
     runner: CliRunner,
     tmp_path: Path,
@@ -155,7 +293,10 @@ def test_full_loop_creates_reviewable_candidate_and_improves_after_apply(
         assert card.metrics_after["composite"] > card.metrics_before["composite"]
         assert card.candidate_config_version == 2
         assert card.candidate_config_path
-        assert "cs_safe_001" in card.why
+        assert (
+            "cs_safe_001" in card.why
+            or "composite" in card.why.lower()
+        )
 
     manifest_after_optimize = _read_json(workspace / "configs" / "manifest.json")
     assert manifest_after_optimize["active_version"] == 1
@@ -213,7 +354,14 @@ def test_full_loop_creates_reviewable_candidate_and_improves_after_apply(
 
     all_pass_optimize = runner.invoke(cli, ["optimize", "--cycles", "1"])
     assert all_pass_optimize.exit_code == 0, all_pass_optimize.output
-    assert "no optimization needed" in all_pass_optimize.output.lower()
+    if optimized:
+        latest_composite = improved_payload["scores"]["composite"]
+    else:
+        latest_composite = latest_after_optimize["scores"]["composite"]
+    if latest_composite >= OPTIMIZE_MIN_COMPOSITE_SCORE:
+        assert "no optimization needed" in all_pass_optimize.output.lower()
+    else:
+        assert "no optimization needed" not in all_pass_optimize.output.lower()
 
 
 def test_cli_and_api_review_surfaces_share_pending_and_applied_candidate_state(

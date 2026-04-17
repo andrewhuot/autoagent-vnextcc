@@ -72,6 +72,7 @@ class ProposedChangeCard:
     rollout_plan: str = "2h canary \u2192 auto-promote if metrics hold"
     rollback_condition: str = ""
     experiment_card_id: str = ""
+    attempt_id: str | None = None
     candidate_config_version: int | None = None
     candidate_config_path: str = ""
     source_eval_path: str = ""
@@ -113,6 +114,7 @@ class ProposedChangeCard:
             "rollout_plan": self.rollout_plan,
             "rollback_condition": self.rollback_condition,
             "experiment_card_id": self.experiment_card_id,
+            "attempt_id": self.attempt_id,
             "candidate_config_version": self.candidate_config_version,
             "candidate_config_path": self.candidate_config_path,
             "source_eval_path": self.source_eval_path,
@@ -151,6 +153,7 @@ class ProposedChangeCard:
             rollout_plan=data.get("rollout_plan", ""),
             rollback_condition=data.get("rollback_condition", ""),
             experiment_card_id=data.get("experiment_card_id", ""),
+            attempt_id=data.get("attempt_id"),
             candidate_config_version=data.get("candidate_config_version"),
             candidate_config_path=data.get("candidate_config_path", ""),
             source_eval_path=data.get("source_eval_path", ""),
@@ -229,6 +232,7 @@ class ProposedChangeCard:
             latency_delta=latency_after - latency_before,
             rollback_condition=rollback,
             experiment_card_id=card.experiment_id,
+            attempt_id=None,
             candidate_config_version=None,
             candidate_config_path="",
             source_eval_path="",

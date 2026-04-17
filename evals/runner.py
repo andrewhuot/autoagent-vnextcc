@@ -26,6 +26,8 @@ if TYPE_CHECKING:
 
 ProgressCallback = Callable[[int, int], None]
 
+_GENERATED_FAILURE_CLUSTER_TAG_PREFIX = "generated_from:failure_cluster:"
+
 
 def _apply_tag_filters(
     cases: list["TestCase"],
@@ -162,6 +164,7 @@ class EvalRunner:
         *,
         tags: list[str] | None = None,
         exclude_tags: list[str] | None = None,
+        include_generated_training: bool = False,
     ) -> list[TestCase]:
         """Load all test cases from YAML files in cases_dir.
 
@@ -170,6 +173,10 @@ class EvalRunner:
         case-sensitive.
         """
         cases = self._load_cases_from_dir(self.cases_dir)
+        if include_generated_training:
+            training_dir = self.cases_dir / "training"
+            if training_dir.exists():
+                cases.extend(self._load_cases_from_dir(training_dir))
         if cases:
             fixture_dir = Path(__file__).resolve().parents[1] / "tests" / "evals" / "cases"
             if (
@@ -180,6 +187,14 @@ class EvalRunner:
                 fixture_cases = self._load_cases_from_dir(fixture_dir)
                 if fixture_cases:
                     cases = fixture_cases
+        if not include_generated_training:
+            cases = [
+                case for case in cases
+                if not any(
+                    str(tag).startswith(_GENERATED_FAILURE_CLUSTER_TAG_PREFIX)
+                    for tag in (case.tags or [])
+                )
+            ]
         return _apply_tag_filters(cases, tags, exclude_tags)
 
     def _load_cases_from_dir(self, directory: Path) -> list[TestCase]:

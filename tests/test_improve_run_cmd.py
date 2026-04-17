@@ -1,6 +1,7 @@
 """agentlab improve run <config> — canonical orchestration."""
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,16 +10,52 @@ from click.testing import CliRunner
 from runner import cli
 
 
-def test_improve_run_zero_args_shows_deprecation():
-    """Legacy hidden autofix path: zero args prints deprecation and routes
-    users to `agentlab autofix apply`."""
+def test_improve_run_zero_args_in_workspace_uses_active_config(
+    tmp_path, monkeypatch
+):
+    """Zero-arg improve should resolve the workspace active config, not legacy autofix."""
+    workspace = tmp_path / "workspace"
+    init_result = CliRunner().invoke(
+        cli,
+        ["init", "--dir", str(workspace), "--no-synthetic-data"],
+    )
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+    captured: dict[str, str] = {}
+
+    def fake_eval(**kwargs):
+        captured["eval"] = kwargs["config_path"]
+
+    def fake_optimize(**kwargs):
+        captured["optimize"] = kwargs["config_path"]
+        return {}
+
+    with patch("cli.commands.improve._run_eval_step", side_effect=fake_eval), \
+         patch("cli.commands.improve._run_optimize_step", side_effect=fake_optimize), \
+         patch("cli.commands.improve._present_top_attempt"), \
+         patch("cli.commands.improve._invoke_legacy_autofix") as legacy:
+        result = CliRunner().invoke(cli, ["improve", "run", "--auto"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["eval"].endswith("configs/v001.yaml")
+    assert captured["optimize"].endswith("configs/v001.yaml")
+    assert "autofix" not in result.output.lower()
+    assert "deprecated" not in result.output.lower()
+    legacy.assert_not_called()
+
+
+def test_improve_run_zero_args_outside_workspace_fails_clearly(tmp_path, monkeypatch):
+    """Zero-arg improve should fail nonzero when no config can be resolved."""
+    monkeypatch.chdir(tmp_path)
+
     with patch("cli.commands.improve._invoke_legacy_autofix") as legacy:
-        legacy.return_value = None
-        r = CliRunner().invoke(cli, ["improve", "run"])
-    # Must mention the deprecation and the new command name:
-    assert "deprecated" in r.output.lower() or "autofix" in r.output.lower()
-    # Legacy handler still runs for back-compat:
-    legacy.assert_called_once()
+        result = CliRunner().invoke(cli, ["improve", "run", "--auto"])
+
+    assert result.exit_code != 0
+    assert "workspace" in result.output.lower() or "config" in result.output.lower()
+    assert "autofix" not in result.output.lower()
+    legacy.assert_not_called()
 
 
 def test_improve_run_with_config_invokes_eval_then_optimize():
@@ -85,6 +122,44 @@ def test_improve_run_json_output_envelope():
     parsed = _json.loads(r.output.strip().split("\n")[-1])
     # Envelope shape is flexible; at minimum top_attempt_id must surface:
     assert "abc12345" in r.output
+
+
+def test_improve_run_auto_keeps_workspace_eval_suite(
+    tmp_path, monkeypatch
+):
+    """`improve run --auto` should use workspace config + cases instead of package autofix defaults."""
+    workspace = tmp_path / "workspace"
+    init_result = CliRunner().invoke(
+        cli,
+        ["init", "--dir", str(workspace), "--no-synthetic-data"],
+    )
+    assert init_result.exit_code == 0, init_result.output
+
+    monkeypatch.chdir(workspace)
+
+    eval_result = CliRunner().invoke(cli, ["eval", "run"])
+    assert eval_result.exit_code == 0, eval_result.output
+
+    optimize_result = CliRunner().invoke(cli, ["optimize", "--cycles", "1"])
+    assert optimize_result.exit_code == 0, optimize_result.output
+
+    improve_result = CliRunner().invoke(cli, ["improve", "run", "--auto"])
+    assert improve_result.exit_code == 0, improve_result.output
+    assert "autofix" not in improve_result.output.lower()
+    assert "deprecated" not in improve_result.output.lower()
+
+    latest = json.loads(
+        (workspace / ".agentlab" / "eval_results_latest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert latest["config_path"].endswith("configs/v001.yaml")
+    assert latest["total"] == 3
+    assert {item["case_id"] for item in latest["results"]} == {
+        "cs_happy_001",
+        "cs_happy_002",
+        "cs_safe_001",
+    }
 
 
 def test_improve_run_is_no_longer_hidden():

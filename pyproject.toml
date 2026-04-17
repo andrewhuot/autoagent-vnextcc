@@ -48,6 +48,8 @@ include = [
     "adk.*",
     "agent",
     "agent.*",
+    "agent_card",
+    "agent_card.*",
     "agent_skills",
     "agent_skills.*",
     "api",

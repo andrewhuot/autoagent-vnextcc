@@ -44,6 +44,19 @@ def test_run_status_command_executes_with_empty_state(tmp_path) -> None:
     assert "Conversations:" in result.output
 
 
+def test_eval_show_fails_closed_on_corrupt_latest_eval_state(tmp_path, monkeypatch) -> None:
+    """Corrupt latest eval JSON should surface as an explicit CLI failure, not an empty-state no-op."""
+    monkeypatch.chdir(tmp_path)
+    agentlab_dir = tmp_path / ".agentlab"
+    agentlab_dir.mkdir()
+    (agentlab_dir / "eval_results_latest.json").write_text('{"status": "ok"', encoding="utf-8")
+
+    result = CliRunner().invoke(cli, ["eval", "show", "latest"])
+
+    assert result.exit_code != 0
+    assert "corrupt latest eval state" in result.output.lower()
+
+
 def test_build_eval_runner_records_trace_events(tmp_path) -> None:
     """The runner-built eval harness should persist trace events for executed cases."""
     cases_dir = tmp_path / "cases"

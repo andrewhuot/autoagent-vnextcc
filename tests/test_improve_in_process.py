@@ -176,7 +176,12 @@ def test_run_improve_accept_in_process_emits_terminal_event(isolated_stores) -> 
         lin.return_value.view_attempt.side_effect = [_View1(), _View2()]
         lin.return_value.record_measurement.return_value = None
 
-        def fake_deploy(*, attempt_id: str, strategy: str) -> None:
+        def fake_deploy(
+            *,
+            attempt_id: str,
+            strategy: str,
+            config_version: int | None = None,
+        ) -> None:
             return None
 
         result = run_improve_accept_in_process(
@@ -206,7 +211,12 @@ def test_run_improve_accept_in_process_already_deployed(isolated_stores) -> None
 
     called = {"count": 0}
 
-    def fake_deploy(*, attempt_id: str, strategy: str) -> None:
+    def fake_deploy(
+        *,
+        attempt_id: str,
+        strategy: str,
+        config_version: int | None = None,
+    ) -> None:
         called["count"] += 1
 
     with patch(
@@ -283,19 +293,20 @@ def test_run_improve_measure_in_process_raises_when_not_deployed(
     assert events[-1]["status"] == "failed"
 
 
-def test_run_improve_run_in_process_requires_config_path() -> None:
+def test_run_improve_run_in_process_emits_failure_when_config_cannot_be_resolved() -> None:
     from cli.commands.improve import (
         ImproveCommandError, run_improve_run_in_process,
     )
 
     events: list[dict[str, Any]] = []
-    with pytest.raises(ImproveCommandError):
-        run_improve_run_in_process(
-            config_path=None,
-            on_event=events.append,
-        )
+    with patch(
+        "cli.commands.improve._resolve_improve_run_config_path",
+        side_effect=ImproveCommandError("missing config"),
+    ), pytest.raises(ImproveCommandError):
+        run_improve_run_in_process(config_path=None, on_event=events.append)
     # Terminal event must be emitted with status=failed before the raise.
     assert any(e["event"] == "improve_run_complete" for e in events)
+    assert events[-1]["status"] == "failed"
 
 
 # ---------------------------------------------------------------------------

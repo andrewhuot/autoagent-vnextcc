@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from shared.build_artifact_store import BuildArtifactStore
+from shared.build_artifact_store import BuildArtifactStore, StateStoreCorruptionError
 from shared.contracts import BuildArtifact
 
 fastapi = pytest.importorskip("fastapi", reason="fastapi not installed")
@@ -92,3 +92,16 @@ def test_build_artifact_api_lists_and_fetches_saved_records(tmp_path: Path) -> N
     detail = detail_response.json()
     assert detail["metadata"]["title"] == "Support Agent"
     assert detail["prompt_used"] == "Build a support agent"
+
+
+def test_build_artifact_store_raises_on_corrupt_primary_store(tmp_path: Path) -> None:
+    """Corrupt shared build state should fail closed instead of silently resetting latest selection."""
+    path = tmp_path / ".agentlab" / "build_artifacts.json"
+    latest_path = tmp_path / ".agentlab" / "build_artifact_latest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"latest_id": "broken"', encoding="utf-8")
+
+    store = BuildArtifactStore(path=path, latest_path=latest_path)
+
+    with pytest.raises(StateStoreCorruptionError, match="build artifact store"):
+        store.get_latest()

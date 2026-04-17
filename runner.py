@@ -171,6 +171,9 @@ TRACE_DB = os.environ.get("AGENTLAB_TRACE_DB", ".agentlab/traces.db")
 SCORER_SPECS_DIR = os.environ.get("AGENTLAB_SCORER_SPECS_DIR", ".agentlab/scorers")
 AGENTLAB_VERSION = get_agentlab_version()
 EVAL_METRIC_NAMES = ("quality", "safety", "latency", "cost", "composite")
+OPTIMIZE_MIN_COMPOSITE_SCORE = float(
+    os.environ.get("AGENTLAB_OPTIMIZE_MIN_COMPOSITE", "0.90")
+)
 
 
 # Command visibility tiers for simplified help output
@@ -1108,8 +1111,8 @@ def _latest_eval_payload() -> tuple[Path | None, dict | None]:
         return None, None
     try:
         return latest, json.loads(latest.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return latest, None
+    except (json.JSONDecodeError, OSError) as exc:
+        raise click.ClickException(f"Corrupt latest eval state at {latest}: {exc}") from exc
 
 
 def _paths_match(left: Path | None, right: Path | None) -> bool:
@@ -1128,19 +1131,22 @@ def _latest_eval_payload_for_active_config(active_config_path: Path | None) -> t
     if latest_path is None or latest_payload is None or active_config_path is None:
         return latest_path, None
 
-    payload = _unwrap_eval_payload(latest_payload)
-    config_path_raw = payload.get("config_path") or latest_payload.get("config_path")
-    if not config_path_raw:
-        return latest_path, latest_payload
-
-    try:
-        eval_config_path = Path(str(config_path_raw))
-    except TypeError:
-        return latest_path, None
-
-    if not _paths_match(eval_config_path, active_config_path):
-        return latest_path, None
-    return latest_path, latest_payload
+    for candidate in _list_eval_result_files(limit=100):
+        try:
+            data = json.loads(candidate.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+        payload = _unwrap_eval_payload(data)
+        config_path_raw = payload.get("config_path") or data.get("config_path")
+        if not config_path_raw:
+            continue
+        try:
+            eval_config_path = Path(str(config_path_raw))
+        except (TypeError, ValueError):
+            continue
+        if _paths_match(eval_config_path, active_config_path):
+            return candidate, data
+    return None, None
 
 
 def _eval_payload_run_id(data: dict) -> str:
@@ -1169,7 +1175,9 @@ def _eval_payload_for_run_id(
         if config_path is not None:
             payload = _unwrap_eval_payload(data)
             payload_config = payload.get("config_path") or data.get("config_path")
-            if payload_config and not _paths_match(Path(str(payload_config)), config_path):
+            if not payload_config:
+                continue
+            if not _paths_match(Path(str(payload_config)), config_path):
                 continue
         return candidate, data
     return None, None
@@ -1276,12 +1284,23 @@ def _health_report_from_eval(data: dict):
     reason = "All latest eval cases passed."
     if failed_case_ids:
         reason = f"Latest eval failed {len(failed_case_ids)}/{total_cases} case(s): {', '.join(failed_case_ids[:5])}"
+    low_composite = scores.get("composite", 0.0) < OPTIMIZE_MIN_COMPOSITE_SCORE
+    if low_composite:
+        composite_reason = (
+            "Latest eval composite "
+            f"{scores.get('composite', 0.0):.4f} is below optimization threshold "
+            f"{OPTIMIZE_MIN_COMPOSITE_SCORE:.4f}"
+        )
+        if failed_case_ids:
+            reason = f"{reason}; {composite_reason}."
+        else:
+            reason = f"{composite_reason}."
 
     return HealthReport(
         metrics=metrics,
         anomalies=[],
         failure_buckets=failure_buckets,
-        needs_optimization=bool(failed_case_ids),
+        needs_optimization=bool(failed_case_ids) or low_composite,
         reason=reason,
     )
 
@@ -1437,13 +1456,20 @@ def _deploy_gate_check(
     if payload is None:
         return  # no eval, nothing to gate
 
-    composite = payload.get("composite") if isinstance(payload, dict) else None
-    if composite is None and isinstance(payload, dict):
-        nested = payload.get("score") or {}
-        if isinstance(nested, dict):
-            composite = nested.get("composite")
-    if composite is None:
+    score_sources: list[dict] = []
+    if isinstance(payload, dict):
+        score_sources.append(payload)
+        nested_scores = payload.get("scores")
+        if isinstance(nested_scores, dict):
+            score_sources.append(nested_scores)
+        legacy_scores = payload.get("score")
+        if isinstance(legacy_scores, dict):
+            score_sources.append(legacy_scores)
+
+    if not any("composite" in source for source in score_sources):
         return  # no composite score, nothing to gate
+
+    composite = _extract_eval_scores(payload).get("composite")
 
     try:
         composite = float(composite)

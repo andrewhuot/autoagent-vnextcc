@@ -51,6 +51,15 @@ class ConfigVersionManager:
                 return item
         return None
 
+    def _retire_version_if(self, version: int | None, *, expected_status: str) -> None:
+        """Retire a tracked version when it currently owns a specific manifest role."""
+        if version is None:
+            return
+
+        entry = self._find_version(version)
+        if entry is not None and entry["status"] == expected_status:
+            entry["status"] = "retired"
+
     def get_next_version(self) -> int:
         if not self.manifest["versions"]:
             return 1
@@ -83,18 +92,15 @@ class ConfigVersionManager:
         })
         if status == "canary":
             previous_canary = self.manifest.get("canary_version")
-            if previous_canary is not None:
-                previous_entry = self._find_version(previous_canary)
-                if previous_entry is not None and previous_entry["status"] == "canary":
-                    previous_entry["status"] = "retired"
+            self._retire_version_if(previous_canary, expected_status="canary")
             self.manifest["canary_version"] = version_num
         elif status == "active":
             previous_active = self.manifest.get("active_version")
-            if previous_active is not None:
-                previous_entry = self._find_version(previous_active)
-                if previous_entry is not None and previous_entry["status"] == "active":
-                    previous_entry["status"] = "retired"
+            previous_canary = self.manifest.get("canary_version")
+            self._retire_version_if(previous_active, expected_status="active")
+            self._retire_version_if(previous_canary, expected_status="canary")
             self.manifest["active_version"] = version_num
+            self.manifest["canary_version"] = None
         self._save_manifest()
         return cv
 
@@ -104,8 +110,12 @@ class ConfigVersionManager:
         if promoted is None:
             raise ValueError(f"Unknown version: {version}")
 
+        previous_active = self.manifest.get("active_version")
+        previous_canary = self.manifest.get("canary_version")
         for v in self.manifest["versions"]:
-            if v["version"] == self.manifest.get("active_version") and v["version"] != version:
+            if v["version"] == previous_active and v["version"] != version:
+                v["status"] = "retired"
+            if v["version"] == previous_canary and v["version"] != version and v["status"] == "canary":
                 v["status"] = "retired"
             if v["version"] == version:
                 v["status"] = "active"
@@ -118,12 +128,12 @@ class ConfigVersionManager:
         candidate = self._find_version(version)
         if candidate is None:
             raise ValueError(f"Unknown version: {version}")
+        if version == self.manifest.get("active_version") or candidate["status"] == "active":
+            raise ValueError(f"Cannot mark active version {version} as canary")
 
         previous_canary = self.manifest.get("canary_version")
         if previous_canary is not None and previous_canary != version:
-            previous_entry = self._find_version(previous_canary)
-            if previous_entry is not None and previous_entry["status"] == "canary":
-                previous_entry["status"] = "retired"
+            self._retire_version_if(previous_canary, expected_status="canary")
 
         candidate["status"] = "canary"
         self.manifest["canary_version"] = version
@@ -134,6 +144,8 @@ class ConfigVersionManager:
         rolled_back = self._find_version(version)
         if rolled_back is None:
             raise ValueError(f"Unknown version: {version}")
+        if version == self.manifest.get("active_version"):
+            raise ValueError(f"Cannot roll back active version {version}")
 
         for v in self.manifest["versions"]:
             if v["version"] == version:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version as distribution_version
 from pathlib import Path
 import tomllib
 
@@ -11,11 +12,17 @@ import click
 
 @lru_cache(maxsize=1)
 def get_agentlab_version() -> str:
-    """Return the project version from source so local CLI runs stay honest."""
+    """Return the source version locally and installed package metadata elsewhere."""
     pyproject_path = Path(__file__).resolve().parents[1] / "pyproject.toml"
-    with pyproject_path.open("rb") as handle:
-        project = tomllib.load(handle)
-    return str(project["project"]["version"])
+    if pyproject_path.exists():
+        with pyproject_path.open("rb") as handle:
+            project = tomllib.load(handle)
+        return str(project["project"]["version"])
+
+    try:
+        return distribution_version("agentlab")
+    except PackageNotFoundError:
+        return "0.0.0"
 
 
 def banner_enabled(ctx: click.Context | None) -> bool:

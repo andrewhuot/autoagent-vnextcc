@@ -222,6 +222,7 @@ class Optimizer:
         # rejected attempts with the OptimizationAttempt rows persisted to
         # memory via the shared ``attempt_id``.
         self._recent_rejections: deque[RejectionRecord] = deque(maxlen=200)
+        self.last_attempt: OptimizationAttempt | None = None
         self._last_strategy_diagnostics = StrategyDiagnostics(
             strategy=self.search_strategy.value,
             selected_operator_family=None,
@@ -253,6 +254,8 @@ class Optimizer:
         3. Immutable surfaces — refreshed from human_control_store
         4. Event logging — every significant action gets logged
         """
+        self.last_attempt = None
+
         # Gate 1: Human pause check
         if self.human_control_store is not None:
             state = self.human_control_store.get_state()
@@ -812,6 +815,7 @@ class Optimizer:
             strategy_name=(_exp.strategy if _exp is not None else None),
         )
         self.memory.log(attempt)
+        self.last_attempt = attempt
 
         # R2: emit attempt event to lineage store (observability).
         self._emit_attempt_lineage(
@@ -1240,6 +1244,7 @@ class Optimizer:
             strategy_name=(_exp.strategy if _exp is not None else None),
         )
         self.memory.log(attempt)
+        self.last_attempt = attempt
 
         # R2: emit attempt event to lineage store (observability).
         self._emit_attempt_lineage(

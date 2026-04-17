@@ -66,6 +66,27 @@ _BUCKET_APPROACH: dict[str, str] = {
     "invalid_output": "Add output format constraints and validation instructions.",
 }
 
+_VALID_SURFACES: set[str] = {
+    "instruction",
+    "few_shot",
+    "tool_description",
+    "model",
+    "generation_settings",
+    "callback",
+    "context_caching",
+    "memory_policy",
+    "routing",
+    "workflow",
+    "skill",
+    "policy",
+    "tool_contract",
+    "handoff_schema",
+}
+
+_VALID_FAILURE_TYPES: set[str] = set(_BUCKET_TO_SURFACE)
+
+DEFAULT_GENERATED_FAILURE_CASES_PATH = Path("evals") / "cases" / "training" / "generated_failures.yaml"
+
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -222,8 +243,108 @@ def _extract_json_payload(text: str) -> dict[str, Any] | None:
             return None
 
 
-def _parse_llm_analysis(payload: dict[str, Any]) -> FailureAnalysis:
+def _validate_llm_analysis_payload(
+    payload: dict[str, Any],
+    *,
+    known_sample_ids: set[str] | None = None,
+) -> None:
+    """Validate semantic constraints on an LLM-produced failure analysis payload."""
+    raw_clusters = payload.get("clusters", [])
+    if raw_clusters is None:
+        raw_clusters = []
+    if not isinstance(raw_clusters, list):
+        raise ValueError("Failure analysis payload field 'clusters' must be a list")
+
+    cluster_ids: set[str] = set()
+    for index, raw_cluster in enumerate(raw_clusters):
+        if not isinstance(raw_cluster, dict):
+            raise ValueError(f"Cluster {index} must be a JSON object")
+
+        cluster_id = str(raw_cluster.get("cluster_id", "")).strip()
+        if not cluster_id:
+            raise ValueError(f"Cluster {index} is missing a cluster_id")
+        if cluster_id in cluster_ids:
+            raise ValueError(f"Duplicate cluster_id in failure analysis payload: {cluster_id}")
+        cluster_ids.add(cluster_id)
+
+        failure_type = str(raw_cluster.get("failure_type", "")).strip()
+        if failure_type and failure_type not in _VALID_FAILURE_TYPES:
+            raise ValueError(f"Unknown failure type in failure analysis payload: {failure_type}")
+
+        sample_ids = raw_cluster.get("sample_ids", [])
+        if sample_ids is None:
+            sample_ids = []
+        if not isinstance(sample_ids, list):
+            raise ValueError(f"Cluster {cluster_id} field 'sample_ids' must be a list")
+        normalized_sample_ids = [str(sample_id) for sample_id in sample_ids]
+        if known_sample_ids is not None:
+            unknown_sample_ids = sorted(set(normalized_sample_ids) - known_sample_ids)
+            if unknown_sample_ids:
+                raise ValueError(
+                    f"Cluster {cluster_id} references unknown sample ids: {', '.join(unknown_sample_ids[:3])}"
+                )
+
+        try:
+            severity = float(raw_cluster.get("severity", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Cluster {cluster_id} has a non-numeric severity") from exc
+        if not 0.0 <= severity <= 1.0:
+            raise ValueError(f"Cluster {cluster_id} severity must be between 0 and 1")
+
+        try:
+            count = int(raw_cluster.get("count", 0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Cluster {cluster_id} has a non-integer count") from exc
+        if count < 0:
+            raise ValueError(f"Cluster {cluster_id} count must be non-negative")
+
+    raw_recommendations = payload.get("surface_recommendations", [])
+    if raw_recommendations is None:
+        raw_recommendations = []
+    if not isinstance(raw_recommendations, list):
+        raise ValueError("Failure analysis payload field 'surface_recommendations' must be a list")
+
+    for index, raw_rec in enumerate(raw_recommendations):
+        if not isinstance(raw_rec, dict):
+            raise ValueError(f"Surface recommendation {index} must be a JSON object")
+        surface = str(raw_rec.get("surface", "")).strip()
+        if surface not in _VALID_SURFACES:
+            raise ValueError(f"Unknown surface in failure analysis payload: {surface}")
+        try:
+            confidence = float(raw_rec.get("confidence", 0.0))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"Surface recommendation {index} has a non-numeric confidence"
+            ) from exc
+        if not 0.0 <= confidence <= 1.0:
+            raise ValueError(f"Surface recommendation {index} confidence must be between 0 and 1")
+        try:
+            priority = int(raw_rec.get("priority", 1))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Surface recommendation {index} has a non-integer priority") from exc
+        if priority < 1:
+            raise ValueError(f"Surface recommendation {index} priority must be >= 1")
+
+    severity_ranking = payload.get("severity_ranking", [])
+    if severity_ranking is None:
+        severity_ranking = []
+    if not isinstance(severity_ranking, list):
+        raise ValueError("Failure analysis payload field 'severity_ranking' must be a list")
+    for cluster_id in severity_ranking:
+        if str(cluster_id) not in cluster_ids:
+            raise ValueError(
+                f"Severity ranking references unknown cluster_id: {cluster_id}"
+            )
+
+
+def _parse_llm_analysis(
+    payload: dict[str, Any],
+    *,
+    known_sample_ids: set[str] | None = None,
+) -> FailureAnalysis:
     """Convert a validated JSON payload into a FailureAnalysis."""
+    _validate_llm_analysis_payload(payload, known_sample_ids=known_sample_ids)
+
     clusters: list[FailureCluster] = []
     for raw_cluster in payload.get("clusters", []):
         clusters.append(FailureCluster(
@@ -400,7 +521,7 @@ class FailureAnalyzer:
         *,
         case_generator: "CardCaseGenerator | None" = None,
         min_cluster_size: int = 3,
-        generated_cases_path: str | Path = "evals/cases/generated_failures.yaml",
+        generated_cases_path: str | Path = DEFAULT_GENERATED_FAILURE_CASES_PATH,
     ) -> FailureAnalysis:
         """Run failure analysis on eval results.
 
@@ -425,8 +546,8 @@ class FailureAnalyzer:
             Minimum cluster size to trigger variant generation. Defaults to 3.
         generated_cases_path:
             Where to persist generated variants. Defaults to
-            ``evals/cases/generated_failures.yaml`` so the runner picks them
-            up on next ``load_cases()``.
+            ``evals/cases/training/generated_failures.yaml`` so generated
+            variants stay out of default held-out eval runs.
 
         Returns
         -------
@@ -490,7 +611,7 @@ class FailureAnalyzer:
         *,
         case_generator: "CardCaseGenerator",
         min_cluster_size: int = 3,
-        generated_cases_path: str | Path = "evals/cases/generated_failures.yaml",
+        generated_cases_path: str | Path = DEFAULT_GENERATED_FAILURE_CASES_PATH,
     ) -> list[str]:
         """Write variant cases for each large cluster into the YAML catalog.
 
@@ -540,7 +661,14 @@ class FailureAnalyzer:
                 if variant.id in seen_ids:
                     continue
                 case_dict = variant.to_dict()
-                case_dict["tags"] = [tag]
+                existing_tags = case_dict.get("tags", [])
+                if not isinstance(existing_tags, list):
+                    existing_tags = []
+                normalized_tags = [str(existing_tag) for existing_tag in existing_tags]
+                if tag not in normalized_tags:
+                    normalized_tags.append(tag)
+                case_dict["tags"] = normalized_tags
+                case_dict["split"] = str(case_dict.get("split") or "train")
                 existing_cases.append(case_dict)
                 seen_ids.add(variant.id)
                 new_ids.append(variant.id)
@@ -589,4 +717,9 @@ class FailureAnalyzer:
         if payload is None:
             raise ValueError("LLM returned unparseable response for failure analysis")
 
-        return _parse_llm_analysis(payload)
+        known_sample_ids = {
+            str(sample.get("id", sample.get("sample_id", "")))
+            for sample in failure_samples
+            if str(sample.get("id", sample.get("sample_id", ""))).strip()
+        }
+        return _parse_llm_analysis(payload, known_sample_ids=known_sample_ids)

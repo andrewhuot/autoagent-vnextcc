@@ -424,6 +424,8 @@ def run_optimize_in_process(
                     f"{cycle_result['status']} ({cycle_delta:+.2f})"
                 ),
             )
+            if cycle_result.get("attempt_id") is not None:
+                resolved_attempt_id = str(cycle_result["attempt_id"])
             # Track before/after composite from the first/latest cycles.
             if composite_before is None:
                 composite_before = cycle_result.get("score_before")
@@ -468,17 +470,11 @@ def run_optimize_in_process(
     progress.phase_completed("optimize", message="Optimization run complete")
     progress.next_action("agentlab status")
 
-    # Pull the latest attempt_id from memory for terminal envelope.
-    latest_attempts = memory.recent(limit=1)
-    if latest_attempts:
-        resolved_attempt_id = getattr(latest_attempts[0], "attempt_id", None)
-
     if text_writer is not None:
         if cycles > 1 and not continuous:
             _emit_text(f"\nOptimization complete. {cycles} cycles executed.")
-        latest_score = latest_attempts[0].score_after if latest_attempts else None
         _emit_text(click.style(
-            f"  Status: {runner._score_status_label(latest_score)}", fg="magenta",
+            f"  Status: {runner._score_status_label(composite_after)}", fg="magenta",
         ))
         runner._print_next_actions(
             [
@@ -600,6 +596,9 @@ def _build_reviewable_change_card(
     why = "Linked to latest eval failures."
     if failed_cases:
         why = "Linked to latest eval failures: " + "; ".join(failed_cases)
+    else:
+        report = runner._health_report_from_eval(baseline_eval_data)
+        why = report.reason or "Linked to latest eval evidence."
 
     return ProposedChangeCard(
         title=str(attempt.change_description or "Accepted optimization candidate"),
@@ -626,6 +625,7 @@ def _build_reviewable_change_card(
             f"Rollback if composite drops below baseline {float(getattr(attempt, 'score_before', 0.0) or 0.0):.4f}"
         ),
         experiment_card_id=experiment_card_id,
+        attempt_id=str(getattr(attempt, "attempt_id", "") or "") or None,
         candidate_config_version=candidate_version,
         candidate_config_path=str(candidate_path),
         source_eval_path=str(source_eval_path) if source_eval_path is not None else "",
@@ -760,6 +760,7 @@ def _run_optimize_cycle(
                     "total_cycles": None if continuous else display_total,
                     "status": entry.status,
                     "accepted": False,
+                    "attempt_id": None,
                     "score_before": entry.score_before,
                     "score_after": entry.score_after,
                     "delta": entry.delta,
@@ -793,6 +794,7 @@ def _run_optimize_cycle(
                     "total_cycles": None if continuous else display_total,
                     "status": entry.status,
                     "accepted": False,
+                    "attempt_id": None,
                     "score_before": entry.score_before,
                     "score_after": entry.score_after,
                     "delta": entry.delta,
@@ -814,12 +816,15 @@ def _run_optimize_cycle(
         _tool_completed("optimizer.optimize", optimize_started, output=opt_status)
         _task("task.completed", "propose", "Propose candidate config", detail=opt_status)
 
-        latest_attempts = memory.recent(limit=1)
-        latest = latest_attempts[0] if latest_attempts else None
+        latest = getattr(optimizer, "last_attempt", None)
+        if latest is None:
+            latest_attempts = memory.recent(limit=1)
+            latest = latest_attempts[0] if latest_attempts else None
         proposal_desc = latest.change_description if latest else None
         score_after: float | None = latest.score_after if latest else None
         score_before: float | None = latest.score_before if latest else None
         p_value: float | None = latest.significance_p_value if latest else None
+        attempt_id: str | None = getattr(latest, "attempt_id", None) if latest else None
 
         normalized_status = runner._optimize_cycle_status(
             report_needs_optimization=report.needs_optimization,
@@ -893,7 +898,6 @@ def _run_optimize_cycle(
                         message=f"candidate v{candidate_version:03d} updated",
                     ),
                 )
-            latest = memory.recent(limit=1)[0]
             entry_timestamp = runner.experiment_log_utc_timestamp()
             preview_entry = runner.make_experiment_log_entry(
                 cycle=cycle_number,
@@ -949,6 +953,7 @@ def _run_optimize_cycle(
                 "total_cycles": None if continuous else display_total,
                 "status": entry.status,
                 "accepted": entry.status == "keep",
+                "attempt_id": attempt_id,
                 "score_before": score_before,
                 "score_after": score_after,
                 "delta": entry.delta,
@@ -972,6 +977,7 @@ def _run_optimize_cycle(
             "total_cycles": None if continuous else display_total,
             "status": entry.status,
             "accepted": False,
+            "attempt_id": None,
             "score_before": entry.score_before,
             "score_after": entry.score_after,
             "delta": entry.delta,

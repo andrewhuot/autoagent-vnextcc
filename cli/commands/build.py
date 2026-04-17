@@ -168,20 +168,23 @@ def register_build_commands(cli: click.Group) -> None:
             config = runner._artifact_to_seed_config(prompt, artifact)
             config_yaml = yaml.safe_dump(config, sort_keys=False)
             built_version: int | None = None
+            config_store_dir = workspace.configs_dir if register_in_workspace and workspace is not None else target / "configs"
+            conversation_db_path = (
+                workspace.conversation_db
+                if register_in_workspace and workspace is not None
+                else target / ".agentlab" / "conversations.db"
+            )
+            store = runner.ConversationStore(db_path=str(conversation_db_path))
+            deployer = runner.Deployer(configs_dir=str(config_store_dir), store=store)
+            saved_version = deployer.version_manager.save_version(
+                config,
+                scores={"composite": 0.0},
+                status="candidate",
+            )
+            built_version = saved_version.version
+            config_path = config_store_dir / saved_version.filename
             if register_in_workspace and workspace is not None:
-                store = runner.ConversationStore(db_path=str(workspace.conversation_db))
-                deployer = runner.Deployer(configs_dir=str(workspace.configs_dir), store=store)
-                saved_version = deployer.version_manager.save_version(
-                    config,
-                    scores={"composite": 0.0},
-                    status="candidate",
-                )
-                built_version = saved_version.version
-                config_path = workspace.configs_dir / saved_version.filename
                 workspace.set_active_config(saved_version.version, filename=saved_version.filename)
-            else:
-                config_path = runner._next_built_config_path(target / "configs")
-                config_path.write_text(config_yaml, encoding="utf-8")
             progress.artifact_written("config", path=str(config_path))
 
             eval_path = target / "evals" / "cases" / "generated_build.yaml"

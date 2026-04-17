@@ -12,6 +12,10 @@ DEFAULT_BUILD_ARTIFACT_STORE_PATH = Path(".agentlab") / "build_artifacts.json"
 DEFAULT_LATEST_BUILD_ARTIFACT_PATH = Path(".agentlab") / "build_artifact_latest.json"
 
 
+class StateStoreCorruptionError(RuntimeError):
+    """Raised when a durable JSON store is unreadable or structurally invalid."""
+
+
 class BuildArtifactStore:
     """Persist shared build artifacts while preserving CLI compatibility files."""
 
@@ -114,19 +118,30 @@ class BuildArtifactStore:
 
         try:
             raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return {
-                "latest_id": None,
-                "artifacts": {},
-                "legacy_payloads": {},
-            }
+        except (json.JSONDecodeError, OSError) as exc:
+            raise StateStoreCorruptionError(
+                f"Corrupt build artifact store at {self.path}"
+            ) from exc
+
+        if not isinstance(raw, dict):
+            raise StateStoreCorruptionError(
+                f"Corrupt build artifact store at {self.path}: expected a JSON object"
+            )
 
         artifacts = raw.get("artifacts", {})
         legacy_payloads = raw.get("legacy_payloads", {})
+        if not isinstance(artifacts, dict):
+            raise StateStoreCorruptionError(
+                f"Corrupt build artifact store at {self.path}: 'artifacts' must be an object"
+            )
+        if not isinstance(legacy_payloads, dict):
+            raise StateStoreCorruptionError(
+                f"Corrupt build artifact store at {self.path}: 'legacy_payloads' must be an object"
+            )
         return {
             "latest_id": raw.get("latest_id"),
-            "artifacts": artifacts if isinstance(artifacts, dict) else {},
-            "legacy_payloads": legacy_payloads if isinstance(legacy_payloads, dict) else {},
+            "artifacts": artifacts,
+            "legacy_payloads": legacy_payloads,
         }
 
     def _save(self, payload: dict[str, Any]) -> None:

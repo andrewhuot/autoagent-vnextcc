@@ -97,6 +97,29 @@ def test_analyze_without_case_generator_unchanged_behavior(tmp_path: Path) -> No
     assert not target.exists(), "no case_generator must not create the file"
 
 
+def test_analyze_uses_training_only_generated_cases_path_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default variant persistence should target the training-only corpus outside held-out eval cases."""
+    analysis = _analysis_with_cluster("default_path", size=4)
+    analyzer = _stub_analyzer(monkeypatch, analysis)
+    monkeypatch.chdir(tmp_path)
+
+    analyzer.analyze(
+        eval_results=_baseline_eval_results(),
+        agent_card_markdown="# agent",
+        case_generator=CardCaseGenerator(),
+        min_cluster_size=3,
+    )
+
+    assert not (tmp_path / "evals" / "cases" / "generated_failures.yaml").exists()
+    default_target = tmp_path / "evals" / "cases" / "training" / "generated_failures.yaml"
+    assert default_target.exists()
+
+    cases = yaml.safe_load(default_target.read_text(encoding="utf-8"))["cases"]
+    assert all(case.get("split") == "train" for case in cases)
+
+
 # ---------------------------------------------------------------------------
 # Large cluster → variants written
 # ---------------------------------------------------------------------------
