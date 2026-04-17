@@ -90,7 +90,7 @@ def build_live_client_factory(
                 f"(configured: {configured})"
             )
         server_cfg = config.mcp_servers[spec.name]
-        transport = transport_factory(server_cfg)
+        raw_transport = transport_factory(server_cfg)
 
         # Only hosted transports benefit from supervised reconnect.
         # Stdio subprocesses are OS-supervised — a dead child shows up
@@ -98,15 +98,29 @@ def build_live_client_factory(
         # already surfaces that as a registration warning. Wrapping
         # stdio would just add a background thread with nothing useful
         # to do.
-        if isinstance(server_cfg, (SseServerConfig, HttpServerConfig)):
-            transport = wrapper(transport)
+        wrapped = isinstance(server_cfg, (SseServerConfig, HttpServerConfig))
+        transport = wrapper(raw_transport) if wrapped else raw_transport
+
+        # Build the client, then close the loop: post-reconnect the
+        # server may have restarted with a different tool set, so the
+        # client's cached tools/list becomes stale the moment the wire
+        # recovers. Registering invalidate_schemas as on_reconnect
+        # snaps us back to "ask-next-time" at exactly the right
+        # moment. We only do this for wrapped (hosted) transports —
+        # stdio has no reconnect supervisor to hang the hook on.
+        client = McpTransportClient(transport=transport, timeout=client_timeout)
+        if wrapped:
+            try:
+                transport.on_reconnect = client.invalidate_schemas  # type: ignore[attr-defined]
+            except AttributeError:  # pragma: no cover - test wrappers may opt out
+                pass
 
         # Connect before returning — the bridge calls list_tools
         # immediately and has no retry of its own. If connect raises,
         # the bridge catches it at the per-server boundary and records
         # a warning rather than failing all registrations.
         transport.connect()
-        return McpTransportClient(transport=transport, timeout=client_timeout)
+        return client
 
     return factory
 

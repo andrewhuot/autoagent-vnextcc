@@ -125,7 +125,12 @@ def test_unrelated_notifications_are_ignored():
 
 
 def test_id_counter_advances():
-    """Each request must carry a fresh monotonically-increasing id."""
+    """Each request must carry a fresh monotonically-increasing id.
+
+    Note: ``list_tools`` is memoised since the slice-4 schema cache
+    landed, so we call :meth:`invalidate_schemas` between the two
+    list_tools calls to force a real second roundtrip (the hook is
+    what ReconnectingTransport would fire in production)."""
     sent: list[dict] = []
     fake = FakeTransport(
         sent=sent,
@@ -137,6 +142,7 @@ def test_id_counter_advances():
     )
     client = McpTransportClient(transport=fake)
     client.list_tools()
+    client.invalidate_schemas()
     client.list_tools()
     client.call_tool("x", {})
     assert [p["id"] for p in sent] == [1, 2, 3]

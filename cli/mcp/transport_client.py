@@ -40,6 +40,15 @@ class McpTransportClient:
     transport: Transport
     timeout: float = 5.0
     _next_id: int = field(default=1, init=False, repr=False)
+    _cached_tools: list[dict[str, Any]] | None = field(
+        default=None, init=False, repr=False
+    )
+    """Memoised ``tools/list`` reply. ``None`` means "ask the server next
+    time" — either because we've never asked or because the cache was
+    explicitly invalidated (e.g. by :class:`ReconnectingTransport`'s
+    ``on_reconnect`` hook after the wire recovered from a drop). We
+    store ``None`` vs. ``[]`` deliberately — an empty tool list IS a
+    valid cached answer and must not trigger a re-fetch."""
 
     # ------------------------------------------------------------------
     # Public API (matches cli.tools.mcp_bridge.McpClient)
@@ -48,15 +57,39 @@ class McpTransportClient:
     def list_tools(self) -> list[dict[str, Any]]:
         """Send ``tools/list`` and return the server's tool descriptors.
 
-        The MCP spec says the result carries a ``tools`` array, each item
-        with ``name`` / ``description`` / ``inputSchema``. We pass the
-        raw list through — the bridge's ``_coerce_tool_spec`` already
-        normalises keys."""
-        result = self._request("tools/list", None)
-        tools = result.get("tools") if isinstance(result, Mapping) else None
-        if not isinstance(tools, list):
-            return []
-        return [t for t in tools if isinstance(t, dict)]
+        Results are memoised — MCP tool lists change only when the
+        server restarts, and the :class:`ReconnectingTransport` hook
+        invalidates this cache whenever a drop-recover cycle makes that
+        possible. Repeated in-session callers (``/mcp inspect``, the
+        schema-rewrite hook, a future refresh command) therefore hit
+        the wire only once per connected session.
+
+        The MCP spec says the result carries a ``tools`` array, each
+        item with ``name`` / ``description`` / ``inputSchema``. We pass
+        the raw list through — the bridge's ``_coerce_tool_spec``
+        already normalises keys. A fresh shallow copy is returned to
+        every caller so a well-meaning consumer doing
+        ``tools.pop(0)`` cannot corrupt the cached snapshot."""
+        if self._cached_tools is None:
+            result = self._request("tools/list", None)
+            tools = result.get("tools") if isinstance(result, Mapping) else None
+            if not isinstance(tools, list):
+                self._cached_tools = []
+            else:
+                self._cached_tools = [t for t in tools if isinstance(t, dict)]
+        return list(self._cached_tools)
+
+    def invalidate_schemas(self) -> None:
+        """Drop the cached ``tools/list`` result.
+
+        Intended to be registered as :attr:`ReconnectingTransport.on_reconnect`
+        so the next :meth:`list_tools` after a wire recovery re-fetches
+        from the server. Safe to call before any tool-list call has
+        happened (it's a no-op in that case) — the reconnect supervisor
+        may fire before the first caller has a chance to populate the
+        cache.
+        """
+        self._cached_tools = None
 
     def call_tool(self, name: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """Send ``tools/call`` and return the ``result`` object verbatim.
@@ -132,3 +165,4 @@ class McpTransportClient:
 
 
 __all__ = ["McpTransportClient"]
+# invalidate_schemas is reached via the class; exported implicitly.
