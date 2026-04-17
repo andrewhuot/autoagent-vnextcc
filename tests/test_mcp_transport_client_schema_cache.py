@@ -131,3 +131,77 @@ def test_cache_returns_independent_list_not_shared_mutable() -> None:
     first.clear()
     second = client.list_tools()
     assert len(second) == 2
+
+
+# ---------------------------------------------------------------------------
+# Integration: live factory wires invalidate_schemas as on_reconnect
+# ---------------------------------------------------------------------------
+
+
+def test_live_factory_registers_invalidate_schemas_as_on_reconnect(
+    tmp_path: Any,
+) -> None:
+    """The slice 3 live factory must close the loop by registering the
+    slice 4 invalidator as the transport's on_reconnect hook. This is
+    the whole point of combining these slices — the schema cache is
+    only safe in a reconnecting world if reconnects clear it."""
+    import json
+
+    from cli.mcp.live_factory import build_live_client_factory
+    from cli.tools.mcp_bridge import McpServerSpec
+
+    (tmp_path / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "notion": {
+                        "transport": "sse",
+                        "url": "https://mcp.notion.com/sse",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeWrapper:
+        on_reconnect: Any = None
+
+        def __init__(self, inner: Any) -> None:
+            self.inner = inner
+            self.connected = False
+
+        def connect(self) -> None:
+            self.connected = True
+
+        def close(self) -> None:
+            self.connected = False
+
+        def send(self, payload: dict) -> None:  # pragma: no cover
+            pass
+
+        def receive(self, timeout: float) -> dict | None:  # pragma: no cover
+            return None
+
+        @property
+        def is_connected(self) -> bool:
+            return self.connected
+
+    wrapper_holder: list[_FakeWrapper] = []
+
+    def fake_reconnect_wrapper(inner: Any) -> _FakeWrapper:
+        w = _FakeWrapper(inner)
+        wrapper_holder.append(w)
+        return w
+
+    factory = build_live_client_factory(
+        workspace_root=tmp_path,
+        transport_factory=lambda cfg: _RecordingTransport(),
+        reconnect_wrapper=fake_reconnect_wrapper,
+    )
+    client = factory(McpServerSpec(name="notion"))
+
+    # The wrapper was built AND its on_reconnect is the client's
+    # invalidator — so a supervised reconnect will flush the cache.
+    assert len(wrapper_holder) == 1
+    assert wrapper_holder[0].on_reconnect == client.invalidate_schemas
