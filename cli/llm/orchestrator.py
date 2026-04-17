@@ -21,11 +21,13 @@ server can all consume the same record.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from cli.llm.caching import CacheInput, anthropic_cache_blocks
+from cli.llm.provider_capabilities import ProviderCapabilities
 from cli.llm.streaming import (
     MessageStop,
     TextDelta,
@@ -37,6 +39,7 @@ from cli.llm.streaming import (
     collect_stream,
     events_from_model_response,
 )
+from cli.llm.streaming_tool_dispatcher import StreamingToolDispatcher
 from cli.llm.types import (
     AssistantTextBlock,
     AssistantToolUseBlock,
@@ -59,6 +62,9 @@ DEFAULT_MAX_TOOL_LOOPS = 12
 The loop terminates when the model stops requesting tools *or* this cap
 is hit. 12 is chosen empirically — enough for a reasonable chain of
 read/edit/verify calls, low enough that a runaway loop surfaces quickly."""
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -160,7 +166,12 @@ class LLMOrchestrator:
         # model keeps asking for tools past the limit we hard-stop.
         tool_iterations = 0
         while True:
-            response = self._run_model_turn(renderer, final_text_parts)
+            allow_tool_dispatch = tool_iterations < self.max_tool_loops
+            response, dispatcher = self._run_model_turn(
+                renderer,
+                final_text_parts,
+                dispatch_tools=allow_tool_dispatch,
+            )
             _merge_usage(aggregated_usage, response.usage)
 
             tool_uses = response.tool_uses()
@@ -172,7 +183,7 @@ class LLMOrchestrator:
                 stop_reason = response.stop_reason or "end_turn"
                 break
 
-            if tool_iterations >= self.max_tool_loops:
+            if not allow_tool_dispatch:
                 # Already at the cap — do not execute another tool batch.
                 stop_reason = "max_tool_loops"
                 break
@@ -181,10 +192,16 @@ class LLMOrchestrator:
 
             # Execute tool calls and append a user-side message with the
             # tool_result blocks so the next model call can consume them.
+            executions_in_order = dispatcher.results_in_order() if dispatcher else []
+            if len(executions_in_order) != len(tool_uses):
+                raise RuntimeError(
+                    "Streaming tool dispatch produced "
+                    f"{len(executions_in_order)} execution(s) for "
+                    f"{len(tool_uses)} tool call(s)."
+                )
             tool_results: list[dict[str, Any]] = []
             post_fragments: list[str] = []
-            for tool_use in tool_uses:
-                execution = self._execute_tool(tool_use)
+            for tool_use, execution in zip(tool_uses, executions_in_order):
                 executions.append(execution)
                 tool_results.append(_result_to_block(tool_use.id, execution))
                 post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
@@ -245,7 +262,9 @@ class LLMOrchestrator:
         self,
         renderer: StreamingMarkdownRenderer,
         final_text_parts: list[str],
-    ) -> ModelResponse:
+        *,
+        dispatch_tools: bool,
+    ) -> tuple[ModelResponse, StreamingToolDispatcher | None]:
         """Call the model and render its output live.
 
         Uses ``stream()`` when the client implements it — text chunks land
@@ -256,6 +275,7 @@ class LLMOrchestrator:
         tools_schema = self.tool_registry.to_schema()
         effective_system_prompt = self._compose_system_prompt()
         stream_method = getattr(self.model, "stream", None)
+        dispatcher = self._build_streaming_tool_dispatcher() if dispatch_tools else None
 
         # Dispatch a provider-neutral cache hint unconditionally. Adapters
         # that honour it (Anthropic) store the breakpoint for the next
@@ -308,6 +328,13 @@ class LLMOrchestrator:
                 # transcript chrome; the main stream stays focused on
                 # user-visible prose.
                 continue
+            elif dispatcher is not None:
+                if isinstance(event, ToolUseStart):
+                    dispatcher.on_tool_use_start(event)
+                elif isinstance(event, ToolUseDelta):
+                    dispatcher.on_tool_use_delta(event)
+                elif isinstance(event, ToolUseEnd):
+                    dispatcher.on_tool_use_end(event)
             # Tool-use deltas never render as text — they land in the
             # collected ModelResponse via collect_stream.
 
@@ -318,7 +345,18 @@ class LLMOrchestrator:
             renderer.feed("\n")
             final_text_parts.append("\n")
 
-        return collect_stream(collected_events)
+        response = collect_stream(collected_events)
+        if dispatcher is not None:
+            for tool_use in response.tool_uses():
+                dispatcher.on_tool_use_end(
+                    ToolUseEnd(
+                        id=tool_use.id,
+                        name=tool_use.name,
+                        input=dict(tool_use.input or {}),
+                    )
+                )
+
+        return response, dispatcher
 
     def _compose_system_prompt(self) -> str:
         """Layer hook-supplied prompt fragments on top of the base prompt.
@@ -373,20 +411,77 @@ class LLMOrchestrator:
             return []
 
     def _execute_tool(self, tool_use: AssistantToolUseBlock) -> ToolExecution:
+        return self._execute_tool_call(tool_use.name, dict(tool_use.input or {}))
+
+    def _execute_tool_call(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> ToolExecution:
         context = ToolContext(
             workspace_root=self.workspace_root,
             session_id=self.session.session_id if self.session else None,
             extra=self._build_tool_extra(),
         )
         return execute_tool_call(
-            tool_use.name,
-            dict(tool_use.input or {}),
+            tool_name,
+            tool_input,
             registry=self.tool_registry,
             permissions=self.permissions,
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
         )
+
+    def _build_streaming_tool_dispatcher(self) -> StreamingToolDispatcher:
+        return StreamingToolDispatcher(
+            registry=self.tool_registry,
+            executor=_StreamingToolExecutor(self),
+            capabilities=self._model_capabilities(),
+        )
+
+    def _model_capabilities(self) -> ProviderCapabilities:
+        caps = getattr(self.model, "capabilities", None)
+        if isinstance(caps, ProviderCapabilities):
+            return caps
+        return _fallback_provider_capabilities()
+
+    def _requires_permission_prompt(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> bool:
+        if self._hook_may_prompt(tool_name):
+            return True
+        try:
+            tool = self.tool_registry.get(tool_name)
+        except Exception:
+            return False
+        try:
+            return self.permissions.decision_for_tool(tool, tool_input) == "ask"
+        except Exception:
+            return False
+
+    def _hook_may_prompt(self, tool_name: str) -> bool:
+        """Conservatively serialize tools whose hooks may trigger a modal prompt."""
+        registry = self.hook_registry
+        if registry is None:
+            return False
+
+        hooks_for = getattr(registry, "hooks_for", None)
+        if not callable(hooks_for):
+            return False
+
+        try:
+            from cli.hooks import HookEvent, HookType
+
+            for event in (HookEvent.ON_PERMISSION_REQUEST, HookEvent.PRE_TOOL_USE):
+                hooks = hooks_for(event, tool_name=tool_name) or []
+                if any(getattr(hook, "hook_type", None) is HookType.COMMAND for hook in hooks):
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _build_tool_extra(self) -> dict[str, Any]:
         """Stamp the tool context with publishable session state.
@@ -567,6 +662,40 @@ def _render_fragment_block(fragments: list[str]) -> str:
     that aren't there."""
     body = "\n\n".join(fragments)
     return f"Hook post-tool-use guidance:\n\n{body}"
+
+
+def _fallback_provider_capabilities() -> ProviderCapabilities:
+    """Return a conservative capability default for legacy test doubles."""
+    logger.warning(
+        "LLMOrchestrator: model did not declare ProviderCapabilities; "
+        "falling back to conservative sequential defaults."
+    )
+    return ProviderCapabilities(
+        streaming=True,
+        native_tool_use=True,
+        parallel_tool_calls=False,
+        thinking=False,
+        prompt_cache=False,
+        vision=False,
+        json_mode=False,
+        max_context_tokens=1,
+        max_output_tokens=1,
+    )
+
+
+@dataclass
+class _StreamingToolExecutor:
+    """Adapter that lets the dispatcher reuse orchestrator permissions."""
+
+    orchestrator: LLMOrchestrator
+
+    def __call__(self, tool_name: str, tool_input: dict[str, Any]) -> ToolExecution:
+        return self.orchestrator._execute_tool_call(tool_name, tool_input)
+
+    def requires_permission_prompt(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> bool:
+        return self.orchestrator._requires_permission_prompt(tool_name, tool_input)
 
 
 __all__ = ["DEFAULT_MAX_TOOL_LOOPS", "LLMOrchestrator", "synthetic_tool_use_id"]
