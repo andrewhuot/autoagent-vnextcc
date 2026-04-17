@@ -121,6 +121,28 @@ class LLMOrchestrator:
     """Optional markdown-stream styler — tests pass a tagger to assert
     mode transitions."""
 
+    classifier_context: Any | None = None
+    """Optional :class:`cli.permissions.classifier.ClassifierContext` —
+    forwarded to :func:`execute_tool_call` on every tool call so the
+    transcript classifier can short-circuit AUTO_APPROVE / AUTO_DENY
+    decisions before they hit the legacy permission manager. ``None``
+    disables the classifier gate (the executor handles ``None`` as a
+    no-op), which keeps pre-P3 callers working unchanged."""
+
+    denial_tracker: Any | None = None
+    """Optional :class:`cli.permissions.denial_tracking.DenialTracker` —
+    forwarded to :func:`execute_tool_call` so AUTO_DENY decisions
+    accumulate and eventually escalate borderline-safe tools back to
+    the PROMPT path. Shared across all tool calls within a single
+    orchestrator (and therefore across turns), matching the per-session
+    semantics documented on :class:`DenialTracker` itself."""
+
+    audit_log: Any | None = None
+    """Optional :class:`cli.permissions.audit_log.ClassifierAuditLog` —
+    when set, every classifier decision (including PROMPT pass-through)
+    is appended as a JSONL line with a size-rotated file on disk. Opt-in
+    so unit tests and ephemeral harnesses don't touch the filesystem."""
+
     # Accumulated conversation across turns (a list to preserve order).
     messages: list[TurnMessage] = field(default_factory=list)
     tool_cancellation: CancellationToken | None = None
@@ -513,6 +535,9 @@ class LLMOrchestrator:
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
+            classifier_context=self.classifier_context,
+            denial_tracker=self.denial_tracker,
+            audit_log=self.audit_log,
         )
 
     def _build_streaming_tool_dispatcher(self) -> StreamingToolDispatcher:
