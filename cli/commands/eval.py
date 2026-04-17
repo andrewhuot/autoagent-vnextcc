@@ -65,6 +65,8 @@ def run_eval_in_process(
     category: str | None = None,
     dataset: str | None = None,
     dataset_split: str = "all",
+    tags: list[str] | None = None,
+    exclude_tags: list[str] | None = None,
     output_path: str | None = None,
     instruction_overrides_path: str | None = None,
     real_agent: bool = False,
@@ -242,6 +244,8 @@ def run_eval_in_process(
                 config=config,
                 dataset_path=dataset,
                 split=dataset_split,
+                tags=tags,
+                exclude_tags=exclude_tags,
                 progress_callback=_progress_callback,
             )
             return score_result, f"Category '{category}' complete", f"Category: {category}"
@@ -250,6 +254,8 @@ def run_eval_in_process(
             config=config,
             dataset_path=dataset,
             split=dataset_split,
+            tags=tags,
+            exclude_tags=exclude_tags,
             progress_callback=_progress_callback,
         )
         return score_result, "Full eval suite complete", "Full eval suite"
@@ -271,6 +277,8 @@ def run_eval_in_process(
                         config=config,
                         dataset_path=dataset,
                         split=dataset_split,
+                        tags=tags,
+                        exclude_tags=exclude_tags,
                         progress_callback=_text_progress_callback,
                     )
                     return score_result, f"Category '{category}' complete", f"Category: {category}"
@@ -279,6 +287,8 @@ def run_eval_in_process(
                     config=config,
                     dataset_path=dataset,
                     split=dataset_split,
+                    tags=tags,
+                    exclude_tags=exclude_tags,
                     progress_callback=_text_progress_callback,
                 )
                 return score_result, "Full eval suite complete", "Full eval suite"
@@ -432,6 +442,18 @@ def register_eval_commands(cli: click.Group) -> None:
                   show_default=True,
                   help="Dataset split to evaluate when using --dataset.")
     @click.option("--category", default=None, help="Run only a specific category.")
+    @click.option(
+        "--tag",
+        "tag",
+        multiple=True,
+        help="Filter cases by tag (repeatable, OR semantics). Case-sensitive.",
+    )
+    @click.option(
+        "--exclude-tag",
+        "exclude_tag",
+        multiple=True,
+        help="Exclude cases with matching tag (repeatable). Case-sensitive.",
+    )
     @click.option("--output", default=None, help="Write results JSON to file.")
     @click.option(
         "--instruction-overrides",
@@ -473,7 +495,10 @@ def register_eval_commands(cli: click.Group) -> None:
         help="Render text, a final JSON envelope, or stream JSON progress events.",
     )
     def eval_run(config_path: str | None, suite: str | None, dataset: str | None, dataset_split: str,
-                 category: str | None, output: str | None, instruction_overrides_path: str | None,
+                 category: str | None,
+                 tag: tuple[str, ...] = (),
+                 exclude_tag: tuple[str, ...] = (),
+                 output: str | None = None, instruction_overrides_path: str | None = None,
                  real_agent: bool = False,
                  force_mock: bool = False,
                  require_live: bool = False,
@@ -492,6 +517,10 @@ def register_eval_commands(cli: click.Group) -> None:
         from cli.output import resolve_output_format, emit_stream_json
         from cli.strict_live import MockFallbackError
         from cli.exit_codes import EXIT_MOCK_FALLBACK
+
+        # Convert click's tuple to list (or None when unset) for the runner kwargs.
+        tag_filter = list(tag) if tag else None
+        exclude_tag_filter = list(exclude_tag) if exclude_tag else None
 
         resolved_output_format = resolve_output_format(output_format, json_output=json_output)
 
@@ -523,6 +552,8 @@ def register_eval_commands(cli: click.Group) -> None:
                 category=category,
                 dataset=dataset,
                 dataset_split=dataset_split,
+                tags=tag_filter,
+                exclude_tags=exclude_tag_filter,
                 output_path=output,
                 instruction_overrides_path=instruction_overrides_path,
                 real_agent=real_agent,
@@ -1079,3 +1110,11 @@ def register_eval_commands(cli: click.Group) -> None:
 
         for cluster, count in sorted(clusters.items(), key=lambda item: (-item[1], item[0])):
             click.echo(f"    {count:>3}x {cluster}")
+
+    # R5 Slice A.6: nested `agentlab eval dataset {import,export}` subgroup.
+    from .dataset import register_dataset_commands
+    register_dataset_commands(eval_group)
+
+    # R5 Slice C.4: `agentlab eval ingest --from-traces` with mandatory redaction.
+    from .ingest import register_ingest_command
+    register_ingest_command(eval_group)

@@ -27,6 +27,39 @@ if TYPE_CHECKING:
 ProgressCallback = Callable[[int, int], None]
 
 
+def _apply_tag_filters(
+    cases: list["TestCase"],
+    include: list[str] | None,
+    exclude: list[str] | None,
+) -> list["TestCase"]:
+    """Filter ``cases`` by include/exclude tag lists.
+
+    Semantics (see R5 §1.1):
+      * ``include`` is OR across tags — a case is kept if *any* include tag is
+        in ``case.tags``.
+      * ``exclude`` drops a case if *any* exclude tag is in ``case.tags``
+        (equivalent to "each exclude filter is applied conjunctively").
+      * ``None`` or empty lists mean "no-op" for that side.
+      * Tag comparison is case-sensitive.
+
+    The input list is never mutated — a new list is returned.
+    """
+    include_tags = list(include) if include else []
+    exclude_tags = list(exclude) if exclude else []
+    if not include_tags and not exclude_tags:
+        return list(cases)
+
+    result: list[TestCase] = []
+    for case in cases:
+        case_tags = case.tags or []
+        if include_tags and not any(tag in case_tags for tag in include_tags):
+            continue
+        if exclude_tags and any(tag in case_tags for tag in exclude_tags):
+            continue
+        result.append(case)
+    return result
+
+
 @dataclass
 class TestCase:
     """A single eval test case."""
@@ -41,6 +74,7 @@ class TestCase:
     expected_tool: str | None = None
     split: str | None = None
     reference_answer: str = ""
+    tags: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -123,8 +157,18 @@ class EvalRunner:
             raise ValueError("Evaluator name must be non-empty")
         self._custom_evaluators[name] = evaluator
 
-    def load_cases(self) -> list[TestCase]:
-        """Load all test cases from YAML files in cases_dir."""
+    def load_cases(
+        self,
+        *,
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
+    ) -> list[TestCase]:
+        """Load all test cases from YAML files in cases_dir.
+
+        Optionally filter by tag include/exclude lists (see
+        ``_apply_tag_filters`` for semantics). Tag comparison is
+        case-sensitive.
+        """
         cases = self._load_cases_from_dir(self.cases_dir)
         if cases:
             fixture_dir = Path(__file__).resolve().parents[1] / "tests" / "evals" / "cases"
@@ -135,8 +179,8 @@ class EvalRunner:
             ):
                 fixture_cases = self._load_cases_from_dir(fixture_dir)
                 if fixture_cases:
-                    return fixture_cases
-        return cases
+                    cases = fixture_cases
+        return _apply_tag_filters(cases, tags, exclude_tags)
 
     def _load_cases_from_dir(self, directory: Path) -> list[TestCase]:
         """Load all test cases from a specific YAML directory."""
@@ -156,10 +200,16 @@ class EvalRunner:
                     seen_case_ids,
                     source_label=yaml_file.stem,
                 )
+                category = entry.get("category", "unknown")
+                raw_tags = entry.get("tags")
+                if isinstance(raw_tags, list) and raw_tags:
+                    tags = [str(tag) for tag in raw_tags]
+                else:
+                    tags = [category]
                 cases.append(
                     TestCase(
                         id=case_id,
-                        category=entry.get("category", "unknown"),
+                        category=category,
                         user_message=entry["user_message"],
                         expected_specialist=entry.get("expected_specialist", "support"),
                         expected_behavior=entry.get("expected_behavior", "answer"),
@@ -168,6 +218,7 @@ class EvalRunner:
                         expected_tool=entry.get("expected_tool"),
                         split=entry.get("split"),
                         reference_answer=entry.get("reference_answer", ""),
+                        tags=tags,
                     )
                 )
         return cases
@@ -178,8 +229,15 @@ class EvalRunner:
         *,
         split: str = "all",
         train_ratio: float = 0.8,
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
     ) -> list[TestCase]:
-        """Load dataset cases from JSONL/CSV/YAML and optionally filter by split."""
+        """Load dataset cases from JSONL/CSV/YAML and optionally filter by split.
+
+        ``tags`` / ``exclude_tags`` apply the same tag filter semantics as
+        :meth:`load_cases` (case-sensitive, OR across includes, case dropped
+        if any exclude tag matches).
+        """
         path = Path(dataset_path)
         if not path.exists():
             raise FileNotFoundError(f"Dataset file not found: {dataset_path}")
@@ -200,7 +258,7 @@ class EvalRunner:
                 continue
             cases.append(case)
 
-        return cases
+        return _apply_tag_filters(cases, tags, exclude_tags)
 
     @staticmethod
     def _make_unique_case_id(
@@ -241,9 +299,18 @@ class EvalRunner:
         if isinstance(safety_probe, str):
             safety_probe = safety_probe.strip().lower() in {"1", "true", "yes", "y"}
 
+        category = str(row.get("category") or "dataset")
+        raw_tags = row.get("tags")
+        if isinstance(raw_tags, str):
+            tags = [item.strip() for item in raw_tags.split(",") if item.strip()]
+        elif isinstance(raw_tags, list) and raw_tags:
+            tags = [str(item).strip() for item in raw_tags if str(item).strip()]
+        else:
+            tags = [category]
+
         return TestCase(
             id=case_id,
-            category=str(row.get("category") or "dataset"),
+            category=category,
             user_message=str(row.get("user_message") or row.get("prompt") or ""),
             expected_specialist=str(row.get("expected_specialist") or "support"),
             expected_behavior=str(row.get("expected_behavior") or "answer"),
@@ -252,6 +319,7 @@ class EvalRunner:
             expected_tool=(str(row.get("expected_tool")).strip() if row.get("expected_tool") else None),
             split=explicit_split,
             reference_answer=str(row.get("reference_answer") or row.get("expected_answer") or ""),
+            tags=tags,
         )
 
     @staticmethod
@@ -477,13 +545,20 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run all test cases and return composite score."""
         if dataset_path:
-            cases = self.load_dataset_cases(dataset_path, split=split)
+            cases = self.load_dataset_cases(
+                dataset_path,
+                split=split,
+                tags=tags,
+                exclude_tags=exclude_tags,
+            )
         else:
-            cases = self.load_cases()
+            cases = self.load_cases(tags=tags, exclude_tags=exclude_tags)
             self._last_dataset_integrity = DatasetIntegrityReport()
         return self._run_cases_with_harness(
             cases,
@@ -501,13 +576,20 @@ class EvalRunner:
         *,
         dataset_path: str | None = None,
         split: str = "all",
+        tags: list[str] | None = None,
+        exclude_tags: list[str] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> CompositeScore:
         """Run test cases for a specific category only."""
         if dataset_path:
-            source_cases = self.load_dataset_cases(dataset_path, split=split)
+            source_cases = self.load_dataset_cases(
+                dataset_path,
+                split=split,
+                tags=tags,
+                exclude_tags=exclude_tags,
+            )
         else:
-            source_cases = self.load_cases()
+            source_cases = self.load_cases(tags=tags, exclude_tags=exclude_tags)
             self._last_dataset_integrity = DatasetIntegrityReport()
         cases = [case for case in source_cases if case.category == category]
         return self._run_cases_with_harness(
