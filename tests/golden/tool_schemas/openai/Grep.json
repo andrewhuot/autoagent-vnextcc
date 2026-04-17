@@ -1,0 +1,35 @@
+{
+  "function": {
+    "description": "Search workspace files for a regex pattern. Returns matching lines with 'path:line: content' prefixes. Supply 'glob' to narrow the search or 'path' to restrict it to a subtree.",
+    "name": "Grep",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "case_insensitive": {
+          "type": "boolean"
+        },
+        "glob": {
+          "description": "Glob filter applied before matching (e.g. '*.py').",
+          "type": "string"
+        },
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Subdirectory to scan (defaults to workspace root).",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Python regex.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -1,0 +1,28 @@
+{
+  "description": "Set a dotted key in an agent configuration file. Parses the file, applies the change, re-validates against the AgentConfig schema, and only writes when validation passes. Use this instead of FileEdit for structured config changes.",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "delete": {
+        "description": "When true, remove the key instead of setting it.",
+        "type": "boolean"
+      },
+      "key": {
+        "description": "Dotted path, e.g. 'optimizer.search_max_candidates'.",
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "value": {
+        "description": "New value. Strings, numbers, booleans, arrays, and objects are supported."
+      }
+    },
+    "required": [
+      "path",
+      "key"
+    ],
+    "type": "object"
+  },
+  "name": "ConfigEdit"
+}

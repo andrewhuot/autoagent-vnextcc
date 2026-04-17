@@ -1,0 +1,23 @@
+{
+  "description": "Search the web for a query and return a list of title/url/snippet entries. Requires a backend configured either via ToolContext.extra['web_search_backend'] or the AGENTLAB_SEARCH_BACKEND environment variable (values: stub, brave, tavily).",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "limit": {
+        "description": "Maximum results to return (default 5).",
+        "maximum": 10,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "query": {
+        "description": "Free-text search query.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "query"
+    ],
+    "type": "object"
+  },
+  "name": "WebSearch"
+}

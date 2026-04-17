@@ -1,0 +1,21 @@
+{
+  "description": "Fetch the body of an http(s) URL. Returns plain text (HTML is stripped of tags). The response is truncated to 100 000 characters and known secret patterns are redacted. Use for reading docs, GitHub files, or any URL-addressable resource.",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "prompt": {
+        "description": "Optional hint for future summarisation; ignored by the current fetcher.",
+        "type": "string"
+      },
+      "url": {
+        "description": "Absolute http(s) URL to fetch.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  },
+  "name": "WebFetch"
+}

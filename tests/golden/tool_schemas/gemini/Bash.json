@@ -1,0 +1,22 @@
+{
+  "description": "Execute a shell command (bash) from the workspace root. Captures stdout and stderr, truncates very long output. Command is subject to the active permission mode — plan mode blocks it.",
+  "name": "Bash",
+  "parameters": {
+    "properties": {
+      "command": {
+        "description": "Shell command line (executed via bash -c).",
+        "type": "string"
+      },
+      "timeout_seconds": {
+        "description": "Override the default 120-second timeout.",
+        "maximum": 600,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "command"
+    ],
+    "type": "object"
+  }
+}

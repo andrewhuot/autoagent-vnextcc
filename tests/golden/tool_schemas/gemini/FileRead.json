@@ -1,0 +1,26 @@
+{
+  "description": "Read a text file from the workspace. Returns contents prefixed with 1-indexed line numbers so subsequent FileEdit calls can reference them. Pass ``offset`` / ``limit`` to read a slice of a large file.",
+  "name": "FileRead",
+  "parameters": {
+    "properties": {
+      "limit": {
+        "description": "Maximum lines to return. Defaults to 2000.",
+        "minimum": 1,
+        "type": "integer"
+      },
+      "offset": {
+        "description": "Zero-based line number to start reading at.",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "description": "Workspace-relative or absolute path (must resolve inside the workspace root).",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  }
+}
