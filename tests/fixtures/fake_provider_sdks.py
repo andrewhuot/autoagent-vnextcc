@@ -24,6 +24,7 @@ The helpers intentionally don't import the real SDKs; they return
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any
 
 
@@ -105,15 +106,113 @@ class FakeOpenAISDK:
 
 @dataclass
 class FakeGeminiSDK:
-    """Skeleton for the Gemini streaming fake.
+    """Duck-typed fake of ``google.genai.Client``.
 
-    P0.5c populates ``scripted_chunks`` with
-    ``GenerateContentResponse``-shaped records and wires
-    ``models.generate_content_stream`` to yield them.
+    Exposes a ``.models.generate_content_stream(**kwargs)`` entry point
+    the adapter calls. Scripted chunks are yielded on success;
+    ``pending_exceptions`` lets a test script transient failures
+    followed by recovery so retry behaviour round-trips end-to-end.
+
+    Usage::
+
+        fake = FakeGeminiSDK()
+        fake.scripted_chunks = [
+            gemini_chunk(text="Hello"),
+            gemini_chunk(finish_reason="STOP"),
+        ]
+        client = GeminiClient(
+            model="gemini-2.5-pro",
+            api_key="k",
+            sdk_factory=lambda _k: fake,
+        )
+        list(client.stream(system_prompt="", messages=[...], tools=[]))
+        assert fake.captured_kwargs[-1]["model"] == "gemini-2.5-pro"
     """
 
     scripted_chunks: list[Any] = field(default_factory=list)
     captured_kwargs: list[dict[str, Any]] = field(default_factory=list)
+    pending_exceptions: list[BaseException] = field(default_factory=list)
+    """Exceptions to raise on the first ``len(...)`` calls into
+    ``generate_content_stream`` — drained one per attempt. When empty
+    the fake returns ``scripted_chunks`` normally."""
+
+    def fail_with_then_succeed(
+        self,
+        exception: BaseException,
+        *,
+        scripted: list[Any] | None = None,
+    ) -> None:
+        """Queue ``exception`` to raise on the next call, then succeed
+        with ``scripted`` (or the existing ``scripted_chunks``)."""
+        self.pending_exceptions.append(exception)
+        if scripted is not None:
+            self.scripted_chunks = list(scripted)
+
+    @property
+    def models(self) -> "_FakeGeminiModels":
+        return _FakeGeminiModels(self)
+
+
+@dataclass
+class _FakeGeminiModels:
+    parent: FakeGeminiSDK
+
+    def generate_content_stream(self, **kwargs: Any) -> Any:
+        self.parent.captured_kwargs.append(kwargs)
+        if self.parent.pending_exceptions:
+            raise self.parent.pending_exceptions.pop(0)
+        return iter(list(self.parent.scripted_chunks))
+
+
+def gemini_chunk(
+    *,
+    text: str | None = None,
+    thought: bool = False,
+    function_call: dict[str, Any] | None = None,
+    fc_id: str | None = None,
+    finish_reason: str | None = None,
+    usage: dict[str, int] | None = None,
+) -> Any:
+    """Build a ``GenerateContentResponse``-shaped ``SimpleNamespace``.
+
+    Populates only the fields the adapter's translator reads so a test
+    can specify exactly the chunk it needs without re-declaring the
+    entire SDK record layout. One chunk typically carries one semantic
+    event (text delta, thought, function call, finish, usage).
+    """
+    parts: list[Any] = []
+    if text is not None:
+        parts.append(SimpleNamespace(text=text, thought=thought, function_call=None))
+    if function_call is not None:
+        fc = SimpleNamespace(
+            name=function_call.get("name", ""),
+            args=dict(function_call.get("args", {})),
+            id=fc_id,
+        )
+        parts.append(
+            SimpleNamespace(
+                text=None,
+                thought=False,
+                function_call=fc,
+                function_call_id=fc_id,
+            )
+        )
+
+    candidate = SimpleNamespace(
+        content=SimpleNamespace(parts=parts),
+        finish_reason=finish_reason,
+    )
+
+    usage_obj: Any = None
+    if usage is not None:
+        usage_obj = SimpleNamespace(
+            prompt_token_count=usage.get("prompt_token_count"),
+            candidates_token_count=usage.get("candidates_token_count"),
+            thoughts_token_count=usage.get("thoughts_token_count"),
+            cached_content_token_count=usage.get("cached_content_token_count"),
+        )
+
+    return SimpleNamespace(candidates=[candidate], usage_metadata=usage_obj)
 
 
 # ---------------------------------------------------------------------------
@@ -126,18 +225,23 @@ def scripted_turn_events(
     provider: str,
     tool_calls: list[tuple[str, dict[str, Any]]],
 ) -> list[Any]:
-    """Return the canonical "three tools, one fails, end_turn" event
-    sequence shaped for the given provider's SDK surface.
+    """Return the canonical "tool-use then end_turn" event sequence
+    shaped for the given provider's SDK surface.
 
-    Skeleton — concrete shapes land in P0.5c (Gemini) and P0.5d
-    (OpenAI). The Anthropic path uses the existing test helpers in
-    ``tests/test_llm_providers.py``. Raising here rather than silently
-    returning ``[]`` makes it obvious to a downstream task that the
-    helper still needs a body.
+    P0.5c fills in Gemini; P0.5d fills in OpenAI. Anthropic shape still
+    uses the helpers in ``tests/test_llm_providers.py``.
     """
+    if provider == "gemini":
+        chunks: list[Any] = []
+        for name, args in tool_calls:
+            chunks.append(
+                gemini_chunk(function_call={"name": name, "args": args})
+            )
+        chunks.append(gemini_chunk(finish_reason="STOP"))
+        return chunks
     raise NotImplementedError(
         f"scripted_turn_events({provider!r}) not implemented yet — "
-        "P0.5c fills in Gemini, P0.5d fills in OpenAI."
+        "P0.5d fills in OpenAI; Anthropic uses test_llm_providers helpers."
     )
 
 
@@ -145,5 +249,6 @@ __all__ = [
     "FakeAnthropicSDK",
     "FakeGeminiSDK",
     "FakeOpenAISDK",
+    "gemini_chunk",
     "scripted_turn_events",
 ]

@@ -89,6 +89,21 @@ ECHO_EXPECTED = {
     "max_output_tokens": 512,
 }
 
+# Gemini adapter landed in P0.5c. ``parallel_tool_calls=True`` reflects
+# the 2.5 family's multi-tool-per-turn behaviour; ``prompt_cache=False``
+# because the SDK lacks the content-handle API today (follow-up task).
+GEMINI_EXPECTED = {
+    "streaming": True,
+    "native_tool_use": True,
+    "parallel_tool_calls": True,
+    "thinking": True,
+    "prompt_cache": False,
+    "vision": True,
+    "json_mode": True,
+    "max_context_tokens": 1_048_576,
+    "max_output_tokens": 8192,
+}
+
 
 def _caps_to_dict(caps: ProviderCapabilities) -> dict:
     return {
@@ -118,6 +133,19 @@ def test_openai_adapter_declares_current_non_streaming_reality():
     assert _caps_to_dict(caps) == OPENAI_EXPECTED
 
 
+def test_gemini_adapter_declares_expected_capabilities():
+    from cli.llm.providers.gemini_client import GeminiClient
+
+    client = GeminiClient(
+        model="gemini-2.5-pro",
+        api_key="sk-test",
+        sdk_factory=lambda _k: object(),
+    )
+    caps = client.capabilities
+    assert isinstance(caps, ProviderCapabilities)
+    assert _caps_to_dict(caps) == GEMINI_EXPECTED
+
+
 def test_echo_model_declares_zero_capabilities():
     caps = EchoModel().capabilities
     assert isinstance(caps, ProviderCapabilities)
@@ -134,9 +162,12 @@ def test_echo_model_declares_zero_capabilities():
 
 
 def test_capabilities_available_as_class_attribute():
+    from cli.llm.providers.gemini_client import GeminiClient
+
     assert isinstance(AnthropicClient.capabilities, ProviderCapabilities)
     assert isinstance(OpenAIClient.capabilities, ProviderCapabilities)
     assert isinstance(EchoModel.capabilities, ProviderCapabilities)
+    assert isinstance(GeminiClient.capabilities, ProviderCapabilities)
 
 
 # ---------------------------------------------------------------------------
