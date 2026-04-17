@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Each task below ships as one failing test → minimal impl → passing test → conventional commit. One task per subagent. Verify the repo-wide suite green after every merge-back.
 
+> **Pickup audit (same day):** This branch is not starting from zero. By the time this plan was revisited, the worktree already contained substantial P3 implementation (`cli/permissions/classifier.py`, `cli/permissions/denial_tracking.py`, `cli/permissions/audit_log.py`, `cli/mcp/transports/*`, `cli/mcp/reconnect.py`, transport-backed MCP client/tests, and `/doctor` coverage). The role of this document is now twofold: preserve the original TDD expansion, and record the remaining delta between the handoff spec and the branch's current state so follow-on work does not duplicate landed functionality.
+
 **Goal.** Reduce permission-prompt noise on obviously-safe tool calls (classifier + denial tracking + audit log), and let AgentLab talk to hosted MCP servers (SSE + HTTP transports with reconnect).
 
 **Architecture.** Two independent slices sharing only `cli/permissions.py` (existing `PermissionManager.persist_allow_rule`) and `cli/workbench_app/tool_permissions.py` (existing `PermissionTable`).
@@ -17,18 +19,27 @@
 
 ## Ground-truth findings
 
-Where the canonical P3 handoff diverges from what's on `master` as of `2f63f08`:
+Where the canonical P3 handoff diverges from the pickup branch state:
 
-1. **`cli/mcp_runtime.py` does NOT run stdio servers.** It's a config-management layer only (`load_mcp_config`, `save_mcp_config`, CLI subcommands). The actual stdio dispatch lives behind `McpClientFactory` in `cli/tools/mcp_bridge.py`. **Decision:** the new `Transport` lives under `cli/mcp/transports/`; `mcp_bridge.py` gains a new `transport`-aware factory (or `McpClientFactory` subclasses produce transport-wrapped clients). We do NOT rewrite `mcp_runtime.py` into an event loop — it stays as config I/O.
-2. **`cli/permissions.py` already persists rules.** `PermissionManager.persist_allow_rule(pattern)` already writes `permissions.rules.allow` to `.agentlab/settings.json` via `update_workspace_settings`. The dialog's new "save as rule" button calls this function directly — no new persistence code needed.
-3. **`PermissionTable` (`cli/workbench_app/tool_permissions.py`) is simpler than the handoff implies.** It owns a defaults dict, an overrides dict, and a `check(tool_name)` that raises `PermissionPending`/`PermissionDenied`. It has no workspace root, no classifier reference. **Decision:** the classifier lives OUTSIDE `PermissionTable`. The REPL's permission-resolution path consults the classifier first; if the classifier returns `PROMPT`, the existing `PermissionTable.check` fires. `PermissionTable` stays untouched.
-4. **`cli/permissions/` — does not exist.** Free to create. (`cli/permissions.py` the MODULE exists, but Python package + module can coexist — if not, we promote `cli/permissions.py` → `cli/permissions/__init__.py` in a zero-content-change move.)
-5. **`cli/mcp/` — does not exist.** Free to create.
-6. **`.mcp.json` schema today.** `{"mcpServers": {<name>: {"command": str, "args": [...], "env": {...}}}}`. No `transport` field. **Decision:** treat absence of `transport` as `"stdio"` (backward compat). New `"transport": "sse"` and `"http"` cases require `url`. Pydantic validates via a tagged union.
-7. **`httpx` availability** — already imported in `cli/llm/providers/openai_client.py`. Confirmed.
-8. **`/doctor` is already extended** (P0 + P0.5). New `classifier_section(manager, tracker, classifier)` is a pure render helper.
-9. **`tests/test_system_prompt.py` must stay byte-stable.** No change to `cli/workbench_app/system_prompt.py` in P3. The classifier has zero effect on system prompts.
-10. **Existing permission tests.** `tests/test_permissions*.py` must all stay green; the classifier path is strictly additive (consulted BEFORE the existing `PermissionTable.check`, returns `PROMPT` on anything novel). Auto-deny tools never existed before; classifier's `AUTO_DENY` is limited to the same rules `PermissionManager.decision_for` would return `"deny"` for — it's a cheaper path, not a new policy.
+1. **`cli/permissions/` already exists on this branch.** The classifier, denial tracker, audit log, and persistence helpers are implemented under that package. The open question is not "create them" but "do they fully match the handoff invariants?" Current focused tests indicate yes for the major safety properties.
+2. **`cli/mcp/` already exists on this branch.** There is a transport protocol, concrete stdio/SSE/HTTP implementations, a reconnect wrapper, and a transport-backed JSON-RPC client. Again, the work now is gap-closing, not greenfield transport creation.
+3. **`cli/mcp_runtime.py` remains a config-management / CLI surface.** It does not itself host a transport loop; it validates and persists config, and the bridge/runtime layers consume the typed config elsewhere. This is still the right architecture.
+4. **`cli/permissions.py` already persists rules.** `PermissionManager.persist_allow_rule(pattern)` writes to `.agentlab/settings.json::permissions.rules.allow`. The permission dialog and executor already use this path; no new persistence mechanism should be invented.
+5. **`PermissionTable` (`cli/workbench_app/tool_permissions.py`) still does not own classifier logic.** The classifier gate lives higher in the executor path. That is acceptable so long as prompting behavior is preserved and tests stay green.
+6. **MCP config currently lives in `.mcp.json`, not in `Settings.mcp.servers`.** This is the biggest remaining divergence from the handoff's desired end state. Existing code validates `.mcp.json` via `cli/mcp/config.py`; the settings cascade schema still exposes `mcp.servers` as an untyped placeholder and runtime code does not consult it.
+7. **Transport naming currently uses `streamable-http`, not the handoff's shorter `http`.** This is functionally correct for the wire protocol but may be a parity mismatch at the configuration boundary. If we close one remaining P3 gap, it should include accepting `http` as a first-class alias while preserving `streamable-http` for backward compatibility.
+8. **`/doctor` classifier + MCP transport sections already exist.** Any further work here should be additive only if the config source changes (for example, reporting settings-backed MCP servers as well as `.mcp.json` entries).
+9. **`tests/test_system_prompt.py` must stay byte-stable.** This remains non-negotiable and is already satisfied by the current branch.
+10. **Current pickup focus.** Based on the audit and focused test run, the most likely missing P3 deliverables are:
+   - settings-cascade support for MCP server definitions (`Settings.mcp.servers`);
+   - `http` transport alias / compatibility on top of the existing `streamable-http` transport name;
+   - any small `/doctor` or wizard adjustments required once settings-backed servers are recognized.
+
+## Pickup status
+
+- **Already green in focused verification:** classifier rules, denial tracking, executor wiring, audit logging, `/doctor` classifier section, stdio/SSE/HTTP transports, reconnect wrapper, MCP transport client, runtime transport config, `test_system_prompt.py`.
+- **Most probable remaining work:** bridge the P0 settings cascade into MCP transport config without regressing existing `.mcp.json` users, and smooth the `http` vs `streamable-http` naming edge.
+- **Execution order from pickup:** docs-only plan refresh commit first, then one TDD slice for settings-backed MCP config + transport aliasing if tests expose the gap.
 
 ---
 
