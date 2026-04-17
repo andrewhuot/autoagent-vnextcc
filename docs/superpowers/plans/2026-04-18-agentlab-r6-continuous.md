@@ -196,9 +196,28 @@ Thresholds and window size are per-surface in
 `continuous.regression.thresholds`. Default surface is workspace-
 global.
 
-### 1.8 Calibration (R6.7)
+### 1.8 Calibration (R6.7) — reality-adjusted
 
-A new SQLite table:
+Ground-truth findings that revise the original sketch:
+
+- **`agentlab improve measure <attempt_id>` already ships** at
+  `cli/commands/improve.py:1488` with an in-process twin at
+  `:843`. It runs `_run_post_deploy_eval` against the default eval
+  set and writes `composite_delta = post - score_before` to the
+  lineage store. R6.6 does **not** add a new subcommand; it extends
+  the existing one.
+- **`--explain-strategy` already ships** on `agentlab optimize`
+  (`cli/commands/optimize.py:988`). The rendering path is
+  `optimizer/proposer.py:format_strategy_explanation` keyed off a
+  `StrategyExplanation(strategy, surface, effectiveness, samples,
+  explored)`. There is no `predicted_improvement` or
+  `expected_score_delta` field anywhere in the repo today.
+- **The "prediction" we calibrate against is `effectiveness`** — the
+  past per-`(strategy, surface)` success rate the proposer uses when
+  ranking. Framing: "the proposer *predicted* effectiveness 0.65;
+  actual composite_delta on this attempt was 0.59 → under by 0.06."
+
+Schema:
 
 ```sql
 CREATE TABLE IF NOT EXISTS predicted_vs_actual (
@@ -206,25 +225,50 @@ CREATE TABLE IF NOT EXISTS predicted_vs_actual (
     attempt_id TEXT NOT NULL,         -- R2 lineage FK
     surface TEXT NOT NULL,
     strategy TEXT NOT NULL,
-    predicted_improvement REAL NOT NULL,
-    actual_improvement REAL NOT NULL,
+    predicted_effectiveness REAL NOT NULL,   -- StrategyExplanation.effectiveness at rank-time
+    actual_delta REAL NOT NULL,              -- measure.composite_delta
     recorded_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pva_surface_strategy
     ON predicted_vs_actual(surface, strategy);
 ```
 
-- `predicted_improvement` comes from the proposer's
-  `expected_score_delta` field at attempt time.
-- `actual_improvement` is filled in by `improve measure <id>` (R6.6)
-  after running the production-replay eval set.
 - The **calibration factor** for `(surface, strategy)` is
-  `mean(actual - predicted)` over the last N=20 rows for that pair.
-  With fewer rows, factor = 0.0 (no adjustment). Never raise an
-  exception on sparse data — new workspaces must work.
-- `optimize --explain-strategy` reads the factor and displays:
-  "Predicted +0.08; calibration-adjusted +0.06 (last 20 attempts
-  ran 0.02 below prediction on this surface)."
+  `mean(actual_delta - predicted_effectiveness)` over the last N=20
+  rows for that pair. With fewer rows, factor = `None` (no
+  adjustment). Never raises on sparse data — new workspaces must work.
+- The factor units are intentionally in the same `[0,1]` composite
+  space as `effectiveness` itself so the CLI can render them
+  side-by-side. We are **not** claiming this factor generalizes to a
+  different surface or strategy; it's strictly descriptive on its
+  key.
+- The `CalibrationStore` persists at `.agentlab/calibration.db` by
+  default; `AGENTLAB_CALIBRATION_DB` overrides.
+
+Capturing `predicted_effectiveness` at attempt time requires plumbing:
+
+- `optimizer/memory.py:OptimizationAttempt` gains two optional
+  fields: `predicted_effectiveness: float | None = None`,
+  `strategy_surface: str | None = None`. Both nullable — legacy rows
+  load fine.
+- `optimizer/memory.py:OptimizationMemory` migration: a
+  `CREATE TABLE IF NOT EXISTS` alter-add path. Add columns if
+  missing; existing rows populate with `NULL`. This is the only
+  schema migration in Slice B.
+- `optimizer/loop.py` writes both fields when persisting an attempt,
+  sourced from the `StrategyExplanation` returned by the proposer on
+  that cycle.
+
+Render rule in `format_strategy_explanation` (R6.7 / B.3):
+
+- Signature extended: `format_strategy_explanation(e, *,
+  calibration_factor: float | None = None) -> str`.
+- When `calibration_factor is None`: output unchanged (preserves
+  every existing golden).
+- When set: append `; calibrated effectiveness={e.effectiveness +
+  factor:.2f} (last 20 runs {"under" if factor<0 else "over"}-
+  performed by {abs(factor):.2f})`. Never mutates the leading line
+  — only appends.
 
 This is **separate** from `optimizer/reflection.py:Reflection`.
 Reflection captures *qualitative* learnings; calibration captures
@@ -365,7 +409,10 @@ and after; FD count delta must be 0 ± small constant.
 | `cli/commands/loop.py` | **Create** | `agentlab loop {run,status}` CLI group |
 | `optimizer/continuous.py` | **Create** | Cycle orchestrator (ingest→score→detect→notify) |
 | `optimizer/cycle_store.py` | **Create** | SQLite: `loop_cycles`, reconcile abandoned |
-| `optimizer/calibration.py` | **Create** | `predicted_vs_actual` table + factor lookup |
+| `optimizer/calibration.py` | **Create** | `CalibrationStore` (`predicted_vs_actual` table + factor lookup) |
+| `optimizer/memory.py` | **Modify** | Add `predicted_effectiveness` + `strategy_surface` columns on attempts; additive migration |
+| `optimizer/loop.py` | **Modify** (minimal) | Write the two new fields when persisting an attempt |
+| `optimizer/proposer.py` | **Modify** | `format_strategy_explanation(e, *, calibration_factor=None)` |
 | `optimizer/canary_scoring.py` | **Create** | `CanaryRouter` protocol + `LocalCanaryRouter` + aggregator |
 | `evals/drift.py` | **Create** | `score_distribution_drift`, `DriftReport`, coverage |
 | `notifications/channels.py` | **Modify** | Add `SlackAdapter`, `EmailAdapter` |
@@ -417,20 +464,38 @@ Commit style (one per task):
 pairwise canary verdicts; feed calibration into the optimizer's
 strategy explanation.
 
+**Reality check** — this slice ships as extensions, not greenfield:
+
+- `agentlab improve measure` already exists; B.2c/B.2d extend it.
+- `agentlab optimize --explain-strategy` already exists; B.3/B.3b
+  extend its rendering.
+- `StrategyExplanation.effectiveness` is the "prediction" we
+  calibrate against (no `expected_score_delta` field exists).
+- `judges/pairwise.py` and `evals/judges/pairwise_judge.py` both
+  exist — dispatch prompts must `Read` them before B.5.
+
 | # | Task | Test first |
 |---|---|---|
-| B.1 | `optimizer/calibration.py:CalibrationStore` with `predicted_vs_actual` schema + `record(attempt_id, surface, strategy, pred, actual)` + `factor(surface, strategy, N=20)`. Sparse → 0.0, never raises. | `test_calibration_factor_sparse_returns_zero`, `test_calibration_factor_last_n`, `test_calibration_record_persists` |
-| B.2 | `cli/commands/improve.py:measure <attempt_id> --replay-set <path>` — runs the eval set, diffs against baseline score at attempt time, writes to `CalibrationStore` + lineage. | `test_improve_measure_computes_actual_delta`, `test_improve_measure_writes_calibration_row`, `test_improve_measure_unknown_attempt_exit_4` |
-| B.3 | `cli/commands/optimize.py:--explain-strategy` reads the factor and renders the calibrated prediction. | `test_explain_strategy_shows_calibrated_value`, `test_explain_strategy_sparse_falls_back_to_raw` |
+| B.1 | `optimizer/calibration.py:CalibrationStore` with `predicted_vs_actual` schema + `record(attempt_id, surface, strategy, predicted_effectiveness, actual_delta)` + `factor(surface, strategy, n=20) -> float \| None`. Sparse → `None`, never raises. | `test_calibration_factor_sparse_returns_none`, `test_calibration_factor_last_n_mean`, `test_calibration_record_persists`, `test_calibration_keys_by_surface_strategy` |
+| B.2a | `optimizer/memory.py`: add nullable `predicted_effectiveness: float \| None` and `strategy_surface: str \| None` columns to `OptimizationAttempt`; idempotent `ALTER TABLE` migration; legacy rows load with `NULL`. | `test_memory_schema_adds_calibration_columns`, `test_memory_migration_idempotent`, `test_memory_legacy_row_loads_with_null_fields` |
+| B.2b | `optimizer/loop.py`: when persisting a new attempt, populate the two calibration fields from `_LAST_EXPLANATION` (or from the `StrategyExplanation` returned by rank). No-op when explanation missing. | `test_loop_persists_predicted_effectiveness_and_surface`, `test_loop_tolerates_missing_explanation` |
+| B.2c | Extend existing `improve measure` (both `run_improve_measure_in_process` and the click command) to accept optional `--replay-set <path>`. When set, `_run_post_deploy_eval` loads cases from that path; when unset, behavior is unchanged. | `test_improve_measure_default_replay_unchanged`, `test_improve_measure_with_replay_set_uses_custom_cases`, `test_improve_measure_replay_set_missing_file_exit_1` |
+| B.2d | Extend `improve measure` to write a `CalibrationStore` row after the lineage measurement succeeds — only when the attempt has both `predicted_effectiveness` and `strategy_surface`. Absent → skip silently + log once. | `test_improve_measure_writes_calibration_row`, `test_improve_measure_skips_calibration_when_predicted_null`, `test_improve_measure_calibration_write_failure_is_warning_not_exit` |
+| B.3 | `optimizer/proposer.py:format_strategy_explanation(e, *, calibration_factor=None)` appends a calibrated-effectiveness clause when factor is set; signature change is keyword-only so existing callers keep working. | `test_format_explanation_no_factor_preserves_output`, `test_format_explanation_positive_factor_renders_overperform`, `test_format_explanation_negative_factor_renders_underperform` |
+| B.3b | `cli/commands/optimize.py:--explain-strategy` rendering loop looks up the factor from `CalibrationStore` per explanation entry and passes it through. Sparse factor (`None`) → existing render preserved. | `test_explain_strategy_shows_calibrated_value_when_history`, `test_explain_strategy_sparse_falls_back_to_raw`, `test_explain_strategy_golden_help_unchanged` |
 | B.4 | `optimizer/canary_scoring.py:CanaryRouter` protocol + `LocalCanaryRouter(db_path)` implementing `record_pair`. | `test_local_router_persists_pairs`, `test_local_router_schema_roundtrip` |
 | B.5 | `optimizer/canary_scoring.py:CanaryScoringAggregator.score_recent` using R3 pairwise judge. | `test_aggregator_computes_win_rate`, `test_aggregator_requires_min_pairs`, `test_aggregator_tie_handling` |
 | B.6 | Deployer hook: existing `deployer/canary.py:CanaryManager.check_canary` consults aggregator if configured. Non-breaking — default is `None`. | `test_canary_manager_ignores_aggregator_when_none`, `test_canary_manager_uses_aggregator_verdict_when_set` |
 | B.7 | **Acceptance:** after a simulated shipped improvement and 50 replay cases, calibration factor updates and `--explain-strategy` shows the calibrated delta. | `test_acceptance_slice_b_calibration_roundtrip` |
 
-Commit style:
+Commit style (one per task):
 - `feat(optimizer): calibration store for predicted-vs-actual`
-- `feat(improve): measure subcommand on replay set`
-- `feat(optimize): --explain-strategy uses calibration factor`
+- `feat(optimizer): record predicted_effectiveness on attempts`
+- `feat(optimizer): populate calibration fields in loop attempt write`
+- `feat(improve): measure --replay-set for custom eval sets`
+- `feat(improve): measure writes calibration row`
+- `refactor(optimizer): format_strategy_explanation accepts calibration_factor`
+- `feat(optimize): --explain-strategy renders calibration factor`
 - `feat(canary): CanaryRouter protocol + LocalCanaryRouter`
 - `feat(canary): CanaryScoringAggregator with pairwise verdict`
 - `feat(deployer): opt-in pairwise aggregator in CanaryManager`
@@ -492,8 +557,14 @@ Commit: `docs(continuous): R6 user-facing overview`.
    fake clients (§1.3, tests A.5/A.6).
 5. **Abandoned cycles reconcile.** Stale `running` rows → `abandoned`
    on next start (§1.5, test A.1).
-6. **Sparse calibration does not crash.** Factor = 0.0 when N<20
-   (§1.8, test B.1).
+6. **Sparse calibration does not crash.** Factor = `None` when N<20;
+   renderers fall back to the pre-calibration output (§1.8, tests
+   B.1/B.3b).
+6a. **Existing `--explain-strategy` goldens stay green.** The signature
+    change is keyword-only; the absent-factor output is
+    byte-identical to pre-R6 (§1.8, test B.3b).
+6b. **`improve measure` default path is unchanged.** No `--replay-set`
+    flag → same cases, same lineage write (§B.2c).
 7. **Canary pairwise uses the same inputs.** Aggregator only scores
    `(baseline, candidate)` tuples recorded together (§1.9, tests
    B.4/B.5).
