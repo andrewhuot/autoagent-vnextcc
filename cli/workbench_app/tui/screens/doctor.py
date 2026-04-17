@@ -88,7 +88,9 @@ class DoctorScreen(TUIScreen):
             from pathlib import Path as _Path
 
             from cli.doctor_sections import (
+                render_classifier_section,
                 render_hooks_section,
+                render_mcp_transports_section,
                 render_settings_section,
             )
             from cli.hooks import HookRegistry
@@ -113,6 +115,14 @@ class DoctorScreen(TUIScreen):
                 registry = HookRegistry()
                 registry.load_errors = [f"hook load failed: {exc}"]  # type: ignore[attr-defined]
             for line in render_hooks_section(registry):
+                lines.append(line)
+
+            # Classifier + MCP transport health (P3.T4). Both renderers
+            # are defensive against empty/missing state, so we can pass
+            # the raw workspace root without pre-checks here.
+            for line in render_classifier_section(root):
+                lines.append(line)
+            for line in render_mcp_transports_section(root):
                 lines.append(line)
         except Exception as exc:  # pragma: no cover - defensive
             lines.append("")

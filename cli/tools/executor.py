@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from cli.permissions import PermissionManager
+from cli.permissions.audit_log import ClassifierAuditLog, compute_input_digest
 from cli.permissions.classifier import (
     ClassifierContext,
     ClassifierDecision,
@@ -63,6 +64,7 @@ def execute_tool_call(
     hook_registry: Any | None = None,
     classifier_context: ClassifierContext | None = None,
     denial_tracker: DenialTracker | None = None,
+    audit_log: ClassifierAuditLog | None = None,
 ) -> ToolExecution:
     """Execute a single tool call end-to-end.
 
@@ -131,6 +133,23 @@ def execute_tool_call(
         classifier_decision = classify_tool_call(
             tool_name, dict(tool_input), classifier_context
         )
+        # Audit log: record EVERY classifier decision, including PROMPT,
+        # so operators can correlate after the fact which tools fell
+        # through vs. which short-circuited. The log stores only a
+        # 16-hex SHA-256 digest of tool_input — never the raw payload —
+        # because bash commands and file paths routinely contain
+        # secrets. Failures in record() are swallowed by the audit-log
+        # module; the executor must never crash on a full disk.
+        if audit_log is not None:
+            try:
+                audit_log.record(
+                    tool_name=tool_name,
+                    decision=classifier_decision,
+                    tool_input_digest=compute_input_digest(dict(tool_input)),
+                    reason="classifier",
+                )
+            except Exception:  # pragma: no cover - defensive
+                pass
         if classifier_decision == ClassifierDecision.AUTO_DENY:
             if denial_tracker is not None:
                 denial_tracker.record_denial(tool_name)
