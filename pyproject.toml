@@ -19,13 +19,13 @@ dependencies = [
 
 [project.optional-dependencies]
 adk = [
-    "google-adk>=0.3.0",
+    "google-adk>=1.28.1",
 ]
 gemini = [
-    "google-genai>=1.15,<1.16",
+    "google-genai>=1.64.0",
 ]
 providers = [
-    "google-genai>=1.15,<1.16",
+    "google-genai>=1.64.0",
 ]
 vision = [
     "Pillow>=10.0",
