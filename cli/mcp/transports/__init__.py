@@ -56,4 +56,8 @@ class Transport(Protocol):
         ...
 
 
-__all__ = ["Transport"]
+from cli.mcp.transports.http import HttpStreamableTransport  # noqa: E402
+from cli.mcp.transports.sse import SseTransport  # noqa: E402
+from cli.mcp.transports.stdio import StdioTransport  # noqa: E402
+
+__all__ = ["Transport", "StdioTransport", "SseTransport", "HttpStreamableTransport"]
