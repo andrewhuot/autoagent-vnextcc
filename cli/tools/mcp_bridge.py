@@ -198,6 +198,7 @@ def _build_mcp_tool(
         # want a tool to auto-allow can add a dedicated allow rule in
         # ``settings.json`` — safer than assuming.
         read_only = False
+        is_concurrency_safe = False
 
         _server_name = spec.server_name
         _tool_name = spec.name

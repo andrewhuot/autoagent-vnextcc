@@ -38,6 +38,7 @@ class ConfigReadTool(Tool):
         "additionalProperties": False,
     }
     read_only = True
+    is_concurrency_safe = True
 
     def permission_action(self, tool_input: Mapping[str, Any]) -> str:
         return f"tool:ConfigRead:{tool_input.get('path', '')}"

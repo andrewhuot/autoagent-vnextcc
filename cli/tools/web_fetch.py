@@ -78,6 +78,7 @@ class WebFetchTool(Tool):
         "additionalProperties": False,
     }
     read_only = False
+    is_concurrency_safe = True
 
     def permission_action(self, tool_input: Mapping[str, Any]) -> str:
         url = str(tool_input.get("url") or "")
