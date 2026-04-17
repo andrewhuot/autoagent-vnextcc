@@ -27,6 +27,10 @@ Options:
                                   mutating state.
   --explain-strategy              Print one line per ranked strategy showing
                                   why it was chosen.
+  --show-tradeoffs INTEGER        Print the top-K non-dominated candidates
+                                  from the Pareto archive
+                                  (quality/safety/cost). 0 disables; positive
+                                  integers select K.  [default: 0]
   -j, --json                      Output as JSON.
   --max-budget-usd FLOAT          Stop before running when workspace spend
                                   reaches this amount.

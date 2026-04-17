@@ -64,6 +64,152 @@ class OptimizeRunResult:
     artifacts: tuple[str, ...]
 
 
+def _build_tradeoffs_archive_from_memory(memory):
+    """Construct a :class:`ConstrainedParetoArchive` from memory attempts.
+
+    Today ``OptimizationAttempt`` only persists a single composite score,
+    so we treat ``score_after`` as the quality dimension and leave safety
+    and cost at the neutral 0.0 default. This keeps ``--show-tradeoffs``
+    unobtrusive until the attempt schema grows per-dimension scores in a
+    future slice; the renderer already handles missing dimensions.
+    """
+    from optimizer.pareto import (
+        ConstrainedParetoArchive,
+        ObjectiveDirection,
+        ObjectiveName,
+    )
+
+    archive = ConstrainedParetoArchive(
+        objective_directions={
+            ObjectiveName.QUALITY.value: ObjectiveDirection.MAXIMIZE,
+            ObjectiveName.SAFETY.value: ObjectiveDirection.MAXIMIZE,
+            ObjectiveName.COST.value: ObjectiveDirection.MINIMIZE,
+        }
+    )
+    try:
+        attempts = memory.recent(limit=50)
+    except Exception:
+        attempts = []
+    for attempt in attempts or []:
+        cid = getattr(attempt, "attempt_id", None) or getattr(
+            attempt, "change_description", None
+        )
+        if not cid:
+            continue
+        score_after = getattr(attempt, "score_after", None)
+        if score_after is None:
+            continue
+        archive.add_candidate(
+            candidate_id=str(cid)[:16],
+            objectives={
+                "quality": float(score_after),
+                "safety": 0.0,
+                "cost": 0.0,
+            },
+            constraints_passed=True,
+        )
+    return archive
+
+
+def render_tradeoffs_table(archive, k: int = 5) -> str:
+    """Render the top-K non-dominated candidates from a Pareto archive.
+
+    Accepts a :class:`optimizer.pareto.ConstrainedParetoArchive` (direction-
+    aware, named-objective). Returns a fixed-width ASCII table with the
+    ``candidate | quality | safety | cost | dominates | dominated_by``
+    columns. Missing objective values are rendered as ``—``.
+
+    The ``dominates`` column lists candidate IDs that this row strictly
+    Pareto-dominates in the archive; ``dominated_by`` lists rows that
+    dominate this one. For frontier members ``dominated_by`` is ``—``.
+
+    When the archive has no feasible candidates, returns a short placeholder
+    message so the caller can unconditionally ``click.echo`` the result.
+    """
+    if k <= 0:
+        return ""
+    feasible = list(getattr(archive, "feasible_candidates", []))
+    if not feasible:
+        return "No Pareto candidates to display (archive empty)."
+
+    # Compute dominance relationships across the full feasible set so we
+    # can list dominators/dominees per candidate. This is O(n^2) but the
+    # archive cap is ~100, which is tiny.
+    dominates_map: dict[str, list[str]] = {c["candidate_id"]: [] for c in feasible}
+    dominated_by_map: dict[str, list[str]] = {c["candidate_id"]: [] for c in feasible}
+    for a in feasible:
+        for b in feasible:
+            if a["candidate_id"] == b["candidate_id"]:
+                continue
+            if archive.dominates(a, b):
+                dominates_map[a["candidate_id"]].append(b["candidate_id"])
+                dominated_by_map[b["candidate_id"]].append(a["candidate_id"])
+
+    # Order candidates: non-dominated first (sorted by quality desc),
+    # then dominated (sorted by quality desc) so the most informative
+    # tradeoffs appear at the top.
+    def _q(c: dict) -> float:
+        return float(c.get("objectives", {}).get("quality", float("-inf")))
+
+    frontier_ids = {c["candidate_id"] for c in archive.frontier()}
+    non_dom = sorted(
+        [c for c in feasible if c["candidate_id"] in frontier_ids],
+        key=_q,
+        reverse=True,
+    )
+    dominated = sorted(
+        [c for c in feasible if c["candidate_id"] not in frontier_ids],
+        key=_q,
+        reverse=True,
+    )
+    ordered = (non_dom + dominated)[:k]
+
+    def _fmt(value: float | None, width: int) -> str:
+        if value is None:
+            return "—".ljust(width)
+        return f"{value:.4f}".ljust(width)
+
+    def _fmt_ids(ids: list[str], width: int) -> str:
+        if not ids:
+            return "—".ljust(width)
+        joined = ",".join(ids)
+        if len(joined) > width:
+            joined = joined[: max(0, width - 1)] + "…"
+        return joined.ljust(width)
+
+    cid_w = max(9, max(len(c["candidate_id"]) for c in ordered))
+    num_w = 8
+    dom_w = max(9, max(len(",".join(dominates_map[c["candidate_id"]] or ["—"])) for c in ordered))
+    dom_w = min(dom_w, 24)
+    dby_w = max(12, max(len(",".join(dominated_by_map[c["candidate_id"]] or ["—"])) for c in ordered))
+    dby_w = min(dby_w, 24)
+
+    header = (
+        f"{'candidate'.ljust(cid_w)} | "
+        f"{'quality'.ljust(num_w)} | "
+        f"{'safety'.ljust(num_w)} | "
+        f"{'cost'.ljust(num_w)} | "
+        f"{'dominates'.ljust(dom_w)} | "
+        f"{'dominated_by'.ljust(dby_w)}"
+    )
+    sep = "-" * len(header)
+    lines = [header, sep]
+    for c in ordered:
+        objectives = c.get("objectives", {})
+        q = objectives.get("quality")
+        s = objectives.get("safety")
+        cost = objectives.get("cost")
+        lines.append(
+            f"{c['candidate_id'].ljust(cid_w)} | "
+            f"{_fmt(q, num_w)} | "
+            f"{_fmt(s, num_w)} | "
+            f"{_fmt(cost, num_w)} | "
+            f"{_fmt_ids(dominates_map[c['candidate_id']], dom_w)} | "
+            f"{_fmt_ids(dominated_by_map[c['candidate_id']], dby_w)}"
+        )
+    return "\n".join(lines)
+
+
 def _explanation_with_calibration(entry) -> str:
     """Render a ``StrategyExplanation`` with its calibration factor pulled
     from :class:`optimizer.calibration.CalibrationStore`.
@@ -1026,6 +1172,16 @@ def register_optimize_commands(cli: click.Group) -> None:
         default=False,
         help="Print one line per ranked strategy showing why it was chosen.",
     )
+    @click.option(
+        "--show-tradeoffs",
+        type=int,
+        default=0,
+        show_default=True,
+        help=(
+            "Print the top-K non-dominated candidates from the Pareto archive "
+            "(quality/safety/cost). 0 disables; positive integers select K."
+        ),
+    )
     @click.option("--json", "json_output", "-j", is_flag=True, help="Output as JSON.")
     @click.option("--max-budget-usd", default=None, type=float, help="Stop before running when workspace spend reaches this amount.")
     @click.option(
@@ -1061,6 +1217,7 @@ def register_optimize_commands(cli: click.Group) -> None:
         full_auto: bool,
         dry_run: bool,
         explain_strategy: bool = False,
+        show_tradeoffs: int = 0,
         json_output: bool = False,
         max_budget_usd: float | None = None,
         strict_live: bool = False,
@@ -1503,6 +1660,17 @@ def register_optimize_commands(cli: click.Group) -> None:
                 click.echo(
                     "No strategy explanation available (reflection data empty or mock mode)."
                 )
+
+        if show_tradeoffs > 0:
+            # Build a Pareto archive from recent optimization attempts so
+            # --show-tradeoffs has something to display even when the CLI
+            # isn't driving the continuous loop. Each attempt contributes
+            # its post-candidate composite score to quality; safety/cost
+            # come from the optimizer's reported metrics when present.
+            archive = _build_tradeoffs_archive_from_memory(memory)
+            click.echo("")
+            click.echo(click.style("Pareto tradeoffs (top-K non-dominated):", fg="cyan", bold=True))
+            click.echo(render_tradeoffs_table(archive, k=show_tradeoffs))
 
         if proposer.llm_router is not None:
             summary = proposer.llm_router.cost_summary()
