@@ -167,8 +167,27 @@ def build_workbench_runtime(
             # Race-safe: another caller registered the tools between the
             # ``has`` check and the call. Treat as success.
             pass
-    if mcp_client_factory is not None:
-        _register_mcp_tools(workspace_root, mcp_client_factory, tool_registry)
+    # Live MCP registration. Priority:
+    #   1. explicit ``mcp_client_factory`` kwarg (tests, embedders)
+    #   2. auto-built live factory when ``.mcp.json`` exists
+    #   3. skip entirely (legacy path, back-compat with environments that
+    #      don't ship the mcp SDK or don't want live servers)
+    resolved_mcp_factory: Any | None = mcp_client_factory
+    if resolved_mcp_factory is None and (workspace_root / ".mcp.json").exists():
+        try:
+            from cli.mcp.live_factory import build_live_client_factory
+
+            resolved_mcp_factory = build_live_client_factory(
+                workspace_root=workspace_root
+            )
+        except Exception:  # pragma: no cover - best-effort; bridge also warns
+            # A malformed .mcp.json or a missing SDK must not wedge
+            # boot. The bridge already surfaces per-server failures as
+            # warnings; we preserve that behaviour by only failing in
+            # the factory builder itself.
+            resolved_mcp_factory = None
+    if resolved_mcp_factory is not None:
+        _register_mcp_tools(workspace_root, resolved_mcp_factory, tool_registry)
 
     # Build the lean R7 system prompt unless the caller supplied an
     # explicit override (back-compat for tests + Phase-C callers).
