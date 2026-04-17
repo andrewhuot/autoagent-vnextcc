@@ -13,18 +13,20 @@ Public exports are added in B.2+ as each adapter lands. Use
 from __future__ import annotations
 
 from cli.tools.registry import ToolRegistry
+from cli.workbench_app.agentlab_tools.deploy_tool import DeployTool
 from cli.workbench_app.agentlab_tools.eval_tool import EvalRunTool
 
 
 def register_agentlab_tools(registry: ToolRegistry) -> None:
     """Register every available AgentLab adapter on ``registry``.
 
-    Adapters are added incrementally as each Slice-B task lands; today
-    only :class:`EvalRunTool` is wired up. Subsequent slices append
-    :class:`DeployTool`, the five ``Improve*`` tools, etc.
+    Adapters are added incrementally as each Slice-B task lands. Today
+    :class:`EvalRunTool` (B.2) and :class:`DeployTool` (B.3) are wired up;
+    subsequent slices append the five ``Improve*`` tools.
     """
 
     registry.register(EvalRunTool())
+    registry.register(DeployTool())
 
 
-__all__ = ["EvalRunTool", "register_agentlab_tools"]
+__all__ = ["DeployTool", "EvalRunTool", "register_agentlab_tools"]
