@@ -3,11 +3,38 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .loader import (
+    LOCAL_SETTINGS_FILENAME,
+    PROJECT_SETTINGS_FILENAME,
+    SYSTEM_SETTINGS_PATH,
+    USER_CONFIG_DIR,
+    USER_CONFIG_PATH,
+    USER_SETTINGS_PATH,
+    _deep_merge,
+    _flatten_dotted,
+    _load_json,
+    load_settings as _load_settings,
+)
+from .schema import (
+    HookCommand,
+    HookMatcher,
+    Hooks,
+    Input,
+    MCP,
+    Paste,
+    PermissionRules,
+    Permissions,
+    Providers,
+    Sessions,
+    Settings,
+)
 
+# Legacy flat defaults stay in place so older imports keep reading the same map.
 DEFAULTS: dict[str, Any] = {
     "shell.prompt": "agentlab> ",
     "shell.show_status_bar": True,
@@ -18,61 +45,50 @@ DEFAULTS: dict[str, Any] = {
     "editor": None,
 }
 
-USER_CONFIG_DIR = Path.home() / ".agentlab"
-USER_CONFIG_PATH = USER_CONFIG_DIR / "config.json"
-PROJECT_SETTINGS_FILENAME = "settings.json"
-LOCAL_SETTINGS_FILENAME = "settings.local.json"
-
-
-def _load_json(path: Path) -> dict[str, Any]:
-    """Load a JSON file or return an empty mapping when unavailable."""
-    if not path.exists():
-        return {}
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return {}
-
-
-def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
-    """Recursively merge ``override`` into a copy of ``base``."""
-    merged = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(merged.get(key), dict):
-            merged[key] = _deep_merge(merged[key], value)
-        else:
-            merged[key] = value
-    return merged
-
 
 @dataclass
 class ResolvedSettings:
     """Fully resolved CLI settings after all layers are merged."""
 
     values: dict[str, Any] = field(default_factory=dict)
+    settings: Settings | None = None
 
     def get(self, dotted_key: str, default: Any = None) -> Any:
-        """Retrieve a setting by dotted key such as ``shell.prompt``."""
+        """Read dotted keys while warning that the flat accessor is deprecated."""
+        logging.getLogger(__name__).warning(
+            'ResolvedSettings.get("%s") is deprecated; use Settings.get() or direct attributes.',
+            dotted_key,
+        )
+        if self.settings is not None:
+            value = self.settings.get(dotted_key, _MISSING)
+            if value is not _MISSING:
+                return value
+
         parts = dotted_key.split(".")
         node: Any = self.values
         for part in parts:
             if isinstance(node, dict):
-                node = node.get(part)
+                node = node.get(part, _MISSING)
             else:
                 return default
-        return node if node is not None else default
+            if node is _MISSING:
+                return default
+        return default if node is None else node
 
 
-def _flatten_dotted(source: dict[str, Any]) -> dict[str, Any]:
-    """Expand dotted keys into nested dictionaries."""
-    result: dict[str, Any] = {}
-    for key, value in source.items():
-        parts = key.split(".")
-        node = result
-        for part in parts[:-1]:
-            node = node.setdefault(part, {})
-        node[parts[-1]] = value
-    return result
+_MISSING = object()
+
+
+def _sync_loader_constants() -> None:
+    """Keep the loader module aligned with package-level monkeypatches."""
+    from . import loader as loader_mod
+
+    loader_mod.SYSTEM_SETTINGS_PATH = SYSTEM_SETTINGS_PATH
+    loader_mod.USER_CONFIG_DIR = USER_CONFIG_DIR
+    loader_mod.USER_CONFIG_PATH = USER_CONFIG_PATH
+    loader_mod.USER_SETTINGS_PATH = USER_SETTINGS_PATH
+    loader_mod.PROJECT_SETTINGS_FILENAME = PROJECT_SETTINGS_FILENAME
+    loader_mod.LOCAL_SETTINGS_FILENAME = LOCAL_SETTINGS_FILENAME
 
 
 def resolve_settings(
@@ -82,16 +98,10 @@ def resolve_settings(
     flag_overrides: dict[str, Any] | None = None,
 ) -> ResolvedSettings:
     """Resolve CLI settings from defaults through the highest-priority overrides."""
-    merged = _flatten_dotted(DEFAULTS)
+    _sync_loader_constants()
 
-    merged = _deep_merge(merged, _flatten_dotted(_load_json(USER_CONFIG_PATH)))
-
-    if workspace_dir is not None:
-        project_path = workspace_dir / ".agentlab" / PROJECT_SETTINGS_FILENAME
-        merged = _deep_merge(merged, _flatten_dotted(_load_json(project_path)))
-
-        local_path = workspace_dir / ".agentlab" / LOCAL_SETTINGS_FILENAME
-        merged = _deep_merge(merged, _flatten_dotted(_load_json(local_path)))
+    settings = load_settings(workspace_dir)
+    merged: dict[str, Any] = settings.model_dump()
 
     if session_overrides:
         merged = _deep_merge(merged, _flatten_dotted(session_overrides))
@@ -99,7 +109,14 @@ def resolve_settings(
     if flag_overrides:
         merged = _deep_merge(merged, _flatten_dotted(flag_overrides))
 
-    return ResolvedSettings(values=merged)
+    resolved_settings = Settings.model_validate(merged)
+    return ResolvedSettings(values=resolved_settings.model_dump(), settings=resolved_settings)
+
+
+def load_settings(workspace_root: Path | None) -> Settings:
+    """Load typed settings through the public package surface."""
+    _sync_loader_constants()
+    return _load_settings(workspace_root)
 
 
 def save_user_config(data: dict[str, Any]) -> Path:
@@ -147,3 +164,35 @@ def settings_file_paths(workspace_dir: Path | None = None) -> list[tuple[str, Pa
         paths.append(("project", workspace_dir / ".agentlab" / PROJECT_SETTINGS_FILENAME))
         paths.append(("local", workspace_dir / ".agentlab" / LOCAL_SETTINGS_FILENAME))
     return paths
+
+
+__all__ = [
+    "DEFAULTS",
+    "HookCommand",
+    "HookMatcher",
+    "Hooks",
+    "Input",
+    "LOCAL_SETTINGS_FILENAME",
+    "MCP",
+    "PROJECT_SETTINGS_FILENAME",
+    "Paste",
+    "PermissionRules",
+    "Permissions",
+    "Providers",
+    "Sessions",
+    "ResolvedSettings",
+    "SYSTEM_SETTINGS_PATH",
+    "Settings",
+    "USER_CONFIG_DIR",
+    "USER_CONFIG_PATH",
+    "USER_SETTINGS_PATH",
+    "_deep_merge",
+    "_flatten_dotted",
+    "_load_json",
+    "load_settings",
+    "resolve_settings",
+    "save_local_settings",
+    "save_project_settings",
+    "save_user_config",
+    "settings_file_paths",
+]
