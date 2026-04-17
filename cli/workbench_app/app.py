@@ -16,6 +16,7 @@ and a ``run_workbench_app`` signature stable enough to wire into
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -145,6 +146,32 @@ def _permission_mode_for_workspace(workspace: Any | None) -> str:
         return PermissionManager(root=root).mode
     except Exception:  # pragma: no cover - defensive startup path
         return DEFAULT_PERMISSION_MODE
+
+
+def _workspace_root_for_settings(workspace: Any | None) -> Path | None:
+    root = getattr(workspace, "root", None)
+    if root is not None:
+        return Path(root)
+    try:
+        return Path.cwd()
+    except OSError:  # pragma: no cover - defensive startup path
+        return None
+
+
+def _input_disables_tui(workspace: Any | None, environ: Mapping[str, str]) -> bool:
+    from cli.settings import load_settings
+    from cli.settings.env_bridge import env_overrides
+
+    try:
+        settings = load_settings(_workspace_root_for_settings(workspace))
+        if settings.input.no_tui:
+            return True
+    except Exception:  # pragma: no cover - defensive startup path
+        pass
+
+    env_layer, _ = env_overrides(environ)
+    input_layer = env_layer.get("input")
+    return isinstance(input_layer, dict) and input_layer.get("no_tui") is True
 
 
 def _render_turn_footer(
@@ -1116,7 +1143,8 @@ def launch_workbench(
     # TUI instead of the legacy REPL loop. The TUI codepath is fully
     # independent — it wires its own store, widgets, and event bridge.
     if (
-        os.environ.get("AGENTLAB_TUI", "").lower() in ("1", "true")
+        not _input_disables_tui(workspace, os.environ)
+        and os.environ.get("AGENTLAB_TUI", "").lower() in ("1", "true")
         and input_provider is None
         and sys.stdin.isatty()
     ):

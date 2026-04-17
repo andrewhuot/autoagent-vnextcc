@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .env_bridge import env_overrides
 from .schema import Settings
 
 SYSTEM_SETTINGS_PATH = Path("/etc/agentlab/settings.json")
@@ -79,6 +80,11 @@ def load_settings(workspace_root: Path | None) -> Settings:
         apply_layer("project", workspace_settings_dir / PROJECT_SETTINGS_FILENAME)
         apply_layer("local", workspace_settings_dir / LOCAL_SETTINGS_FILENAME)
 
+    env_layer, env_names = env_overrides()
+    if env_layer:
+        merged = _deep_merge(merged, env_layer)
+
     settings = Settings.model_validate(merged)
     settings._loaded_layers = loaded_layers
+    settings._env_overrides = env_names
     return settings
