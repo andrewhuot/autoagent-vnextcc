@@ -1873,6 +1873,8 @@ class WorkbenchService:
             "dataset_path": dataset_path,
             "generated_suite_id": generated_suite_id,
             "split": split,
+            "last_eval_run_id": None,
+            "eval_run_ids": [],
             "updated_at": _now_iso(),
         }
         project["materialized_candidate"] = copy.deepcopy(materialized)
@@ -1882,6 +1884,50 @@ class WorkbenchService:
         if isinstance(run, dict):
             run["materialized_candidate"] = copy.deepcopy(materialized)
             self._refresh_run_handoff(project, run)
+        self.store.save_project(project)
+        return copy.deepcopy(materialized)
+
+    def record_materialized_eval_run(
+        self,
+        *,
+        project_id: str,
+        eval_run_id: str,
+    ) -> dict[str, Any]:
+        """Persist the latest eval run id for the current materialized candidate.
+
+        WHY: Workbench -> Eval -> Optimize should survive reloads and route
+        transitions without relying on query params to carry the most recent
+        eval run for the saved candidate.
+        """
+        project = self._require_project(project_id)
+        materialized = project.get("materialized_candidate")
+        if not isinstance(materialized, dict):
+            raise RuntimeError("Workbench candidate must be materialized before recording an eval run.")
+
+        eval_run_id = str(eval_run_id or "").strip()
+        if not eval_run_id:
+            raise RuntimeError("eval_run_id is required")
+
+        existing_ids = [
+            str(item)
+            for item in list(materialized.get("eval_run_ids") or [])
+            if str(item or "").strip()
+        ]
+        if eval_run_id not in existing_ids:
+            existing_ids.append(eval_run_id)
+
+        materialized["last_eval_run_id"] = eval_run_id
+        materialized["eval_run_ids"] = existing_ids
+        materialized["updated_at"] = _now_iso()
+        project["materialized_candidate"] = copy.deepcopy(materialized)
+
+        runs = project.get("runs") if isinstance(project.get("runs"), dict) else {}
+        active_run_id = project.get("active_run_id")
+        run = runs.get(active_run_id) if isinstance(active_run_id, str) else None
+        if isinstance(run, dict):
+            run["materialized_candidate"] = copy.deepcopy(materialized)
+            self._refresh_run_handoff(project, run)
+
         self.store.save_project(project)
         return copy.deepcopy(materialized)
 
@@ -1904,6 +1950,11 @@ class WorkbenchService:
         run = self._active_run(project)
         if run is None:
             raise KeyError("run")
+        materialized = project.get("materialized_candidate")
+        if eval_run_id is None and isinstance(materialized, dict):
+            persisted_eval_run_id = str(materialized.get("last_eval_run_id") or "").strip()
+            if persisted_eval_run_id:
+                eval_run_id = persisted_eval_run_id
         return build_workbench_improvement_bridge(
             project,
             run=run,

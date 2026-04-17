@@ -31,7 +31,11 @@ router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 # ---------------------------------------------------------------------------
 
 
-def _pending_review_to_unified(review: Any) -> UnifiedReviewItem:
+def _pending_review_to_unified(
+    review: Any,
+    *,
+    verification: dict[str, Any] | None = None,
+) -> UnifiedReviewItem:
     """Map a PendingReview (from the optimizer pipeline) to UnifiedReviewItem."""
 
     # Handle both Pydantic models and plain dicts
@@ -70,6 +74,7 @@ def _pending_review_to_unified(review: Any) -> UnifiedReviewItem:
         operator_family=data.get("selected_operator_family"),
         has_detailed_audit=False,
         patch_bundle=data.get("patch_bundle"),
+        verification=verification,
     )
 
 
@@ -165,6 +170,32 @@ def _get_change_card_store(request: Request):
     return getattr(request.app.state, "change_card_store", None)
 
 
+def _get_improvement_lineage(request: Request):
+    return getattr(request.app.state, "improvement_lineage", None)
+
+
+def _verification_summary(lineage: Any, attempt_id: str) -> dict[str, Any] | None:
+    """Return the latest verification summary for an optimizer proposal."""
+    if lineage is None or not attempt_id:
+        return None
+    try:
+        view = lineage.view_attempt(attempt_id)
+    except Exception:  # noqa: BLE001 - keep review queue resilient
+        logger.exception("Failed to hydrate verification summary for %s", attempt_id)
+        return None
+    if view is None or getattr(view, "verification_id", None) is None:
+        return None
+    return {
+        "verification_id": view.verification_id,
+        "status": view.verification_status,
+        "eval_run_id": view.verification_eval_run_id,
+        "phase": view.verification_phase,
+        "score_before": view.verification_score_before,
+        "score_after": view.verification_score_after,
+        "composite_delta": view.verification_composite_delta,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -175,13 +206,21 @@ async def list_pending_reviews(request: Request, limit: int = 50) -> list[Unifie
     """Return all pending review items from both stores, sorted newest first."""
 
     items: list[UnifiedReviewItem] = []
+    lineage = _get_improvement_lineage(request)
 
     # Optimizer pending reviews
     pr_store = _get_pending_review_store(request)
     if pr_store is not None:
         try:
             for review in pr_store.list_pending(limit=limit):
-                items.append(_pending_review_to_unified(review))
+                data = review.model_dump(mode="python") if hasattr(review, "model_dump") else review
+                attempt_id = data.get("attempt_id", "") if isinstance(data, dict) else ""
+                items.append(
+                    _pending_review_to_unified(
+                        review,
+                        verification=_verification_summary(lineage, attempt_id),
+                    )
+                )
         except Exception as e:
             logger.error("Failed to read from PendingReviewStore: %s", e)
 
@@ -208,13 +247,21 @@ async def list_all_reviews(
     """Return all review items from both stores, optionally filtered by status."""
 
     items: list[UnifiedReviewItem] = []
+    lineage = _get_improvement_lineage(request)
 
     # Optimizer pending reviews (PendingReviewStore only holds pending items)
     pr_store = _get_pending_review_store(request)
     if pr_store is not None:
         try:
             for review in pr_store.list_pending(limit=limit):
-                items.append(_pending_review_to_unified(review))
+                data = review.model_dump(mode="python") if hasattr(review, "model_dump") else review
+                attempt_id = data.get("attempt_id", "") if isinstance(data, dict) else ""
+                items.append(
+                    _pending_review_to_unified(
+                        review,
+                        verification=_verification_summary(lineage, attempt_id),
+                    )
+                )
         except Exception as e:
             logger.error("Failed to read from PendingReviewStore: %s", e)
 

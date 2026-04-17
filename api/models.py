@@ -825,6 +825,10 @@ class UnifiedReviewItem(BaseModel):
         None,
         description="Typed canonical component patch bundle when the source provides one",
     )
+    verification: Optional[dict[str, Any]] = Field(
+        None,
+        description="Latest verification summary for optimizer proposals when available",
+    )
 
 
 class UnifiedReviewStats(BaseModel):

@@ -138,6 +138,12 @@ class WorkbenchEvalBridgeRequest(BaseModel):
     split: str = Field(default="all", pattern="^(train|test|all)$")
 
 
+class WorkbenchRecordEvalRunRequest(BaseModel):
+    """Persist the completed eval run id for a materialized Workbench candidate."""
+
+    eval_run_id: str = Field(min_length=1)
+
+
 class WorkbenchChatRequest(BaseModel):
     """Request body for chatting with the candidate Workbench agent."""
 
@@ -308,6 +314,65 @@ async def create_eval_bridge(
             "start_optimize_endpoint": "/api/optimize/run",
             "optimize_requires_eval_run": True,
         },
+    }
+
+
+@router.get("/projects/{project_id}/bridge")
+async def get_bridge(
+    project_id: str,
+    request: Request,
+    eval_run_id: str | None = None,
+    category: str | None = None,
+    dataset_path: str | None = None,
+    generated_suite_id: str | None = None,
+    split: str = "all",
+) -> dict[str, Any]:
+    """Return the durable Workbench bridge without rematerializing files."""
+    try:
+        bridge = _service(request).build_improvement_bridge_payload(
+            project_id=project_id,
+            eval_run_id=eval_run_id,
+            category=category,
+            dataset_path=dataset_path,
+            generated_suite_id=generated_suite_id,
+            split=split,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench run not found") from exc
+
+    return {
+        "bridge": bridge,
+        "eval_request": (bridge.get("evaluation") or {}).get("request"),
+        "optimize_request_template": (bridge.get("optimization") or {}).get("request_template"),
+        "next": {
+            "start_eval_endpoint": "/api/eval/run",
+            "start_optimize_endpoint": "/api/optimize/run",
+            "optimize_requires_eval_run": True,
+        },
+    }
+
+
+@router.post("/projects/{project_id}/bridge/eval-run")
+async def record_bridge_eval_run(
+    project_id: str,
+    request: Request,
+    body: WorkbenchRecordEvalRunRequest,
+) -> dict[str, Any]:
+    """Persist the durable eval run id for a materialized Workbench candidate."""
+    try:
+        materialized = _service(request).record_materialized_eval_run(
+            project_id=project_id,
+            eval_run_id=body.eval_run_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Workbench project not found") from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "project_id": project_id,
+        "eval_run_id": body.eval_run_id,
+        "materialized_candidate": materialized,
     }
 
 

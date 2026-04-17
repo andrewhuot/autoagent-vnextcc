@@ -48,6 +48,7 @@ class WorkbenchOptimizeRequest(BaseModel):
 class WorkbenchBridgeCandidate(BaseModel):
     """Stable identity for the Workbench candidate being handed downstream."""
 
+    candidate_id: str
     project_id: str
     run_id: str
     turn_id: str | None = None
@@ -100,6 +101,7 @@ class WorkbenchImprovementHandoff(BaseModel):
 
     kind: str = "workbench_eval_optimize"
     schema_version: int = 1
+    journey_id: str
     candidate: WorkbenchBridgeCandidate
     evaluation: WorkbenchBridgeEvaluationStep
     optimization: WorkbenchBridgeOptimizationStep
@@ -152,8 +154,13 @@ def build_workbench_improvement_bridge(
         review_gate=review_gate,
         generated_config=generated_config,
     )
+    candidate_id = _candidate_id(
+        project_id=str(project.get("project_id") or ""),
+        generated_config_hash=_hash_payload(generated_config),
+    )
 
     candidate = WorkbenchBridgeCandidate(
+        candidate_id=candidate_id,
         project_id=str(project.get("project_id") or ""),
         run_id=str(run.get("run_id") or ""),
         turn_id=str(run.get("turn_id")) if run.get("turn_id") else None,
@@ -185,6 +192,7 @@ def build_workbench_improvement_bridge(
     )
 
     return WorkbenchImprovementHandoff(
+        journey_id=_journey_id(candidate),
         candidate=candidate,
         evaluation=evaluation,
         optimization=optimization,
@@ -422,6 +430,17 @@ def _hash_payload(payload: dict[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
 
 
+def _candidate_id(*, project_id: str, generated_config_hash: str) -> str:
+    """Create a stable durable id for the materialized candidate."""
+    digest = generated_config_hash.split(":", 1)[-1][:16]
+    return f"candidate:{project_id}:{digest}"
+
+
+def _journey_id(candidate: WorkbenchBridgeCandidate) -> str:
+    """Create the canonical operator-journey id for this candidate lineage."""
+    return f"journey:{candidate.project_id}:{candidate.version}:{candidate.candidate_id.split(':')[-1]}"
+
+
 def _eval_handoff_target(
     candidate: WorkbenchBridgeCandidate,
     *,
@@ -432,19 +451,8 @@ def _eval_handoff_target(
         "new": "1",
         "from": "workbench",
         "workbenchProjectId": candidate.project_id,
-        "candidate": candidate.agent_name,
+        "journeyId": _journey_id(candidate),
     }
-    config_path = request.config_path if request else candidate.config_path
-    if config_path:
-        params["configPath"] = config_path
-    if request and request.generated_suite_id:
-        params["generatedSuiteId"] = request.generated_suite_id
-    if request and request.dataset_path:
-        params["evalCasesPath"] = request.dataset_path
-    if request and request.category:
-        params["category"] = request.category
-    if request and request.split:
-        params["split"] = request.split
     return f"/evals?{urlencode(params)}"
 
 
@@ -453,11 +461,9 @@ def _optimize_handoff_target(candidate: WorkbenchBridgeCandidate, *, eval_run_id
     params: dict[str, str] = {
         "from": "workbench",
         "workbenchProjectId": candidate.project_id,
-        "candidate": candidate.agent_name,
+        "journeyId": _journey_id(candidate),
         "evalRunId": eval_run_id,
     }
-    if candidate.config_path:
-        params["configPath"] = candidate.config_path
     return f"/optimize?{urlencode(params)}"
 
 

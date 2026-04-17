@@ -109,7 +109,9 @@ def test_materialized_eval_bridge_saves_candidate_and_returns_downstream_request
     bridge = payload["bridge"]
     assert bridge["kind"] == "workbench_eval_optimize"
     assert bridge["schema_version"] == 1
+    assert bridge["journey_id"]
     assert bridge["candidate"]["project_id"] == project_id
+    assert bridge["candidate"]["candidate_id"]
     assert bridge["candidate"]["config_path"] == save_result["config_path"]
     assert bridge["candidate"]["eval_cases_path"] == save_result["eval_cases_path"]
     assert bridge["candidate"]["generated_config_hash"]
@@ -120,8 +122,9 @@ def test_materialized_eval_bridge_saves_candidate_and_returns_downstream_request
     assert bridge["evaluation"]["primary_action_label"] == "Open Eval with this candidate"
     assert bridge["evaluation"]["primary_action_target"].startswith("/evals?")
     assert f"workbenchProjectId={project_id}" in bridge["evaluation"]["primary_action_target"]
-    assert "configPath=" in bridge["evaluation"]["primary_action_target"]
-    assert "evalCasesPath=" in bridge["evaluation"]["primary_action_target"]
+    assert "candidate=" not in bridge["evaluation"]["primary_action_target"]
+    assert "configPath=" not in bridge["evaluation"]["primary_action_target"]
+    assert "evalCasesPath=" not in bridge["evaluation"]["primary_action_target"]
     assert bridge["evaluation"]["request"]["config_path"] == save_result["config_path"]
     assert bridge["evaluation"]["request"]["dataset_path"] == save_result["eval_cases_path"]
     assert bridge["evaluation"]["request"]["split"] == "all"
@@ -244,7 +247,55 @@ def test_bridge_marks_optimize_ready_after_completed_eval_run_id() -> None:
     assert payload["optimization"]["primary_action_label"] == "Start Optimize from Eval run"
     assert payload["optimization"]["primary_action_target"].startswith("/optimize?")
     assert "evalRunId=eval-run-123" in payload["optimization"]["primary_action_target"]
+    assert "candidate=" not in payload["optimization"]["primary_action_target"]
+    assert "configPath=" not in payload["optimization"]["primary_action_target"]
     assert payload["optimization"]["request_template"]["eval_run_id"] == "eval-run-123"
+
+
+def test_bridge_hydration_reuses_recorded_eval_run_with_stable_ids(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _make_client(tmp_path, monkeypatch)
+
+    build_response = client.post(
+        "/api/workbench/build/stream",
+        json={
+            "brief": "Build an airline support agent with flight status tools.",
+            "target": "portable",
+            "mock": True,
+            "max_iterations": 1,
+        },
+    )
+    assert build_response.status_code == 200
+    events = _parse_sse(build_response.text)
+    project_id = events[-1]["data"]["project_id"]
+
+    materialize_response = client.post(
+        f"/api/workbench/projects/{project_id}/bridge/eval",
+        json={},
+    )
+    assert materialize_response.status_code == 201
+    first_bridge = materialize_response.json()["bridge"]
+
+    record_response = client.post(
+        f"/api/workbench/projects/{project_id}/bridge/eval-run",
+        json={"eval_run_id": "eval-run-recorded-123"},
+    )
+    assert record_response.status_code == 200
+
+    hydrate_response = client.get(f"/api/workbench/projects/{project_id}/bridge")
+    assert hydrate_response.status_code == 200
+    hydrated = hydrate_response.json()["bridge"]
+
+    assert hydrated["journey_id"] == first_bridge["journey_id"]
+    assert hydrated["candidate"]["candidate_id"] == first_bridge["candidate"]["candidate_id"]
+    assert hydrated["optimization"]["status"] == "ready"
+    assert hydrated["optimization"]["request_template"]["eval_run_id"] == "eval-run-recorded-123"
+    assert hydrated["optimization"]["primary_action_target"].startswith("/optimize?")
+    assert "workbenchProjectId=" in hydrated["optimization"]["primary_action_target"]
+    assert "evalRunId=eval-run-recorded-123" in hydrated["optimization"]["primary_action_target"]
+    assert "configPath=" not in hydrated["optimization"]["primary_action_target"]
 
 
 def test_bridge_blocks_downstream_requests_when_validation_failed() -> None:
