@@ -187,79 +187,89 @@ class LLMOrchestrator:
         # model keeps asking for tools past the limit we hard-stop.
         tool_iterations = 0
         pending_tool_batch: _PendingToolBatch | None = None
-        while True:
-            allow_tool_dispatch = tool_iterations < self.max_tool_loops
-            try:
-                response, dispatcher = self._run_model_turn(
-                    renderer,
-                    final_text_parts,
-                    dispatch_tools=allow_tool_dispatch,
-                    pending_tool_batch=pending_tool_batch,
+        current_dispatcher: StreamingToolDispatcher | None = None
+        try:
+            while True:
+                allow_tool_dispatch = tool_iterations < self.max_tool_loops
+                try:
+                    response, dispatcher = self._run_model_turn(
+                        renderer,
+                        final_text_parts,
+                        dispatch_tools=allow_tool_dispatch,
+                        pending_tool_batch=pending_tool_batch,
+                    )
+                except _TurnCancelled:
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
+
+                current_dispatcher = dispatcher
+                if pending_tool_batch is not None:
+                    executions.extend(pending_tool_batch.executions)
+                    pending_tool_batch = None
+                _merge_usage(aggregated_usage, response.usage)
+
+                tool_uses = response.tool_uses()
+                assistant_message = TurnMessage(role="assistant", content=response.blocks)
+
+                if not tool_uses:
+                    self.messages.append(assistant_message)
+                    stop_reason = response.stop_reason or "end_turn"
+                    break
+
+                if not allow_tool_dispatch:
+                    # Already at the cap — do not execute another tool batch.
+                    self.messages.append(assistant_message)
+                    stop_reason = "max_tool_loops"
+                    break
+
+                tool_iterations += 1
+
+                # Execute tool calls and append a user-side message with the
+                # tool_result blocks so the next model call can consume them.
+                executions_in_order = current_dispatcher.results_in_order() if current_dispatcher else []
+                current_dispatcher = None
+                if self._tool_cancellation_requested():
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
+                if len(executions_in_order) != len(tool_uses):
+                    raise RuntimeError(
+                        "Streaming tool dispatch produced "
+                        f"{len(executions_in_order)} execution(s) for "
+                        f"{len(tool_uses)} tool call(s)."
+                    )
+                tool_results: list[dict[str, Any]] = []
+                post_fragments: list[str] = []
+                for tool_use, execution in zip(tool_uses, executions_in_order):
+                    tool_results.append(_result_to_block(tool_use.id, execution))
+                    post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
+
+                # Append the post-tool-use prompt fragments as a text block at
+                # the end of the tool_result message. This keeps them tied to
+                # the tools that triggered them and lets the model take them
+                # into account on its next turn.
+                if post_fragments:
+                    tool_results.append(
+                        {"type": "text", "text": _render_fragment_block(post_fragments)}
+                    )
+
+                if self._tool_cancellation_requested():
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
+
+                pending_tool_batch = _PendingToolBatch(
+                    assistant_message=assistant_message,
+                    tool_results_message=TurnMessage(role="user", content=tool_results),
+                    executions=tuple(executions_in_order),
                 )
-            except _TurnCancelled:
-                stop_reason = "cancelled"
-                final_text_parts.clear()
-                break
-
-            if pending_tool_batch is not None:
-                executions.extend(pending_tool_batch.executions)
-                pending_tool_batch = None
-            _merge_usage(aggregated_usage, response.usage)
-
-            tool_uses = response.tool_uses()
-            assistant_message = TurnMessage(role="assistant", content=response.blocks)
-
-            if not tool_uses:
-                self.messages.append(assistant_message)
-                stop_reason = response.stop_reason or "end_turn"
-                break
-
-            if not allow_tool_dispatch:
-                # Already at the cap — do not execute another tool batch.
-                self.messages.append(assistant_message)
-                stop_reason = "max_tool_loops"
-                break
-
-            tool_iterations += 1
-
-            # Execute tool calls and append a user-side message with the
-            # tool_result blocks so the next model call can consume them.
-            executions_in_order = dispatcher.results_in_order() if dispatcher else []
-            if self._tool_cancellation_requested():
-                stop_reason = "cancelled"
-                final_text_parts.clear()
-                break
-            if len(executions_in_order) != len(tool_uses):
-                raise RuntimeError(
-                    "Streaming tool dispatch produced "
-                    f"{len(executions_in_order)} execution(s) for "
-                    f"{len(tool_uses)} tool call(s)."
-                )
-            tool_results: list[dict[str, Any]] = []
-            post_fragments: list[str] = []
-            for tool_use, execution in zip(tool_uses, executions_in_order):
-                tool_results.append(_result_to_block(tool_use.id, execution))
-                post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
-
-            # Append the post-tool-use prompt fragments as a text block at
-            # the end of the tool_result message. This keeps them tied to
-            # the tools that triggered them and lets the model take them
-            # into account on its next turn.
-            if post_fragments:
-                tool_results.append(
-                    {"type": "text", "text": _render_fragment_block(post_fragments)}
-                )
-
-            if self._tool_cancellation_requested():
-                stop_reason = "cancelled"
-                final_text_parts.clear()
-                break
-
-            pending_tool_batch = _PendingToolBatch(
-                assistant_message=assistant_message,
-                tool_results_message=TurnMessage(role="user", content=tool_results),
-                executions=tuple(executions_in_order),
-            )
+        except KeyboardInterrupt:
+            if current_dispatcher is not None:
+                current_dispatcher.cancel_all()
+            self._cancel_active_turn()
+            stop_reason = "cancelled"
+            final_text_parts.clear()
 
         renderer.finalize()
         assistant_text = "".join(final_text_parts)
@@ -379,29 +389,35 @@ class LLMOrchestrator:
         # that doesn't matter at this scale.
         collected_events: list[Any] = []
         pending_text = ""
-        for event in events_iter:
-            collected_events.append(event)
-            if isinstance(event, TextDelta):
-                text = event.text or ""
-                pending_text += text
-                final_text_parts.append(text)
-                # Feed the renderer without forcing newlines — the
-                # markdown streamer buffers partial lines correctly.
-                renderer.feed(text)
-            elif isinstance(event, ThinkingDelta):
-                # Thinking surfaces only on a dedicated indicator in the
-                # transcript chrome; the main stream stays focused on
-                # user-visible prose.
-                continue
-            elif dispatcher is not None:
-                if isinstance(event, ToolUseStart):
-                    dispatcher.on_tool_use_start(event)
-                elif isinstance(event, ToolUseDelta):
-                    dispatcher.on_tool_use_delta(event)
-                elif isinstance(event, ToolUseEnd):
-                    dispatcher.on_tool_use_end(event)
-            # Tool-use deltas never render as text — they land in the
-            # collected ModelResponse via collect_stream.
+        try:
+            for event in events_iter:
+                collected_events.append(event)
+                if isinstance(event, TextDelta):
+                    text = event.text or ""
+                    pending_text += text
+                    final_text_parts.append(text)
+                    # Feed the renderer without forcing newlines — the
+                    # markdown streamer buffers partial lines correctly.
+                    renderer.feed(text)
+                elif isinstance(event, ThinkingDelta):
+                    # Thinking surfaces only on a dedicated indicator in the
+                    # transcript chrome; the main stream stays focused on
+                    # user-visible prose.
+                    continue
+                elif dispatcher is not None:
+                    if isinstance(event, ToolUseStart):
+                        dispatcher.on_tool_use_start(event)
+                    elif isinstance(event, ToolUseDelta):
+                        dispatcher.on_tool_use_delta(event)
+                    elif isinstance(event, ToolUseEnd):
+                        dispatcher.on_tool_use_end(event)
+                # Tool-use deltas never render as text — they land in the
+                # collected ModelResponse via collect_stream.
+        except KeyboardInterrupt:
+            if dispatcher is not None:
+                dispatcher.cancel_all()
+            self._cancel_active_turn()
+            raise
 
         # Ensure any trailing partial line flushes on end-of-turn; the
         # renderer will add one itself at finalize(), but we mimic that
@@ -575,6 +591,13 @@ class LLMOrchestrator:
         if isinstance(cancelled, bool):
             return cancelled
         return bool(cancelled)
+
+    def _cancel_active_turn(self) -> None:
+        """Signal cancellation to any in-flight tool workers for this turn."""
+        cancellation = self.tool_cancellation
+        cancel = getattr(cancellation, "cancel", None)
+        if callable(cancel):
+            cancel()
 
     def _rollback_pending_tool_messages(
         self,

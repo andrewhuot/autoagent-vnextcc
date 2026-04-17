@@ -678,6 +678,18 @@ def _meta_int(ctx: "SlashContext | None", key: str) -> int:
         return 0
 
 
+def _should_persist_assistant_turn(result: Any) -> bool:
+    """Skip blank cancelled turns so stored history matches visible output."""
+    stop_reason = getattr(result, "stop_reason", None)
+    assistant_text = getattr(result, "assistant_text", "") or ""
+    tool_executions = list(getattr(result, "tool_executions", []) or [])
+    return not (
+        stop_reason == "cancelled"
+        and not assistant_text
+        and not tool_executions
+    )
+
+
 def _persist_user_turn(
     *,
     ctx: "SlashContext | None",
@@ -1671,7 +1683,7 @@ def _run_orchestrator_turn(
             except Exception:  # pragma: no cover
                 pass
 
-    if bridge is not None and result is not None:
+    if bridge is not None and result is not None and _should_persist_assistant_turn(result):
         try:
             bridge.record_assistant_turn(result)
         except Exception:  # pragma: no cover — bridge persistence is best-effort

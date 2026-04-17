@@ -119,7 +119,7 @@ class StreamingToolDispatcher:
             pool = self._pool
             self._state_changed.notify_all()
         if pool is not None:
-            pool.shutdown(wait=False, cancel_futures=True)
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _get_or_create_record(self, tool_use_id: str, name: str) -> OrderedToolCall:
         record = self._records_by_id.get(tool_use_id)

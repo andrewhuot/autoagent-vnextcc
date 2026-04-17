@@ -135,3 +135,29 @@ def test_run_orchestrator_turn_threads_ctx_cancellation_into_orchestrator(
 
     assert observed["during"] is token
     assert runtime.orchestrator.tool_cancellation is prior
+
+
+def test_run_orchestrator_turn_skips_blank_cancelled_assistant_rows(
+    runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cancelled turns with no visible output should not persist blank assistants."""
+    fake = OrchestratorResult(
+        assistant_text="",
+        tool_executions=[],
+        stop_reason="cancelled",
+    )
+    monkeypatch.setattr(runtime.orchestrator, "run_turn", lambda _line: fake)
+
+    _run_orchestrator_turn(
+        orchestrator=runtime.orchestrator,
+        ctx=None,
+        line="ping",
+        echo=lambda _l: None,
+        bridge=runtime.conversation_bridge,
+    )
+
+    convo = runtime.conversation_store.get_conversation(runtime.conversation_id)
+    assert len(convo.messages) == 1
+    assert convo.messages[0].role == "user"
+    assert convo.messages[0].content == "ping"
