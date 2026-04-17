@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Reference sample: launchd agent for the AgentLab continuous improvement
+    loop. This file is NOT auto-installed. To use it, copy it to
+    ~/Library/LaunchAgents/ and edit the ProgramArguments paths below before
+    loading:
+
+        cp contrib/launchd/com.agentlab.loop.plist ~/Library/LaunchAgents/
+        # edit ~/Library/LaunchAgents/com.agentlab.loop.plist to replace
+        # /Users/you/traces with your actual trace directory and adjust the
+        # `agentlab` binary path (run `which agentlab`).
+        launchctl load ~/Library/LaunchAgents/com.agentlab.loop.plist
+
+    Uninstall with `launchctl unload ~/Library/LaunchAgents/com.agentlab.loop.plist`.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agentlab.loop</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/local/bin/agentlab</string>
+        <string>loop</string>
+        <string>run</string>
+        <string>--schedule</string>
+        <string>continuous</string>
+        <string>--trace-source</string>
+        <string>/Users/you/traces</string>
+    </array>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/you/Library/Logs/agentlab-loop.out</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/you/Library/Logs/agentlab-loop.err</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>AGENTLAB_STRICT_LIVE</key>
+        <string>1</string>
+    </dict>
+</dict>
+</plist>
