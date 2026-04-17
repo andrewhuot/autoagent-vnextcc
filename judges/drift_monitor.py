@@ -5,6 +5,9 @@ when a judge starts disagreeing with its historical baseline or exhibits
 positional or verbosity bias.
 """
 
+# NOTE: This detects *judge agreement drift*. For *production score
+# distribution drift*, see evals/drift.py.
+
 from __future__ import annotations
 
 import time

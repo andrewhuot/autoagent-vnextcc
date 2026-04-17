@@ -57,6 +57,30 @@ def _stable_signature(*parts: Any) -> str:
     return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
 
 
+def _coerce_case_scores(raw: Any) -> list[float]:
+    """Normalize an arbitrary iterable of per-case scores into floats.
+
+    Entries that cannot be coerced to a finite float are dropped rather
+    than exploding the drift check.
+    """
+    if not raw:
+        return []
+    out: list[float] = []
+    try:
+        iterable = list(raw)
+    except TypeError:
+        return []
+    for item in iterable:
+        try:
+            val = float(item)
+        except (TypeError, ValueError):
+            continue
+        if val != val:  # NaN guard without importing math.
+            continue
+        out.append(val)
+    return out
+
+
 def _score_bucket(score: float | None) -> str:
     """Round a composite score into a coarse bucket for signature stability.
 
@@ -140,6 +164,9 @@ class ContinuousCycleResult:
     attempt_id: str | None
     lineage_event_id: str | None
     error: str | None
+    # R6.9 / R6.10 — production-score distribution drift (C10).
+    drift_kl: float | None = None
+    drift_detected: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -198,11 +225,16 @@ class ContinuousOrchestrator:
         lineage_store: ImprovementLineageStore | None = None,
         notification_manager: Any | None = None,
         clock: Callable[[], datetime] = datetime.utcnow,
+        drift_threshold: float = 0.2,
+        min_baseline_size: int = 20,
     ) -> None:
         self.workspace = workspace
         self.trace_source = Path(trace_source)
         self.regression_threshold = float(regression_threshold)
         self.lookback_runs = int(lookback_runs)
+        # R6.9 / R6.10 — production-score distribution drift (C10).
+        self.drift_threshold = float(drift_threshold)
+        self.min_baseline_size = int(min_baseline_size)
         # Exposed publicly so NotificationManager.send(..., clock=...) can
         # share the same clock for test-time mocking.
         self.clock = clock
@@ -292,11 +324,15 @@ class ContinuousOrchestrator:
         # 2. Score (only when we actually have new cases).
         median_score: float | None = None
         run_id: str | None = None
+        current_case_scores: list[float] = []
         if cases:
             eval_runner = _build_eval_runner(self.workspace)
             eval_result = eval_runner.score_cases(cases)
             median_score = float(getattr(eval_result, "composite_score", 0.0))
             run_id = str(getattr(eval_result, "run_id", "") or "")
+            current_case_scores = _coerce_case_scores(
+                getattr(eval_result, "case_scores", None)
+            )
             if run_id:
                 self.lineage_store.record_eval_run(
                     eval_run_id=run_id,
@@ -304,6 +340,7 @@ class ContinuousOrchestrator:
                     composite_score=median_score,
                     case_count=int(getattr(eval_result, "case_count", len(cases))),
                     source="continuous",
+                    case_scores=current_case_scores,
                 )
 
         # 3. Regression check — median-of-last-N prior eval_run composite scores.
@@ -312,6 +349,13 @@ class ContinuousOrchestrator:
             median_score is not None
             and baseline_median is not None
             and (baseline_median - median_score) >= self.regression_threshold
+        )
+
+        # 3b. Distribution drift (R6.9 / R6.10). Pulls per-case scores from
+        # the last N eval_run events and compares against the current run.
+        drift_kl, drift_detected, drift_report = self._check_distribution_drift(
+            current_case_scores=current_case_scores,
+            exclude_run_id=run_id,
         )
 
         # 4. Queue improvement on regression. Never deploy.
@@ -361,6 +405,8 @@ class ContinuousOrchestrator:
                 attempt_id=attempt_id,
                 eval_run_id=run_id,
             )
+        if drift_detected and drift_report is not None:
+            self._emit_drift_detected(report=drift_report)
 
         return ContinuousCycleResult(
             ingested_trace_count=ingested,
@@ -371,6 +417,8 @@ class ContinuousOrchestrator:
             attempt_id=attempt_id,
             lineage_event_id=lineage_event.event_id if lineage_event else None,
             error=None,
+            drift_kl=drift_kl,
+            drift_detected=bool(drift_detected),
         )
 
     # ------------------------------------------------------------------
@@ -421,6 +469,71 @@ class ContinuousOrchestrator:
         if not scores:
             return None
         return float(statistics.median(scores))
+
+    def _collect_baseline_case_scores(
+        self, *, exclude_run_id: str | None
+    ) -> list[float]:
+        """Concatenate per-case scores from the last N prior eval_run events.
+
+        When ``exclude_run_id`` matches, that event is skipped so the
+        baseline only reflects runs that preceded the current cycle.
+        Runs emitted by the continuous loop itself (``source="continuous"``)
+        are excluded so the baseline represents the curated eval set and
+        stays stable across cycles — this also keeps the drift signature
+        stable for C9 dedupe.
+        """
+        recent = self.lineage_store.recent(limit=self.lookback_runs * 10 + 20)
+        scores: list[float] = []
+        runs_seen = 0
+        for ev in recent:
+            if ev.event_type != EVENT_EVAL_RUN:
+                continue
+            payload = ev.payload or {}
+            if exclude_run_id and payload.get("eval_run_id") == exclude_run_id:
+                continue
+            if payload.get("source") == "continuous":
+                continue
+            raw_case_scores = payload.get("case_scores")
+            if not isinstance(raw_case_scores, list) or not raw_case_scores:
+                continue
+            scores.extend(_coerce_case_scores(raw_case_scores))
+            runs_seen += 1
+            if runs_seen >= self.lookback_runs:
+                break
+        return scores
+
+    def _check_distribution_drift(
+        self,
+        *,
+        current_case_scores: list[float],
+        exclude_run_id: str | None,
+    ) -> tuple[float | None, bool, Any]:
+        """Pull baseline per-case scores and run the drift detector.
+
+        Returns ``(kl, detected, report_or_None)``. When skipped (no
+        current scores or baseline too small) returns ``(None, False, None)``.
+        """
+        if not current_case_scores:
+            return None, False, None
+
+        baseline = self._collect_baseline_case_scores(exclude_run_id=exclude_run_id)
+        if len(baseline) < self.min_baseline_size:
+            logger.debug(
+                "drift check skipped: baseline=%d < min_baseline_size=%d",
+                len(baseline),
+                self.min_baseline_size,
+            )
+            return None, False, None
+
+        # Import locally to keep orchestrator module import cheap.
+        from evals.drift import detect_distribution_drift
+
+        report = detect_distribution_drift(
+            baseline,
+            current_case_scores,
+            threshold=self.drift_threshold,
+        )
+        return float(report.kl), bool(report.diverged), report
 
     def _record_cycle(
         self,
@@ -525,6 +638,22 @@ class ContinuousOrchestrator:
         }
         # Per spec: signature = attempt_id. Distinct attempts always fire.
         self._emit("improvement_queued", payload, signature=str(attempt_id))
+
+    def _emit_drift_detected(self, *, report: Any) -> None:
+        """Emit ``drift_detected`` with a KL-magnitude-bucketed signature."""
+        workspace_id = self._workspace_id()
+        # Bucket at 0.01 resolution — matches the 2-decimal signature spec.
+        kl_bucket = round(float(report.kl), 2)
+        signature = _stable_signature(workspace_id, f"{kl_bucket:.2f}")
+        payload = {
+            "workspace": workspace_id,
+            "kl": float(report.kl),
+            "baseline_size": int(report.baseline_size),
+            "current_size": int(report.current_size),
+            "recommendation": str(report.recommendation),
+            "timestamp": self.clock().isoformat(),
+        }
+        self._emit("drift_detected", payload, signature=signature)
 
     def _emit_cycle_failed(self, exc: BaseException) -> None:
         workspace_id = self._workspace_id()
