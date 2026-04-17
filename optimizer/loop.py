@@ -49,6 +49,25 @@ from .skill_engine import SkillEngine
 from .skill_autolearner import SkillAutoLearner
 
 
+def _top_strategy_explanation() -> "StrategyExplanation | None":
+    """Return the top-ranked StrategyExplanation from the proposer's
+    last ranking, or None if no ranking has happened yet.
+
+    Read from the proposer's module-level ``_LAST_EXPLANATION`` slot,
+    populated as a side effect of each ``Proposer.propose(...)`` call.
+    Index 0 is the entry that was applied this cycle, so we pass it
+    straight to the ``OptimizationAttempt`` calibration fields.
+
+    The import is local to dodge any circular-import surprises and to
+    keep rebind-via-``monkeypatch.setattr(prop_mod, "_LAST_EXPLANATION", ...)``
+    semantics working in tests.
+    """
+    from .proposer import _LAST_EXPLANATION
+    if not _LAST_EXPLANATION:
+        return None
+    return _LAST_EXPLANATION[0]
+
+
 def _patch_bundle_touches_surface(patch_bundle: dict[str, Any], surface: str) -> bool:
     """Return whether a typed patch declares an operation on an immutable surface."""
     surface_lower = surface.strip().lower()
@@ -765,6 +784,7 @@ class Optimizer:
             skill_ids = [skill.id for skill in self._current_cycle_skills]
             skills_applied_json = json.dumps(skill_ids)
 
+        _exp = _top_strategy_explanation()
         attempt = OptimizationAttempt(
             attempt_id=str(uuid.uuid4())[:8],
             timestamp=time.time(),
@@ -787,6 +807,8 @@ class Optimizer:
             patch_bundle=json.dumps(patch_bundle, sort_keys=True, default=str)
             if patch_bundle is not None
             else "",
+            predicted_effectiveness=(_exp.effectiveness if _exp is not None else None),
+            strategy_surface=(_exp.surface if _exp is not None else None),
         )
         self.memory.log(attempt)
 
@@ -1202,6 +1224,7 @@ class Optimizer:
         # can join them.
         attempt_id = str(uuid.uuid4())[:8]
 
+        _exp = _top_strategy_explanation()
         attempt = OptimizationAttempt(
             attempt_id=attempt_id,
             timestamp=time.time(),
@@ -1211,6 +1234,8 @@ class Optimizer:
             config_section=config_section,
             health_context=json.dumps(health_report.metrics.to_dict()),
             skills_applied=skills_applied_json,
+            predicted_effectiveness=(_exp.effectiveness if _exp is not None else None),
+            strategy_surface=(_exp.surface if _exp is not None else None),
         )
         self.memory.log(attempt)
 
