@@ -24,6 +24,7 @@ class OptimizationAttempt:
     patch_bundle: str = ""  # JSON typed canonical component patch bundle, when available
     predicted_effectiveness: float | None = None
     strategy_surface: str | None = None
+    strategy_name: str | None = None
 
 
 class OptimizationMemory:
@@ -54,7 +55,8 @@ class OptimizationMemory:
                     skills_applied TEXT DEFAULT '',
                     patch_bundle TEXT DEFAULT '',
                     predicted_effectiveness REAL,
-                    strategy_surface TEXT
+                    strategy_surface TEXT,
+                    strategy_name TEXT
                 )
                 """
             )
@@ -95,6 +97,10 @@ class OptimizationMemory:
                 conn.execute(
                     "ALTER TABLE attempts ADD COLUMN strategy_surface TEXT"
                 )
+            if "strategy_name" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN strategy_name TEXT"
+                )
             conn.commit()
 
     def log(self, attempt: OptimizationAttempt) -> None:
@@ -106,8 +112,8 @@ class OptimizationMemory:
                     (attempt_id, timestamp, change_description, config_diff, config_section, status,
                      score_before, score_after, significance_p_value, significance_delta,
                      significance_n, health_context, skills_applied, patch_bundle,
-                     predicted_effectiveness, strategy_surface)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     predicted_effectiveness, strategy_surface, strategy_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.attempt_id,
@@ -126,6 +132,7 @@ class OptimizationMemory:
                     attempt.patch_bundle,
                     attempt.predicted_effectiveness,
                     attempt.strategy_surface,
+                    attempt.strategy_name,
                 ),
             )
             conn.commit()
@@ -138,7 +145,7 @@ class OptimizationMemory:
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
                        significance_delta, significance_n, health_context, skills_applied, patch_bundle,
-                       predicted_effectiveness, strategy_surface
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -155,7 +162,7 @@ class OptimizationMemory:
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
                        significance_delta, significance_n, health_context, skills_applied, patch_bundle,
-                       predicted_effectiveness, strategy_surface
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 WHERE status = 'accepted'
                 ORDER BY timestamp DESC
@@ -173,7 +180,7 @@ class OptimizationMemory:
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
                        significance_delta, significance_n, health_context, skills_applied, patch_bundle,
-                       predicted_effectiveness, strategy_surface
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 ORDER BY timestamp DESC
                 """
@@ -206,4 +213,5 @@ class OptimizationMemory:
             patch_bundle=row[13] if len(row) > 13 else "",
             predicted_effectiveness=row[14] if len(row) > 14 else None,
             strategy_surface=row[15] if len(row) > 15 else None,
+            strategy_name=row[16] if len(row) > 16 else None,
         )

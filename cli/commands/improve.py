@@ -20,6 +20,7 @@ and accepts an optional ``text_writer`` for human-readable output.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -870,6 +871,72 @@ def run_improve_accept_in_process(
     )
 
 
+def _maybe_record_calibration(
+    attempt: Any,
+    full_id: str,
+    composite_delta: float | None,
+    *,
+    text_writer: Callable[[str], None] | None = None,
+) -> bool | None:
+    """Write a CalibrationStore row when the attempt has all three
+    calibration fields set (predicted_effectiveness, strategy_surface,
+    strategy_name) AND ``composite_delta`` is not None.
+
+    Returns:
+      - ``True``: row written.
+      - ``False``: skipped because the attempt is missing one of the
+        three calibration fields (legacy attempt).
+      - ``None``: skipped due to missing ``composite_delta`` or because
+        the underlying CalibrationStore call failed (warning emitted).
+    """
+    if composite_delta is None:
+        # Don't fabricate 0.0 — skip with a log line so calibration
+        # history stays trustworthy.
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "calibration skipped: attempt %s has no composite_delta "
+            "(missing score_before)",
+            full_id,
+        )
+        return None
+
+    if (
+        getattr(attempt, "predicted_effectiveness", None) is not None
+        and getattr(attempt, "strategy_surface", None)
+        and getattr(attempt, "strategy_name", None)
+    ):
+        try:
+            from optimizer.calibration import CalibrationStore
+            calibration_db = os.environ.get(
+                "AGENTLAB_CALIBRATION_DB",
+                ".agentlab/calibration.db",
+            )
+            store = CalibrationStore(db_path=calibration_db)
+            store.record(
+                attempt_id=full_id,
+                surface=attempt.strategy_surface,
+                strategy=attempt.strategy_name,
+                predicted_effectiveness=float(
+                    attempt.predicted_effectiveness
+                ),
+                actual_delta=float(composite_delta),
+            )
+            return True
+        except Exception as exc:
+            _emit(text_writer, click.style(
+                f"Warning: failed to record calibration: {exc}",
+                fg="yellow"))
+            return None
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "calibration skipped: attempt %s missing predicted_effectiveness "
+        "or strategy_surface or strategy_name (legacy attempt?)",
+        full_id,
+    )
+    return False
+
+
 def run_improve_measure_in_process(
     *,
     attempt_id: str,
@@ -941,6 +1008,12 @@ def run_improve_measure_in_process(
             f"Warning: failed to record measurement event: {exc}",
             fg="yellow"))
 
+    # R6.B.2d: write calibration row when the attempt carries the three
+    # calibration fields and produced a composite_delta.
+    calibration_recorded = _maybe_record_calibration(
+        attempt, full_id, composite_delta, text_writer=text_writer,
+    )
+
     if text_writer is not None:
         _emit(text_writer, click.style(
             f"\n\u2713 Measured {full_id}", fg="green", bold=True))
@@ -959,6 +1032,7 @@ def run_improve_measure_in_process(
         "score_before": score_before,
         "composite_delta": composite_delta,
         "cases_path": cases_path,
+        "calibration_recorded": calibration_recorded,
         "status": "ok",
     })
     return ImproveMeasureResult(
@@ -1618,6 +1692,13 @@ def register_improve_commands(cli: click.Group) -> None:
                 f"Warning: failed to record measurement event: {exc}",
                 fg="yellow"), err=True)
 
+        # R6.B.2d: write calibration row when fields are present.
+        def _stderr_writer(line: str) -> None:
+            click.echo(line, err=True)
+        calibration_recorded = _maybe_record_calibration(
+            attempt, full_id, composite_delta, text_writer=_stderr_writer,
+        )
+
         if json_output:
             payload = {
                 "status": "ok",
@@ -1626,6 +1707,7 @@ def register_improve_commands(cli: click.Group) -> None:
                 "post_composite": post_composite,
                 "score_before": score_before,
                 "composite_delta": composite_delta,
+                "calibration_recorded": calibration_recorded,
             }
             if replay_set is not None:
                 payload["replay_set"] = replay_set

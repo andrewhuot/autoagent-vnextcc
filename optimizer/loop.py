@@ -809,6 +809,7 @@ class Optimizer:
             else "",
             predicted_effectiveness=(_exp.effectiveness if _exp is not None else None),
             strategy_surface=(_exp.surface if _exp is not None else None),
+            strategy_name=(_exp.strategy if _exp is not None else None),
         )
         self.memory.log(attempt)
 
@@ -1236,6 +1237,7 @@ class Optimizer:
             skills_applied=skills_applied_json,
             predicted_effectiveness=(_exp.effectiveness if _exp is not None else None),
             strategy_surface=(_exp.surface if _exp is not None else None),
+            strategy_name=(_exp.strategy if _exp is not None else None),
         )
         self.memory.log(attempt)
 
