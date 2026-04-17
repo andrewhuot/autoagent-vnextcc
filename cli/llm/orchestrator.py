@@ -21,11 +21,13 @@ server can all consume the same record.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from cli.llm.caching import CacheInput, anthropic_cache_blocks
+from cli.llm.provider_capabilities import ProviderCapabilities
 from cli.llm.streaming import (
     MessageStop,
     TextDelta,
@@ -37,6 +39,7 @@ from cli.llm.streaming import (
     collect_stream,
     events_from_model_response,
 )
+from cli.llm.streaming_tool_dispatcher import StreamingToolDispatcher
 from cli.llm.types import (
     AssistantTextBlock,
     AssistantToolUseBlock,
@@ -50,6 +53,7 @@ from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolContext
 from cli.tools.executor import ToolExecution, execute_tool_call
 from cli.tools.registry import ToolRegistry
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.markdown_stream import StreamingMarkdownRenderer
 
 
@@ -59,6 +63,22 @@ DEFAULT_MAX_TOOL_LOOPS = 12
 The loop terminates when the model stops requesting tools *or* this cap
 is hit. 12 is chosen empirically — enough for a reasonable chain of
 read/edit/verify calls, low enough that a runaway loop surfaces quickly."""
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PendingToolBatch:
+    """Assistant/tool-result pair staged until the next model call consumes it."""
+
+    assistant_message: TurnMessage
+    tool_results_message: TurnMessage
+    executions: tuple[ToolExecution, ...]
+
+
+class _TurnCancelled(RuntimeError):
+    """Private sentinel used to stop a turn before the next model call."""
 
 
 @dataclass
@@ -103,6 +123,13 @@ class LLMOrchestrator:
 
     # Accumulated conversation across turns (a list to preserve order).
     messages: list[TurnMessage] = field(default_factory=list)
+    tool_cancellation: CancellationToken | None = None
+    """Shared Ctrl+C token for in-flight tool execution during this turn.
+
+    The workbench loop owns the token and swaps it in only for the
+    lifetime of a single natural-language turn so tools can observe
+    cancellation without the orchestrator inventing its own side channel.
+    """
 
     # ------------------------------------------------------------------ API
 
@@ -159,46 +186,90 @@ class LLMOrchestrator:
         # the model can summarise after the cap is reached — but if the
         # model keeps asking for tools past the limit we hard-stop.
         tool_iterations = 0
-        while True:
-            response = self._run_model_turn(renderer, final_text_parts)
-            _merge_usage(aggregated_usage, response.usage)
+        pending_tool_batch: _PendingToolBatch | None = None
+        current_dispatcher: StreamingToolDispatcher | None = None
+        try:
+            while True:
+                allow_tool_dispatch = tool_iterations < self.max_tool_loops
+                try:
+                    response, dispatcher = self._run_model_turn(
+                        renderer,
+                        final_text_parts,
+                        dispatch_tools=allow_tool_dispatch,
+                        pending_tool_batch=pending_tool_batch,
+                    )
+                except _TurnCancelled:
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
 
-            tool_uses = response.tool_uses()
-            self.messages.append(
-                TurnMessage(role="assistant", content=response.blocks)
-            )
+                current_dispatcher = dispatcher
+                if pending_tool_batch is not None:
+                    executions.extend(pending_tool_batch.executions)
+                    pending_tool_batch = None
+                _merge_usage(aggregated_usage, response.usage)
 
-            if not tool_uses:
-                stop_reason = response.stop_reason or "end_turn"
-                break
+                tool_uses = response.tool_uses()
+                assistant_message = TurnMessage(role="assistant", content=response.blocks)
 
-            if tool_iterations >= self.max_tool_loops:
-                # Already at the cap — do not execute another tool batch.
-                stop_reason = "max_tool_loops"
-                break
+                if not tool_uses:
+                    self.messages.append(assistant_message)
+                    stop_reason = response.stop_reason or "end_turn"
+                    break
 
-            tool_iterations += 1
+                if not allow_tool_dispatch:
+                    # Already at the cap — do not execute another tool batch.
+                    self.messages.append(assistant_message)
+                    stop_reason = "max_tool_loops"
+                    break
 
-            # Execute tool calls and append a user-side message with the
-            # tool_result blocks so the next model call can consume them.
-            tool_results: list[dict[str, Any]] = []
-            post_fragments: list[str] = []
-            for tool_use in tool_uses:
-                execution = self._execute_tool(tool_use)
-                executions.append(execution)
-                tool_results.append(_result_to_block(tool_use.id, execution))
-                post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
+                tool_iterations += 1
 
-            # Append the post-tool-use prompt fragments as a text block at
-            # the end of the tool_result message. This keeps them tied to
-            # the tools that triggered them and lets the model take them
-            # into account on its next turn.
-            if post_fragments:
-                tool_results.append(
-                    {"type": "text", "text": _render_fragment_block(post_fragments)}
+                # Execute tool calls and append a user-side message with the
+                # tool_result blocks so the next model call can consume them.
+                executions_in_order = current_dispatcher.results_in_order() if current_dispatcher else []
+                current_dispatcher = None
+                if self._tool_cancellation_requested():
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
+                if len(executions_in_order) != len(tool_uses):
+                    raise RuntimeError(
+                        "Streaming tool dispatch produced "
+                        f"{len(executions_in_order)} execution(s) for "
+                        f"{len(tool_uses)} tool call(s)."
+                    )
+                tool_results: list[dict[str, Any]] = []
+                post_fragments: list[str] = []
+                for tool_use, execution in zip(tool_uses, executions_in_order):
+                    tool_results.append(_result_to_block(tool_use.id, execution))
+                    post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
+
+                # Append the post-tool-use prompt fragments as a text block at
+                # the end of the tool_result message. This keeps them tied to
+                # the tools that triggered them and lets the model take them
+                # into account on its next turn.
+                if post_fragments:
+                    tool_results.append(
+                        {"type": "text", "text": _render_fragment_block(post_fragments)}
+                    )
+
+                if self._tool_cancellation_requested():
+                    stop_reason = "cancelled"
+                    final_text_parts.clear()
+                    break
+
+                pending_tool_batch = _PendingToolBatch(
+                    assistant_message=assistant_message,
+                    tool_results_message=TurnMessage(role="user", content=tool_results),
+                    executions=tuple(executions_in_order),
                 )
-
-            self.messages.append(TurnMessage(role="user", content=tool_results))
+        except KeyboardInterrupt:
+            if current_dispatcher is not None:
+                current_dispatcher.cancel_all()
+            self._cancel_active_turn()
+            stop_reason = "cancelled"
+            final_text_parts.clear()
 
         renderer.finalize()
         assistant_text = "".join(final_text_parts)
@@ -245,7 +316,10 @@ class LLMOrchestrator:
         self,
         renderer: StreamingMarkdownRenderer,
         final_text_parts: list[str],
-    ) -> ModelResponse:
+        *,
+        dispatch_tools: bool,
+        pending_tool_batch: _PendingToolBatch | None = None,
+    ) -> tuple[ModelResponse, StreamingToolDispatcher | None]:
         """Call the model and render its output live.
 
         Uses ``stream()`` when the client implements it — text chunks land
@@ -253,9 +327,21 @@ class LLMOrchestrator:
         thinking. Clients that expose only ``complete()`` still route
         through :func:`events_from_model_response` so the renderer path
         is identical, just non-incremental."""
+        appended_pending = False
+        if pending_tool_batch is not None:
+            if self._tool_cancellation_requested():
+                raise _TurnCancelled()
+            self.messages.append(pending_tool_batch.assistant_message)
+            self.messages.append(pending_tool_batch.tool_results_message)
+            appended_pending = True
+            if self._tool_cancellation_requested():
+                self._rollback_pending_tool_messages(pending_tool_batch)
+                raise _TurnCancelled()
+
         tools_schema = self.tool_registry.to_schema()
         effective_system_prompt = self._compose_system_prompt()
         stream_method = getattr(self.model, "stream", None)
+        dispatcher = self._build_streaming_tool_dispatcher() if dispatch_tools else None
 
         # Dispatch a provider-neutral cache hint unconditionally. Adapters
         # that honour it (Anthropic) store the breakpoint for the next
@@ -273,19 +359,28 @@ class LLMOrchestrator:
             )
             cache_hint(hint_blocks)
 
-        if callable(stream_method):
-            events_iter = stream_method(
-                system_prompt=effective_system_prompt,
-                messages=list(self.messages),
-                tools=tools_schema,
-            )
-        else:
-            response = self.model.complete(
-                system_prompt=effective_system_prompt,
-                messages=list(self.messages),
-                tools=tools_schema,
-            )
-            events_iter = events_from_model_response(response)
+        try:
+            messages = list(self.messages)
+            if self._tool_cancellation_requested():
+                raise _TurnCancelled()
+
+            if callable(stream_method):
+                events_iter = stream_method(
+                    system_prompt=effective_system_prompt,
+                    messages=messages,
+                    tools=tools_schema,
+                )
+            else:
+                response = self.model.complete(
+                    system_prompt=effective_system_prompt,
+                    messages=messages,
+                    tools=tools_schema,
+                )
+                events_iter = events_from_model_response(response)
+        except _TurnCancelled:
+            if appended_pending:
+                self._rollback_pending_tool_messages(pending_tool_batch)
+            raise
 
         # Fork the event stream: one consumer drives the renderer live,
         # the other collects the final ModelResponse for bookkeeping.
@@ -294,22 +389,35 @@ class LLMOrchestrator:
         # that doesn't matter at this scale.
         collected_events: list[Any] = []
         pending_text = ""
-        for event in events_iter:
-            collected_events.append(event)
-            if isinstance(event, TextDelta):
-                text = event.text or ""
-                pending_text += text
-                final_text_parts.append(text)
-                # Feed the renderer without forcing newlines — the
-                # markdown streamer buffers partial lines correctly.
-                renderer.feed(text)
-            elif isinstance(event, ThinkingDelta):
-                # Thinking surfaces only on a dedicated indicator in the
-                # transcript chrome; the main stream stays focused on
-                # user-visible prose.
-                continue
-            # Tool-use deltas never render as text — they land in the
-            # collected ModelResponse via collect_stream.
+        try:
+            for event in events_iter:
+                collected_events.append(event)
+                if isinstance(event, TextDelta):
+                    text = event.text or ""
+                    pending_text += text
+                    final_text_parts.append(text)
+                    # Feed the renderer without forcing newlines — the
+                    # markdown streamer buffers partial lines correctly.
+                    renderer.feed(text)
+                elif isinstance(event, ThinkingDelta):
+                    # Thinking surfaces only on a dedicated indicator in the
+                    # transcript chrome; the main stream stays focused on
+                    # user-visible prose.
+                    continue
+                elif dispatcher is not None:
+                    if isinstance(event, ToolUseStart):
+                        dispatcher.on_tool_use_start(event)
+                    elif isinstance(event, ToolUseDelta):
+                        dispatcher.on_tool_use_delta(event)
+                    elif isinstance(event, ToolUseEnd):
+                        dispatcher.on_tool_use_end(event)
+                # Tool-use deltas never render as text — they land in the
+                # collected ModelResponse via collect_stream.
+        except KeyboardInterrupt:
+            if dispatcher is not None:
+                dispatcher.cancel_all()
+            self._cancel_active_turn()
+            raise
 
         # Ensure any trailing partial line flushes on end-of-turn; the
         # renderer will add one itself at finalize(), but we mimic that
@@ -318,7 +426,18 @@ class LLMOrchestrator:
             renderer.feed("\n")
             final_text_parts.append("\n")
 
-        return collect_stream(collected_events)
+        response = collect_stream(collected_events)
+        if dispatcher is not None:
+            for tool_use in response.tool_uses():
+                dispatcher.on_tool_use_end(
+                    ToolUseEnd(
+                        id=tool_use.id,
+                        name=tool_use.name,
+                        input=dict(tool_use.input or {}),
+                    )
+                )
+
+        return response, dispatcher
 
     def _compose_system_prompt(self) -> str:
         """Layer hook-supplied prompt fragments on top of the base prompt.
@@ -373,20 +492,78 @@ class LLMOrchestrator:
             return []
 
     def _execute_tool(self, tool_use: AssistantToolUseBlock) -> ToolExecution:
+        return self._execute_tool_call(tool_use.name, dict(tool_use.input or {}))
+
+    def _execute_tool_call(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> ToolExecution:
         context = ToolContext(
             workspace_root=self.workspace_root,
             session_id=self.session.session_id if self.session else None,
+            cancel_check=self.tool_cancellation,
             extra=self._build_tool_extra(),
         )
         return execute_tool_call(
-            tool_use.name,
-            dict(tool_use.input or {}),
+            tool_name,
+            tool_input,
             registry=self.tool_registry,
             permissions=self.permissions,
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
         )
+
+    def _build_streaming_tool_dispatcher(self) -> StreamingToolDispatcher:
+        return StreamingToolDispatcher(
+            registry=self.tool_registry,
+            executor=_StreamingToolExecutor(self),
+            capabilities=self._model_capabilities(),
+        )
+
+    def _model_capabilities(self) -> ProviderCapabilities:
+        caps = getattr(self.model, "capabilities", None)
+        if isinstance(caps, ProviderCapabilities):
+            return caps
+        return _fallback_provider_capabilities()
+
+    def _requires_permission_prompt(
+        self,
+        tool_name: str,
+        tool_input: dict[str, Any],
+    ) -> bool:
+        if self._hook_may_prompt(tool_name):
+            return True
+        try:
+            tool = self.tool_registry.get(tool_name)
+        except Exception:
+            return False
+        try:
+            return self.permissions.decision_for_tool(tool, tool_input) == "ask"
+        except Exception:
+            return False
+
+    def _hook_may_prompt(self, tool_name: str) -> bool:
+        """Conservatively serialize tools whose hooks may trigger a modal prompt."""
+        registry = self.hook_registry
+        if registry is None:
+            return False
+
+        hooks_for = getattr(registry, "hooks_for", None)
+        if not callable(hooks_for):
+            return False
+
+        try:
+            from cli.hooks import HookEvent, HookType
+
+            for event in (HookEvent.ON_PERMISSION_REQUEST, HookEvent.PRE_TOOL_USE):
+                hooks = hooks_for(event, tool_name=tool_name) or []
+                if any(getattr(hook, "hook_type", None) is HookType.COMMAND for hook in hooks):
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _build_tool_extra(self) -> dict[str, Any]:
         """Stamp the tool context with publishable session state.
@@ -404,6 +581,38 @@ class LLMOrchestrator:
         if self.session is not None:
             extra["session_id"] = self.session.session_id
         return extra
+
+    def _tool_cancellation_requested(self) -> bool:
+        """Return whether the active turn cancellation token has been flipped."""
+        cancellation = self.tool_cancellation
+        if cancellation is None:
+            return False
+        cancelled = getattr(cancellation, "cancelled", None)
+        if isinstance(cancelled, bool):
+            return cancelled
+        return bool(cancelled)
+
+    def _cancel_active_turn(self) -> None:
+        """Signal cancellation to any in-flight tool workers for this turn."""
+        cancellation = self.tool_cancellation
+        cancel = getattr(cancellation, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+    def _rollback_pending_tool_messages(
+        self,
+        pending_tool_batch: _PendingToolBatch | None,
+    ) -> None:
+        """Remove a staged tool batch that was never consumed by the model."""
+        if pending_tool_batch is None:
+            return
+        self._pop_message_if_tail(pending_tool_batch.tool_results_message)
+        self._pop_message_if_tail(pending_tool_batch.assistant_message)
+
+    def _pop_message_if_tail(self, message: TurnMessage) -> None:
+        """Remove ``message`` when it is still the most recent transcript entry."""
+        if self.messages and self.messages[-1] is message:
+            self.messages.pop()
 
     def _append_session_entry(self, *, role: str, content: str) -> None:
         assert self.session is not None
@@ -567,6 +776,46 @@ def _render_fragment_block(fragments: list[str]) -> str:
     that aren't there."""
     body = "\n\n".join(fragments)
     return f"Hook post-tool-use guidance:\n\n{body}"
+
+
+def _fallback_provider_capabilities() -> ProviderCapabilities:
+    """Return a conservative capability default for legacy test doubles."""
+    logger.warning(
+        "LLMOrchestrator: model did not declare ProviderCapabilities; "
+        "falling back to conservative sequential defaults."
+    )
+    return ProviderCapabilities(
+        streaming=True,
+        native_tool_use=True,
+        parallel_tool_calls=False,
+        thinking=False,
+        prompt_cache=False,
+        vision=False,
+        json_mode=False,
+        max_context_tokens=1,
+        max_output_tokens=1,
+    )
+
+
+@dataclass
+class _StreamingToolExecutor:
+    """Adapter that lets the dispatcher reuse orchestrator permissions."""
+
+    orchestrator: LLMOrchestrator
+
+    def __call__(self, tool_name: str, tool_input: dict[str, Any]) -> ToolExecution:
+        return self.orchestrator._execute_tool_call(tool_name, tool_input)
+
+    def cancel_all(self) -> None:
+        cancellation = self.orchestrator.tool_cancellation
+        cancel = getattr(cancellation, "cancel", None)
+        if callable(cancel):
+            cancel()
+
+    def requires_permission_prompt(
+        self, tool_name: str, tool_input: dict[str, Any]
+    ) -> bool:
+        return self.orchestrator._requires_permission_prompt(tool_name, tool_input)
 
 
 __all__ = ["DEFAULT_MAX_TOOL_LOOPS", "LLMOrchestrator", "synthetic_tool_use_id"]

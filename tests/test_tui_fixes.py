@@ -9,6 +9,7 @@ Covers:
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass
 from unittest.mock import MagicMock, patch
@@ -329,6 +330,81 @@ class TestChatOrchestratorRouting:
         msgs = store.get_state().messages
         assert msgs[0].role == "user"
         assert any(m.role == "assistant" and "AI assistant" in m.content for m in msgs)
+
+    def test_chat_with_orchestrator_threads_adapter_cancellation_token(self) -> None:
+        """The TUI adapter should expose its shared cancel token during a turn."""
+        store = Store(get_default_app_state())
+        observed: dict[str, object] = {}
+        done = threading.Event()
+
+        @dataclass
+        class FakeResult:
+            assistant_text: str = "done"
+            stop_reason: str = "end_turn"
+            tool_executions: list = None
+
+            def __post_init__(self):
+                if self.tool_executions is None:
+                    self.tool_executions = []
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.echo = print
+        mock_orchestrator.tool_cancellation = object()
+
+        def _run_turn(_prompt: str) -> FakeResult:
+            observed["during"] = mock_orchestrator.tool_cancellation
+            done.set()
+            return FakeResult()
+
+        mock_orchestrator.run_turn = _run_turn
+
+        adapter = TUISlashAdapter(store, orchestrator=mock_orchestrator)
+        prior = mock_orchestrator.tool_cancellation
+
+        adapter.handle_input("hello world")
+        assert done.wait(timeout=1)
+
+        assert observed["during"] is adapter.context.cancellation
+        assert mock_orchestrator.tool_cancellation is prior
+
+    def test_chat_resets_adapter_cancellation_between_turns(self) -> None:
+        """A cancelled TUI turn must not poison the next orchestrator-backed turn."""
+        store = Store(get_default_app_state())
+        seen: list[bool] = []
+        done = threading.Event()
+
+        @dataclass
+        class FakeResult:
+            assistant_text: str = "done"
+            stop_reason: str = "end_turn"
+            tool_executions: list = None
+
+            def __post_init__(self):
+                if self.tool_executions is None:
+                    self.tool_executions = []
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.echo = print
+
+        def _run_turn(_prompt: str) -> FakeResult:
+            token = mock_orchestrator.tool_cancellation
+            seen.append(bool(token.cancelled))
+            if len(seen) == 1:
+                token.cancel()
+            done.set()
+            return FakeResult()
+
+        mock_orchestrator.run_turn = _run_turn
+
+        adapter = TUISlashAdapter(store, orchestrator=mock_orchestrator)
+
+        adapter.handle_input("first")
+        assert done.wait(timeout=1)
+        done.clear()
+        adapter.handle_input("second")
+        assert done.wait(timeout=1)
+
+        assert seen == [False, False]
 
     def test_chat_orchestrator_failure_shows_error(self) -> None:
         """If run_turn raises, an error message appears in the transcript."""

@@ -66,6 +66,7 @@ class WebSearchTool(Tool):
         "additionalProperties": False,
     }
     read_only = True
+    is_concurrency_safe = True
 
     def permission_action(self, tool_input: Mapping[str, Any]) -> str:
         return "tool:WebSearch"

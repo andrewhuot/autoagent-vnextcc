@@ -122,6 +122,10 @@ class Tool(ABC):
     """When ``True`` the tool is auto-allowed in plan mode and never triggers a
     permission prompt in default mode. Grep/Glob/FileRead flip this on."""
 
+    is_concurrency_safe: bool = False
+    """When ``True`` the dispatcher may run the tool alongside other safe
+    calls. Most tools stay serial by default."""
+
     def permission_action(self, tool_input: Mapping[str, Any]) -> str:
         """Return the action string consumed by :class:`PermissionManager`.
 

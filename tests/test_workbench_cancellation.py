@@ -17,14 +17,27 @@ Covers:
 
 from __future__ import annotations
 
+import _thread
+import os
+import signal
 import subprocess
 import sys
+import threading
 import time
+from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Iterator, Sequence
 
 import click
 import pytest
 
+from cli.llm.orchestrator import LLMOrchestrator
+from cli.llm.provider_capabilities import ProviderCapabilities
+from cli.llm.streaming import ToolUseDelta, ToolUseEnd, ToolUseStart
+from cli.llm.types import TurnMessage
+from cli.permissions import PermissionManager
+from cli.tools.base import Tool, ToolContext, ToolResult
+from cli.tools.registry import ToolRegistry
 from cli.workbench_app.app import run_workbench_app
 from cli.workbench_app.build_slash import (
     make_build_handler as make_build_handler_,
@@ -364,6 +377,77 @@ def test_handler_falls_back_for_legacy_runner_signature() -> None:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class _ToolState:
+    """Lifecycle signals for the in-process tool used in the Ctrl+C test."""
+
+    started: threading.Event = field(default_factory=threading.Event)
+    finished: threading.Event = field(default_factory=threading.Event)
+    cancel_observed: threading.Event = field(default_factory=threading.Event)
+
+
+class _InterruptibleTool(Tool):
+    """Read-only tool that exits only when the shared token is cancelled."""
+
+    name = "Interruptible"
+    description = "Blocks until cancelled."
+    input_schema = {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": False,
+    }
+    read_only = True
+    is_concurrency_safe = True
+
+    def __init__(self, state: _ToolState) -> None:
+        self._state = state
+
+    def run(self, tool_input: dict[str, Any], context: ToolContext) -> ToolResult:
+        self._state.started.set()
+        token = context.cancel_check
+        while not getattr(token, "cancelled", False):
+            time.sleep(0.01)
+        self._state.cancel_observed.set()
+        self._state.finished.set()
+        return ToolResult.success("cancelled")
+
+
+@dataclass
+class _SingleToolTurnModel:
+    """Model stub that emits one tool-use turn and should never reach a follow-up."""
+
+    capabilities: ProviderCapabilities
+    calls: int = 0
+
+    def stream(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[TurnMessage],
+        tools: list[dict[str, Any]],
+    ) -> Iterator[Any]:
+        self.calls += 1
+        if self.calls > 1:  # pragma: no cover - regression sentinel
+            raise AssertionError("cancelled turn should not reach a follow-up model call")
+        yield ToolUseStart(id="tool-1", name="Interruptible")
+        yield ToolUseDelta(id="tool-1", input_json="{}")
+        yield ToolUseEnd(id="tool-1", name="Interruptible", input={})
+
+
+def _caps(*, parallel_tool_calls: bool) -> ProviderCapabilities:
+    return ProviderCapabilities(
+        streaming=True,
+        native_tool_use=True,
+        parallel_tool_calls=parallel_tool_calls,
+        thinking=False,
+        prompt_cache=False,
+        vision=False,
+        json_mode=False,
+        max_context_tokens=1_000,
+        max_output_tokens=1_000,
+    )
+
+
 def _recorder_echo() -> tuple[list[str], Any]:
     sink: list[str] = []
 
@@ -465,6 +549,47 @@ def test_interrupt_with_active_tool_call_cancels_instead_of_exiting() -> None:
     # With an active call the first ctrl-c cancelled — /exit then ended cleanly.
     assert result.exited_via == "/exit"
     assert any("cancelled active tool call" in _strip(line) for line in sink)
+
+
+def test_keyboard_interrupt_during_python_tool_turn_cancels_cleanly(
+    tmp_path: Path,
+) -> None:
+    """A real Ctrl+C during a thread-pooled Python tool should return a cancelled turn."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    state = _ToolState()
+    registry = ToolRegistry()
+    registry.register(_InterruptibleTool(state))
+    orchestrator = LLMOrchestrator(
+        model=_SingleToolTurnModel(capabilities=_caps(parallel_tool_calls=True)),
+        tool_registry=registry,
+        permissions=PermissionManager(root=workspace),
+        workspace_root=workspace,
+        echo=lambda _line: None,
+    )
+
+    def _trigger_interrupt() -> None:
+        assert state.started.wait(timeout=1)
+        os.kill(os.getpid(), signal.SIGINT)
+
+    interrupter = threading.Thread(target=_trigger_interrupt, daemon=True)
+    interrupter.start()
+
+    sink, echo = _recorder_echo()
+    result = run_workbench_app(
+        workspace=None,
+        input_provider=["please cancel me", "/exit"],
+        echo=echo,
+        show_banner=False,
+        orchestrator=orchestrator,
+    )
+
+    assert state.finished.wait(timeout=1)
+    assert state.cancel_observed.is_set()
+    assert result.exited_via == "/exit"
+    joined = "\n".join(_strip(line) for line in sink)
+    assert "(stop: cancelled)" in joined
 
 
 # ---------------------------------------------------------------------------
