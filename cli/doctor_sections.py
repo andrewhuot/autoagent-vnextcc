@@ -14,6 +14,7 @@ knows, not crash.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Mapping
 
 from cli.hooks import HookRegistry
@@ -407,11 +408,283 @@ def render_cost_section(
     return lines
 
 
+# ---------------------------------------------------------------------------
+# Classifier section (P3.T4)
+# ---------------------------------------------------------------------------
+
+
+def classifier_section(root: str | Path | None) -> dict[str, Any]:
+    """Build the transcript-classifier diagnostic block.
+
+    Reports how many persisted-allow patterns are in scope and the
+    audit-log metadata (path, size, most-recent timestamp). Per-session
+    state like :class:`~cli.permissions.denial_tracking.DenialTracker`
+    is explicitly NOT reported — ``/doctor`` runs out-of-band and has no
+    session handle. Users who want the live denial state should use
+    ``/perms`` inside the workbench.
+
+    Accepts ``None`` for callers that have no workspace; the returned
+    dict still has the expected keys so renderers don't special-case.
+    """
+    if root is None:
+        return _empty_classifier_section()
+
+    root_path = Path(root)
+    allowlist_count = _classifier_allowlist_count(root_path)
+    audit = _classifier_audit_metadata(root_path)
+
+    return {
+        "workspace_root": str(root_path),
+        "allowlist_path": str(root_path / ".agentlab" / "classifier_allowlist.json"),
+        "allowlist_count": allowlist_count,
+        "audit_log_path": audit["path"],
+        "audit_log_exists": audit["exists"],
+        "audit_log_size_bytes": audit["size"],
+        "last_entry_ts": audit["last_ts"],
+    }
+
+
+def render_classifier_section(root: str | Path | None) -> list[str]:
+    """Render the classifier section as plain lines for the doctor command.
+
+    Layout matches the existing :func:`render_settings_section`:
+    two-space indent, colon-aligned labels, no ANSI colours (callers
+    add colour).
+    """
+    section = classifier_section(root)
+    lines: list[str] = ["", "Classifier"]
+
+    count = section.get("allowlist_count", 0)
+    allowlist_path = section.get("allowlist_path") or "(no workspace)"
+    if count:
+        lines.append(f"  Allowlist:         {count} pattern(s) at {allowlist_path}")
+    else:
+        lines.append(f"  Allowlist:         (empty) — file: {allowlist_path}")
+
+    audit_path = section.get("audit_log_path") or "(no workspace)"
+    if section.get("audit_log_exists"):
+        size = section.get("audit_log_size_bytes") or 0
+        last_ts = section.get("last_entry_ts") or "(none)"
+        lines.append(f"  Audit log:         {audit_path}")
+        lines.append(f"  Audit size:        {size} bytes")
+        lines.append(f"  Last entry:        {last_ts}")
+    else:
+        lines.append(f"  Audit log:         (not yet written) — {audit_path}")
+
+    # Denial tracker is session-scoped; documented here so users don't
+    # assume the absence of the field means "no denials".
+    lines.append(
+        "  Denial tracker:    session-scoped — inspect via /perms inside the workbench"
+    )
+
+    return lines
+
+
+def _empty_classifier_section() -> dict[str, Any]:
+    return {
+        "workspace_root": None,
+        "allowlist_path": None,
+        "allowlist_count": 0,
+        "audit_log_path": None,
+        "audit_log_exists": False,
+        "audit_log_size_bytes": 0,
+        "last_entry_ts": None,
+    }
+
+
+def _classifier_allowlist_count(root: Path) -> int:
+    """Count persisted allow-patterns without importing the persistence
+    module at top level (it pulls in logging config we don't want to
+    reach for in the JSON path).
+
+    We intentionally call through to the persistence helper so the
+    count matches what the classifier actually sees at session start.
+    """
+    try:
+        from cli.permissions.classifier_persistence import load_persisted_patterns
+
+        return len(load_persisted_patterns(root))
+    except Exception:  # pragma: no cover - defensive
+        return 0
+
+
+def _classifier_audit_metadata(root: Path) -> dict[str, Any]:
+    """Return audit-log path/size/last-ts WITHOUT reading the whole file.
+
+    We do tail up to 100 lines to find the most recent timestamp so the
+    doctor display reflects reality; 100 lines is bounded by the log
+    layout (one short JSON object per line) and the caller accepts
+    O(reading) cost in exchange for freshness.
+    """
+    audit_path = root / ".agentlab" / "classifier_audit.jsonl"
+    result: dict[str, Any] = {
+        "path": str(audit_path),
+        "exists": False,
+        "size": 0,
+        "last_ts": None,
+    }
+    if not audit_path.exists():
+        return result
+    try:
+        result["size"] = audit_path.stat().st_size
+    except OSError:
+        return result
+    result["exists"] = True
+
+    try:
+        from cli.permissions.audit_log import ClassifierAuditLog
+
+        log = ClassifierAuditLog(audit_path)
+        last_ts: str | None = None
+        for entry in log.iter_recent(limit=100):
+            # iter_recent yields in file order; the last one wins.
+            ts = entry.get("ts")
+            if isinstance(ts, str):
+                last_ts = ts
+        result["last_ts"] = last_ts
+    except Exception:  # pragma: no cover - defensive
+        pass
+    return result
+
+
+# ---------------------------------------------------------------------------
+# MCP transports section (P3.T4)
+# ---------------------------------------------------------------------------
+
+
+def mcp_transports_section(root: str | Path | None) -> dict[str, Any]:
+    """Build the MCP-transport diagnostic block.
+
+    Parses ``<root>/.mcp.json`` and, for each server, labels its
+    configured transport. Since T9 hasn't landed yet the config is
+    loosely typed: we accept both ``type`` and ``transport`` keys, fall
+    back to "stdio (legacy)" when only ``command``/``args`` are
+    present, and never attempt a live connectivity probe (probes can
+    hang the doctor render).
+    """
+    if root is None:
+        return {"configured": False, "config_path": None, "servers": []}
+
+    root_path = Path(root)
+    config_path = root_path / ".mcp.json"
+    if not config_path.exists():
+        return {"configured": False, "config_path": str(config_path), "servers": []}
+
+    try:
+        import json as _json
+
+        payload = _json.loads(config_path.read_text(encoding="utf-8") or "{}")
+    except (OSError, ValueError):
+        return {"configured": False, "config_path": str(config_path), "servers": []}
+
+    servers_raw = payload.get("mcpServers") if isinstance(payload, dict) else None
+    if not isinstance(servers_raw, dict):
+        return {"configured": True, "config_path": str(config_path), "servers": []}
+
+    servers: list[dict[str, Any]] = []
+    for name in sorted(servers_raw):
+        entry = servers_raw.get(name)
+        if not isinstance(entry, dict):
+            continue
+        servers.append(
+            {
+                "name": name,
+                "transport": _detect_transport_label(entry),
+                "command": entry.get("command"),
+                "args": list(entry.get("args") or []),
+                "url": entry.get("url"),
+            }
+        )
+
+    return {
+        "configured": True,
+        "config_path": str(config_path),
+        "servers": servers,
+    }
+
+
+def render_mcp_transports_section(root: str | Path | None) -> list[str]:
+    """Render the MCP-transport section as plain lines for the doctor.
+
+    Each server gets one main line (``name: transport``) and, when
+    relevant, a second indented line with the connection hint (command
+    line or URL). We DO NOT probe — connectivity checks can hang on an
+    unresponsive remote.
+    """
+    section = mcp_transports_section(root)
+    lines: list[str] = ["", "MCP transports"]
+
+    if not section.get("configured"):
+        lines.append("  .mcp.json:         (not configured)")
+        return lines
+
+    servers = section.get("servers") or []
+    if not servers:
+        lines.append("  .mcp.json:         present, no servers configured")
+        return lines
+
+    lines.append(f"  .mcp.json:         {section.get('config_path', '(unknown)')}")
+    lines.append(f"  Servers:           {len(servers)}")
+    for entry in servers:
+        name = entry.get("name", "?")
+        transport = entry.get("transport", "?")
+        lines.append(f"    - {name}: {transport}")
+        detail = _render_server_detail(entry)
+        if detail:
+            lines.append(f"        {detail}")
+    return lines
+
+
+def _detect_transport_label(entry: Mapping[str, Any]) -> str:
+    """Return a human-readable transport label.
+
+    Preference order:
+
+    1. Explicit ``transport`` key (T9's expected field).
+    2. Explicit ``type`` key (some alternative configs).
+    3. ``command`` present → ``stdio (legacy)`` — we know enough to say
+       it's stdio but flag it as pre-T9 so the user knows the schema
+       will tighten.
+    4. ``url`` present but no type → ``http (legacy)`` as a best guess.
+    5. Otherwise ``unknown``.
+    """
+    transport = entry.get("transport")
+    if isinstance(transport, str) and transport.strip():
+        return transport.strip()
+    kind = entry.get("type")
+    if isinstance(kind, str) and kind.strip():
+        return kind.strip()
+    if entry.get("command"):
+        return "stdio (legacy)"
+    if entry.get("url"):
+        return "http (legacy)"
+    return "unknown"
+
+
+def _render_server_detail(entry: Mapping[str, Any]) -> str:
+    """Single-line detail: command+args for stdio-ish transports, URL
+    for HTTP-ish transports. No output when both are missing."""
+    url = entry.get("url")
+    if isinstance(url, str) and url:
+        return f"url={url}"
+    command = entry.get("command")
+    if isinstance(command, str) and command:
+        args = entry.get("args") or []
+        if args:
+            return f"command={command} args={' '.join(str(a) for a in args)}"
+        return f"command={command}"
+    return ""
+
+
 __all__ = [
+    "classifier_section",
     "cost_section",
     "hooks_section",
+    "mcp_transports_section",
+    "render_classifier_section",
     "render_cost_section",
     "render_hooks_section",
+    "render_mcp_transports_section",
     "render_settings_section",
     "settings_section",
 ]

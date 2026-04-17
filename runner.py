@@ -4739,6 +4739,21 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             settings_diag = {"error": str(exc)}
             hooks_diag = {"error": str(exc)}
 
+        classifier_diag: dict[str, Any] = {}
+        mcp_transports_diag: dict[str, Any] = {}
+        try:
+            from cli.doctor_sections import (
+                classifier_section,
+                mcp_transports_section,
+            )
+
+            diag_root = workspace.root if workspace is not None else Path.cwd()
+            classifier_diag = classifier_section(diag_root)
+            mcp_transports_diag = mcp_transports_section(diag_root)
+        except Exception as exc:  # pragma: no cover - defensive
+            classifier_diag = {"error": str(exc)}
+            mcp_transports_diag = {"error": str(exc)}
+
         data = {
             "workspace": str(workspace.root) if workspace is not None else None,
             "issues": issues,
@@ -4746,11 +4761,13 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             "mode": mode_summary["effective_mode"],
             "memory": memory_snapshot,
             "mcp": mcp_snapshot,
+            "mcp_transports": mcp_transports_diag,
             "harness": harness_snapshot.to_dict() if harness_snapshot is not None else None,
             "mock_reason": mock_info.reason,
             "mock_reason_detail": mock_info.detail,
             "settings": settings_diag,
             "hooks": hooks_diag,
+            "classifier": classifier_diag,
         }
         click.echo(json_response("ok", data, next_cmd="agentlab status"))
         return
@@ -5150,6 +5167,30 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
     except Exception as exc:  # pragma: no cover - defensive
         click.echo("")
         click.echo(click.style(f"Settings/Hooks diagnostics failed: {exc}", fg="yellow"))
+
+    # ------------------------------------------------------------------
+    # Classifier + MCP transports (P3.T4). Wrapped so an unreadable
+    # .agentlab directory or a malformed .mcp.json never crashes the
+    # rest of the doctor output.
+    # ------------------------------------------------------------------
+    try:
+        from cli.doctor_sections import (
+            render_classifier_section,
+            render_mcp_transports_section,
+        )
+
+        diag_root = workspace.root if workspace is not None else Path.cwd()
+        for line in render_classifier_section(diag_root):
+            click.echo(line)
+        for line in render_mcp_transports_section(diag_root):
+            click.echo(line)
+    except Exception as exc:  # pragma: no cover - defensive
+        click.echo("")
+        click.echo(
+            click.style(
+                f"Classifier/MCP diagnostics failed: {exc}", fg="yellow"
+            )
+        )
 
     # ------------------------------------------------------------------
     # Summary
