@@ -11,6 +11,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from cli.paste.placeholders import render_placeholder
+from cli.paste.store import PasteHandle, PasteStore
+
 
 EXIT_TOKENS = frozenset({"/exit", "/quit", ":q", "exit", "quit"})
 
@@ -35,6 +38,15 @@ class InputRoute:
     raw: str
     payload: str
     command_name: str | None = None
+
+
+@dataclass(frozen=True)
+class PasteExternalization:
+    """Visible/input-model split for oversized pasted content."""
+
+    raw_text: str
+    display_text: str
+    handle: PasteHandle | None = None
 
 
 def route_user_input(line: str) -> InputRoute:
@@ -76,10 +88,39 @@ def route_user_input(line: str) -> InputRoute:
     return InputRoute(kind=InputKind.CHAT, raw=line, payload=stripped)
 
 
+def externalize_paste(
+    line: str,
+    *,
+    paste_store: PasteStore,
+    inline_threshold_bytes: int,
+    pasted: bool,
+) -> PasteExternalization:
+    """Store large pasted content out-of-band while keeping the input readable."""
+    if not pasted:
+        return PasteExternalization(raw_text=line, display_text=line)
+
+    if len(line.encode("utf-8")) <= inline_threshold_bytes:
+        return PasteExternalization(raw_text=line, display_text=line)
+
+    handle = paste_store.store(line)
+    return PasteExternalization(
+        raw_text=line,
+        display_text=render_placeholder(handle),
+        handle=handle,
+    )
+
+
 def _slash_command_name(line: str) -> str:
     """Return the command token from a slash-prefixed line."""
     token = line.split(maxsplit=1)[0]
     return token.lstrip("/")
 
 
-__all__ = ["EXIT_TOKENS", "InputKind", "InputRoute", "route_user_input"]
+__all__ = [
+    "EXIT_TOKENS",
+    "InputKind",
+    "InputRoute",
+    "PasteExternalization",
+    "externalize_paste",
+    "route_user_input",
+]

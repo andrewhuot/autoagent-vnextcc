@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from cli.workbench_app.input_router import InputKind, route_user_input
+from pathlib import Path
+
+from cli.paste.store import PasteStore
+from cli.workbench_app.input_router import (
+    InputKind,
+    externalize_paste,
+    route_user_input,
+)
 
 
 def test_routes_blank_input_as_empty() -> None:
@@ -52,3 +59,17 @@ def test_routes_plain_text_as_chat() -> None:
     assert route.kind is InputKind.CHAT
     assert route.payload == "hello"
     assert route.command_name is None
+
+
+def test_externalize_paste_is_noop_without_paste_flag(tmp_path: Path) -> None:
+    store = PasteStore(tmp_path / "pastes")
+
+    result = externalize_paste(
+        "line\n" * 100,
+        paste_store=store,
+        inline_threshold_bytes=10,
+        pasted=False,
+    )
+
+    assert result.display_text == result.raw_text
+    assert result.handle is None
