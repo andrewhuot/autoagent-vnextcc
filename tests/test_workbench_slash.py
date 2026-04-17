@@ -470,9 +470,10 @@ def test_help_handler_argument_hint_rendered_as_column(
     resume_line = next(
         line for line in rendered.splitlines() if line.lstrip().startswith("/resume ")
     )
-    # ``/resume`` declares an argument hint of ``[session_id]`` in the
-    # registry — it must reach the rendered row.
-    assert "[session_id]" in resume_line
+    # ``/resume`` declares an argument hint of ``[conversation_id]`` in
+    # the registry (R7.C.6: the conversation-aware variant) — it must
+    # reach the rendered row.
+    assert "[conversation_id]" in resume_line
 
     clear_line = next(
         line for line in rendered.splitlines() if line.lstrip().startswith("/clear ")
@@ -491,7 +492,7 @@ def test_help_handler_shows_command_detail(
     plain = click.unstyle(result.raw_result)
     assert "/resume" in plain
     assert "Arguments:" in plain
-    assert "[session_id]" in plain
+    assert "[conversation_id]" in plain
     assert "Aliases:" in plain
     assert "/r" in plain
     assert echo.lines == [result.output]

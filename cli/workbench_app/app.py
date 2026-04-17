@@ -381,6 +381,11 @@ def run_workbench_app(
         if hint is not None:
             out(theme.meta(hint))
             out("")
+        # R7.C.6 — surface a separate hint when the most recent persisted
+        # *conversation* (distinct from session above) was killed mid
+        # tool call. Wrapped in try/except so a flaky DB on boot can
+        # never bring down the REPL.
+        _emit_resume_hint(orchestrator, out)
         if active_workflow_runtime is not None:
             degraded = getattr(active_workflow_runtime, "worker_mode_degraded_reason", None)
             if degraded:
@@ -1401,6 +1406,35 @@ def _resolve_orchestrator(bundle: Any | None) -> Any | None:
     return None
 
 
+def _emit_resume_hint(bundle: Any | None, echo: EchoFn) -> None:
+    """Echo the conversation-resume hint when the most recent conversation
+    has interrupted tool calls (R7.C.6).
+
+    Wrapped in a broad try/except — boot must never crash on a hint
+    failure (a flaky DB on disk, a stale schema, anything). When the
+    bundle has no ``conversation_store`` (bare orchestrator, headless
+    test) we silently skip; the hint is purely an affordance, not state.
+    """
+    if bundle is None:
+        return
+    try:
+        from cli.workbench_app.conversation_resume import format_resume_hint
+
+        store = getattr(bundle, "conversation_store", None)
+        if store is None:
+            return
+        recent = store.list_recent(limit=1)
+        if not recent:
+            return
+        full = store.get_conversation(recent[0].id)
+        hint = format_resume_hint(full)
+        if hint:
+            echo(theme.meta(f"  {hint}"))
+            echo("")
+    except Exception:  # pragma: no cover — boot must never crash on a hint
+        pass
+
+
 def _publish_orchestrator_meta(ctx: "SlashContext", bundle: Any) -> None:
     """Thread every subsystem from the :class:`WorkbenchRuntime` into
     ``SlashContext.meta`` so slash handlers (``/plan``, ``/skill``,
@@ -1412,6 +1446,12 @@ def _publish_orchestrator_meta(ctx: "SlashContext", bundle: Any) -> None:
     keys land where."""
     if bundle is None or ctx is None:
         return
+
+    # R7.C.6 — publish the full runtime bundle so handlers like /resume
+    # can reach the conversation_store + workbench_session in one step
+    # without each one re-deriving them from scattered ctx.meta keys.
+    if hasattr(bundle, "conversation_store"):
+        ctx.meta["workbench_runtime"] = bundle
 
     from cli.tools.exit_plan_mode import PLAN_WORKFLOW_KEY
     from cli.tools.skill_tool import SKILL_REGISTRY_KEY
