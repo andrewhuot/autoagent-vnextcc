@@ -141,6 +141,16 @@ class Providers(BaseModel):
     gemini_api_key: str | None = None
     models: dict[str, str] = Field(default_factory=dict)
 
+    # P0.5e pricing overrides. Keys are ``"<provider>:<model>"`` (e.g.
+    # ``"openai:gpt-4o"``); values are partial dicts that layer on top of
+    # :data:`cli.llm.pricing.PRICING`. Supported value keys:
+    # ``input_per_m``, ``output_per_m``, ``cache_read_per_m``,
+    # ``cache_write_per_m``, ``thinking_per_m``. Unknown keys are ignored
+    # by :func:`cli.llm.pricing.resolve` so a typo can't crash the ticker.
+    # The settings cascade already merges this dict across layers so a
+    # per-project override shadows the user-level one for the same pair.
+    pricing_overrides: dict[str, dict[str, float]] = Field(default_factory=dict)
+
 
 class Sessions(BaseModel):
     """Session storage options."""

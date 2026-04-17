@@ -18,6 +18,7 @@ from typing import Any, Mapping
 
 from cli.hooks import HookRegistry
 from cli.hooks.types import HookEvent, HookType
+from cli.llm.pricing import TokenPrice, resolve
 from cli.settings import Settings
 
 
@@ -286,8 +287,130 @@ def _safe_attr(node: Any, dotted: str, *, default: Any = None) -> Any:
     return current
 
 
+# ---------------------------------------------------------------------------
+# Cost section
+# ---------------------------------------------------------------------------
+
+
+def cost_section(
+    settings: Settings | None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Build the per-turn cost rate card for ``(provider, model)``.
+
+    When the caller doesn't supply ``provider`` / ``model`` we fall back
+    to ``settings.providers.default_provider`` / ``default_model`` so
+    ``agentlab doctor`` with no arguments surfaces the active rate card.
+    The section is JSON-safe and never raises — unknown pairs resolve to
+    the :data:`cli.llm.pricing.DEFAULT_PRICE` fallback and show up as
+    ``"source": "fallback"`` so the doctor output tells the user why the
+    numbers might not match their invoice.
+    """
+    resolved_provider = provider or _safe_attr(
+        settings, "providers.default_provider", default=None
+    )
+    resolved_model = model or _safe_attr(
+        settings, "providers.default_model", default=None
+    )
+    overrides: dict[str, dict[str, float]] = {}
+    if settings is not None:
+        raw_overrides = _safe_attr(settings, "providers.pricing_overrides", default=None)
+        if isinstance(raw_overrides, dict):
+            overrides = raw_overrides
+
+    if not resolved_provider or not resolved_model:
+        return {
+            "provider": resolved_provider,
+            "model": resolved_model,
+            "source": "unset",
+            "price": None,
+            "has_override": False,
+        }
+
+    price: TokenPrice = resolve(
+        resolved_provider, resolved_model, overrides=overrides or None
+    )
+    override_key = f"{resolved_provider}:{resolved_model}"
+    has_override = override_key in overrides
+
+    # Tag the source so the renderer can say "using claude-sonnet-4-6
+    # rates" without re-implementing the PRICING lookup.
+    from cli.llm.pricing import PRICING, DEFAULT_PRICE
+
+    if has_override:
+        source = "override"
+    elif (resolved_provider, resolved_model) in PRICING:
+        source = "table"
+    elif price is DEFAULT_PRICE:
+        source = "fallback"
+    else:  # pragma: no cover — resolve only returns table/override/DEFAULT
+        source = "table"
+
+    return {
+        "provider": resolved_provider,
+        "model": resolved_model,
+        "source": source,
+        "has_override": has_override,
+        "price": {
+            "input_per_m": price.input_per_m,
+            "output_per_m": price.output_per_m,
+            "cache_read_per_m": price.cache_read_per_m,
+            "cache_write_per_m": price.cache_write_per_m,
+            "thinking_per_m": price.thinking_per_m,
+        },
+    }
+
+
+def render_cost_section(
+    settings: Settings | None,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> list[str]:
+    """Render the cost section as plain lines for the doctor command."""
+    section = cost_section(settings, provider=provider, model=model)
+    lines: list[str] = ["", "Cost"]
+
+    resolved_provider = section["provider"]
+    resolved_model = section["model"]
+    if not resolved_provider or not resolved_model:
+        lines.append("  Rate card:         (no default provider/model configured)")
+        return lines
+
+    source = section["source"]
+    source_label = {
+        "table": "built-in pricing table",
+        "override": "settings override",
+        "fallback": "DEFAULT_PRICE fallback (model not in pricing table)",
+    }.get(source, source)
+
+    lines.append(f"  Using:             {resolved_provider}/{resolved_model} rates")
+    lines.append(f"  Source:            {source_label}")
+    price = section["price"] or {}
+    lines.append(
+        f"  Input:             ${price.get('input_per_m', 0):.4f} / 1M tokens"
+    )
+    lines.append(
+        f"  Output:            ${price.get('output_per_m', 0):.4f} / 1M tokens"
+    )
+    cache_read = price.get("cache_read_per_m")
+    if cache_read is not None:
+        lines.append(f"  Cache read:        ${cache_read:.4f} / 1M tokens")
+    cache_write = price.get("cache_write_per_m")
+    if cache_write is not None:
+        lines.append(f"  Cache write:       ${cache_write:.4f} / 1M tokens")
+    thinking = price.get("thinking_per_m")
+    if thinking is not None:
+        lines.append(f"  Thinking:          ${thinking:.4f} / 1M tokens")
+    return lines
+
+
 __all__ = [
+    "cost_section",
     "hooks_section",
+    "render_cost_section",
     "render_hooks_section",
     "render_settings_section",
     "settings_section",

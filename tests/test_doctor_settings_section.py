@@ -141,3 +141,107 @@ def test_settings_section_handles_partial_settings_without_crash() -> None:
     assert section["env_overrides"] == []
     # Default permission mode is "default"
     assert section["permission_mode"] == "default"
+
+
+# ---------------------------------------------------------------------------
+# Cost section (P0.5e)
+# ---------------------------------------------------------------------------
+
+
+def test_cost_section_uses_default_provider_and_model_from_settings() -> None:
+    from cli.doctor_sections import cost_section
+
+    settings = Settings.model_validate(
+        {
+            "providers": {
+                "default_provider": "anthropic",
+                "default_model": "claude-sonnet-4-6",
+            }
+        }
+    )
+    section = cost_section(settings)
+    assert section["provider"] == "anthropic"
+    assert section["model"] == "claude-sonnet-4-6"
+    assert section["source"] == "table"
+    assert section["price"]["input_per_m"] == 3.0
+    assert section["price"]["output_per_m"] == 15.0
+    assert section["has_override"] is False
+
+
+def test_cost_section_honors_explicit_provider_model_arguments() -> None:
+    from cli.doctor_sections import cost_section
+
+    settings = Settings()
+    section = cost_section(settings, provider="openai", model="gpt-4o")
+    assert section["provider"] == "openai"
+    assert section["model"] == "gpt-4o"
+    assert section["price"]["input_per_m"] == 2.5
+
+
+def test_cost_section_reports_override_source_when_settings_override_matches() -> None:
+    from cli.doctor_sections import cost_section
+
+    settings = Settings.model_validate(
+        {
+            "providers": {
+                "default_provider": "openai",
+                "default_model": "gpt-4o",
+                "pricing_overrides": {
+                    "openai:gpt-4o": {"input_per_m": 99.0},
+                },
+            }
+        }
+    )
+    section = cost_section(settings)
+    assert section["source"] == "override"
+    assert section["has_override"] is True
+    # Override layered on top of the base; only input_per_m changed.
+    assert section["price"]["input_per_m"] == 99.0
+    assert section["price"]["output_per_m"] == 10.0
+
+
+def test_cost_section_reports_fallback_for_unknown_model() -> None:
+    from cli.doctor_sections import cost_section
+
+    settings = Settings()
+    section = cost_section(settings, provider="mystery", model="gpt-9000")
+    assert section["source"] == "fallback"
+    assert section["price"]["input_per_m"] == 5.0
+
+
+def test_cost_section_empty_when_no_provider_or_model_configured() -> None:
+    from cli.doctor_sections import cost_section
+
+    section = cost_section(Settings())
+    assert section["provider"] is None
+    assert section["model"] is None
+    assert section["source"] == "unset"
+    assert section["price"] is None
+
+
+def test_render_cost_section_yields_human_readable_lines() -> None:
+    from cli.doctor_sections import render_cost_section
+
+    settings = Settings.model_validate(
+        {
+            "providers": {
+                "default_provider": "anthropic",
+                "default_model": "claude-sonnet-4-6",
+            }
+        }
+    )
+    lines = render_cost_section(settings)
+    text = "\n".join(lines)
+    assert "Cost" in text
+    assert "anthropic/claude-sonnet-4-6" in text
+    assert "Input" in text
+    assert "Output" in text
+
+
+def test_render_cost_section_unset_when_no_defaults() -> None:
+    from cli.doctor_sections import render_cost_section
+
+    lines = render_cost_section(Settings())
+    text = "\n".join(lines)
+    assert "Cost" in text
+    assert "no default" in text.lower()
