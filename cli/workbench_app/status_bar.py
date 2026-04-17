@@ -66,6 +66,12 @@ class StatusSnapshot:
     renderer looks the limit up via :mod:`cli.llm.capabilities`."""
     extras: tuple[tuple[str, str], ...] = field(default_factory=tuple)
     """Ad-hoc ``(label, value)`` pairs appended after the standard fields."""
+    cost_usd: float = 0.0
+    """Running USD cost for this Workbench session. Mirrors
+    :attr:`WorkbenchSession.cost_ticker_usd` and is populated by
+    :func:`snapshot_from_workspace` when a ``workbench_session`` is passed
+    in. ``0.0`` is treated as "nothing to show" by the renderer so an
+    idle bar stays uncluttered."""
 
 
 def _read_pending_reviews(workspace: Any) -> int:
@@ -149,12 +155,30 @@ def _describe_provider_safely(workspace: Any | None) -> Any | None:
         return None
 
 
+def _cost_from_workbench_session(workbench_session: Any | None) -> float:
+    """Read ``cost_ticker_usd`` off a WorkbenchSession without crashing the bar.
+
+    Accepts anything with that attribute to keep the seam duck-typed — tests
+    and future alternative session impls don't need to import the concrete
+    class. Returns 0.0 on any failure so a broken session can't take down
+    the status line.
+    """
+    if workbench_session is None:
+        return 0.0
+    try:
+        value = float(getattr(workbench_session, "cost_ticker_usd", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value > 0 else 0.0
+
+
 def snapshot_from_workspace(
     workspace: Any | None,
     *,
     session: Session | None = None,
     model_override: str | None = None,
     provider_info: Any | None = None,
+    workbench_session: Any | None = None,
 ) -> StatusSnapshot:
     """Build a :class:`StatusSnapshot` from current workspace/session state.
 
@@ -166,12 +190,20 @@ def snapshot_from_workspace(
     they don't touch environment variables or the runtime config.  When omitted
     the status bar calls :func:`optimizer.providers.describe_default_provider`
     via :func:`_describe_provider_safely`.
+
+    ``workbench_session`` (R4.9) is the
+    :class:`~cli.workbench_app.session_state.WorkbenchSession` that owns the
+    cost ticker. When provided, its ``cost_ticker_usd`` is copied onto the
+    snapshot so the renderer can surface a running USD total; when absent
+    the snapshot's ``cost_usd`` stays at ``0.0`` and the renderer hides the
+    segment.
     """
     version = get_agentlab_version()
     info = provider_info if provider_info is not None else _describe_provider_safely(workspace)
 
     provider_name = getattr(info, "name", None) if info is not None else None
     provider_key_present = bool(getattr(info, "key_present", True)) if info is not None else True
+    cost_usd = _cost_from_workbench_session(workbench_session)
 
     if workspace is None:
         return StatusSnapshot(
@@ -180,6 +212,7 @@ def snapshot_from_workspace(
             model=model_override,
             provider=provider_name,
             provider_key_present=provider_key_present,
+            cost_usd=cost_usd,
         )
 
     active = _resolve_active_config(workspace)
@@ -196,6 +229,7 @@ def snapshot_from_workspace(
         best_score=_read_best_score(workspace),
         agentlab_version=version,
         session_title=(session.title if session else None),
+        cost_usd=cost_usd,
     )
 
 
@@ -211,6 +245,24 @@ def _resolve_limit_for_snapshot(snapshot: "StatusSnapshot") -> int | None:
 
     cap = get_capability(snapshot.model)
     return cap.context_window if cap is not None else None
+
+
+def render_cost_usd(cost_usd: float) -> str:
+    """Format a USD cost for the status bar.
+
+    Two-decimal dollars once the tab clears a cent — matches how the rest
+    of the app (``best_score``, token counts) reports human-facing numbers
+    and avoids ``$0.4200``-style noise for the common case. Fractional
+    sub-cent amounts fall through to four decimals so a single small
+    slash-command call is still visible instead of rounding to ``$0.00``.
+    Negatives are clamped to zero because
+    :meth:`WorkbenchSession.increment_cost` never subtracts in normal flow.
+    """
+    if cost_usd < 0:
+        cost_usd = 0.0
+    if cost_usd >= 0.01:
+        return f"${cost_usd:.2f}"
+    return f"${cost_usd:.4f}"
 
 
 def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
@@ -261,6 +313,14 @@ def render_snapshot(snapshot: StatusSnapshot, *, color: bool = True) -> str:
     if snapshot.best_score:
         parts.append(f"score:{snapshot.best_score}")
 
+    if snapshot.cost_usd and snapshot.cost_usd > 0:
+        # Match the rest of the bar's number convention: compact two-decimal
+        # dollars when the tab is material, four decimals for fractional
+        # costs so a single 0.01 increment still reads. ``render_cost_usd``
+        # keeps this logic in one place so test assertions and the live bar
+        # always agree on the format.
+        parts.append(f"{theme.meta('Cost:', color=color)} {render_cost_usd(snapshot.cost_usd)}")
+
     for label, value in snapshot.extras:
         parts.append(f"{label}:{value}")
 
@@ -303,6 +363,7 @@ class StatusBar:
         session: Session | None = None,
         model_override: str | None = None,
         provider_info: Any | None = None,
+        workbench_session: Any | None = None,
     ) -> StatusSnapshot:
         """Rebuild the snapshot from disk/DB state and return the new value."""
         self._snapshot = snapshot_from_workspace(
@@ -310,6 +371,7 @@ class StatusBar:
             session=session,
             model_override=model_override,
             provider_info=provider_info,
+            workbench_session=workbench_session,
         )
         return self._snapshot
 
@@ -341,6 +403,7 @@ __all__ = [
     "RenderFn",
     "StatusBar",
     "StatusSnapshot",
+    "render_cost_usd",
     "render_snapshot",
     "snapshot_from_workspace",
 ]

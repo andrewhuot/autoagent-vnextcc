@@ -193,6 +193,10 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "diff",
         "accept",
         "reject",
+        # R4.10 — lineage attempt multi-pane viewer.
+        "attempt-diff",
+        # R4.11 — full-chain ancestry visualizer.
+        "lineage",
         # Phase-2 plan-mode commands.
         "plan",
         "plan-approve",
@@ -289,7 +293,7 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     # /background + /background-clear, /init, /theme, /output-style, the R2
     # Slice D.1 ``/improve`` passthrough, the R7.C.7 ``/fork`` command, and
     # the /custom supplied via ``extra``.
-    assert len(registry) == 52
+    assert len(registry) == 54
 
 
 # ---------------------------------------------------------------------------

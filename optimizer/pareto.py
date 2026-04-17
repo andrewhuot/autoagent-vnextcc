@@ -22,6 +22,30 @@ class ObjectiveDirection(str, Enum):
     MINIMIZE = "minimize"
 
 
+class ObjectiveName(str, Enum):
+    """Canonical names for first-class optimization objectives (R6.11).
+
+    These names are recognised by :class:`ConstrainedParetoArchive` and by
+    the ``agentlab optimize --show-tradeoffs`` renderer. ``cost`` is
+    direction-aware (MINIMIZE) so cost-cheaper candidates dominate at
+    equal quality/safety. Cost is opt-in for workspaces: archives that do
+    not register a ``cost`` objective behave exactly as pre-R6.11.
+    """
+
+    QUALITY = "quality"
+    SAFETY = "safety"
+    COST = "cost"
+
+
+# Canonical direction for each first-class objective. Cost is the only
+# MINIMIZE dimension; quality/safety maximize.
+DEFAULT_OBJECTIVE_DIRECTIONS: dict[str, ObjectiveDirection] = {
+    ObjectiveName.QUALITY.value: ObjectiveDirection.MAXIMIZE,
+    ObjectiveName.SAFETY.value: ObjectiveDirection.MAXIMIZE,
+    ObjectiveName.COST.value: ObjectiveDirection.MINIMIZE,
+}
+
+
 @dataclass
 class ParetoCandidate:
     """A candidate in the Pareto archive."""

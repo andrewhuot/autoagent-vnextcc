@@ -18,7 +18,7 @@ import queue
 import shlex
 import threading
 from dataclasses import dataclass
-from typing import Any, Callable, Iterable, Iterator, Sequence
+from typing import Any, Callable, Iterable, Iterator, Protocol, Sequence
 
 from cli.workbench_app import theme
 from cli.workbench_app._subprocess import DEFAULT_STALL_TIMEOUT_S
@@ -44,6 +44,19 @@ inject a generator in place of the real subprocess.
 
 class EvalCommandError(RuntimeError):
     """Raised by a :data:`StreamRunner` when the subprocess fails."""
+
+
+class GridObserver(Protocol):
+    """Optional sink for progress events fed to a case-grid widget.
+
+    Implemented by :class:`cli.workbench_app.eval_progress_grid.EvalProgressGrid`
+    (R4.7). The handler forwards **every** stream event it sees; the observer
+    is responsible for filtering by ``event``/``task_id``. Keeping the
+    Protocol here (rather than importing the widget directly) avoids coupling
+    the non-TUI slash handler to Textual.
+    """
+
+    def on_progress_event(self, event: "StreamEvent") -> None: ...
 
 
 @dataclass(frozen=True)
@@ -319,8 +332,17 @@ def _format_summary(summary: EvalSummary) -> str:
 
 def make_eval_handler(
     runner: StreamRunner | None = None,
+    *,
+    grid_observer: GridObserver | None = None,
 ) -> Callable[..., OnDoneResult]:
-    """Return a slash handler closed over ``runner`` (defaults to real subprocess)."""
+    """Return a slash handler closed over ``runner`` (defaults to real subprocess).
+
+    ``grid_observer`` — optional R4.7 hook: an object with
+    ``on_progress_event(event)`` that gets every stream event forwarded to
+    it. Used by the :class:`~cli.workbench_app.eval_progress_grid.EvalProgressGrid`
+    widget to paint per-case status while the run is in flight. Defaults to
+    ``None`` so non-TUI callers are unaffected.
+    """
     active_runner = runner or _default_stream_runner
 
     def _handle_eval(ctx: SlashContext, *args: str) -> OnDoneResult:
@@ -339,6 +361,16 @@ def make_eval_handler(
                 for event, summary in _summarise(stream):
                     final_summary = summary
                     _advance_phase(spin, event)
+                    # R4.7 — forward events to the optional case-grid widget
+                    # before rendering the transcript line so the grid is
+                    # consistent with whatever the user sees in the log.
+                    if grid_observer is not None:
+                        try:
+                            grid_observer.on_progress_event(event)
+                        except Exception:
+                            # Grid failures must never crash /eval. The
+                            # transcript line is the load-bearing output.
+                            pass
                     line = _render_event(event)
                     if line is not None:
                         spin.echo(line)
@@ -392,6 +424,23 @@ def make_eval_handler(
                     session.update(**updates)
                 except Exception as exc:  # don't let a session error crash /eval
                     echo(theme.warning(f"  /eval: session update failed: {exc}"))
+
+            # R4.9 / C3 — route any usage the eval runner surfaces through
+            # ``record_slash_cost`` so the status-bar ticker captures
+            # slash-command LLM costs through the same sink as conversation
+            # turns. Today the subprocess runner does not forward ``usage``
+            # on its events, so this is a no-op in production; wiring the
+            # seam now means a later runner change ("events carry usage")
+            # lights up the bar without touching the handler.
+            usage = ctx.meta.get("eval_usage") if isinstance(ctx.meta, dict) else None
+            model_id = ctx.meta.get("eval_model_id") if isinstance(ctx.meta, dict) else None
+            if usage or model_id:
+                try:
+                    from cli.workbench_app.cost_calculator import record_slash_cost
+
+                    record_slash_cost(session, usage=usage, model_id=model_id)
+                except Exception as exc:  # cost reporting must never block /eval
+                    echo(theme.warning(f"  /eval: cost record failed: {exc}"))
 
         summary_line = _format_summary(final_summary)
         meta: list[str] = []

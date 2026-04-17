@@ -29,6 +29,7 @@ import queue
 import shlex
 import threading
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Sequence
 
 from cli.workbench_app import theme
@@ -37,6 +38,12 @@ from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
 from cli.workbench_app.slash import SlashContext
 from cli.workbench_render import format_workbench_event
+
+# Re-exported for the --edit flow so the handler and tests share a single
+# symbol. The direct import lets tests monkey-patch
+# ``cli.workbench_app.improve_slash.run_improve_accept_in_process`` without
+# reaching into ``cli.commands.improve``.
+from cli.commands.improve import run_improve_accept_in_process  # noqa: F401
 
 
 _SENTINEL: Any = object()
@@ -223,6 +230,213 @@ def _resolve_session_attempt_id(
         )
     out["attempt_id"] = session_value
     return out
+
+
+# ---------------------------------------------------------------------------
+# --edit flow (R4.12 / C6) — inline edit of candidate YAML before accept
+# ---------------------------------------------------------------------------
+
+
+def _prompt_yaml_edit(original: str) -> str | None:
+    """Prompt the user to edit ``original`` YAML and return the result.
+
+    Injectable seam — the real implementation opens a Textual ``TextArea``
+    inside the Workbench app. Unit tests monkey-patch this function
+    directly (see ``tests/test_improve_edit_flow.py``) because driving a
+    modal dialog requires a full Pilot-backed Textual app context that's
+    brittle to stand up in a pure unit test.
+
+    Contract:
+      * Return the edited YAML as a string when the user submits.
+      * Return ``None`` when the user cancels (Escape / Ctrl-C).
+
+    The default implementation here is a no-op fallback that treats any
+    call as a cancel. The real modal is wired up in the Workbench TUI
+    layer; this seam is what the slash handler talks to regardless.
+    """
+    del original
+    return None
+
+
+def _resolve_workspace_root(ctx: SlashContext) -> Path:
+    """Resolve the workspace root for scratch-file placement.
+
+    Prefers ``ctx.meta['workspace_root']`` (set in tests), then
+    ``ctx.workspace.root`` (real handler), then the current working
+    directory as a last resort.
+    """
+    root = ctx.meta.get("workspace_root") if isinstance(ctx.meta, dict) else None
+    if isinstance(root, (str, Path)):
+        return Path(root)
+    workspace = ctx.workspace
+    candidate = getattr(workspace, "root", None)
+    if isinstance(candidate, (str, Path)):
+        return Path(candidate)
+    return Path.cwd()
+
+
+def _resolve_lineage_store(ctx: SlashContext) -> Any | None:
+    """Pull a lineage store out of ``ctx.meta``, if available.
+
+    Mirrors :func:`cli.workbench_app.attempt_diff_slash._resolve_store` —
+    prefers a cached ``lineage_store``; otherwise instantiates one from
+    ``lineage_db_path``. Returns ``None`` when no handle can be
+    constructed (the handler falls back to an error line in that case).
+    """
+    cached = ctx.meta.get("lineage_store") if isinstance(ctx.meta, dict) else None
+    if cached is not None:
+        return cached
+    db_path = ctx.meta.get("lineage_db_path") if isinstance(ctx.meta, dict) else None
+    if isinstance(db_path, (str, Path)):
+        from optimizer.improvement_lineage import ImprovementLineageStore
+
+        store = ImprovementLineageStore(db_path=str(db_path))
+        ctx.meta["lineage_store"] = store
+        return store
+    return None
+
+
+def _extract_candidate_config_path(view: Any) -> str | None:
+    """Mirror of ``attempt_diff_slash._extract_config_path`` for the
+    candidate_config_path key only. ``AttemptLineageView`` doesn't expose
+    the path as a first-class attribute in all store revisions, so we
+    fall back to scanning the event stream (most recent wins). See C4 for
+    the convention."""
+    attr = getattr(view, "candidate_config_path", None)
+    if isinstance(attr, str) and attr:
+        return attr
+    events = getattr(view, "events", None) or []
+    from optimizer.improvement_lineage import EVENT_ATTEMPT
+
+    for event in reversed(events):
+        if getattr(event, "event_type", None) != EVENT_ATTEMPT:
+            continue
+        payload = getattr(event, "payload", None) or {}
+        value = payload.get("candidate_config_path")
+        if isinstance(value, str) and value:
+            return value
+    return None
+
+
+def _handle_accept_edit(
+    ctx: SlashContext, attempt_id: str, kwargs: dict[str, Any],
+) -> OnDoneResult:
+    """Run the ``/improve accept <id> --edit`` flow end-to-end.
+
+    1. Look up the attempt via the lineage store; error if unknown.
+    2. Read the candidate YAML from the attempt's recorded path.
+    3. Prompt the user to edit via :func:`_prompt_yaml_edit` (seam).
+    4. On cancel → emit ``edit cancelled`` and return.
+    5. On submit → write the edited YAML to
+       ``<workspace>/.agentlab/scratch/accept_<attempt_id>.yaml`` and call
+       :func:`run_improve_accept_in_process` with
+       ``candidate_override_path=<scratch>``.
+
+    The scratch file is intentionally left on disk after a successful
+    accept for post-hoc inspection (forensics). On an unhandled error
+    we also leave it — the user can inspect and remove manually.
+    """
+    echo = ctx.echo
+    store = _resolve_lineage_store(ctx)
+    if store is None:
+        echo(theme.error(
+            "  /improve accept --edit: no lineage store available; "
+            "pass `lineage_store` via slash context."
+        ))
+        return on_done(
+            result="  /improve accept --edit: no lineage store",
+            display="skip",
+        )
+
+    try:
+        view = store.view_attempt(attempt_id)
+    except Exception as exc:  # defensive — sqlite / IO
+        echo(theme.error(
+            f"  /improve accept --edit: failed to load attempt: {exc}"
+        ))
+        return on_done(result=None, display="skip")
+
+    events = getattr(view, "events", None) or []
+    if not events:
+        message = f"  [red]Unknown attempt: {attempt_id}[/]"
+        echo(message)
+        return on_done(result=message, display="skip")
+
+    candidate_path_str = _extract_candidate_config_path(view)
+    if not candidate_path_str:
+        echo(theme.error(
+            f"  /improve accept --edit: attempt {attempt_id} has no "
+            f"recorded candidate_config_path."
+        ))
+        return on_done(result=None, display="skip")
+
+    candidate_path = Path(candidate_path_str)
+    try:
+        original_yaml = candidate_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        echo(theme.error(
+            f"  /improve accept --edit: unable to read "
+            f"{candidate_path}: {exc}"
+        ))
+        return on_done(result=None, display="skip")
+
+    edited = _prompt_yaml_edit(original_yaml)
+    if edited is None:
+        echo("[dim]edit cancelled[/]")
+        return on_done(result="edit cancelled", display="skip")
+
+    workspace_root = _resolve_workspace_root(ctx)
+    scratch_dir = workspace_root / ".agentlab" / "scratch"
+    scratch_dir.mkdir(parents=True, exist_ok=True)
+    scratch_path = scratch_dir / f"accept_{attempt_id}.yaml"
+    scratch_path.write_text(edited, encoding="utf-8")
+
+    accept_kwargs = {
+        k: v for k, v in kwargs.items()
+        if k in {"attempt_id", "strategy", "memory_db", "lineage_db"}
+    }
+    accept_kwargs["attempt_id"] = attempt_id
+    accept_kwargs["candidate_override_path"] = scratch_path
+
+    # Stream events through the same echo sink the normal handler uses.
+    events_seen: list[dict[str, Any]] = []
+
+    def _on_event(event: dict[str, Any]) -> None:
+        events_seen.append(event)
+        line = _render_event(event)
+        if line is not None:
+            echo(line)
+
+    try:
+        run_improve_accept_in_process(
+            on_event=_on_event,
+            **accept_kwargs,
+        )
+    except Exception as exc:
+        echo(theme.error(f"  /improve accept --edit failed: {exc}"))
+        return on_done(
+            result=f"  /improve accept --edit failed: {exc}",
+            display="skip",
+            meta_messages=(str(exc),),
+        )
+
+    # Propagate attempt_id to the shared session so follow-up /improve
+    # subcommands can auto-inject it (matches non-edit accept behavior).
+    session = (
+        ctx.meta.get("workbench_session") if isinstance(ctx.meta, dict) else None
+    )
+    if session is not None:
+        try:
+            session.update(last_attempt_id=attempt_id)
+        except Exception as exc:
+            echo(theme.warning(f"  /improve: session update failed: {exc}"))
+
+    summary_line = theme.success(
+        f"  /improve accept --edit — {attempt_id} (override: {scratch_path})",
+        bold=True,
+    )
+    echo(summary_line)
+    return on_done(result=summary_line, display="user")
 
 
 def _build_stream_args(
@@ -515,6 +729,22 @@ def make_improve_handler(
                 display="skip",
                 meta_messages=(str(exc),),
             )
+
+        # R4.12 / C6 — /improve accept <id> --edit routes through a
+        # dedicated handler that prompts for an edited YAML and passes
+        # the scratch file to run_improve_accept_in_process as
+        # candidate_override_path. The non-edit path is unchanged.
+        if sub == "accept" and "--edit" in rest:
+            attempt_id = resolved_kwargs.get("attempt_id")
+            if not attempt_id:
+                echo(theme.error(
+                    "  /improve accept --edit: missing <attempt_id>."
+                ))
+                return on_done(
+                    result="  /improve accept --edit: missing <attempt_id>.",
+                    display="skip",
+                )
+            return _handle_accept_edit(ctx, str(attempt_id), resolved_kwargs)
 
         # Thread the resolved attempt_id back into argv so the runner sees
         # the canonical invocation.

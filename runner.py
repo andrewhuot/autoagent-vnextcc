@@ -181,10 +181,10 @@ OPTIMIZE_MIN_COMPOSITE_SCORE = float(
 PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "ship", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {
     "review", "config", "instruction", "model", "provider", "mode", "memory",
-    "template", "connect", "harness", "context", "conversation",
+    "template", "connect", "harness", "context", "conversation", "loop",
 }
 HIDDEN_COMMANDS = {
-    "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
+    "improve", "compare", "diagnose", "explain", "replay", "autofix",
     "release", "intelligence", "skill", "mcp", "session", "continue",
     "permissions", "usage", "export", "trace", "knowledge", "quickstart", "demo",
     "init", "serve", "server", "full-auto", "edit", "cx", "adk", "dataset",
@@ -3826,7 +3826,88 @@ def _open_in_editor(file_path: Path) -> None:
 # agentlab loop
 # ---------------------------------------------------------------------------
 
-@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True, hidden=True)
+
+def _run_continuous_orchestrator_cli(
+    *,
+    trace_source: Path,
+    output_format: str,
+) -> None:
+    """Run one ContinuousOrchestrator cycle from the ``agentlab loop run`` CLI.
+
+    Exit code contract (R6.2):
+      * 0 on success.
+      * 12 when strict-live fell back to mock (MockFallbackError).
+      * 14 when a live provider key is missing.
+      * 1 on any other orchestrator error.
+    """
+    from cli.exit_codes import (
+        EXIT_GENERIC_ERROR,
+        EXIT_MISSING_PROVIDER,
+        EXIT_MOCK_FALLBACK,
+        EXIT_OK,
+    )
+    from cli.strict_live import MockFallbackError
+    from cli.workspace import discover_workspace
+    from optimizer.continuous import ContinuousOrchestrator
+
+    workspace = discover_workspace()
+    if workspace is None:
+        click.echo(
+            "No AgentLab workspace found — run `agentlab init` first.",
+            err=True,
+        )
+        sys.exit(EXIT_GENERIC_ERROR)
+
+    try:
+        orchestrator = ContinuousOrchestrator(
+            workspace,
+            trace_source=trace_source,
+        )
+        result = orchestrator.run_once()
+    except MockFallbackError as exc:
+        click.echo(f"Strict-live mode: mock fallback detected — {exc}", err=True)
+        sys.exit(EXIT_MOCK_FALLBACK)
+    except Exception as exc:  # noqa: BLE001 — CLI boundary
+        message = str(exc)
+        if "provider" in message.lower() and "key" in message.lower():
+            click.echo(f"Missing provider key: {message}", err=True)
+            sys.exit(EXIT_MISSING_PROVIDER)
+        click.echo(f"Continuous orchestrator error: {message}", err=True)
+        sys.exit(EXIT_GENERIC_ERROR)
+
+    if result.error is not None:
+        click.echo(f"Continuous orchestrator error: {result.error}", err=True)
+        sys.exit(EXIT_GENERIC_ERROR)
+
+    if output_format == "json":
+        from cli.stream2_helpers import json_response
+
+        click.echo(
+            json_response(
+                "ok",
+                {
+                    "ingested_trace_count": result.ingested_trace_count,
+                    "median_score": result.median_score,
+                    "baseline_median": result.baseline_median,
+                    "regressed": result.regressed,
+                    "improvement_queued": result.improvement_queued,
+                    "attempt_id": result.attempt_id,
+                    "lineage_event_id": result.lineage_event_id,
+                },
+            )
+        )
+    elif output_format == "text":
+        click.echo(
+            f"Continuous cycle: ingested={result.ingested_trace_count} "
+            f"median={result.median_score} baseline={result.baseline_median} "
+            f"regressed={result.regressed} queued={result.improvement_queued}"
+        )
+        if result.attempt_id:
+            click.echo(f"  attempt_id={result.attempt_id}")
+    sys.exit(EXIT_OK)
+
+
+@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
 def loop_group() -> None:
     """Run the optimization loop or control its execution state.
 
@@ -3838,7 +3919,7 @@ def loop_group() -> None:
     """
 
 
-@loop_group.command("run", hidden=True)
+@loop_group.command("run")
 @click.option("--max-cycles", default=50, show_default=True, type=int, help="Maximum optimization cycles.")
 @click.option("--stop-on-plateau", is_flag=True, default=False,
               help="Stop if no improvement for 5 consecutive cycles.")
@@ -3850,6 +3931,10 @@ def loop_group() -> None:
               help="Interval minutes for --schedule interval.")
 @click.option("--cron", "cron_expression", default=None,
               help="Cron expression for --schedule cron (5-field UTC).")
+@click.option("--trace-source", "trace_source", default=None, type=click.Path(),
+              help="Trace directory for --schedule continuous. When set, runs the "
+                   "ContinuousOrchestrator (R6.2) once per cycle instead of the "
+                   "default observe/propose loop.")
 @click.option("--checkpoint-file", default=None,
               help="Checkpoint file path. Defaults to agentlab.yaml loop.checkpoint_path.")
 @click.option("--resume/--no-resume", default=True, show_default=True,
@@ -3875,7 +3960,8 @@ def loop_group() -> None:
     help="Interactive UI mode for text output.",
 )
 def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode: str | None,
-             interval_minutes: float | None, cron_expression: str | None, checkpoint_file: str | None,
+             interval_minutes: float | None, cron_expression: str | None,
+             trace_source: str | None, checkpoint_file: str | None,
              resume: bool, full_auto: bool, db: str, configs_dir: str, memory_db: str,
              max_budget_usd: float | None = None, output_format: str = "text",
              ui: str | None = None, harness: Any | None = None) -> None:
@@ -3893,6 +3979,16 @@ def loop_run(max_cycles: int, stop_on_plateau: bool, delay: float, schedule_mode
     from cli.usage import enforce_workspace_budget
 
     resolved_output_format = resolve_output_format(output_format)
+
+    # R6.2: --schedule continuous --trace-source <path> wires the
+    # ContinuousOrchestrator. When absent, behave exactly as before.
+    if schedule_mode == "continuous" and trace_source:
+        _run_continuous_orchestrator_cli(
+            trace_source=Path(trace_source),
+            output_format=resolved_output_format,
+        )
+        return
+
     if harness is None:
         harness = _harness_session(
             title="AgentLab Loop",

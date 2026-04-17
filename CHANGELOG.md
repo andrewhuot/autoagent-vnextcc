@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased] — 2026-04-17 — R4/R6 Cleanup
+
+Closes the 12 gaps left by R4 Slice A and R6 Slice B. With this change, the R1–R6 roadmap is 100% complete (R4.13 per-command error boundary deferred; not blocking).
+
+**Expansion plan:** [docs/superpowers/plans/2026-04-17-agentlab-r4-r6-cleanup.md](docs/superpowers/plans/2026-04-17-agentlab-r4-r6-cleanup.md).
+
+### Added — R4 Workbench Slice B/C (widgets + navigation)
+
+- **Eval case-grid progress widget** (`cli/workbench_app/eval_progress_grid.py`) — live colored grid during `/eval`, one cell per case. Feeds off the R4 Slice A on-event bridge.
+- **Failure preview cards** (`cli/workbench_app/failure_card.py`) — after failed cases, renders input/expected/actual/diff plus a one-line fix hint from `optimizer/failure_analyzer.py` (or a deterministic heuristic fallback).
+- **Cost ticker in status bar** (`cli/workbench_app/status_bar.py`, `cost_calculator.record_slash_cost`) — `Cost: $X.XX` segment sums conversation turns (R7) and slash-command LLM calls via one sink (`session.increment_cost`).
+- **`/attempt-diff <attempt_id>`** (`cli/workbench_app/attempt_diff_slash.py`) — three-pane baseline / candidate YAML / eval-delta viewer. Does NOT collide with the existing `/diff` (system-prompt diff).
+- **`/lineage <id>`** (`cli/workbench_app/lineage_view_slash.py`) — ancestry tree (eval_run → attempt → deployment → measurement). Accepts any node id.
+- **`/improve accept <id> --edit`** (`cli/workbench_app/improve_slash.py`, `cli/commands/improve.py::run_improve_accept_in_process(candidate_override_path=…)`) — injectable `_prompt_yaml_edit` seam; scratch file at `<workspace>/.agentlab/scratch/accept_<id>.yaml`. Full Textual modal wiring deferred to TUI follow-up.
+
+### Added — R6 Continuous Improvement (Slices A/C)
+
+- **`agentlab loop` visible in help** (`runner.py`) — `hidden=True` removed from both the group and `run` subcommand; `loop` moved from `HIDDEN_COMMANDS` to `SECONDARY_COMMANDS`.
+- **Continuous orchestrator** (`optimizer/continuous.py`) — `ContinuousOrchestrator.run_once()` ingests new traces since a watermark, scores via `EvalRunner`, regression-checks against the last N lineage-recorded eval runs, queues an improvement attempt when median drops by ≥ threshold. Records `continuous_cycle` lineage events. **No auto-deploy.**
+- **Trace-source CLI flag** — `agentlab loop run --schedule continuous --trace-source <path>` wires the orchestrator. Strict-live respected (exits 12 on mock-fallback, 14 on missing provider key).
+- **Notification manager dedupe** (`optimizer/notification_dedupe.py`, `notifications/manager.py`) — 1-hour window per `(event_type, workspace, signature)` via SQLite `notification_log`. `VALID_EVENT_TYPES` extended with `regression_detected`, `improvement_queued`, `continuous_cycle_failed`, `drift_detected`. Backward-compatible: callers without `signature` keep legacy behavior.
+- **Production-score drift detector** (`evals/drift.py`) — `detect_distribution_drift(baseline, current)` bucketed KL divergence (default threshold 0.2) with recommendation text. Emits `drift_detected` via the dedupe plumbing. Distinct from judge-agreement drift in `judges/drift_monitor.py` — cross-referenced in both modules.
+- **Cost-aware Pareto** (`optimizer/pareto.py`) — `ObjectiveName` enum with `QUALITY`, `SAFETY`, `COST` (direction = MINIMIZE). Default cost weight 0 preserves existing 2D dominance behavior.
+- **`agentlab optimize --show-tradeoffs N`** (`cli/commands/optimize.py`) — prints top-N non-dominated candidates with quality / safety / cost columns plus dominates / dominated_by.
+- **Daemon samples** (`contrib/systemd/agentlab-loop.service`, `contrib/launchd/com.agentlab.loop.plist`) — reference-only; never auto-installed.
+- **Docs** — `docs/continuous-mode.md` (R6 user-facing guide); new R4 widgets section in `docs/workbench-quickstart.md`.
+
+### Deferred
+
+- R4.13 per-command error boundary (surfaces exceptions as error cards without crashing the TUI) — scoped to a follow-up.
+- TUI-side Textual `TextArea` modal for `/improve accept --edit`; the injectable seam is in place.
+- Wiring real `EvalRunner.case_scores` into `ContinuousOrchestrator.score` path; C8 uses a `score_cases()` seam and drift check is a no-op on today's `EvalRunner` until case-score plumbing lands.
+- Cost direction fix in `optimizer/loop.py:211` (currently `ObjectiveDirection.MAXIMIZE`; should be `MINIMIZE` per `ObjectiveName`). Pre-existing inconsistency noted in the C11 report.
+
+---
+
 ## [4.0.0-R3] — 2026-04-16 — Optimizer that Learns
 
 R3 makes the optimizer target its own weak spots, makes the pairwise judge LLM-backed with a cache, and moves composite scoring from hardcoded constants to per-workspace yaml. Slice A (R3.1–R3.6) and Slice B (R3.7–R3.13) are both shipped.

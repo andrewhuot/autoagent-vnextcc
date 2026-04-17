@@ -1,0 +1,38 @@
+# Reference sample: systemd user unit for the AgentLab continuous improvement
+# loop. This file is NOT auto-installed. To use it, copy it to your user
+# systemd directory and edit the WorkingDirectory / ExecStart paths below:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp contrib/systemd/agentlab-loop.service ~/.config/systemd/user/
+#   # edit ~/.config/systemd/user/agentlab-loop.service to point at your paths
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agentlab-loop.service
+#
+# The loop runs one cycle per invocation of `agentlab loop run --schedule
+# continuous`; systemd keeps it alive via Restart=on-failure and the loop
+# itself sleeps between cycles when --schedule is passed.
+
+[Unit]
+Description=AgentLab continuous optimization loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# --- EDIT THESE ---
+# WorkingDirectory: absolute path to your agentlab workspace.
+WorkingDirectory=%h/agentlab-workspace
+# ExecStart: use `which agentlab` to find your install path.
+ExecStart=/usr/local/bin/agentlab loop run --schedule continuous --trace-source %h/traces
+# -------------------
+Environment=AGENTLAB_STRICT_LIVE=1
+# Provider keys: set via systemd environment file or drop-in unit, do NOT commit to git.
+# EnvironmentFile=%h/.config/agentlab/env
+Restart=on-failure
+RestartSec=30s
+# Backoff: systemd handles exponential-ish backoff via StartLimit* when needed.
+StartLimitIntervalSec=10min
+StartLimitBurst=5
+
+[Install]
+WantedBy=default.target

@@ -156,6 +156,48 @@ def _resolve_attempt_candidate_version(
     return int(matches[0].candidate_config_version)
 
 
+def _persist_candidate_override(override_path: Path) -> int:
+    """Snapshot the YAML at ``override_path`` as a new candidate version.
+
+    Used by :func:`run_improve_accept_in_process` when the
+    ``candidate_override_path`` kwarg is supplied — the inline-edit flow
+    (``/improve accept <id> --edit``) writes the edited YAML to a scratch
+    file and passes the path here so the rest of accept (deploy,
+    measurement) can proceed against the edited version rather than the
+    original.
+
+    Returns the new config version number so the caller can pass it to
+    the deploy invoker. Raises :class:`ImproveCommandError` on IO or
+    parse failures.
+    """
+    import yaml
+
+    from deployer.versioning import ConfigVersionManager
+
+    path = Path(override_path)
+    if not path.exists():
+        raise ImproveCommandError(
+            f"improve accept: candidate_override_path {path} does not exist."
+        )
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ImproveCommandError(
+            f"improve accept: failed to read {path}: {exc}"
+        ) from exc
+    try:
+        config = yaml.safe_load(raw) or {}
+    except yaml.YAMLError as exc:
+        raise ImproveCommandError(
+            f"improve accept: {path} is not valid YAML: {exc}"
+        ) from exc
+
+    runner = _runner_module()
+    manager = ConfigVersionManager(runner.CONFIGS_DIR)
+    cv = manager.save_version(config, scores={}, status="candidate")
+    return int(cv.version)
+
+
 def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
     """Run the pre-R2 autofix flow for back-compat with zero-arg `improve run`.
 
@@ -847,12 +889,21 @@ def run_improve_accept_in_process(
     on_event: Callable[[dict[str, Any]], None],
     text_writer: Callable[[str], None] | None = None,
     deploy_invoker: Callable[..., None] | None = None,
+    candidate_override_path: Path | None = None,
 ) -> ImproveAcceptResult:
     """Deploy an accepted improvement and schedule a post-deploy measurement.
 
     The optional ``deploy_invoker`` lets callers (notably the Click wrapper)
     keep its existing ctx-aware deploy path. The slash handler passes a
     thin wrapper over ``runner.cli``'s deploy command.
+
+    ``candidate_override_path`` (R4.12 / C6) — when set, the YAML at this
+    path is snapshotted as a new **candidate** version via
+    :meth:`deployer.versioning.ConfigVersionManager.save_version` before
+    deploy, and that new version number is used instead of the
+    change-card-bound candidate version. This is the deploy path used by
+    the ``/improve accept <id> --edit`` slash flow. When ``None``
+    (default), behavior is unchanged from the pre-R4.12 accept path.
     """
     from optimizer.improvement_lineage import ImprovementLineageStore
 
@@ -863,6 +914,9 @@ def run_improve_accept_in_process(
     attempt = _find_unique_attempt(attempt_id, resolved_memory_db)
     full_id = attempt.attempt_id
     candidate_version = _resolve_attempt_candidate_version(full_id)
+
+    if candidate_override_path is not None:
+        candidate_version = _persist_candidate_override(candidate_override_path)
 
     lineage = ImprovementLineageStore(db_path=resolved_lineage_db)
     view = lineage.view_attempt(full_id)

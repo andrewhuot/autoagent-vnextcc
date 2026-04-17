@@ -74,10 +74,10 @@ class TestCLIStructure:
         result = runner.invoke(cli, ["--help"])
         assert result.exit_code == 0
         # Commands visible in help (primary + secondary)
-        for cmd in ["build", "eval", "optimize", "config", "deploy", "ship", "status"]:
+        for cmd in ["build", "eval", "optimize", "config", "deploy", "ship", "status", "loop"]:
             assert cmd in result.output, f"Missing command: {cmd}"
         # Commands that exist but are hidden from help — verify via cli.commands dict
-        for cmd in ["init", "loop", "logs", "server", "full-auto", "changes"]:
+        for cmd in ["init", "logs", "server", "full-auto", "changes"]:
             assert cmd in cli.commands, f"Missing command in registry: {cmd}"
 
     def test_legacy_run_group_hidden(self, runner):
