@@ -22,7 +22,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Callable, ClassVar, Iterator
 
-from cli.llm.caching import CacheInput, compute_cache_blocks
+from cli.llm.caching import CacheBlock, CacheInput, compute_cache_blocks
 from cli.llm.provider_capabilities import ProviderCapabilities
 from cli.llm.retries import RetryPolicy, retry_call
 from cli.llm.streaming import (
@@ -104,6 +104,15 @@ class AnthropicClient:
 
     _client: Any = field(default=None, init=False, repr=False)
 
+    _cache_hint_blocks: list[dict[str, Any]] | None = field(
+        default=None, init=False, repr=False
+    )
+    """Anthropic-shape system blocks queued by the most recent
+    :meth:`cache_hint` call. ``None`` means "no hint provided — fall back
+    to recomputing from ``system_prompt`` at stream time". An empty list
+    means "the caller explicitly cleared the hint" and is equivalent to
+    ``None`` in effect (we recompute from ``system_prompt``)."""
+
     # ------------------------------------------------------------------ API
 
     def complete(
@@ -155,6 +164,40 @@ class AnthropicClient:
         with stream_context as sdk_stream:
             yield from self._translate_events(sdk_stream)
 
+    def cache_hint(self, blocks: list[Any]) -> None:
+        """Store an explicit prompt-cache hint for the next request.
+
+        Accepts a list of :class:`cli.llm.caching.CacheBlock` objects — we
+        read ``provider_params["anthropic_blocks"]`` off each and
+        concatenate them into the ``system=`` content list. For
+        back-compat we also accept a raw list of Anthropic-shape dicts
+        (``{type: text, text: ..., cache_control: ...}``) — the
+        orchestrator can hand either shape and the adapter does the right
+        thing.
+
+        Repeat calls *replace* the stored hint — the most recent call
+        wins. An empty list (or a list whose entries carry no
+        ``anthropic_blocks``) clears the hint and the next request falls
+        back to recomputing breakpoints from ``system_prompt`` directly.
+
+        The hint consumes on the next ``stream()`` / ``complete()`` call
+        — it is not sticky across multiple turns unless the orchestrator
+        re-issues it each time."""
+        if not blocks:
+            self._cache_hint_blocks = []
+            return
+        collected: list[dict[str, Any]] = []
+        for block in blocks:
+            if isinstance(block, CacheBlock):
+                payload = block.provider_params.get("anthropic_blocks") if block.provider_params else None
+                if isinstance(payload, list):
+                    collected.extend(payload)
+            elif isinstance(block, dict):
+                # Back-compat: caller handed the raw Anthropic content
+                # dict directly. Keep it as-is.
+                collected.append(block)
+        self._cache_hint_blocks = collected
+
     # ------------------------------------------------------------------ internal
 
     def _ensure_client(self) -> Any:
@@ -182,12 +225,21 @@ class AnthropicClient:
             "tools": tools,
             **self.request_options,
         }
-        cache_blocks = compute_cache_blocks(
-            CacheInput(
-                system_prompt=system_prompt,
-                tool_schema_text=_compact_json(tools),
+        # Prefer an orchestrator-supplied hint when the caller provided
+        # one — the orchestrator computes it once per turn with full
+        # context (pinned memory, etc.) and hands it to us via
+        # ``cache_hint``. Falls back to recomputing here when no hint
+        # was supplied so standalone callers (tests, scripts) still get
+        # the caching behaviour they used to get for free.
+        if self._cache_hint_blocks:
+            cache_blocks: list[dict[str, Any]] = list(self._cache_hint_blocks)
+        else:
+            cache_blocks = compute_cache_blocks(
+                CacheInput(
+                    system_prompt=system_prompt,
+                    tool_schema_text=_compact_json(tools),
+                )
             )
-        )
         if cache_blocks:
             request_kwargs["system"] = cache_blocks
         elif system_prompt:

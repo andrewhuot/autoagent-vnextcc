@@ -22,7 +22,7 @@ Design:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 
@@ -91,4 +91,63 @@ def _block(text: str, *, cache: bool) -> dict[str, Any]:
     return payload
 
 
-__all__ = ["CacheInput", "MIN_CACHEABLE_CHARS", "compute_cache_blocks"]
+# ---------------------------------------------------------------------------
+# Provider-neutral cache hint (P0.5f)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CacheBlock:
+    """Opaque cache hint spanning some subset of a turn's context.
+
+    The orchestrator emits :class:`CacheBlock` objects and hands them to
+    ``ModelClient.cache_hint()``. Each adapter interprets the hint using
+    whatever cache mechanism the provider supports (Anthropic breakpoints,
+    OpenAI automatic prefix caching, Gemini handle — one day) or no-ops
+    cleanly when the provider can't honour explicit hints.
+
+    ``message_indices`` describes *which* messages the hint covers so a
+    future adapter can translate into a block-level breakpoint when its
+    SDK grows the surface. Today Anthropic only uses the ``provider_params
+    ["anthropic_blocks"]`` escape hatch — the pre-baked Anthropic-shape
+    list returned by :func:`compute_cache_blocks` — which keeps the
+    orchestrator from recomputing the breakpoint split twice."""
+
+    message_indices: tuple[int, ...] = ()
+    """Indices into the turn's message list that the hint spans. Empty
+    tuple means the hint covers the static prefix (system prompt + tool
+    schema) rather than a message range."""
+
+    ttl_seconds: int | None = None
+    """Optional TTL override for Anthropic's ephemeral breakpoint. ``None``
+    means "SDK default" (~5 minutes). Other providers ignore."""
+
+    provider_params: dict[str, Any] = field(default_factory=dict)
+    """Escape hatch for adapter-specific payloads. Anthropic reads
+    ``provider_params["anthropic_blocks"]`` — a pre-computed list of
+    ``{type: text, text: ..., cache_control: ...}`` dicts — and splices
+    the list directly into the ``system=`` field on the next request."""
+
+
+def anthropic_cache_blocks(inputs: CacheInput) -> list[CacheBlock]:
+    """Wrap :func:`compute_cache_blocks` output as a list of
+    :class:`CacheBlock` objects suitable for ``ModelClient.cache_hint()``.
+
+    Returns an empty list when no breakpoint is warranted (short prefix
+    or no content). One :class:`CacheBlock` encapsulates the full
+    Anthropic-shape content list via ``provider_params``; splitting per
+    content block would be redundant because the breakpoints already live
+    on the individual dicts."""
+    blocks = compute_cache_blocks(inputs)
+    if not blocks:
+        return []
+    return [CacheBlock(provider_params={"anthropic_blocks": blocks})]
+
+
+__all__ = [
+    "CacheBlock",
+    "CacheInput",
+    "MIN_CACHEABLE_CHARS",
+    "anthropic_cache_blocks",
+    "compute_cache_blocks",
+]

@@ -180,12 +180,21 @@ class GeminiClient:
         )
         yield from self._translate_events(sdk_stream)
 
-    def cache_hint(self, blocks: list[dict[str, Any]]) -> None:
+    def cache_hint(self, blocks: list[Any]) -> None:
         """Prompt-cache hint dispatched by the orchestrator. No-op today;
         the Gemini SDK currently lacks the content-handle API we'd need
-        to honour explicit breakpoints. Kept on the class so orchestrator
-        code stays provider-agnostic (see P0.5f)."""
-        del blocks
+        to honour explicit breakpoints — follow-up task will wire the
+        cached-content handle surface. Kept on the class so orchestrator
+        code stays provider-agnostic (see P0.5f). Logs at DEBUG so users
+        don't see noise on every turn."""
+        if blocks:
+            import logging
+
+            logging.getLogger(__name__).debug(
+                "gemini_client.cache_hint: received %d block(s); ignoring — "
+                "SDK lacks cached-content handle API (follow-up).",
+                len(blocks),
+            )
 
     # ------------------------------------------------------------------ internal
 

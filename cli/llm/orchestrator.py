@@ -25,6 +25,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from cli.llm.caching import CacheInput, anthropic_cache_blocks
 from cli.llm.streaming import (
     MessageStop,
     TextDelta,
@@ -255,6 +256,22 @@ class LLMOrchestrator:
         tools_schema = self.tool_registry.to_schema()
         effective_system_prompt = self._compose_system_prompt()
         stream_method = getattr(self.model, "stream", None)
+
+        # Dispatch a provider-neutral cache hint unconditionally. Adapters
+        # that honour it (Anthropic) store the breakpoint for the next
+        # call; adapters whose providers do implicit prefix caching
+        # (OpenAI) or lack the handle surface (Gemini) accept the list
+        # and no-op. This keeps the orchestrator free of provider-string
+        # branching for cache logic.
+        cache_hint = getattr(self.model, "cache_hint", None)
+        if callable(cache_hint):
+            hint_blocks = anthropic_cache_blocks(
+                CacheInput(
+                    system_prompt=effective_system_prompt,
+                    tool_schema_text=_compact_tools_schema(tools_schema),
+                )
+            )
+            cache_hint(hint_blocks)
 
         if callable(stream_method):
             events_iter = stream_method(
@@ -488,6 +505,18 @@ class LLMOrchestrator:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _compact_tools_schema(tools: list[dict[str, Any]]) -> str:
+    """Stable JSON serialisation of the tool schema, used only for cache
+    sizing. Sorted keys keep the serialisation stable across iteration
+    orders so equivalent tool lists produce the same cache fingerprint."""
+    import json as _json
+
+    try:
+        return _json.dumps(tools, sort_keys=True, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return ""
 
 
 def _merge_usage(acc: dict[str, int], incoming: dict[str, int]) -> None:

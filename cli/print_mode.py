@@ -230,6 +230,13 @@ class EchoModel:
         )
         yield from events_from_model_response(response)
 
+    def cache_hint(self, blocks: list[Any]) -> None:
+        """No-op — the echo model has no provider to cache against. Kept
+        on the class so orchestrator code that dispatches
+        ``model.cache_hint(...)`` unconditionally doesn't special-case
+        the echo smoke-test path (see P0.5f)."""
+        del blocks
+
 
 @click.command("print")
 @click.argument("prompt", required=True)

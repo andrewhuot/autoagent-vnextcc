@@ -150,6 +150,20 @@ class ModelClient(Protocol):
         """
         ...
 
+    def cache_hint(self, blocks: list[Any]) -> None:  # pragma: no cover - protocol
+        """Receive a provider-neutral cache hint for the next call.
+
+        ``blocks`` is a list of :class:`cli.llm.caching.CacheBlock` (or
+        provider-shaped dicts for back-compat). Adapters that support
+        explicit cache breakpoints store the hint and apply it on the
+        next ``stream()`` / ``complete()``; adapters whose providers do
+        implicit prefix caching (OpenAI) or lack the surface today
+        (Gemini) accept the call and no-op cleanly.
+
+        Repeat calls *replace* the stored hint — the most recent call
+        wins. Passing an empty list clears any prior hint."""
+        ...
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator output

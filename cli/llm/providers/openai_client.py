@@ -204,7 +204,7 @@ class OpenAIClient:
         )
         yield from self._translate_events(sdk_stream)
 
-    def cache_hint(self, blocks: list[dict[str, Any]]) -> None:
+    def cache_hint(self, blocks: list[Any]) -> None:
         """Prompt-cache hint dispatched by the orchestrator. No-op — OpenAI
         applies server-side automatic prefix caching past 1024 tokens, so
         the adapter has nothing to do. Kept on the class for provider-
