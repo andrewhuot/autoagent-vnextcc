@@ -1,6 +1,48 @@
 # Changelog
 
-## [Unreleased] — 2026-04-17 — R4/R6 Cleanup
+## [2.0.0] — 2026-04-17 — Claude-Code Parity
+
+Breaking: launching `agentlab workbench` now starts the Textual TUI by default
+when stdout is a TTY. Set `AGENTLAB_NO_TUI=1` for the legacy line-mode REPL.
+Also adds a SQLite-backed task subsystem, recurring `/loop`, a wake-up
+scheduler, a daemon supervisor, and skill/slash catalogues in the system
+prompt. Plan: [docs/superpowers/plans/2026-04-17-claude-code-parity-roadmap.md](docs/superpowers/plans/2026-04-17-claude-code-parity-roadmap.md).
+Operator guide: [docs/CC_PARITY.md](docs/CC_PARITY.md).
+
+### Added — Phase 3 (TUI polish)
+- 3.1: TUI default-on with `AGENTLAB_NO_TUI` opt-out.
+- 3.2: One-keystroke `PermissionOverlay` (y/a/n/p/esc).
+- 3.3: Slash-command autocomplete dropdown.
+- 3.4: Thread-safe `CommandQueue` for mid-turn input.
+- 3.5: Live status bar (model, ctx %, tok/s, cost, branch).
+- 3.6: ESC-to-rewind `CheckpointBar`.
+
+### Added — Phase 4 (task subsystem)
+- 4.1: SQLite `TaskStore` at `.agentlab/tasks.db`.
+- 4.2: `TaskExecutor` worker threads with cancel tokens.
+- 4.3: `TaskCreate`/`TaskList`/`TaskGet`/`TaskOutput`/`TaskStop` tools.
+- 4.4: `AgentSpawnTool` mirrors writes through to `TaskStore`.
+- 4.5: `TaskTree` widget with parent/child status glyphs.
+- 4.6: `reconcile_orphaned_tasks(store)` flips zombie rows on startup.
+
+### Added — Phase 5 (model-facing catalogues)
+- 5.1: `SkillRegistry.describe_for_model()` + `## Available skills` section.
+- 5.2: `slash_catalogue_for_model(reg)` (opt-in via `AGENTLAB_EXPOSE_SLASH_TO_MODEL`).
+
+### Added — Phase 6 (long-running ergonomics)
+- 6.1: `/loop <interval> <prompt>` slash with seconds/minutes/hours.
+- 6.2: `cli.tasks.scheduler` (`due_tasks`, `reschedule_loop_task`,
+  `schedule_one_shot`) and `ScheduleWakeup` tool.
+- 6.3: `DaemonSupervisor` + `DaemonState` (PID-file lifecycle, signal-0
+  liveness probe).
+
+### Added — Phase 7 (polish & docs)
+- 7.1: `cli.doctor_sections` builders for skills / task store /
+  instructions / cost.
+- 7.2: `docs/CC_PARITY.md` operator guide.
+- 7.3: This release.
+
+## [1.0.0] — 2026-04-17 — R4/R6 Cleanup
 
 Closes the 12 gaps left by R4 Slice A and R6 Slice B. With this change, the R1–R6 roadmap is 100% complete (R4.13 per-command error boundary deferred; not blocking).
 

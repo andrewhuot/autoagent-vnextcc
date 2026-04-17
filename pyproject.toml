@@ -1,6 +1,6 @@
 [project]
 name = "agentlab"
-version = "1.0.0"
+version = "2.0.0"
 description = "Product-grade agent optimization platform — CLI, API, and web console for iterating ADK agent quality"
 requires-python = ">=3.11"
 dependencies = [

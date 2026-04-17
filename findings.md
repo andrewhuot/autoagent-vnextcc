@@ -705,3 +705,78 @@
 - `npm run build`: passed; Vite still reports the existing large main chunk warning.
 - Playwright full golden path probe confirmed the Eval POST body included `dataset_path: /Users/andrew/Desktop/agentlab/evals/cases/generated_build.yaml` and the backend completed a 3-case generated-build run.
 - Playwright Workbench handoff probe confirmed `/workbench?agent=...&agentName=FAQ+Concierge&configPath=...` displays `Continuing from Build` and POSTs `/api/workbench/build/stream` with `project_id: null`.
+
+## Web View Deep-Link Scope - 2026-04-17
+
+### Local Context Findings
+
+- AgentLab's README positions the core loop as `Build -> Workbench -> Eval ->
+  Compare -> Optimize -> Review -> Deploy`, with CLI, API, and web console all
+  working off the same local workspace state.
+- The interactive Workbench is intended to be the default CLI surface, including
+  slash commands for `/eval`, `/optimize`, `/build`, `/deploy`, `/skills`, and
+  persistent sessions.
+- Existing web console routes already map to the core loop: Build, Workbench,
+  Eval Runs, Results Explorer, Compare, Optimize, Improvements, and Deploy.
+- Prior planning notes emphasize typed handoffs across Workbench -> Eval ->
+  Optimize -> Deploy, especially carrying `config_path`, `dataset_path`, and
+  `eval_run_id` instead of adjacent-but-disconnected page navigation.
+- The most relevant product gap for this research is not "should web exist?"
+  but "which terminal events deserve stable browser-native detail views, and
+  what IDs/data contracts make those views trustworthy?"
+
+### Local Feasibility Findings
+
+- Current React routes already include `/evals/:id`, `/results/:runId`,
+  `/compare`, `/configs`, `/traces`, `/events`, `/blame`, `/context`,
+  `/workbench`, `/optimize`, `/improvements`, and `/deploy`.
+- Eval APIs already expose durable run-level and case-level endpoints:
+  `/api/eval/runs/{run_id}`, `/api/eval/runs/{run_id}/cases`,
+  `/api/evals/results/{run_id}`, `/api/evals/results/{run_id}/examples`,
+  and `/api/evals/results/{run_id}/diff`.
+- Trace APIs already expose detail and graph endpoints:
+  `/api/traces/{trace_id}`, `/api/traces/{trace_id}/grades`,
+  `/api/traces/{trace_id}/graph`, and context analysis by trace id.
+- Config APIs expose list/show/diff/activate by version, but the web route is
+  currently a stateful `/configs` page rather than a canonical
+  `/configs/:version` or `/configs/:version/lineage` deep link.
+- The CLI Workbench already has `/lineage <id>` and `/attempt-diff <attempt_id>`
+  concepts backed by `optimizer/improvement_lineage.py`; web should reuse the
+  same lineage store instead of inventing a second graph.
+- AgentLab docs already promise CLI/web shared state. A web deep-link project
+  should therefore promote existing IDs (`eval_run_id`, `attempt_id`,
+  `trace_id`, config version, deployment id, session id) rather than adding new
+  human-facing identifiers.
+
+### External Product Findings
+
+- Braintrust is the clearest analog for CLI-to-web eval links: after `bt eval`,
+  its quickstart says the terminal output includes a direct experiment link,
+  and improved evals link to an experiment comparison in the UI.
+- Braintrust also runs the reverse direction: `bt view logs` opens an
+  interactive terminal UI from a Braintrust app view URL, and trace detail pages
+  can share private/public trace links and navigate back to origin prompts or
+  datasets.
+- LangSmith frames the same split as CLI + visual platform: the product manages
+  traces, datasets, experiments, evaluation, Studio, and a CLI for terminal
+  access to those objects.
+- Phoenix emphasizes moving from individual run inspection to improvement:
+  traces, prompt versioning, span replay, datasets, experiments, evaluator
+  traces, and UI experiment failure review that links low-score examples to
+  associated traces.
+- W&B Weave positions itself as an observability and evaluation platform where
+  SDK instrumentation captures code, inputs, outputs, and metadata, with human
+  feedback and production monitoring feeding back into test cases.
+- Langfuse combines tracing, prompt management, production evaluations,
+  datasets, experiments, annotation queues, and dashboards. Its docs explicitly
+  call out UI-based evaluation of prompts/models on datasets.
+- Promptfoo is the strongest local-first/open-source CLI pattern: after running
+  an eval, `promptfoo view` starts a browser UI for results, and individual
+  cells have detail, grading, comment, rating, and share-link actions.
+- MLflow is the mature ML precedent: local/remote tracking records runs,
+  metrics, params, artifacts, and datasets, then a browser UI lets users search,
+  compare, visualize, and download run data.
+- Deployment CLIs such as Vercel and Netlify consistently use terminal output
+  and commands as the primary workflow but expose browser URLs for deployment
+  detail, logs, dashboard inspection, and previews. GitHub CLI's `gh run view
+  --web` is the smallest form of the pattern.
