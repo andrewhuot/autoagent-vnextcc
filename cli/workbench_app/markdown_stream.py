@@ -25,10 +25,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable, Iterable
+from typing import Callable, Iterable, get_args
+
+from cli.workbench_app.output_style import STYLES, apply_style, parse_style_directive
 
 
 EchoFn = Callable[[str], None]
+_STYLE_DIRECTIVES = tuple(f'<agentlab output-style="{style}">' for style in get_args(STYLES))
 
 
 class BlockMode(str, Enum):
@@ -76,6 +79,8 @@ class StreamingMarkdownRenderer:
     mode: BlockMode = BlockMode.PROSE
     fence_language: str = ""
     emitted: list[RenderedLine] = field(default_factory=list)
+    directive_checked: bool = False
+    directive_style: str | None = None
 
     def feed(self, chunk: str) -> None:
         """Append ``chunk`` to the buffer and emit every complete line.
@@ -87,17 +92,58 @@ class StreamingMarkdownRenderer:
         if not chunk:
             return
         self.buffer += chunk.replace("\r\n", "\n").replace("\r", "\n")
-        while "\n" in self.buffer:
-            line, self.buffer = self.buffer.split("\n", 1)
-            self._emit_line(line)
+        if not self.directive_checked:
+            if self._maybe_parse_style_directive():
+                return
+        if self.directive_style is not None:
+            return
+        self._emit_available_lines()
 
     def finalize(self) -> None:
         """Flush any residual partial line at end of stream."""
+        if not self.directive_checked:
+            self._maybe_parse_style_directive(final=True)
+        if self.directive_style is not None:
+            styled_text = apply_style(self.buffer.removesuffix("\n"), self.directive_style)
+            self.buffer = ""
+            self._emit_complete_text(styled_text)
+            return
         if self.buffer:
             self._emit_line(self.buffer)
             self.buffer = ""
 
     # ------------------------------------------------------------------ internal
+
+    def _maybe_parse_style_directive(self, *, final: bool = False) -> bool:
+        """Probe the very start of the stream for an output-style directive.
+
+        Returns ``True`` when the renderer must keep buffering because the
+        prefix is still ambiguous or because a directive was successfully
+        detected and the styled payload should wait until :meth:`finalize`.
+        """
+        stripped, style = parse_style_directive(self.buffer)
+        if style is not None:
+            self.directive_checked = True
+            self.directive_style = style
+            self.buffer = stripped
+            return True
+        if not final and _is_possible_style_directive_prefix(self.buffer):
+            return True
+        self.directive_checked = True
+        return False
+
+    def _emit_available_lines(self) -> None:
+        while "\n" in self.buffer:
+            line, self.buffer = self.buffer.split("\n", 1)
+            self._emit_line(line)
+
+    def _emit_complete_text(self, text: str) -> None:
+        remaining = text
+        while "\n" in remaining:
+            line, remaining = remaining.split("\n", 1)
+            self._emit_line(line)
+        if remaining:
+            self._emit_line(remaining)
 
     def _emit_line(self, raw_line: str) -> None:
         line = raw_line.rstrip("\r")
@@ -194,6 +240,10 @@ def _looks_like_diff_line(line: str) -> bool:
     if rest.startswith(" "):
         return True
     return False
+
+
+def _is_possible_style_directive_prefix(text: str) -> bool:
+    return any(directive.startswith(text) for directive in _STYLE_DIRECTIVES)
 
 
 # ---------------------------------------------------------------------------

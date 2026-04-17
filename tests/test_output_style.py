@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from cli.workbench_app import output_style
+from cli.workbench_app.markdown_stream import BlockMode, StreamingMarkdownRenderer
 
 
 @pytest.fixture(autouse=True)
@@ -84,7 +85,46 @@ def test_apply_style_json_falls_back_for_invalid_payload() -> None:
     assert output_style.apply_style(text, "json") == text
 
 
+def test_streaming_renderer_strips_chunked_json_style_directive() -> None:
+    emitted: list[str] = []
+    renderer = StreamingMarkdownRenderer(echo=emitted.append, styler=_tagging_styler)
+    renderer.feed('<agentlab output-style="jso')
+    assert emitted == []
+    renderer.feed('n">{"ok": true}')
+    assert emitted == []
+    renderer.finalize()
+    assert emitted == [
+        "[prose]```json",
+        '[code]{"ok": true}',
+        "[prose]```",
+    ]
+
+
+def test_streaming_renderer_invalid_directive_falls_back_to_plain_text() -> None:
+    emitted: list[str] = []
+    renderer = StreamingMarkdownRenderer(echo=emitted.append, styler=_tagging_styler)
+    renderer.feed('<agentlab output-style=nope>\nhello\n')
+    renderer.finalize()
+    assert emitted == [
+        "[prose]<agentlab output-style=nope>",
+        "[prose]hello",
+    ]
+
+
+def test_streaming_renderer_without_directive_keeps_existing_behavior() -> None:
+    emitted: list[str] = []
+    renderer = StreamingMarkdownRenderer(echo=emitted.append, styler=_tagging_styler)
+    renderer.feed("<ordinary>\nsecond line")
+    assert emitted == ["[prose]<ordinary>"]
+    renderer.finalize()
+    assert emitted == ["[prose]<ordinary>", "[prose]second line"]
+
+
 @pytest.mark.parametrize("style_name", ["markdown", "default", "unknown"])
 def test_apply_style_passthrough_styles_return_original_text(style_name: str) -> None:
     text = "leave me alone"
     assert output_style.apply_style(text, style_name) == text
+
+
+def _tagging_styler(line: str, mode: BlockMode, fence_language: str) -> str:
+    return f"[{mode.value}]{line}"

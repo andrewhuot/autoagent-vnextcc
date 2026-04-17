@@ -226,6 +226,30 @@ def test_trailing_partial_line_flushes_at_end_of_turn(tmp_path: Path) -> None:
     assert echo == ["No trailing newline"]
 
 
+def test_output_style_directive_renders_json_without_echoing_raw_tag(tmp_path: Path) -> None:
+    """A style directive at byte 0 should be stripped from the live transcript,
+    and JSON output should render only after the full payload is available."""
+    model = _ScriptedStreamingModel(
+        [
+            [
+                TextDelta(text='<agentlab output-style="jso'),
+                TextDelta(text='n">{"ok": true}'),
+                MessageStop(stop_reason="end_turn"),
+            ]
+        ]
+    )
+    echo: list[str] = []
+    orch = _build_orchestrator(tmp_path, model, echo_sink=echo, styler=_mode_tagger())
+    result = orch.run_turn("hi")
+
+    assert echo == [
+        "[prose] ```json",
+        '[code:json] {"ok": true}',
+        "[prose] ```",
+    ]
+    assert result.assistant_text == '<agentlab output-style="json">{"ok": true}\n'
+
+
 # ---------------------------------------------------------------------------
 # ThinkingDelta is intentionally NOT routed into the main renderer
 # ---------------------------------------------------------------------------
