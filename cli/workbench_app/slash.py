@@ -757,9 +757,11 @@ def build_builtin_registry(
     from cli.workbench_app.init_slash import build_init_command
     from cli.workbench_app.theme_slash import build_theme_command
     from cli.workbench_app.output_style_slash import build_output_style_command
+    from cli.workbench_app.fork_slash import build_fork_command
     from cli.workbench_app.resume_slash import build_resume_command
 
     registry.register(build_resume_command())
+    registry.register(build_fork_command())
     registry.register(build_model_command())
     registry.register(build_tasks_command())
     registry.register(build_context_command())

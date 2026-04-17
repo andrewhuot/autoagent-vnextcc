@@ -386,6 +386,11 @@ def run_workbench_app(
         # tool call. Wrapped in try/except so a flaky DB on boot can
         # never bring down the REPL.
         _emit_resume_hint(orchestrator, out)
+        # R7.C.7 — wire the workspace-change observer onto the runtime's
+        # WorkbenchSession so a mid-conversation config switch surfaces
+        # a "stale context" warning. Wrapped in try/except so a flaky
+        # observer can't take down boot.
+        _maybe_register_config_change_observer(orchestrator, out)
         if active_workflow_runtime is not None:
             degraded = getattr(active_workflow_runtime, "worker_mode_degraded_reason", None)
             if degraded:
@@ -1404,6 +1409,68 @@ def _resolve_orchestrator(bundle: Any | None) -> Any | None:
     if hasattr(bundle, "run_turn"):
         return bundle
     return None
+
+
+def _register_config_change_observer(
+    workbench_session: Any,
+    runtime: Any,
+    echo: EchoFn,
+) -> None:
+    """Wire a warning when ``current_config_path`` switches mid-conversation.
+
+    Only fires when the path moves between two non-None values. The
+    initial None → ``"x.yaml"`` set is a workspace coming online, not a
+    switch, and a value → None clear is a teardown — neither warrants a
+    "stale context" warning. Safe to call with a session that already
+    has a non-None ``current_config_path`` — the closure snapshots the
+    current value as the baseline so the next real change fires.
+    """
+    state: dict[str, Any] = {
+        "previous": getattr(workbench_session, "current_config_path", None),
+    }
+
+    def _on_change(field: str, new_value: Any) -> None:
+        if field != "current_config_path":
+            return
+        prev = state["previous"]
+        state["previous"] = new_value
+        if prev is None or new_value is None:
+            return  # initial set or clear — not a "switch"
+        if prev == new_value:
+            return  # belt-and-braces; observer shouldn't fire on no-op
+        old_id = getattr(runtime, "conversation_id", None)
+        message = (
+            f"  ⚠ Active config switched: {prev} → {new_value}. "
+            f"The current conversation may have stale context. "
+            f"Type /fork to start fresh"
+        )
+        if old_id:
+            message += f", or stay on /resume {old_id} to keep going."
+        else:
+            message += "."
+        echo(theme.warning(message))
+
+    workbench_session.add_observer(_on_change)
+
+
+def _maybe_register_config_change_observer(
+    bundle: Any | None, echo: EchoFn
+) -> None:
+    """Register the workspace-change observer when a runtime + session exist.
+
+    Wrapped in a broad try/except — boot must NEVER crash if the
+    session shape changed under us or ``add_observer`` raises. The
+    warning is purely an affordance.
+    """
+    if bundle is None:
+        return
+    workbench_session = getattr(bundle, "workbench_session", None)
+    if workbench_session is None:
+        return
+    try:
+        _register_config_change_observer(workbench_session, bundle, echo)
+    except Exception:  # pragma: no cover — boot must never crash on a hint
+        pass
 
 
 def _emit_resume_hint(bundle: Any | None, echo: EchoFn) -> None:

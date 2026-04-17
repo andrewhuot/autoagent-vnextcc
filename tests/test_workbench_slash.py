@@ -170,6 +170,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "save",
         "compact",
         "resume",
+        "fork",
         "exit",
         "eval",
         "optimize",
@@ -286,9 +287,9 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     # Existing built-ins + Phase 2–6 additions: the five /plan* commands,
     # /usage + three transcript-rewind commands, three /skill* commands,
     # /background + /background-clear, /init, /theme, /output-style, the R2
-    # Slice D.1 ``/improve`` passthrough, and the /custom supplied via
-    # ``extra``.
-    assert len(registry) == 51
+    # Slice D.1 ``/improve`` passthrough, the R7.C.7 ``/fork`` command, and
+    # the /custom supplied via ``extra``.
+    assert len(registry) == 52
 
 
 # ---------------------------------------------------------------------------
