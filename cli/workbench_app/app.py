@@ -16,6 +16,7 @@ and a ``run_workbench_app`` signature stable enough to wire into
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Iterable
@@ -145,6 +146,32 @@ def _permission_mode_for_workspace(workspace: Any | None) -> str:
         return PermissionManager(root=root).mode
     except Exception:  # pragma: no cover - defensive startup path
         return DEFAULT_PERMISSION_MODE
+
+
+def _workspace_root_for_settings(workspace: Any | None) -> Path | None:
+    root = getattr(workspace, "root", None)
+    if root is not None:
+        return Path(root)
+    try:
+        return Path.cwd()
+    except OSError:  # pragma: no cover - defensive startup path
+        return None
+
+
+def _input_disables_tui(workspace: Any | None, environ: Mapping[str, str]) -> bool:
+    from cli.settings import load_settings
+    from cli.settings.env_bridge import env_overrides
+
+    try:
+        settings = load_settings(_workspace_root_for_settings(workspace))
+        if settings.input.no_tui:
+            return True
+    except Exception:  # pragma: no cover - defensive startup path
+        pass
+
+    env_layer, _ = env_overrides(environ)
+    input_layer = env_layer.get("input")
+    return isinstance(input_layer, dict) and input_layer.get("no_tui") is True
 
 
 def _render_turn_footer(
@@ -1085,6 +1112,27 @@ def _maybe_run_first_run_onboarding(workspace: Any | None) -> None:
         return
 
 
+def _maybe_migrate_legacy_settings() -> None:
+    """Run the one-time legacy-settings migration on first launch.
+
+    Cheap if-marker-exists check first so we don't hammer the disk on
+    every REPL boot. Wrapped in try/except so a flaky migration cannot
+    bring down launch — /doctor surfaces the warning instead.
+    """
+    try:
+        from cli.settings.loader import USER_CONFIG_DIR
+        from cli.settings.migration import (
+            MARKER_FILENAME,
+            migrate_legacy_settings,
+        )
+
+        if (USER_CONFIG_DIR / MARKER_FILENAME).exists():
+            return
+        migrate_legacy_settings(USER_CONFIG_DIR)
+    except Exception:  # pragma: no cover - defensive startup path
+        return
+
+
 def launch_workbench(
     workspace: Any | None,
     *,
@@ -1111,12 +1159,17 @@ def launch_workbench(
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
 
+    # Migrate legacy env vars / config.json into the new cascade exactly once.
+    # Runs before settings load so the first cascade read sees the new file.
+    _maybe_migrate_legacy_settings()
+
     # ---- TUI feature flag ----
     # When AGENTLAB_TUI=1 is set and a TTY is available, launch the Textual
     # TUI instead of the legacy REPL loop. The TUI codepath is fully
     # independent — it wires its own store, widgets, and event bridge.
     if (
-        os.environ.get("AGENTLAB_TUI", "").lower() in ("1", "true")
+        not _input_disables_tui(workspace, os.environ)
+        and os.environ.get("AGENTLAB_TUI", "").lower() in ("1", "true")
         and input_provider is None
         and sys.stdin.isatty()
     ):

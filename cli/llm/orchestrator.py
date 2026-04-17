@@ -113,15 +113,44 @@ class LLMOrchestrator:
         writes, checkpoint snapshots — happen synchronously; the returned
         :class:`OrchestratorResult` is the canonical log of what
         occurred."""
+        executions: list[ToolExecution] = []
+        aggregated_usage: dict[str, int] = {}
+        stop_reason = "end_turn"
+        hook_messages: list[str] = []
+
+        before_query = self._fire_turn_hook(
+            "before_query",
+            {
+                "prompt": user_prompt,
+                "session_id": self.session.session_id if self.session else None,
+            },
+        )
+        if before_query is not None:
+            hook_messages.extend(before_query.messages)
+            if before_query.verdict.value == "deny":
+                stop_reason = "hook_deny"
+                assistant_text = "\n".join(before_query.messages)
+                session_outcome = self._fire_session_end_hook(
+                    stop_reason=stop_reason,
+                    assistant_text=assistant_text,
+                    executions=executions,
+                )
+                if session_outcome is not None:
+                    hook_messages.extend(session_outcome.messages)
+                return OrchestratorResult(
+                    assistant_text=assistant_text,
+                    tool_executions=[],
+                    stop_reason=stop_reason,
+                    usage=aggregated_usage,
+                    metadata={"loops": 0, "hook_messages": list(hook_messages)},
+                )
+
         user_message = TurnMessage(role="user", content=user_prompt)
         self.messages.append(user_message)
         if self.session is not None:
             self._append_session_entry(role="user", content=user_prompt)
 
         renderer = StreamingMarkdownRenderer(echo=self.echo, styler=self.styler)
-        executions: list[ToolExecution] = []
-        aggregated_usage: dict[str, int] = {}
-        stop_reason = "end_turn"
         final_text_parts: list[str] = []
 
         # ``max_tool_loops`` caps the number of *tool-bearing* iterations.
@@ -183,14 +212,30 @@ class LLMOrchestrator:
                 pass
 
         if self.hook_registry is not None:
-            self._fire_stop_hook(executions)
+            after_query = self._fire_turn_hook(
+                "after_query",
+                self._turn_lifecycle_payload(
+                    stop_reason=stop_reason,
+                    assistant_text=assistant_text,
+                    executions=executions,
+                ),
+            )
+            if after_query is not None:
+                hook_messages.extend(after_query.messages)
+            session_outcome = self._fire_session_end_hook(
+                stop_reason=stop_reason,
+                assistant_text=assistant_text,
+                executions=executions,
+            )
+            if session_outcome is not None:
+                hook_messages.extend(session_outcome.messages)
 
         return OrchestratorResult(
             assistant_text=assistant_text,
             tool_executions=executions,
             stop_reason=stop_reason,
             usage=aggregated_usage,
-            metadata={"loops": tool_iterations},
+            metadata=_result_metadata(tool_iterations, hook_messages),
         )
 
     # ------------------------------------------------------------------ helpers
@@ -270,9 +315,16 @@ class LLMOrchestrator:
         if self.hook_registry is None:
             return self.system_prompt
 
-        from cli.hooks import HookEvent
+        fragments_for = getattr(self.hook_registry, "prompt_fragments_for", None)
+        if not callable(fragments_for):
+            return self.system_prompt
 
-        fragments = self.hook_registry.prompt_fragments_for(HookEvent.PRE_TOOL_USE)
+        try:
+            from cli.hooks import HookEvent
+
+            fragments = fragments_for(HookEvent.PRE_TOOL_USE)
+        except Exception:  # pragma: no cover - hooks must never crash turns
+            return self.system_prompt
         if not fragments:
             return self.system_prompt
 
@@ -292,11 +344,16 @@ class LLMOrchestrator:
         loop itself."""
         if self.hook_registry is None:
             return []
-        from cli.hooks import HookEvent
 
-        return self.hook_registry.prompt_fragments_for(
-            HookEvent.POST_TOOL_USE, tool_name=tool_name
-        )
+        fragments_for = getattr(self.hook_registry, "prompt_fragments_for", None)
+        if not callable(fragments_for):
+            return []
+        try:
+            from cli.hooks import HookEvent
+
+            return fragments_for(HookEvent.POST_TOOL_USE, tool_name=tool_name) or []
+        except Exception:  # pragma: no cover - hooks must never crash turns
+            return []
 
     def _execute_tool(self, tool_use: AssistantToolUseBlock) -> ToolExecution:
         context = ToolContext(
@@ -345,25 +402,87 @@ class LLMOrchestrator:
                 SessionEntry(role=role, content=content, timestamp=time.time())
             )
 
-    def _fire_stop_hook(self, executions: list[ToolExecution]) -> None:
-        """Fire the ``Stop`` lifecycle hook at turn end.
+    def _turn_lifecycle_payload(
+        self,
+        *,
+        stop_reason: str,
+        assistant_text: str,
+        executions: list[ToolExecution],
+    ) -> dict[str, Any]:
+        """Build the shared payload for turn-completion lifecycle hooks."""
+        execution_names = [execution.tool_name for execution in executions]
+        return {
+            "stop_reason": stop_reason,
+            "assistant_text": assistant_text,
+            "executions": execution_names,
+            "execution_names": execution_names,
+            "session_id": self.session.session_id if self.session else None,
+        }
 
-        Best-effort: failures never bubble up — the turn has already
-        succeeded, and a broken stop hook must not turn that into a
-        user-visible error."""
+    def _fire_turn_hook(self, event_name: str, payload: dict[str, Any]):
+        """Fire a turn-level hook by symbolic name, swallowing hook failures."""
+        if self.hook_registry is None:
+            return None
         try:
             from cli.hooks import HookEvent
 
-            self.hook_registry.fire(
-                HookEvent.STOP,
+            event = {
+                "before_query": HookEvent.BEFORE_QUERY,
+                "after_query": HookEvent.AFTER_QUERY,
+            }[event_name]
+            return self.hook_registry.fire(event, tool_name="", payload=payload)
+        except Exception:  # pragma: no cover - hooks must never crash the loop
+            return None
+
+    def _fire_session_end_hook(
+        self,
+        *,
+        stop_reason: str,
+        assistant_text: str,
+        executions: list[ToolExecution],
+    ):
+        """Fire ``SessionEnd`` plus legacy ``Stop`` hooks when registered.
+
+        ``Stop`` remains a compatibility shim only: fake registries that do
+        not expose registered definitions will see the new ``SessionEnd``
+        event without an extra legacy call."""
+        if self.hook_registry is None:
+            return None
+        payload = self._turn_lifecycle_payload(
+            stop_reason=stop_reason,
+            assistant_text=assistant_text,
+            executions=executions,
+        )
+        try:
+            from cli.hooks import HookEvent
+
+            outcome = self.hook_registry.fire(
+                HookEvent.SESSION_END,
                 tool_name="",
-                payload={
-                    "executions": [execution.tool_name for execution in executions],
-                    "session_id": self.session.session_id if self.session else None,
-                },
+                payload=payload,
             )
+            if self._has_registered_hooks(HookEvent.STOP):
+                self.hook_registry.fire(HookEvent.STOP, tool_name="", payload=payload)
+            return outcome
         except Exception:  # pragma: no cover - best-effort hook
-            pass
+            return None
+
+    def _has_registered_hooks(self, event: Any) -> bool:
+        """Return whether ``hook_registry`` appears to have hooks for ``event``."""
+        registry = self.hook_registry
+        hooks_for = getattr(registry, "hooks_for", None)
+        if callable(hooks_for):
+            try:
+                return bool(hooks_for(event, tool_name=""))
+            except Exception:
+                return False
+        definitions = getattr(registry, "definitions", None)
+        if isinstance(definitions, dict):
+            try:
+                return bool(definitions.get(event))
+            except Exception:
+                return False
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -377,6 +496,13 @@ def _merge_usage(acc: dict[str, int], incoming: dict[str, int]) -> None:
             acc[key] = acc.get(key, 0) + int(value)
         except (TypeError, ValueError):
             continue
+
+
+def _result_metadata(tool_iterations: int, hook_messages: list[str]) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"loops": tool_iterations}
+    if hook_messages:
+        metadata["hook_messages"] = list(hook_messages)
+    return metadata
 
 
 def _result_to_block(tool_use_id: str, execution: ToolExecution) -> dict[str, Any]:

@@ -82,4 +82,40 @@ class DoctorScreen(TUIScreen):
         lines.append("[bold]Session:[/]")
         lines.append("  Use [bold]/status[/] for session details")
 
+        # Settings cascade + hook registry. Wrapped so a settings load
+        # failure cannot crash the diagnostic screen.
+        try:
+            from pathlib import Path as _Path
+
+            from cli.doctor_sections import (
+                render_hooks_section,
+                render_settings_section,
+            )
+            from cli.hooks import HookRegistry
+            from cli.settings import load_settings
+
+            root = getattr(self._workspace, "root", None) or _Path.cwd()
+            try:
+                settings_obj = load_settings(root)
+            except Exception:
+                settings_obj = None
+
+            for line in render_settings_section(settings_obj):
+                lines.append(line)
+
+            try:
+                registry = (
+                    HookRegistry.load_from_settings(settings_obj)
+                    if settings_obj is not None
+                    else HookRegistry()
+                )
+            except Exception as exc:
+                registry = HookRegistry()
+                registry.load_errors = [f"hook load failed: {exc}"]  # type: ignore[attr-defined]
+            for line in render_hooks_section(registry):
+                lines.append(line)
+        except Exception as exc:  # pragma: no cover - defensive
+            lines.append("")
+            lines.append(f"[yellow]Settings/Hooks diagnostics failed: {exc}[/]")
+
         return lines

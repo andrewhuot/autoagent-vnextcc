@@ -18,6 +18,10 @@ Design notes:
 
 Events supported:
 
+* ``beforeQuery``        — before a model turn starts. Hook output can
+                           annotate or gate the upcoming turn.
+* ``afterQuery``         — after a model turn completes. Useful for
+                           turn-level telemetry.
 * ``PreToolUse``         — before a tool is permitted to run. Exit 0 →
                            allow. Exit 1 → treat as deny. Stderr text is
                            passed back to the user.
@@ -29,6 +33,9 @@ Events supported:
                            dialog spam for known-safe patterns.
 * ``Stop``               — at session end. Fire-and-forget for cleanup
                            or autosave scripts.
+* ``SubagentStop`` /
+  ``SessionEnd``         — lifecycle cleanup hooks for nested agents and
+                           full sessions.
 """
 
 from __future__ import annotations

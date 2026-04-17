@@ -20,6 +20,8 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping
 
+from pydantic import ValidationError
+
 from cli.hooks.types import (
     HookDefinition,
     HookEvent,
@@ -27,9 +29,30 @@ from cli.hooks.types import (
     HookType,
     HookVerdict,
 )
+from cli.settings import Settings
 
 
 Runner = Callable[[HookDefinition, dict[str, Any]], "HookProcessResult"]
+
+_EVENT_ALIASES = {
+    "beforeTool": "PreToolUse",
+    "afterTool": "PostToolUse",
+}
+_GATING_EVENTS = {
+    HookEvent.BEFORE_QUERY,
+    HookEvent.PRE_TOOL_USE,
+    HookEvent.ON_PERMISSION_REQUEST,
+}
+
+
+@dataclass(frozen=True)
+class _ParsedHookOutput:
+    """Protocol details extracted from hook stdout, if stdout is JSON."""
+
+    verdict: HookVerdict | None = None
+    message: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
+    consumed_stdout: bool = False
 
 
 @dataclass
@@ -57,6 +80,25 @@ class HookRegistry:
 
     def add(self, definition: HookDefinition) -> None:
         self.definitions.setdefault(definition.event, []).append(definition)
+
+    @classmethod
+    def load_from_settings(
+        cls,
+        settings: Settings,
+        runner: Runner | None = None,
+    ) -> "HookRegistry":
+        """Build a registry from typed settings so runtime loading shares schema defaults."""
+        registry = cls(runner=runner)
+        hooks = settings.hooks
+        default_timeout = hooks.timeout_seconds
+        for event_name, entries in hooks.event_map().items():
+            _load_event_entries(
+                registry,
+                event_name,
+                entries,
+                default_timeout_seconds=default_timeout,
+            )
+        return registry
 
     def hooks_for(self, event: HookEvent, *, tool_name: str = "") -> list[HookDefinition]:
         """Return the hooks subscribed to ``event`` that match ``tool_name``."""
@@ -117,27 +159,40 @@ class HookRegistry:
             return outcome
 
         runner = self.runner or _default_runner
-        gating = event in {HookEvent.PRE_TOOL_USE, HookEvent.ON_PERMISSION_REQUEST}
+        gating = event in _GATING_EVENTS
         payload_dict = dict(payload or {})
 
         for hook in hooks:
             result = runner(hook, payload_dict)
             outcome.record_fired()
-            message = result.stderr.strip() or result.stdout.strip()
             if result.timed_out:
-                outcome.record_deny(
+                outcome.record_timeout(
                     f"Hook {hook.command!r} timed out after {hook.timeout_seconds}s."
                 )
                 if gating:
                     break
                 continue
-            if result.returncode == 0:
-                if message:
-                    outcome.record_inform(message)
-            else:
+
+            parsed = _parse_json_stdout(result.stdout)
+            if parsed.metadata:
+                outcome.metadata.update(parsed.metadata)
+            message = _message_from_result(result, parsed)
+
+            if result.returncode != 0:
                 outcome.record_deny(message or f"Hook exited {result.returncode}")
                 if gating:
                     break
+                continue
+
+            if parsed.verdict is HookVerdict.DENY:
+                outcome.record_deny(message)
+                if gating:
+                    break
+            elif parsed.verdict is HookVerdict.ASK:
+                outcome.record_ask(message)
+            else:
+                if message:
+                    outcome.record_inform(message)
 
         return outcome
 
@@ -187,13 +242,15 @@ def _default_runner(hook: HookDefinition, payload: dict[str, Any]) -> HookProces
 
 
 def load_hook_registry(
-    settings: Mapping[str, Any],
+    settings: Settings | Mapping[str, Any],
     *,
     runner: Runner | None = None,
 ) -> HookRegistry:
-    """Build a :class:`HookRegistry` from a parsed ``settings.json`` dict.
+    """Compatibility wrapper accepting typed settings or legacy raw mappings.
 
-    The shape mirrors Claude Code's:
+    New runtime code should call :meth:`HookRegistry.load_from_settings` with a
+    typed :class:`~cli.settings.Settings`. Older call sites and tests still pass
+    a parsed ``settings.json`` dict, so this wrapper keeps that shape working:
 
     .. code-block:: json
 
@@ -208,68 +265,194 @@ def load_hook_registry(
          }
        }
 
-    We ignore ``type`` values we don't support yet (only ``"command"``
-    runs today) instead of raising, so future extensions can land without
-    churning existing settings files.
+    We ignore event or hook ``type`` values we don't support instead of raising,
+    so future settings can land without breaking existing workspaces.
     """
+    if isinstance(settings, Settings):
+        return HookRegistry.load_from_settings(settings, runner=runner)
+
+    try:
+        typed_settings = Settings.model_validate(settings)
+    except (TypeError, ValidationError, ValueError):
+        return _load_from_raw_mapping(settings, runner=runner)
+
+    return HookRegistry.load_from_settings(typed_settings, runner=runner)
+
+
+def _load_from_raw_mapping(
+    settings: Mapping[str, Any],
+    *,
+    runner: Runner | None = None,
+) -> HookRegistry:
+    """Best-effort loader for raw mappings that do not pass the strict schema."""
     registry = HookRegistry(runner=runner)
     block = settings.get("hooks")
     if not isinstance(block, dict):
         return registry
 
+    default_timeout = _coerce_timeout(block.get("timeout_seconds"), 5)
+
     for event_name, entries in block.items():
-        try:
-            event = HookEvent(event_name)
-        except ValueError:
+        if event_name == "timeout_seconds":
             continue
-        if not isinstance(entries, list):
-            continue
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            matcher = str(entry.get("matcher", "")).strip()
-            hooks_list = entry.get("hooks")
-            if not isinstance(hooks_list, list):
-                continue
-            for hook_spec in hooks_list:
-                if not isinstance(hook_spec, dict):
-                    continue
-                raw_type = str(hook_spec.get("type", "command")).strip().lower()
-                if raw_type not in {"command", "prompt"}:
-                    continue
-                hook_type = (
-                    HookType.COMMAND if raw_type == "command" else HookType.PROMPT
-                )
-                if hook_type is HookType.COMMAND:
-                    command = str(hook_spec.get("command", "")).strip()
-                    if not command:
-                        continue
-                    prompt = ""
-                else:
-                    prompt = str(hook_spec.get("prompt", "")).strip()
-                    if not prompt:
-                        continue
-                    command = ""
-                timeout = hook_spec.get("timeout_seconds") or hook_spec.get("timeout")
-                try:
-                    timeout_seconds = int(timeout) if timeout is not None else 30
-                except (TypeError, ValueError):
-                    timeout_seconds = 30
-                env = hook_spec.get("env") if isinstance(hook_spec.get("env"), dict) else {}
-                registry.add(
-                    HookDefinition(
-                        event=event,
-                        matcher=matcher,
-                        command=command,
-                        prompt=prompt,
-                        hook_type=hook_type,
-                        timeout_seconds=timeout_seconds,
-                        shell=str(hook_spec.get("shell") or "bash"),
-                        env={str(k): str(v) for k, v in env.items()},
-                        id=str(hook_spec.get("id", "")),
-                    )
-                )
+        _load_event_entries(
+            registry,
+            str(event_name),
+            entries,
+            default_timeout_seconds=default_timeout,
+        )
     return registry
+
+
+def _load_event_entries(
+    registry: HookRegistry,
+    event_name: str,
+    entries: Any,
+    *,
+    default_timeout_seconds: int,
+) -> None:
+    """Parse one event bucket from either Pydantic models or raw mappings."""
+    event = _event_from_name(event_name)
+    if event is None or not isinstance(entries, list):
+        return
+
+    for entry in entries:
+        matcher = str(_read_field(entry, "matcher", "") or "").strip()
+        hooks_list = _read_field(entry, "hooks", [])
+        if not isinstance(hooks_list, list):
+            continue
+        for hook_spec in hooks_list:
+            definition = _definition_from_spec(
+                event,
+                matcher,
+                hook_spec,
+                default_timeout_seconds=default_timeout_seconds,
+            )
+            if definition is not None:
+                registry.add(definition)
+
+
+def _definition_from_spec(
+    event: HookEvent,
+    matcher: str,
+    hook_spec: Any,
+    *,
+    default_timeout_seconds: int,
+) -> HookDefinition | None:
+    raw_type = str(_read_field(hook_spec, "type", "command") or "command").strip().lower()
+    if raw_type not in {"command", "prompt"}:
+        return None
+
+    hook_type = HookType.COMMAND if raw_type == "command" else HookType.PROMPT
+    if hook_type is HookType.COMMAND:
+        command = str(_read_field(hook_spec, "command", "") or "").strip()
+        if not command:
+            return None
+        prompt = ""
+    else:
+        prompt = str(_read_field(hook_spec, "prompt", "") or "").strip()
+        if not prompt:
+            return None
+        command = ""
+
+    timeout = _read_field(hook_spec, "timeout_seconds", None)
+    if timeout is None:
+        timeout = _read_field(hook_spec, "timeout", None)
+    env = _read_field(hook_spec, "env", {})
+    if not isinstance(env, dict):
+        env = {}
+
+    return HookDefinition(
+        event=event,
+        matcher=matcher,
+        command=command,
+        prompt=prompt,
+        hook_type=hook_type,
+        timeout_seconds=_coerce_timeout(timeout, default_timeout_seconds),
+        shell=str(_read_field(hook_spec, "shell", "bash") or "bash"),
+        env={str(k): str(v) for k, v in env.items()},
+        id=str(_read_field(hook_spec, "id", "") or ""),
+    )
+
+
+def _event_from_name(event_name: str) -> HookEvent | None:
+    canonical = _EVENT_ALIASES.get(event_name, event_name)
+    try:
+        return HookEvent(canonical)
+    except ValueError:
+        return None
+
+
+def _read_field(source: Any, field_name: str, default: Any) -> Any:
+    if isinstance(source, Mapping):
+        return source.get(field_name, default)
+    return getattr(source, field_name, default)
+
+
+def _coerce_timeout(value: Any, default: int) -> int:
+    try:
+        return int(value) if value is not None else int(default)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _parse_json_stdout(stdout: str) -> _ParsedHookOutput:
+    stripped = stdout.strip()
+    if not stripped:
+        return _ParsedHookOutput()
+
+    try:
+        payload = json.loads(stripped)
+    except json.JSONDecodeError:
+        return _ParsedHookOutput()
+    if not isinstance(payload, dict):
+        return _ParsedHookOutput()
+
+    metadata: dict[str, Any] = {}
+    decision = payload.get("decision")
+    reason = payload.get("reason")
+    hook_specific = payload.get("hookSpecificOutput")
+    if isinstance(hook_specific, dict):
+        decision = hook_specific.get("permissionDecision", decision)
+        reason = hook_specific.get("permissionDecisionReason", reason)
+        if "updatedMCPToolOutput" in hook_specific:
+            metadata["updated_mcp_tool_output"] = hook_specific[
+                "updatedMCPToolOutput"
+            ]
+
+    verdict = _verdict_from_decision(decision)
+    consumed_stdout = verdict is not None or bool(metadata)
+    return _ParsedHookOutput(
+        verdict=verdict,
+        message=str(reason).strip() if reason is not None else "",
+        metadata=metadata,
+        consumed_stdout=consumed_stdout,
+    )
+
+
+def _verdict_from_decision(decision: Any) -> HookVerdict | None:
+    normalized = str(decision or "").strip().lower()
+    if normalized == "allow":
+        return HookVerdict.ALLOW
+    if normalized == "ask":
+        return HookVerdict.ASK
+    if normalized == "deny":
+        return HookVerdict.DENY
+    return None
+
+
+def _message_from_result(
+    result: HookProcessResult,
+    parsed: _ParsedHookOutput,
+) -> str:
+    if parsed.message:
+        return parsed.message
+    stderr = result.stderr.strip()
+    if stderr:
+        return stderr
+    if parsed.consumed_stdout:
+        return ""
+    return result.stdout.strip()
 
 
 __all__ = [

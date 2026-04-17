@@ -8,9 +8,11 @@ from pathlib import Path
 from cli.settings import (
     DEFAULTS,
     ResolvedSettings,
+    Sessions,
     _deep_merge,
     _flatten_dotted,
     _load_json,
+    load_settings,
     resolve_settings,
     save_local_settings,
     save_project_settings,
@@ -83,6 +85,10 @@ def test_resolved_settings_get_top_level() -> None:
     assert settings.get("mode") == "plan"
 
 
+def test_sessions_is_re_exported() -> None:
+    assert Sessions.__name__ == "Sessions"
+
+
 def test_resolve_defaults_when_no_files(tmp_path: Path, monkeypatch) -> None:
     import cli.settings as settings_mod
 
@@ -93,6 +99,30 @@ def test_resolve_defaults_when_no_files(tmp_path: Path, monkeypatch) -> None:
     )
     settings = resolve_settings()
     assert settings.get("shell.show_status_bar") == DEFAULTS["shell.show_status_bar"]
+
+
+def test_load_settings_uses_package_level_path_monkeypatches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import cli.settings as settings_mod
+
+    fake_home = tmp_path / "home"
+    fake_home.mkdir()
+    monkeypatch.setattr(settings_mod, "SYSTEM_SETTINGS_PATH", tmp_path / "etc" / "agentlab" / "settings.json")
+    monkeypatch.setattr(settings_mod, "USER_CONFIG_DIR", fake_home / ".agentlab")
+    monkeypatch.setattr(settings_mod, "USER_CONFIG_PATH", fake_home / ".agentlab" / "config.json")
+    monkeypatch.setattr(settings_mod, "USER_SETTINGS_PATH", fake_home / ".agentlab" / "settings.json")
+
+    settings_mod.USER_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    settings_mod.USER_CONFIG_PATH.write_text(
+        json.dumps({"theme": {"name": "ocean"}}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(tmp_path)
+
+    assert settings.theme["name"] == "ocean"
 
 
 def test_resolve_project_overrides_defaults(tmp_path: Path) -> None:

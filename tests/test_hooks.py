@@ -171,14 +171,14 @@ def test_fire_non_gating_runs_every_hook() -> None:
     assert outcome.messages == ["warn", "warn"]
 
 
-def test_fire_timeout_records_deny_for_gating_event() -> None:
+def test_fire_timeout_records_timeout_for_gating_event() -> None:
     def runner(hook, payload):
         return HookProcessResult(returncode=124, stdout="", stderr="", timed_out=True)
 
     registry = HookRegistry(runner=runner)
     registry.add(HookDefinition(event=HookEvent.PRE_TOOL_USE, matcher="", command="slow"))
     outcome = registry.fire(HookEvent.PRE_TOOL_USE, tool_name="Bash")
-    assert outcome.verdict is HookVerdict.DENY
+    assert outcome.verdict is HookVerdict.TIMEOUT
     assert any("timed out" in msg for msg in outcome.messages)
 
 
