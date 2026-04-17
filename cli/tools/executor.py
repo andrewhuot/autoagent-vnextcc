@@ -65,14 +65,14 @@ def execute_tool_call(
     executor fires:
 
     * ``OnPermissionRequest`` — before the interactive dialog. A deny from
-      this hook skips the dialog entirely so the user isn't prompted for
-      something CI has already vetoed.
+      this hook skips the dialog entirely; an ask keeps the prompt in the
+      user's hands.
     * ``PreToolUse``          — after permission is resolved, before the
       tool actually runs. A deny here is a hard block even if the user
       approved the permission dialog.
     * ``PostToolUse``          — after :meth:`Tool.run` returns. Its
-      output is attached to the execution metadata so the UI can surface
-      lint warnings etc., but the tool result is not altered.
+      messages are attached to result metadata, and Claude-style updated
+      output metadata can replace the content forwarded to the model.
     """
 
     if not registry.has(tool_name):
@@ -97,74 +97,77 @@ def execute_tool_call(
         )
 
     hook_messages: list[str] = []
+    prompted_for_permission = False
 
-    if raw_decision == "ask":
-        if hook_registry is not None:
-            pre_perm = _fire_hook(
-                hook_registry,
-                "OnPermissionRequest",
-                tool_name=tool_name,
-                payload={"tool": tool_name, "input": dict(tool_input)},
-            )
-            if pre_perm and pre_perm.verdict.value == "deny":
-                hook_messages.extend(pre_perm.messages)
-                return ToolExecution(
-                    tool_name=tool_name,
-                    decision=PermissionDecision.DENY,
-                    result=ToolResult.failure(
-                        "Hook denied permission request: "
-                        + ("; ".join(pre_perm.messages) or "no message")
-                    ),
-                    denial_reason="hook_deny",
-                )
-            if pre_perm is not None and getattr(pre_perm, "fired", 0) > 0:
-                # A hook actually ran and did not deny — treat as auto-
-                # approval so the interactive dialog is skipped. Outcomes
-                # where ``fired == 0`` mean no hook was subscribed, so
-                # the ALLOW default is meaningless and we must still
-                # prompt the user.
-                hook_messages.extend(pre_perm.messages)
-                raw_decision = "allow"
-
-    if raw_decision == "ask":
-        runner = dialog_runner or _lazy_default_dialog_runner()
-        outcome = runner(
-            tool,
-            tool_input,
-            include_persist_option=include_persist_option,
+    if raw_decision == "ask" and hook_registry is not None:
+        pre_perm = _fire_hook(
+            hook_registry,
+            "OnPermissionRequest",
+            tool_name=tool_name,
+            payload=_tool_hook_payload(tool_name, tool_input),
         )
-        if not outcome.allow:
+        if pre_perm:
+            hook_messages.extend(pre_perm.messages)
+        if pre_perm and _verdict(pre_perm) == "deny":
             return ToolExecution(
                 tool_name=tool_name,
                 decision=PermissionDecision.DENY,
-                result=ToolResult.failure(f"User denied {tool_name}."),
-                denial_reason="user_deny",
+                result=ToolResult.failure(
+                    "Hook denied permission request: "
+                    + _hook_message(pre_perm, default="no message")
+                ),
+                denial_reason="hook_deny",
             )
-        if outcome.persist_rule and outcome.persist_scope == "session":
-            permissions.allow_for_session(outcome.persist_rule)
-        elif outcome.persist_rule and outcome.persist_scope == "settings":
-            permissions.persist_allow_rule(outcome.persist_rule)
+        if pre_perm and _verdict(pre_perm) in {"ask", "timeout"}:
+            raw_decision = "ask"
+        elif pre_perm is not None and getattr(pre_perm, "fired", 0) > 0:
+            # A hook actually ran and did not ask/deny — treat it as the
+            # existing auto-approval path. Outcomes where ``fired == 0`` mean
+            # no hook was subscribed, so the default ALLOW must be ignored.
+            raw_decision = "allow"
+
+    if raw_decision == "ask":
+        prompted_for_permission = True
+        denied = _run_permission_dialog(
+            tool_name=tool_name,
+            tool=tool,
+            tool_input=tool_input,
+            permissions=permissions,
+            dialog_runner=dialog_runner,
+            include_persist_option=include_persist_option,
+        )
+        if denied is not None:
+            return denied
 
     if hook_registry is not None:
         pre_use = _fire_hook(
             hook_registry,
             "PreToolUse",
             tool_name=tool_name,
-            payload={"tool": tool_name, "input": dict(tool_input)},
+            payload=_tool_hook_payload(tool_name, tool_input),
         )
-        if pre_use and pre_use.verdict.value == "deny":
+        if pre_use:
             hook_messages.extend(pre_use.messages)
+        if pre_use and _verdict(pre_use) == "deny":
             return ToolExecution(
                 tool_name=tool_name,
                 decision=PermissionDecision.DENY,
                 result=ToolResult.failure(
-                    "PreToolUse hook blocked invocation: "
-                    + ("; ".join(pre_use.messages) or "no message")
+                    "denied by hook: " + _hook_message(pre_use, default=tool_name)
                 ),
                 denial_reason="hook_deny",
             )
-        if pre_use:
-            hook_messages.extend(pre_use.messages)
+        if pre_use and _verdict(pre_use) == "ask" and not prompted_for_permission:
+            denied = _run_permission_dialog(
+                tool_name=tool_name,
+                tool=tool,
+                tool_input=tool_input,
+                permissions=permissions,
+                dialog_runner=dialog_runner,
+                include_persist_option=include_persist_option,
+            )
+            if denied is not None:
+                return denied
 
     try:
         result = tool.run(tool_input, context)
@@ -177,14 +180,16 @@ def execute_tool_call(
             "PostToolUse",
             tool_name=tool_name,
             payload={
-                "tool": tool_name,
-                "input": dict(tool_input),
-                "ok": result.ok,
-                "content": result.content,
+                "tool_name": tool_name,
+                "tool_input": dict(tool_input),
+                "tool_response": _tool_response_payload(result),
             },
         )
         if post_use:
             hook_messages.extend(post_use.messages)
+            updated_response = _updated_tool_response(post_use)
+            if updated_response is not None:
+                result.content = updated_response
 
     if hook_messages and result.metadata is not None:
         # Non-destructive: mirror hook diagnostics onto the result metadata
@@ -214,6 +219,69 @@ def _fire_hook(hook_registry: Any, event_name: str, *, tool_name: str, payload: 
         return hook_registry.fire(event, tool_name=tool_name, payload=payload)
     except Exception:  # pragma: no cover - hooks must never crash the loop
         return None
+
+
+def _tool_hook_payload(tool_name: str, tool_input: Mapping[str, Any]) -> dict[str, Any]:
+    return {"tool_name": tool_name, "tool_input": dict(tool_input)}
+
+
+def _tool_response_payload(result: ToolResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": result.ok,
+        "content": result.content,
+        "metadata": dict(result.metadata or {}),
+    }
+    if result.display is not None:
+        payload["display"] = result.display
+    return payload
+
+
+def _verdict(outcome: Any) -> str:
+    verdict = getattr(outcome, "verdict", "")
+    return str(getattr(verdict, "value", verdict)).lower()
+
+
+def _hook_message(outcome: Any, *, default: str) -> str:
+    messages = [str(message) for message in getattr(outcome, "messages", []) if message]
+    return "; ".join(messages) if messages else default
+
+
+def _updated_tool_response(outcome: Any) -> Any | None:
+    metadata = getattr(outcome, "metadata", {}) or {}
+    if "updated_tool_response" in metadata:
+        return metadata["updated_tool_response"]
+    if "updated_mcp_tool_output" in metadata:
+        return metadata["updated_mcp_tool_output"]
+    return None
+
+
+def _run_permission_dialog(
+    *,
+    tool_name: str,
+    tool: Any,
+    tool_input: Mapping[str, Any],
+    permissions: PermissionManager,
+    dialog_runner: DialogRunner | None,
+    include_persist_option: bool,
+) -> ToolExecution | None:
+    runner = dialog_runner or _lazy_default_dialog_runner()
+    outcome = runner(
+        tool,
+        tool_input,
+        include_persist_option=include_persist_option,
+    )
+    if not outcome.allow:
+        return ToolExecution(
+            tool_name=tool_name,
+            decision=PermissionDecision.DENY,
+            result=ToolResult.failure(f"User denied {tool_name}."),
+            denial_reason="user_deny",
+        )
+    if outcome.persist_rule and outcome.persist_scope == "session":
+        permissions.allow_for_session(outcome.persist_rule)
+    elif outcome.persist_rule and outcome.persist_scope == "settings":
+        permissions.persist_allow_rule(outcome.persist_rule)
+    return None
 
 
 def _lazy_default_dialog_runner() -> DialogRunner:
