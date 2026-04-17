@@ -4717,6 +4717,28 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             issues.extend(harness_snapshot.issues)
         if mock_info.is_blocking:
             issues.append("Mock mode forced: no provider key set")
+        # Settings cascade + hook registry diagnostics — degrade gracefully
+        # if either fails to load so /doctor still surfaces the rest.
+        settings_diag: dict[str, Any] = {}
+        hooks_diag: dict[str, Any] = {}
+        try:
+            from cli.doctor_sections import hooks_section, settings_section
+            from cli.hooks import HookRegistry
+            from cli.settings import load_settings
+
+            settings_root = workspace.root if workspace is not None else Path.cwd()
+            settings_obj = load_settings(settings_root)
+            settings_diag = settings_section(settings_obj)
+            try:
+                registry = HookRegistry.load_from_settings(settings_obj)
+            except Exception as exc:  # pragma: no cover - defensive
+                registry = HookRegistry()
+                registry.load_errors = [f"hook load failed: {exc}"]  # type: ignore[attr-defined]
+            hooks_diag = hooks_section(registry)
+        except Exception as exc:  # pragma: no cover - defensive
+            settings_diag = {"error": str(exc)}
+            hooks_diag = {"error": str(exc)}
+
         data = {
             "workspace": str(workspace.root) if workspace is not None else None,
             "issues": issues,
@@ -4727,6 +4749,8 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
             "harness": harness_snapshot.to_dict() if harness_snapshot is not None else None,
             "mock_reason": mock_info.reason,
             "mock_reason_detail": mock_info.detail,
+            "settings": settings_diag,
+            "hooks": hooks_diag,
         }
         click.echo(json_response("ok", data, next_cmd="agentlab status"))
         return
@@ -5087,6 +5111,45 @@ def doctor(config_path: str, fix: bool, json_output: bool = False) -> None:
         else:
             issues.append(f"{label} is not writable")
             click.echo(f"  {label + ':':<22}" + click.style("\u2717 Not writable", fg="red"))
+
+    # ------------------------------------------------------------------
+    # Settings cascade + Hooks
+    # ------------------------------------------------------------------
+    try:
+        from cli.doctor_sections import (
+            render_hooks_section,
+            render_settings_section,
+        )
+        from cli.hooks import HookRegistry
+        from cli.settings import load_settings
+
+        settings_root = workspace.root if workspace is not None else Path.cwd()
+        try:
+            doctor_settings = load_settings(settings_root)
+        except Exception as exc:  # pragma: no cover - defensive
+            doctor_settings = None
+            click.echo("")
+            click.echo(click.style(f"  Settings load failed: {exc}", fg="yellow"))
+
+        for line in render_settings_section(doctor_settings):
+            click.echo(line)
+
+        try:
+            doctor_hooks_registry = (
+                HookRegistry.load_from_settings(doctor_settings)
+                if doctor_settings is not None
+                else HookRegistry()
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            doctor_hooks_registry = HookRegistry()
+            doctor_hooks_registry.load_errors = [  # type: ignore[attr-defined]
+                f"hook load failed: {exc}"
+            ]
+        for line in render_hooks_section(doctor_hooks_registry):
+            click.echo(line)
+    except Exception as exc:  # pragma: no cover - defensive
+        click.echo("")
+        click.echo(click.style(f"Settings/Hooks diagnostics failed: {exc}", fg="yellow"))
 
     # ------------------------------------------------------------------
     # Summary
