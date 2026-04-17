@@ -149,6 +149,12 @@ class PermissionManager:
         # persisted to disk — the user's reload clears them.
         self._session_allow: list[str] = []
         self._session_deny: list[str] = []
+        # Patterns added by ``ask_for_session`` (e.g. AgentLab's permission
+        # preset) — they force a prompt even when ``explicit_rules`` or the
+        # mode defaults would otherwise ``allow``. They sit BELOW
+        # ``explicit_rules`` so a user who deliberately allowlists a tool in
+        # ``settings.json`` still wins.
+        self._session_ask: list[str] = []
         # Optional plan-mode workflow injected by the workbench loop. When
         # present, drafting plans restrict the tool surface ahead of the
         # normal mode lookup — see ``decision_for_tool`` below.
@@ -193,15 +199,24 @@ class PermissionManager:
 
         Precedence (highest to lowest):
 
-        1. Session overrides (``_session_deny`` before ``_session_allow``) —
-           in-memory decisions added via the permission dialog.
-        2. Explicit rules from ``settings.json::permissions.rules``.
-        3. Mode defaults from :data:`_MODE_RULES`.
+        1. ``_session_deny`` — in-memory hard-block from the permission
+           dialog.
+        2. ``_session_allow`` — in-memory "always-yes" from the dialog.
+        3. Explicit ``deny``/``ask``/``allow`` rules from
+           ``settings.json::permissions.rules``.
+        4. ``_session_ask`` — in-memory "force-prompt" patterns added via
+           :meth:`ask_for_session` (AgentLab's permission preset). Sits
+           below explicit rules so a user who deliberately allowlists a
+           tool in their workspace settings keeps that decision.
+        5. Mode defaults from :data:`_MODE_RULES`.
 
-        Rationale for the session layer at top: a user who chose
-        "Approve always (this session)" expects the decision to stick even
-        if the mode rules would otherwise ``ask`` — and a session-level
-        ``deny`` should hard-block even when an explicit allow exists.
+        Rationale for the session-allow / session-deny layers at top: a
+        user who chose "Approve always (this session)" expects the decision
+        to stick even if the mode rules would otherwise ``ask`` — and a
+        session-level ``deny`` should hard-block even when an explicit
+        allow exists. ``_session_ask`` is one tier weaker: it upgrades a
+        mode-default ``allow`` to ``ask`` but never overrides an explicit
+        user choice in ``settings.json``.
         """
         if self._matches(action, self._session_deny):
             return "deny"
@@ -211,6 +226,9 @@ class PermissionManager:
         for decision in ("deny", "ask", "allow"):
             if self._matches(action, self.explicit_rules.get(decision, [])):
                 return decision
+
+        if self._matches(action, self._session_ask):
+            return "ask"
 
         defaults = _MODE_RULES.get(self.mode, _MODE_RULES[DEFAULT_PERMISSION_MODE])
         for decision in ("deny", "ask", "allow"):
@@ -270,6 +288,19 @@ class PermissionManager:
         """Register a deny pattern for the lifetime of this manager."""
         if pattern and pattern not in self._session_deny:
             self._session_deny.append(pattern)
+
+    def ask_for_session(self, pattern: str) -> None:
+        """Register a force-ask pattern for the lifetime of this manager.
+
+        Used by the AgentLab permission preset (:mod:`cli.workbench_app.permission_preset`)
+        to route risky tools through a prompt even when the mode defaults
+        would fall through to ``allow``. Sits BELOW
+        ``explicit_rules`` in :meth:`decision_for` so a user's
+        ``settings.json`` allow/ask/deny choice still wins — and BELOW
+        ``_session_allow`` so an explicit dialog "always-yes" is never
+        silently downgraded by a programmatic preset."""
+        if pattern and pattern not in self._session_ask:
+            self._session_ask.append(pattern)
 
     def persist_allow_rule(self, pattern: str) -> Path:
         """Append an allow rule to ``settings.json`` and reload the cache."""
