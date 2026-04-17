@@ -15,18 +15,40 @@ from __future__ import annotations
 from cli.tools.registry import ToolRegistry
 from cli.workbench_app.agentlab_tools.deploy_tool import DeployTool
 from cli.workbench_app.agentlab_tools.eval_tool import EvalRunTool
+from cli.workbench_app.agentlab_tools.improve_tools import (
+    ImproveAcceptTool,
+    ImproveDiffTool,
+    ImproveListTool,
+    ImproveRunTool,
+    ImproveShowTool,
+)
 
 
 def register_agentlab_tools(registry: ToolRegistry) -> None:
     """Register every available AgentLab adapter on ``registry``.
 
-    Adapters are added incrementally as each Slice-B task lands. Today
-    :class:`EvalRunTool` (B.2) and :class:`DeployTool` (B.3) are wired up;
-    subsequent slices append the five ``Improve*`` tools.
+    Today the seven adapters cover the full eval / deploy / improve surface:
+    :class:`EvalRunTool` (B.2), :class:`DeployTool` (B.3) and the five
+    Improve* tools (B.4). Future slices add the conversation bridge but no
+    further raw command adapters.
     """
 
     registry.register(EvalRunTool())
     registry.register(DeployTool())
+    registry.register(ImproveRunTool())
+    registry.register(ImproveListTool())
+    registry.register(ImproveShowTool())
+    registry.register(ImproveDiffTool())
+    registry.register(ImproveAcceptTool())
 
 
-__all__ = ["DeployTool", "EvalRunTool", "register_agentlab_tools"]
+__all__ = [
+    "DeployTool",
+    "EvalRunTool",
+    "ImproveAcceptTool",
+    "ImproveDiffTool",
+    "ImproveListTool",
+    "ImproveRunTool",
+    "ImproveShowTool",
+    "register_agentlab_tools",
+]
