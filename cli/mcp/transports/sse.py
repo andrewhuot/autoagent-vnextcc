@@ -34,6 +34,8 @@ from urllib.parse import urljoin
 
 import httpx
 
+from cli.mcp.transports._sse_framing import parse_events, parse_one_frame
+
 
 @dataclass
 class SseTransport:
@@ -221,8 +223,8 @@ class SseTransport:
         anyone doing chunked transfer encoding all hit this path)."""
         if self._response is None:
             return None
-        self._event_iter = self._parse_events(self._response.iter_bytes())
-        for event_name, data in self._event_iter:
+        self._event_iter = parse_events(self._response.iter_bytes())
+        for event_name, data, _event_id in self._event_iter:
             self._last_event_time = time.monotonic()
             if event_name == "endpoint":
                 return data
@@ -232,87 +234,29 @@ class SseTransport:
             # here so we don't block forever on an impolite server.
         return None
 
-    def _parse_events(self, iterator):
-        """Generator: yield ``(event_name, data)`` pairs from a byte iter.
+    # NB: framing primitives live in :mod:`cli.mcp.transports._sse_framing`
+    # so the Streamable-HTTP transport can reuse them without subclassing.
+    # We keep thin method wrappers here so any external code that
+    # patched ``SseTransport._parse_events`` / ``_parse_one_frame`` (none
+    # currently, but the symmetry is cheap) continues to work.
 
-        Frames are delimited by a blank line. Multi-line ``data:`` values
-        are joined with ``\\n`` per the SSE spec. Comment lines (``:``)
-        are silently consumed but refresh the staleness clock via the
-        caller's last-event update. Unknown event names are dropped one
-        level up — this layer's only job is framing."""
-        buffer = ""
-        try:
-            for chunk in iterator:
-                if not chunk:
-                    continue
-                if isinstance(chunk, (bytes, bytearray)):
-                    buffer += chunk.decode("utf-8", errors="replace")
-                else:
-                    buffer += chunk
-                # SSE frames end on a blank line; split on the double
-                # newline and keep the trailing partial for the next
-                # chunk. We also tolerate \r\n framing by normalising.
-                buffer = buffer.replace("\r\n", "\n").replace("\r", "\n")
-                while "\n\n" in buffer:
-                    frame, buffer = buffer.split("\n\n", 1)
-                    parsed = self._parse_one_frame(frame)
-                    if parsed is not None:
-                        yield parsed
-        except Exception:
-            # Reader thread never raises past this boundary — the stream
-            # simply stops producing events, which is_connected will
-            # detect via the staleness timer.
-            self._stream_alive = False
-            return
-        # Stream ended cleanly. We deliberately do NOT flip
-        # ``_stream_alive`` here: a well-behaved MCP SSE server never
-        # closes its event stream while the session is live, so a clean
-        # end-of-iterator with the socket still open is indistinguishable
-        # from "server is idle, just hasn't sent the next ping yet." The
-        # staleness timer in :attr:`is_connected` is the source of truth
-        # for liveness — if the stream truly stopped, the clock will
-        # advance past the threshold and flip the flag on its own. When
-        # the caller explicitly tears down via :meth:`close`, that path
-        # sets ``_stream_alive = False`` directly.
+    def _parse_events(self, iterator):
+        """Delegating wrapper: yield ``(event_name, data)`` pairs.
+
+        The shared parser yields 3-tuples (with an ``id:`` field for
+        resume support); plain SSE ignores ``id`` so we drop it here to
+        preserve the historical 2-tuple shape."""
+        for event_name, data, _event_id in parse_events(iterator):
+            yield event_name, data
 
     @staticmethod
     def _parse_one_frame(frame: str) -> Optional[tuple[str, str]]:
-        """Return (event_name, data_joined) for one SSE frame.
-
-        Missing ``event:`` defaults to ``"message"`` per the SSE spec.
-        Comment-only or empty frames return None so the caller can skip
-        cleanly. ``data:`` lines have their single optional leading space
-        stripped, matching the spec."""
-        event_name = "message"
-        data_lines: list[str] = []
-        saw_field = False
-        for line in frame.split("\n"):
-            if not line:
-                continue
-            if line.startswith(":"):
-                # Comment — ignored for content, but its presence is a
-                # heartbeat signal; the enclosing loop updates the clock
-                # on every chunk boundary anyway, so we don't need to.
-                continue
-            if ":" in line:
-                field_name, _, value = line.partition(":")
-                # The spec says a single space after ":" is the
-                # separator and is stripped.
-                if value.startswith(" "):
-                    value = value[1:]
-            else:
-                field_name, value = line, ""
-            if field_name == "event":
-                event_name = value
-                saw_field = True
-            elif field_name == "data":
-                data_lines.append(value)
-                saw_field = True
-            # All other field names (id, retry, ...) are ignored — we
-            # don't resume streams after disconnects yet.
-        if not saw_field:
+        """Delegating wrapper for a single frame (2-tuple for back-compat)."""
+        parsed = parse_one_frame(frame)
+        if parsed is None:
             return None
-        return event_name, "\n".join(data_lines)
+        event_name, data, _event_id = parsed
+        return event_name, data
 
     def _pump(self) -> None:
         """Reader thread: parse events forever, enqueue message payloads.
@@ -330,7 +274,7 @@ class SseTransport:
         if iterator is None:
             return
         try:
-            for event_name, data in iterator:
+            for event_name, data, _event_id in iterator:
                 self._last_event_time = time.monotonic()
                 if event_name != "message":
                     # endpoint (late re-announce), unknown event types —
