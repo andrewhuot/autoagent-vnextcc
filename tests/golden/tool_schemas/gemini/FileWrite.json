@@ -1,0 +1,21 @@
+{
+  "description": "Create a new file or overwrite an existing file with the given content. Prefer FileEdit for surgical changes to existing files — FileWrite replaces the file wholesale.",
+  "name": "FileWrite",
+  "parameters": {
+    "properties": {
+      "content": {
+        "description": "Full file contents to write.",
+        "type": "string"
+      },
+      "path": {
+        "description": "Workspace-relative or absolute path.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path",
+      "content"
+    ],
+    "type": "object"
+  }
+}

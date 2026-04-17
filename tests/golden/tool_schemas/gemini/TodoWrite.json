@@ -1,0 +1,38 @@
+{
+  "description": "Persist the agent's working todo list to .agentlab/todos.json. Supports partial updates: items with a known id update in place, items without an id are appended with a generated uuid.",
+  "name": "TodoWrite",
+  "parameters": {
+    "properties": {
+      "items": {
+        "items": {
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "enum": [
+                "completed",
+                "in_progress",
+                "pending"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "content",
+            "status"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "items"
+    ],
+    "type": "object"
+  }
+}

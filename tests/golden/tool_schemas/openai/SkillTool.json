@@ -1,0 +1,24 @@
+{
+  "function": {
+    "description": "Run a user skill by slug. Skills bundle a prompt with a declared allowed-tools list. Use this to reuse authored procedures (e.g. commit, debug) with their permissions enforced.",
+    "name": "SkillTool",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "arguments": {
+          "description": "Optional text substituted into $ARGUMENTS.",
+          "type": "string"
+        },
+        "slug": {
+          "description": "Skill slug as shown in /skill-list.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "slug"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

@@ -1,0 +1,25 @@
+{
+  "description": "Spawn a subagent to work on a focused task. Describe the work and supply the prompt. The subagent runs in the background — use /background to monitor progress and TaskGet to fetch results once complete.",
+  "name": "AgentSpawn",
+  "parameters": {
+    "properties": {
+      "description": {
+        "description": "Short label for the task (shown in /background).",
+        "type": "string"
+      },
+      "prompt": {
+        "description": "Full instructions the subagent should act on.",
+        "type": "string"
+      },
+      "subagent_type": {
+        "description": "Optional subagent role name (e.g. 'reviewer').",
+        "type": "string"
+      }
+    },
+    "required": [
+      "description",
+      "prompt"
+    ],
+    "type": "object"
+  }
+}

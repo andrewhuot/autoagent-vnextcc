@@ -1,0 +1,20 @@
+{
+  "function": {
+    "description": "Finalise the drafted plan and request user approval to exit plan mode. Supply the plan content — the user sees it in the confirmation dialog. On approval, the next tool call runs with the normal permission mode; on denial, the plan stays drafting.",
+    "name": "ExitPlanMode",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "description": "Final plan markdown to present to the user.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "plan"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

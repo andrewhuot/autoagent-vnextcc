@@ -32,6 +32,8 @@ import click
 from cli.errors import click_error
 from cli.hooks import HookRegistry, load_hook_registry
 from cli.llm.orchestrator import LLMOrchestrator
+from cli.llm.provider_capabilities import ProviderCapabilities
+from cli.llm.streaming import events_from_model_response
 from cli.llm.types import (
     AssistantTextBlock,
     AssistantToolUseBlock,
@@ -181,6 +183,21 @@ class EchoModel:
     Emits a single text block echoing the last user message, flagged
     with ``stop_reason="end_turn"``. Does not call any tools."""
 
+    capabilities: ProviderCapabilities = ProviderCapabilities(
+        streaming=False,
+        native_tool_use=False,
+        parallel_tool_calls=False,
+        thinking=False,
+        prompt_cache=False,
+        vision=False,
+        json_mode=False,
+        max_context_tokens=2048,
+        max_output_tokens=512,
+    )
+    """Minimum viable capability set — zero for every optional surface,
+    non-zero context/output to satisfy downstream budget math that would
+    otherwise divide by zero."""
+
     def complete(
         self,
         *,
@@ -195,6 +212,23 @@ class EchoModel:
             blocks=[AssistantTextBlock(text=f"echo: {text}")],
             stop_reason="end_turn",
         )
+
+    def stream(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[Any],
+        tools: list[dict[str, Any]],
+    ):
+        """Synthesise a stream from :meth:`complete` so the echo model
+        conforms to the streaming protocol. Keeps the renderer contract
+        uniform even though no real deltas are available."""
+        response = self.complete(
+            system_prompt=system_prompt,
+            messages=messages,
+            tools=tools,
+        )
+        yield from events_from_model_response(response)
 
 
 @click.command("print")

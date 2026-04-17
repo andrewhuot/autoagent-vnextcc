@@ -1,0 +1,29 @@
+{
+  "description": "Perform an exact string replacement in a file. Fails when 'old_string' is not unique unless 'replace_all' is true. Use this instead of FileWrite for precise edits to existing files.",
+  "name": "FileEdit",
+  "parameters": {
+    "properties": {
+      "new_string": {
+        "description": "Replacement text (must differ from old_string).",
+        "type": "string"
+      },
+      "old_string": {
+        "description": "The exact text to replace.",
+        "type": "string"
+      },
+      "path": {
+        "type": "string"
+      },
+      "replace_all": {
+        "description": "Replace every occurrence instead of failing on ambiguity.",
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "path",
+      "old_string",
+      "new_string"
+    ],
+    "type": "object"
+  }
+}

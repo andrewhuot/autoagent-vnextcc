@@ -1,0 +1,28 @@
+{
+  "function": {
+    "description": "Find files matching a glob pattern (e.g. 'configs/*.yaml', 'agent/**/*.py'). Returns up to 250 paths by default, sorted by modification time (newest first).",
+    "name": "Glob",
+    "parameters": {
+      "additionalProperties": false,
+      "properties": {
+        "limit": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "path": {
+          "description": "Optional subdirectory to search under.",
+          "type": "string"
+        },
+        "pattern": {
+          "description": "Glob pattern interpreted relative to the workspace.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "pattern"
+      ],
+      "type": "object"
+    }
+  },
+  "type": "function"
+}

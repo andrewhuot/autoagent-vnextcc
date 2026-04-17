@@ -20,9 +20,10 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, ClassVar, Iterator
 
 from cli.llm.caching import CacheInput, compute_cache_blocks
+from cli.llm.provider_capabilities import ProviderCapabilities
 from cli.llm.retries import RetryPolicy, retry_call
 from cli.llm.streaming import (
     MessageStop,
@@ -70,6 +71,21 @@ class AnthropicClient:
     injected fake for tests. The fake must implement
     ``messages.stream(**kwargs)`` returning a context-manager that
     yields SDK event objects with ``.type`` and event-specific fields."""
+
+    capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
+        streaming=True,
+        native_tool_use=True,
+        parallel_tool_calls=True,
+        thinking=True,
+        prompt_cache=True,
+        vision=True,
+        json_mode=True,
+        max_context_tokens=200_000,
+        max_output_tokens=8192,
+    )
+    """Declared runtime surface. Claude 4.x family: streaming + tool use
+    + thinking + prompt cache + vision + JSON mode; 200k context, 8k
+    default output ceiling (callers override via ``max_output_tokens``)."""
 
     model: str = "claude-sonnet-4-5"
     api_key: str | None = None

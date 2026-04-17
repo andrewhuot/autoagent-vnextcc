@@ -1,0 +1,17 @@
+{
+  "description": "Read and parse an agent configuration file (YAML or JSON). Returns the parsed data as JSON plus a validation summary against the AgentConfig / AgentLab schemas when the file matches one.",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "path": {
+        "description": "Workspace-relative or absolute path to the config.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "path"
+    ],
+    "type": "object"
+  },
+  "name": "ConfigRead"
+}
