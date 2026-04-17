@@ -20,6 +20,7 @@ and accepts an optional ``text_writer`` for human-readable output.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 import time
@@ -200,15 +201,45 @@ def _invoke_legacy_autofix(*, auto: bool, json_output: bool) -> None:
         click.echo("  agentlab autofix suggest")
 
 
-def _run_post_deploy_eval(*, strict_live: bool = False) -> float:
+def _run_post_deploy_eval(
+    *, strict_live: bool = False, cases_path: str | None = None,
+) -> float:
     """Run a fresh eval against the currently-active config and return its
-    composite score. Separate helper so tests can patch it."""
+    composite score. Separate helper so tests can patch it.
+
+    When ``cases_path`` is provided it is forwarded as ``cases_dir=`` to
+    :func:`runner._build_eval_runner`. Only directories of YAML cases are
+    accepted today; single-file replay sets (``.jsonl`` etc.) are a TODO
+    and raise :class:`ImproveCommandError` with a clear message.
+    """
+    if cases_path is not None:
+        from pathlib import Path as _Path
+        p = _Path(cases_path)
+        if not p.exists():
+            raise ImproveCommandError(
+                f"Replay set not found or unsupported: {cases_path}"
+            )
+        if not p.is_dir():
+            # Single files are not yet supported — only directories of
+            # YAML cases. Surface a clear, directory-required message.
+            raise ImproveCommandError(
+                f"Replay set must be a directory of YAML cases "
+                f"(got file): {cases_path}"
+            )
+
     runner = _runner_module()
     runtime = runner.load_runtime_with_mode_preference()
     workspace = runner.discover_workspace()
     resolved_config = workspace.resolve_active_config() if workspace is not None else None
     config = resolved_config.config if resolved_config is not None else None
-    eval_runner = runner._build_eval_runner(runtime, default_agent_config=config)
+    if cases_path is not None:
+        eval_runner = runner._build_eval_runner(
+            runtime, default_agent_config=config, cases_dir=cases_path,
+        )
+    else:
+        eval_runner = runner._build_eval_runner(
+            runtime, default_agent_config=config,
+        )
     # strict-live is enforced by the eval_runner's own gates; passing it through
     # is a no-op here but keeps the signature future-proof.
     score = eval_runner.run(config=config)
@@ -840,16 +871,88 @@ def run_improve_accept_in_process(
     )
 
 
+def _maybe_record_calibration(
+    attempt: Any,
+    full_id: str,
+    composite_delta: float | None,
+    *,
+    text_writer: Callable[[str], None] | None = None,
+) -> bool | None:
+    """Write a CalibrationStore row when the attempt has all three
+    calibration fields set (predicted_effectiveness, strategy_surface,
+    strategy_name) AND ``composite_delta`` is not None.
+
+    Returns:
+      - ``True``: row written.
+      - ``False``: skipped because the attempt is missing one of the
+        three calibration fields (legacy attempt).
+      - ``None``: skipped due to missing ``composite_delta`` or because
+        the underlying CalibrationStore call failed (warning emitted).
+    """
+    if composite_delta is None:
+        # Don't fabricate 0.0 — skip with a log line so calibration
+        # history stays trustworthy.
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "calibration skipped: attempt %s has no composite_delta "
+            "(missing score_before)",
+            full_id,
+        )
+        return None
+
+    if (
+        getattr(attempt, "predicted_effectiveness", None) is not None
+        and getattr(attempt, "strategy_surface", None)
+        and getattr(attempt, "strategy_name", None)
+    ):
+        try:
+            from optimizer.calibration import CalibrationStore
+            calibration_db = os.environ.get(
+                "AGENTLAB_CALIBRATION_DB",
+                ".agentlab/calibration.db",
+            )
+            store = CalibrationStore(db_path=calibration_db)
+            store.record(
+                attempt_id=full_id,
+                surface=attempt.strategy_surface,
+                strategy=attempt.strategy_name,
+                predicted_effectiveness=float(
+                    attempt.predicted_effectiveness
+                ),
+                actual_delta=float(composite_delta),
+            )
+            return True
+        except Exception as exc:
+            _emit(text_writer, click.style(
+                f"Warning: failed to record calibration: {exc}",
+                fg="yellow"))
+            return None
+
+    logger = logging.getLogger(__name__)
+    logger.info(
+        "calibration skipped: attempt %s missing predicted_effectiveness "
+        "or strategy_surface or strategy_name (legacy attempt?)",
+        full_id,
+    )
+    return False
+
+
 def run_improve_measure_in_process(
     *,
     attempt_id: str,
     strict_live: bool = False,
     memory_db: str | None = None,
     lineage_db: str | None = None,
+    cases_path: str | None = None,
     on_event: Callable[[dict[str, Any]], None],
     text_writer: Callable[[str], None] | None = None,
 ) -> ImproveMeasureResult:
-    """Run a post-deploy eval and record composite_delta for an attempt."""
+    """Run a post-deploy eval and record composite_delta for an attempt.
+
+    When ``cases_path`` is set the post-deploy eval runs against that
+    directory of YAML cases instead of the workspace default. Default
+    invocation (``cases_path=None``) is byte-identical to before.
+    """
     from optimizer.improvement_lineage import ImprovementLineageStore
 
     resolved_memory_db, resolved_lineage_db = _resolve_improve_db_paths(
@@ -869,6 +972,7 @@ def run_improve_measure_in_process(
             "post_composite": None,
             "score_before": None,
             "composite_delta": None,
+            "cases_path": cases_path,
             "status": "failed",
         })
         raise ImproveCommandError(
@@ -876,7 +980,9 @@ def run_improve_measure_in_process(
             f"Run `agentlab improve accept {full_id}` first."
         )
 
-    post_composite = _run_post_deploy_eval(strict_live=strict_live)
+    post_composite = _run_post_deploy_eval(
+        strict_live=strict_live, cases_path=cases_path,
+    )
 
     score_before = getattr(attempt, "score_before", None)
     if score_before is None:
@@ -902,6 +1008,12 @@ def run_improve_measure_in_process(
             f"Warning: failed to record measurement event: {exc}",
             fg="yellow"))
 
+    # R6.B.2d: write calibration row when the attempt carries the three
+    # calibration fields and produced a composite_delta.
+    calibration_recorded = _maybe_record_calibration(
+        attempt, full_id, composite_delta, text_writer=text_writer,
+    )
+
     if text_writer is not None:
         _emit(text_writer, click.style(
             f"\n\u2713 Measured {full_id}", fg="green", bold=True))
@@ -919,6 +1031,8 @@ def run_improve_measure_in_process(
         "post_composite": post_composite,
         "score_before": score_before,
         "composite_delta": composite_delta,
+        "cases_path": cases_path,
+        "calibration_recorded": calibration_recorded,
         "status": "ok",
     })
     return ImproveMeasureResult(
@@ -1493,6 +1607,11 @@ def register_improve_commands(cli: click.Group) -> None:
                   help="Optimizer memory DB (default: AGENTLAB_MEMORY_DB or optimizer_memory.db).")
     @click.option("--lineage-db", default=None,
                   help="Improvement lineage DB (default: AGENTLAB_IMPROVEMENT_LINEAGE_DB or .agentlab/improvement_lineage.db).")
+    @click.option("--replay-set", "replay_set", default=None,
+                  type=str,
+                  help="Path to a directory of replay eval cases. "
+                       "When set, measures against this set instead "
+                       "of the workspace default.")
     @click.option("--json", "json_output", "-j", is_flag=True,
                   help="Output as JSON.")
     def improve_measure(
@@ -1500,6 +1619,7 @@ def register_improve_commands(cli: click.Group) -> None:
         strict_live: bool,
         memory_db: str | None,
         lineage_db: str | None,
+        replay_set: str | None,
         json_output: bool,
     ) -> None:
         """Run a post-deploy eval and record composite_delta for an attempt."""
@@ -1537,7 +1657,16 @@ def register_improve_commands(cli: click.Group) -> None:
                 fg="red"), err=True)
             raise click.exceptions.Exit(1)
 
-        post_composite = _run_post_deploy_eval(strict_live=strict_live)
+        if replay_set is not None:
+            click.echo(f"Using replay set: {replay_set}")
+
+        try:
+            post_composite = _run_post_deploy_eval(
+                strict_live=strict_live, cases_path=replay_set,
+            )
+        except ImproveCommandError as exc:
+            click.echo(click.style(str(exc), fg="red"), err=True)
+            raise click.exceptions.Exit(1)
 
         score_before = getattr(attempt, "score_before", None)
         if score_before is None:
@@ -1563,15 +1692,26 @@ def register_improve_commands(cli: click.Group) -> None:
                 f"Warning: failed to record measurement event: {exc}",
                 fg="yellow"), err=True)
 
+        # R6.B.2d: write calibration row when fields are present.
+        def _stderr_writer(line: str) -> None:
+            click.echo(line, err=True)
+        calibration_recorded = _maybe_record_calibration(
+            attempt, full_id, composite_delta, text_writer=_stderr_writer,
+        )
+
         if json_output:
-            click.echo(_json.dumps({
+            payload = {
                 "status": "ok",
                 "attempt_id": full_id,
                 "measurement_id": measurement_id,
                 "post_composite": post_composite,
                 "score_before": score_before,
                 "composite_delta": composite_delta,
-            }))
+                "calibration_recorded": calibration_recorded,
+            }
+            if replay_set is not None:
+                payload["replay_set"] = replay_set
+            click.echo(_json.dumps(payload))
         else:
             click.echo(click.style(
                 f"\n\u2713 Measured {full_id}",

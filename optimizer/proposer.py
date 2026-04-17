@@ -39,17 +39,42 @@ class StrategyExplanation:
     explored: bool  # True if this ranking came from the epsilon exploration branch
 
 
-def format_strategy_explanation(e: StrategyExplanation) -> str:
-    """Render a one-line rationale for `--explain-strategy` output."""
+def format_strategy_explanation(
+    e: StrategyExplanation,
+    *,
+    calibration_factor: float | None = None,
+) -> str:
+    """Render a one-line rationale for ``--explain-strategy`` output.
+
+    When ``calibration_factor`` is set, append a clause showing the
+    effectiveness adjusted by the learned ``(actual - predicted)`` mean
+    from recent attempts on the same ``(surface, strategy)`` pair. When
+    ``None`` (default), output is byte-identical to pre-R6 behavior —
+    preserving the ``--explain-strategy`` golden.
+    """
     if e.explored:
-        return (
+        base = (
             f"selected mutation {e.strategy} via random exploration "
             f"(epsilon-greedy; past effectiveness={e.effectiveness:.2f})"
         )
+    else:
+        base = (
+            f"selected mutation {e.strategy} because "
+            f"effectiveness={e.effectiveness:.2f} on similar surfaces "
+            f"(n={e.samples} samples)"
+        )
+
+    if calibration_factor is None or calibration_factor == 0.0:
+        # factor==0 carries no signal — treat as no-op.
+        return base
+
+    # Effectiveness is bounded to [0, 1]; clamp the calibrated value so a
+    # large positive factor doesn't surface nonsensical "calibrated=1.23".
+    calibrated = max(0.0, min(1.0, e.effectiveness + calibration_factor))
+    direction = "overperformed" if calibration_factor > 0 else "underperformed"
     return (
-        f"selected mutation {e.strategy} because "
-        f"effectiveness={e.effectiveness:.2f} on similar surfaces "
-        f"(n={e.samples} samples)"
+        f"{base}; calibrated effectiveness={calibrated:.2f} "
+        f"(last attempts {direction} by {abs(calibration_factor):.2f})"
     )
 
 

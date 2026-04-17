@@ -64,6 +64,38 @@ class OptimizeRunResult:
     artifacts: tuple[str, ...]
 
 
+def _explanation_with_calibration(entry) -> str:
+    """Render a ``StrategyExplanation`` with its calibration factor pulled
+    from :class:`optimizer.calibration.CalibrationStore`.
+
+    Sparse history (no factor available) → byte-identical pre-R6 output so
+    the ``--explain-strategy`` golden stays green. Any failure inside the
+    calibration lookup is swallowed — rendering must never raise.
+    """
+    from optimizer.proposer import format_strategy_explanation
+
+    factor: float | None = None
+    try:
+        import os
+
+        from optimizer.calibration import CalibrationStore
+
+        db_path = os.environ.get(
+            "AGENTLAB_CALIBRATION_DB",
+            ".agentlab/calibration.db",
+        )
+        surface = getattr(entry, "surface", None)
+        strategy = getattr(entry, "strategy", None)
+        if surface and strategy:
+            store = CalibrationStore(db_path=db_path)
+            factor = store.factor(surface=surface, strategy=strategy, n=20)
+    except Exception:
+        # Calibration is purely decorative; never let its failure break
+        # --explain-strategy rendering.
+        factor = None
+    return format_strategy_explanation(entry, calibration_factor=factor)
+
+
 def run_optimize_in_process(
     *,
     cycles: int = 1,
@@ -192,11 +224,10 @@ def run_optimize_in_process(
         if explain_strategy:
             from optimizer.proposer import (
                 _LAST_EXPLANATION as _module_last_explanation,
-                format_strategy_explanation,
             )
             if _module_last_explanation and text_writer is not None:
                 for entry in _module_last_explanation:
-                    _emit_text(format_strategy_explanation(entry))
+                    _emit_text(_explanation_with_calibration(entry))
             elif text_writer is not None:
                 _emit_text(
                     "No strategy explanation available (reflection data empty or mock mode)."
@@ -467,7 +498,6 @@ def run_optimize_in_process(
     if explain_strategy and text_writer is not None:
         from optimizer.proposer import (
             _LAST_EXPLANATION as _module_last_explanation,
-            format_strategy_explanation,
         )
 
         explanation = getattr(proposer, "_last_explanation", None) or list(
@@ -475,7 +505,7 @@ def run_optimize_in_process(
         )
         if explanation:
             for entry in explanation:
-                _emit_text(format_strategy_explanation(entry))
+                _emit_text(_explanation_with_calibration(entry))
         else:
             _emit_text(
                 "No strategy explanation available (reflection data empty or mock mode)."
@@ -1165,12 +1195,11 @@ def register_optimize_commands(cli: click.Group) -> None:
             if explain_strategy:
                 from optimizer.proposer import (
                     _LAST_EXPLANATION as _module_last_explanation,
-                    format_strategy_explanation,
                 )
 
                 if _module_last_explanation:
                     for entry in _module_last_explanation:
-                        click.echo(format_strategy_explanation(entry))
+                        click.echo(_explanation_with_calibration(entry))
                 else:
                     click.echo(
                         "No strategy explanation available (reflection data empty or mock mode)."
@@ -1456,7 +1485,6 @@ def register_optimize_commands(cli: click.Group) -> None:
             # thread the proposer object through runner glue.
             from optimizer.proposer import (
                 _LAST_EXPLANATION as _module_last_explanation,
-                format_strategy_explanation,
             )
 
             explanation = getattr(proposer, "_last_explanation", None) or list(
@@ -1464,7 +1492,7 @@ def register_optimize_commands(cli: click.Group) -> None:
             )
             if explanation:
                 for entry in explanation:
-                    click.echo(format_strategy_explanation(entry))
+                    click.echo(_explanation_with_calibration(entry))
             else:
                 click.echo(
                     "No strategy explanation available (reflection data empty or mock mode)."

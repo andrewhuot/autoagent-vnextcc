@@ -22,6 +22,9 @@ class OptimizationAttempt:
     health_context: str = ""  # JSON string of health metrics that triggered this
     skills_applied: str = ""  # JSON array of skill IDs used in this attempt
     patch_bundle: str = ""  # JSON typed canonical component patch bundle, when available
+    predicted_effectiveness: float | None = None
+    strategy_surface: str | None = None
+    strategy_name: str | None = None
 
 
 class OptimizationMemory:
@@ -50,7 +53,10 @@ class OptimizationMemory:
                     significance_n INTEGER DEFAULT 0,
                     health_context TEXT DEFAULT '',
                     skills_applied TEXT DEFAULT '',
-                    patch_bundle TEXT DEFAULT ''
+                    patch_bundle TEXT DEFAULT '',
+                    predicted_effectiveness REAL,
+                    strategy_surface TEXT,
+                    strategy_name TEXT
                 )
                 """
             )
@@ -83,6 +89,18 @@ class OptimizationMemory:
                 conn.execute(
                     "ALTER TABLE attempts ADD COLUMN patch_bundle TEXT DEFAULT ''"
                 )
+            if "predicted_effectiveness" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN predicted_effectiveness REAL"
+                )
+            if "strategy_surface" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN strategy_surface TEXT"
+                )
+            if "strategy_name" not in columns:
+                conn.execute(
+                    "ALTER TABLE attempts ADD COLUMN strategy_name TEXT"
+                )
             conn.commit()
 
     def log(self, attempt: OptimizationAttempt) -> None:
@@ -93,8 +111,9 @@ class OptimizationMemory:
                 INSERT OR REPLACE INTO attempts
                     (attempt_id, timestamp, change_description, config_diff, config_section, status,
                      score_before, score_after, significance_p_value, significance_delta,
-                     significance_n, health_context, skills_applied, patch_bundle)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     significance_n, health_context, skills_applied, patch_bundle,
+                     predicted_effectiveness, strategy_surface, strategy_name)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     attempt.attempt_id,
@@ -111,6 +130,9 @@ class OptimizationMemory:
                     attempt.health_context,
                     attempt.skills_applied,
                     attempt.patch_bundle,
+                    attempt.predicted_effectiveness,
+                    attempt.strategy_surface,
+                    attempt.strategy_name,
                 ),
             )
             conn.commit()
@@ -122,7 +144,8 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context, skills_applied, patch_bundle
+                       significance_delta, significance_n, health_context, skills_applied, patch_bundle,
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -138,7 +161,8 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context, skills_applied, patch_bundle
+                       significance_delta, significance_n, health_context, skills_applied, patch_bundle,
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 WHERE status = 'accepted'
                 ORDER BY timestamp DESC
@@ -155,7 +179,8 @@ class OptimizationMemory:
                 """
                 SELECT attempt_id, timestamp, change_description, config_diff, config_section,
                        status, score_before, score_after, significance_p_value,
-                       significance_delta, significance_n, health_context, skills_applied, patch_bundle
+                       significance_delta, significance_n, health_context, skills_applied, patch_bundle,
+                       predicted_effectiveness, strategy_surface, strategy_name
                 FROM attempts
                 ORDER BY timestamp DESC
                 """
@@ -186,4 +211,7 @@ class OptimizationMemory:
             health_context=row[11],
             skills_applied=row[12] if len(row) > 12 else "",
             patch_bundle=row[13] if len(row) > 13 else "",
+            predicted_effectiveness=row[14] if len(row) > 14 else None,
+            strategy_surface=row[15] if len(row) > 15 else None,
+            strategy_name=row[16] if len(row) > 16 else None,
         )

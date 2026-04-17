@@ -4,11 +4,18 @@ from __future__ import annotations
 
 import random
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 from logger.store import ConversationStore
 
 from .versioning import ConfigVersionManager
+
+if TYPE_CHECKING:
+    from optimizer.canary_scoring import (
+        CanaryScoringAggregator,
+        CanaryVerdict,
+    )
 
 
 @dataclass
@@ -21,6 +28,8 @@ class CanaryStatus:
     baseline_success_rate: float
     started_at: float
     verdict: str  # "no_canary", "pending", "promote", "rollback"
+    pairwise_verdict: "CanaryVerdict | None" = field(default=None)
+    pairwise_preferred: str | None = field(default=None)
 
 
 class CanaryManager:
@@ -31,12 +40,14 @@ class CanaryManager:
         canary_percentage: float = 0.10,
         min_canary_conversations: int = 10,
         max_canary_duration_s: float = 3600.0,  # 1 hour
+        pairwise_aggregator: "CanaryScoringAggregator | None" = None,
     ):
         self.version_manager = version_manager
         self.store = store
         self.canary_percentage = canary_percentage
         self.min_canary_conversations = min_canary_conversations
         self.max_canary_duration_s = max_canary_duration_s
+        self.pairwise_aggregator = pairwise_aggregator
 
     def should_use_canary(self) -> bool:
         """Decide if this request should use canary config."""
@@ -117,6 +128,27 @@ class CanaryManager:
             else:
                 verdict = "rollback"
 
+        # Optional opt-in: consult pairwise aggregator. Pairwise can only
+        # downgrade a "promote" → "rollback" when it prefers baseline; it
+        # never overrides a legacy rollback (outcome rates remain ground
+        # truth for "is the candidate working at all").
+        pairwise_verdict = None
+        pairwise_preferred = None
+        if self.pairwise_aggregator is not None and baseline_label is not None:
+            try:
+                pairwise_verdict = self.pairwise_aggregator.score_recent(
+                    baseline_label=baseline_label,
+                    candidate_label=canary_label,
+                )
+            except Exception:
+                # Aggregator failure must never escalate into a deploy error.
+                pairwise_verdict = None
+
+            if pairwise_verdict is not None:
+                pairwise_preferred = pairwise_verdict.preferred
+                if pairwise_verdict.preferred == "baseline" and verdict == "promote":
+                    verdict = "rollback"
+
         return CanaryStatus(
             is_active=True,
             canary_version=canary_ver,
@@ -126,6 +158,8 @@ class CanaryManager:
             baseline_success_rate=baseline_success,
             started_at=started_at,
             verdict=verdict,
+            pairwise_verdict=pairwise_verdict,
+            pairwise_preferred=pairwise_preferred,
         )
 
     def execute_verdict(self, status: CanaryStatus) -> str:
