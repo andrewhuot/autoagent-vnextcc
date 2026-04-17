@@ -41,6 +41,7 @@ from cli.workbench_app.conversation_bridge import ConversationBridge
 from cli.workbench_app.conversation_store import ConversationStore
 from cli.workbench_app.permission_preset import apply_agentlab_defaults
 from cli.workbench_app.plan_mode import PlanStore, PlanWorkflow
+from cli.workbench_app.session_state import WorkbenchSession
 from cli.workbench_app.system_prompt import build_system_prompt
 from cli.workbench_app.tool_registry import build_default_registry as build_prompt_registry
 from cli.workbench_app.transcript_checkpoint import (
@@ -71,6 +72,13 @@ class WorkbenchRuntime:
     conversation_bridge: ConversationBridge
     conversation_id: str
 
+    # R7.C.3 — used by ``_run_orchestrator_turn`` to advance the
+    # ``cost_ticker_usd`` after each assistant turn. Both default to
+    # ``None`` so callers that don't supply a session/model still build
+    # cleanly (legacy tests, headless paths).
+    workbench_session: WorkbenchSession | None = None
+    model_id: str | None = None
+
     # Optional extras so callers can hand-inspect warnings (skill-load
     # errors, MCP connection problems, etc.) in diagnostics.
     skill_warnings: list[str] = field(default_factory=list)
@@ -86,6 +94,7 @@ def build_workbench_runtime(
     active_model: str = "claude-sonnet-4-5",
     mcp_client_factory: Any | None = None,
     echo: Callable[[str], None] | None = None,
+    workbench_session: WorkbenchSession | None = None,
 ) -> WorkbenchRuntime:
     """Construct every subsystem and hand back a packaged
     :class:`WorkbenchRuntime`.
@@ -232,6 +241,8 @@ def build_workbench_runtime(
         conversation_store=conversation_store,
         conversation_bridge=conversation_bridge,
         conversation_id=conversation.id,
+        workbench_session=workbench_session,
+        model_id=active_model,
         skill_warnings=list(skill_store.warnings),
     )
 

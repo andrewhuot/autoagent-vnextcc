@@ -579,6 +579,8 @@ def run_workbench_app(
                         result=result,
                         echo=out,
                         bridge=getattr(orchestrator, "conversation_bridge", None),
+                        session=getattr(orchestrator, "workbench_session", None),
+                        model_id=getattr(orchestrator, "model_id", None),
                     )
                     handled_as_slash = True
             if ctx.exit_requested:
@@ -613,6 +615,8 @@ def run_workbench_app(
                     line=line,
                     echo=out,
                     bridge=getattr(orchestrator, "conversation_bridge", None),
+                    session=getattr(orchestrator, "workbench_session", None),
+                    model_id=getattr(orchestrator, "model_id", None),
                 )
             else:
                 _run_chat_unavailable_turn(echo=out)
@@ -997,6 +1001,8 @@ def _run_follow_up_turns(
     result: Any,
     echo: EchoFn,
     bridge: Any | None = None,
+    session: Any | None = None,
+    model_id: str | None = None,
 ) -> None:
     """Process command-requested follow-up prompts through the chat path."""
     prompt: str | None = None
@@ -1015,6 +1021,8 @@ def _run_follow_up_turns(
         line=prompt,
         echo=echo,
         bridge=bridge,
+        session=session,
+        model_id=model_id,
     )
 
 
@@ -1447,6 +1455,8 @@ def _run_orchestrator_turn(
     line: str,
     echo: EchoFn,
     bridge: Any | None = None,
+    session: Any | None = None,
+    model_id: str | None = None,
 ) -> None:
     """Route one natural-language user turn through :meth:`run_turn`.
 
@@ -1486,6 +1496,20 @@ def _run_orchestrator_turn(
         try:
             bridge.record_assistant_turn(result)
         except Exception:  # pragma: no cover — bridge persistence is best-effort
+            pass
+
+    # R7.C.3 — advance the workbench cost ticker. Wrapped in try/except
+    # because cost reporting must NEVER block the conversation: an unknown
+    # model, missing capability, or write failure on the session file is a
+    # diagnostics issue, not a UX-blocking error.
+    if result is not None and session is not None and model_id is not None:
+        try:
+            from cli.workbench_app.cost_calculator import compute_turn_cost
+
+            delta = compute_turn_cost(getattr(result, "usage", None), model_id)
+            if delta > 0:
+                session.increment_cost(delta)
+        except Exception:  # pragma: no cover — cost reporting must never block UX
             pass
 
     if ctx is None or result is None:
