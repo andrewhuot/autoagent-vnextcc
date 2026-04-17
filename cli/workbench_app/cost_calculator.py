@@ -4,13 +4,24 @@ The conversation loop calls :func:`compute_turn_cost` after every
 turn to advance ``WorkbenchSession.cost_ticker_usd``. The function
 **never raises** — an unknown model, missing pricing, or empty
 usage returns ``0.0``. Cost reporting must never block the user.
+
+Slash-command LLM calls share the same sink via
+:func:`record_slash_cost`, which wraps ``compute_turn_cost`` and
+``session.increment_cost`` so a handler can credit cost with one
+line. Keeping a single entry point means the status-bar ticker
+cannot drift from the computed total, and future pricing fixes only
+have to land in one place.
 """
 
 from __future__ import annotations
 
-from typing import Mapping
+from typing import TYPE_CHECKING, Mapping
 
 from cli.llm.capabilities import get_capability
+
+
+if TYPE_CHECKING:  # pragma: no cover — import cycle guard
+    from cli.workbench_app.session_state import WorkbenchSession
 
 
 def _coerce_int(value: object) -> int:
@@ -67,4 +78,27 @@ def compute_turn_cost(usage: Mapping[str, int] | None, model_id: str | None) -> 
     return round(cost, 6)
 
 
-__all__ = ["compute_turn_cost"]
+def record_slash_cost(
+    session: "WorkbenchSession",
+    *,
+    usage: Mapping[str, int] | None,
+    model_id: str | None,
+) -> float:
+    """Compute a slash-command's turn cost and credit it to ``session``.
+
+    Single seam so eval/improve/optimize handlers don't duplicate the
+    ``compute_turn_cost`` -> ``increment_cost`` dance — and, more importantly,
+    so the status-bar ticker and the calculator can never disagree about
+    what was spent. Returns the delta that was applied (``0.0`` when the
+    calculator couldn't price the turn) for callers that want to log it.
+
+    Like ``compute_turn_cost``, this never raises: a missing model, empty
+    usage, or a zero delta is a no-op on the session.
+    """
+    delta = compute_turn_cost(usage, model_id)
+    if delta > 0:
+        session.increment_cost(delta)
+    return delta
+
+
+__all__ = ["compute_turn_cost", "record_slash_cost"]

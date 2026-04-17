@@ -425,6 +425,23 @@ def make_eval_handler(
                 except Exception as exc:  # don't let a session error crash /eval
                     echo(theme.warning(f"  /eval: session update failed: {exc}"))
 
+            # R4.9 / C3 — route any usage the eval runner surfaces through
+            # ``record_slash_cost`` so the status-bar ticker captures
+            # slash-command LLM costs through the same sink as conversation
+            # turns. Today the subprocess runner does not forward ``usage``
+            # on its events, so this is a no-op in production; wiring the
+            # seam now means a later runner change ("events carry usage")
+            # lights up the bar without touching the handler.
+            usage = ctx.meta.get("eval_usage") if isinstance(ctx.meta, dict) else None
+            model_id = ctx.meta.get("eval_model_id") if isinstance(ctx.meta, dict) else None
+            if usage or model_id:
+                try:
+                    from cli.workbench_app.cost_calculator import record_slash_cost
+
+                    record_slash_cost(session, usage=usage, model_id=model_id)
+                except Exception as exc:  # cost reporting must never block /eval
+                    echo(theme.warning(f"  /eval: cost record failed: {exc}"))
+
         summary_line = _format_summary(final_summary)
         meta: list[str] = []
         if final_summary.next_action:
