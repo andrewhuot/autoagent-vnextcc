@@ -57,6 +57,7 @@ class HttpStreamableTransport:
     """
 
     url: str
+    headers: dict[str, str] = field(default_factory=dict)
     connect_timeout: float = 5.0
     request_timeout: float = 30.0
     client: Optional[httpx.Client] = None
@@ -174,6 +175,7 @@ class HttpStreamableTransport:
             # method it's answering — spec-compliant behaviour.
             "Accept": "application/json, text/event-stream",
         }
+        headers.update(self.headers)
         if self._session_id is not None:
             headers["Mcp-Session-Id"] = self._session_id
 
@@ -285,7 +287,7 @@ class HttpStreamableTransport:
     def _try_open_get_channel(self) -> None:
         """Attempt the long-lived GET SSE channel. Tolerate 405 cleanly."""
         assert self.client is not None
-        headers = {"Accept": "text/event-stream"}
+        headers = {"Accept": "text/event-stream", **self.headers}
         if self._session_id is not None:
             headers["Mcp-Session-Id"] = self._session_id
         if self._last_event_id is not None:

@@ -46,8 +46,8 @@ def test_parse_modern_mixed_file(tmp_path: Path) -> None:
                     "url": "https://mcp.example.com/sse",
                     "headers": {"X-Key": "secret"},
                 },
-                "remote-http": {
-                    "transport": "streamable-http",
+                    "remote-http": {
+                        "transport": "http",
                     "url": "https://mcp.example.com/",
                 },
             }
@@ -150,7 +150,7 @@ def test_roundtrip_preserves_config(tmp_path: Path) -> None:
                 ping_interval_seconds=15.0,
             ),
             "remote-http": HttpServerConfig(
-                transport="streamable-http",
+                transport="http",
                 url="https://mcp.example.com/",
             ),
         }
@@ -192,9 +192,9 @@ def test_build_transport_sse() -> None:
     assert transport.ping_interval_seconds == 12.5
 
 
-def test_build_transport_streamable_http() -> None:
+def test_build_transport_http() -> None:
     cfg = HttpServerConfig(
-        transport="streamable-http",
+        transport="http",
         url="https://mcp.example.com/",
     )
 
@@ -212,7 +212,7 @@ def test_mixed_transport_workspace(tmp_path: Path) -> None:
             "mcpServers": {
                 "a": {"command": "x"},
                 "b": {"transport": "sse", "url": "https://e/sse"},
-                "c": {"transport": "streamable-http", "url": "https://e/"},
+                "c": {"transport": "http", "url": "https://e/"},
             }
         },
     )

@@ -50,6 +50,7 @@ class SseTransport:
     single missed keep-alive still looks alive."""
 
     url: str
+    headers: dict[str, str] = field(default_factory=dict)
     ping_interval_seconds: float = 30.0
     connect_timeout: float = 5.0
     # ``client`` is a public injection hook so tests can hand us an
@@ -92,7 +93,9 @@ class SseTransport:
             self._owns_client = True
         self._closed = False
         self._stream_ctx = self.client.stream(
-            "GET", self.url, headers={"Accept": "text/event-stream"}
+            "GET",
+            self.url,
+            headers={**self.headers, "Accept": "text/event-stream"},
         )
         self._response = self._stream_ctx.__enter__()
         # Raise early on a non-2xx so the caller sees a clean failure
@@ -179,7 +182,7 @@ class SseTransport:
         client layer should surface (missing session, malformed request)."""
         if self._post_url is None or self.client is None:
             raise RuntimeError("SseTransport is not connected")
-        response = self.client.post(self._post_url, json=payload)
+        response = self.client.post(self._post_url, json=payload, headers=dict(self.headers))
         # Any 2xx is fine; 202 Accepted is canonical. We raise on
         # everything else so the JSON-RPC layer gets a fast failure path.
         if response.status_code >= 300:

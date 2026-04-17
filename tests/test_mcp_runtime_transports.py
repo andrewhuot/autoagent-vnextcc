@@ -63,10 +63,10 @@ def test_add_mcp_server_writes_sse_shape(tmp_path: Path) -> None:
     assert entry["ping_interval_seconds"] == 15.0
 
 
-def test_add_mcp_server_writes_streamable_http_shape(tmp_path: Path) -> None:
+def test_add_mcp_server_writes_http_shape(tmp_path: Path) -> None:
     add_mcp_server(
         "remote",
-        transport="streamable-http",
+        transport="http",
         url="https://mcp.example.com/",
         headers={"X-Key": "v"},
         root=tmp_path,
@@ -74,7 +74,7 @@ def test_add_mcp_server_writes_streamable_http_shape(tmp_path: Path) -> None:
 
     on_disk = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
     entry = on_disk["mcpServers"]["remote"]
-    assert entry["transport"] == "streamable-http"
+    assert entry["transport"] == "http"
     assert entry["url"] == "https://mcp.example.com/"
     assert entry["headers"] == {"X-Key": "v"}
 
@@ -87,14 +87,14 @@ def test_add_mcp_server_rejects_unknown_transport(tmp_path: Path) -> None:
 def test_inspect_mcp_server_includes_transport(tmp_path: Path) -> None:
     add_mcp_server(
         "remote",
-        transport="streamable-http",
+        transport="http",
         url="https://mcp.example.com/",
         root=tmp_path,
     )
 
     item = inspect_mcp_server("remote", root=tmp_path)
     assert item is not None
-    assert item["transport"] == "streamable-http"
+    assert item["transport"] == "http"
     assert item["url"] == "https://mcp.example.com/"
 
 
@@ -164,7 +164,7 @@ def test_cli_mcp_add_sse(runner: CliRunner) -> None:
         assert entry["headers"] == {"X-Key": "secret"}
 
 
-def test_cli_mcp_add_streamable_http(runner: CliRunner) -> None:
+def test_cli_mcp_add_http(runner: CliRunner) -> None:
     with runner.isolated_filesystem():
         result = runner.invoke(
             cli,
@@ -173,7 +173,7 @@ def test_cli_mcp_add_streamable_http(runner: CliRunner) -> None:
                 "add",
                 "remote",
                 "--transport",
-                "streamable-http",
+                "http",
                 "--url",
                 "https://mcp.example.com/",
             ],
@@ -182,7 +182,7 @@ def test_cli_mcp_add_streamable_http(runner: CliRunner) -> None:
 
         on_disk = json.loads(Path(".mcp.json").read_text(encoding="utf-8"))
         entry = on_disk["mcpServers"]["remote"]
-        assert entry["transport"] == "streamable-http"
+        assert entry["transport"] == "http"
         assert entry["url"] == "https://mcp.example.com/"
 
 

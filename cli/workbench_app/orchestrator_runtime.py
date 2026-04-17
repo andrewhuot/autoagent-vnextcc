@@ -173,8 +173,7 @@ def build_workbench_runtime(
             # Race-safe: another caller registered the tools between the
             # ``has`` check and the call. Treat as success.
             pass
-    if mcp_client_factory is not None:
-        _register_mcp_tools(workspace_root, mcp_client_factory, tool_registry)
+    _register_mcp_tools(workspace_root, mcp_client_factory, tool_registry)
 
     # Build the lean R7 system prompt unless the caller supplied an
     # explicit override (back-compat for tests + Phase-C callers).
@@ -308,9 +307,44 @@ def _register_mcp_tools(
     unrelated subsystem constructors above."""
     from cli.tools.mcp_bridge import McpBridge, load_specs_from_workspace
 
-    bridge = McpBridge(client_factory=client_factory)
+    bridge = McpBridge(client_factory=client_factory or _default_mcp_client_factory)
     specs = load_specs_from_workspace(workspace_root)
     return bridge.register_all(specs, tool_registry)
+
+
+def _default_mcp_client_factory(spec: Any) -> Any:
+    """Build a transport-backed MCP client for a workspace server spec.
+
+    This is the production default when the caller does not inject a custom
+    factory. Stdio, SSE, and HTTP servers therefore all reach the bridge via
+    the same transport-backed client path.
+    """
+    from cli.mcp.reconnect import ReconnectingTransport
+    from cli.mcp.transport_client import McpTransportClient
+    from cli.mcp.transports import HttpStreamableTransport, SseTransport, StdioTransport
+
+    transport_name = str(getattr(spec, "transport", "stdio") or "stdio")
+    if transport_name == "stdio":
+        inner = StdioTransport(
+            command=[str(getattr(spec, "command", ""))],
+            args=list(getattr(spec, "args", []) or []),
+            env=dict(getattr(spec, "env", {}) or {}),
+        )
+    elif transport_name == "sse":
+        inner = SseTransport(
+            url=str(getattr(spec, "url", "")),
+            headers=dict(getattr(spec, "headers", {}) or {}),
+            ping_interval_seconds=float(getattr(spec, "ping_interval_seconds", 30.0) or 30.0),
+        )
+    elif transport_name == "http":
+        inner = HttpStreamableTransport(
+            url=str(getattr(spec, "url", "")),
+            headers=dict(getattr(spec, "headers", {}) or {}),
+        )
+    else:
+        raise ValueError(f"Unsupported MCP transport: {transport_name}")
+
+    return McpTransportClient(transport=ReconnectingTransport(inner=inner))
 
 
 __all__ = ["WorkbenchRuntime", "build_workbench_runtime"]
