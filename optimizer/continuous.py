@@ -25,8 +25,11 @@ Strict-live invariant: LLM-invoking steps re-use the shared guards from
 
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import statistics
+import traceback
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -40,9 +43,33 @@ from optimizer.improvement_lineage import (
     LineageEvent,
 )
 
+logger = logging.getLogger(__name__)
 
 _WATERMARK_FILENAME = "continuous_watermark.json"
 _CONTINUOUS_CYCLE_EVENT = "continuous_cycle"
+_DEDUPE_DB_FILENAME = "notification_log.db"
+_DEDUPE_WINDOW_SECONDS = 3600
+
+
+def _stable_signature(*parts: Any) -> str:
+    """Deterministic short hash used as a dedupe signature."""
+    joined = "|".join("" if p is None else str(p) for p in parts)
+    return hashlib.sha1(joined.encode("utf-8")).hexdigest()[:16]
+
+
+def _score_bucket(score: float | None) -> str:
+    """Round a composite score into a coarse bucket for signature stability.
+
+    Two consecutive cycles with near-identical regressions should produce
+    the same signature, so we bucket at 0.05 granularity — matching the
+    default regression threshold.
+    """
+    if score is None:
+        return "none"
+    try:
+        return f"{round(float(score) * 20) / 20:.3f}"
+    except (TypeError, ValueError):
+        return "none"
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +203,26 @@ class ContinuousOrchestrator:
         self.trace_source = Path(trace_source)
         self.regression_threshold = float(regression_threshold)
         self.lookback_runs = int(lookback_runs)
-        self._clock = clock
-        # C9 hook — accepted now, not yet emitting alerts.
+        # Exposed publicly so NotificationManager.send(..., clock=...) can
+        # share the same clock for test-time mocking.
+        self.clock = clock
         self.notification_manager = notification_manager
+
+        # Attach a default dedupe store to the manager when one is wired but
+        # the caller did not provide one — keeps C8 callers working while
+        # guaranteeing dedupe for continuous-loop emissions.
+        if self.notification_manager is not None and getattr(
+            self.notification_manager, "dedupe_store", None
+        ) is None:
+            try:
+                from optimizer.notification_dedupe import NotificationDedupeStore
+
+                dedupe_db = workspace.agentlab_dir / _DEDUPE_DB_FILENAME
+                self.notification_manager.dedupe_store = NotificationDedupeStore(
+                    db_path=dedupe_db
+                )
+            except Exception:
+                logger.exception("failed to attach default dedupe store")
 
         if lineage_store is None:
             lineage_db = workspace.agentlab_dir / "improvement_lineage.db"
@@ -210,6 +254,8 @@ class ContinuousOrchestrator:
                 event_id: str | None = ev.event_id
             except Exception:  # pragma: no cover — do not mask original error
                 event_id = None
+            # Emit continuous_cycle_failed regardless of lineage success.
+            self._emit_cycle_failed(exc)
             return ContinuousCycleResult(
                 ingested_trace_count=0,
                 median_score=None,
@@ -240,7 +286,7 @@ class ContinuousOrchestrator:
                 watermark.files[str(path.resolve())] = path.stat().st_mtime
             except OSError:
                 continue
-        watermark.updated_at = self._clock().timestamp()
+        watermark.updated_at = self.clock().timestamp()
         watermark.save(self._watermark_path)
 
         # 2. Score (only when we actually have new cases).
@@ -302,6 +348,19 @@ class ContinuousOrchestrator:
             attempt_id=attempt_id,
             run_id=run_id,
         )
+
+        # 6. Emit notifications (R6.4 / R6.5). Failures here must not break
+        # the cycle — each helper swallows its own exceptions.
+        if regressed:
+            self._emit_regression_detected(
+                median_score=median_score,
+                baseline_median=baseline_median,
+            )
+        if improvement_queued and attempt_id:
+            self._emit_improvement_queued(
+                attempt_id=attempt_id,
+                eval_run_id=run_id,
+            )
 
         return ContinuousCycleResult(
             ingested_trace_count=ingested,
@@ -381,7 +440,7 @@ class ContinuousOrchestrator:
             "attempt_id": attempt_id,
             "eval_run_id": run_id,
             "cycle_id": uuid.uuid4().hex[:12],
-            "timestamp": self._clock().isoformat(),
+            "timestamp": self.clock().isoformat(),
         }
         try:
             return self.lineage_store.record(
@@ -391,3 +450,93 @@ class ContinuousOrchestrator:
             )
         except Exception:
             return None
+
+    # ------------------------------------------------------------------
+    # Notification emission helpers (R6.4 / R6.5)
+    # ------------------------------------------------------------------
+
+    def _workspace_id(self) -> str:
+        """Stable identifier used as the dedupe ``workspace`` key."""
+        try:
+            return str(self.workspace.metadata.name)
+        except Exception:
+            return str(self.workspace.root)
+
+    def _config_version(self) -> str:
+        try:
+            return str(self.workspace.metadata.active_config_version or "")
+        except Exception:
+            return ""
+
+    def _emit(
+        self,
+        event_type: str,
+        payload: dict[str, Any],
+        *,
+        signature: str,
+    ) -> None:
+        """Fire-and-forget emit; swallow any channel errors."""
+        if self.notification_manager is None:
+            return
+        try:
+            self.notification_manager.send(
+                event_type,
+                payload,
+                workspace=self._workspace_id(),
+                signature=signature,
+                clock=self.clock,
+            )
+        except Exception:
+            logger.exception("notification emit failed for %s", event_type)
+
+    def _emit_regression_detected(
+        self,
+        *,
+        median_score: float | None,
+        baseline_median: float | None,
+    ) -> None:
+        workspace_id = self._workspace_id()
+        signature = _stable_signature(
+            workspace_id,
+            _score_bucket(median_score),
+            self._config_version(),
+        )
+        payload = {
+            "workspace": workspace_id,
+            "median_score": median_score,
+            "baseline_median": baseline_median,
+            "regression_threshold": self.regression_threshold,
+            "timestamp": self.clock().isoformat(),
+        }
+        self._emit("regression_detected", payload, signature=signature)
+
+    def _emit_improvement_queued(
+        self,
+        *,
+        attempt_id: str,
+        eval_run_id: str | None,
+    ) -> None:
+        workspace_id = self._workspace_id()
+        payload = {
+            "workspace": workspace_id,
+            "attempt_id": attempt_id,
+            "eval_run_id": eval_run_id,
+            "timestamp": self.clock().isoformat(),
+        }
+        # Per spec: signature = attempt_id. Distinct attempts always fire.
+        self._emit("improvement_queued", payload, signature=str(attempt_id))
+
+    def _emit_cycle_failed(self, exc: BaseException) -> None:
+        workspace_id = self._workspace_id()
+        error_class = type(exc).__name__
+        error_message = str(exc)
+        first_line = error_message.splitlines()[0] if error_message else ""
+        signature = _stable_signature(workspace_id, error_class, first_line)
+        tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+        payload = {
+            "workspace": workspace_id,
+            "error": f"{error_class}: {error_message}",
+            "traceback": tb,
+            "timestamp": self.clock().isoformat(),
+        }
+        self._emit("continuous_cycle_failed", payload, signature=signature)
