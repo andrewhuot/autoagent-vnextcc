@@ -26,7 +26,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cli.permissions import PermissionManager
-from cli.permissions.classifier import ClassifierContext
+from cli.permissions.classifier import ClassifierContext, ClassifierDecision
 from cli.permissions.classifier_persistence import (
     CLASSIFIER_ALLOWLIST_FILENAME,
     load_persisted_patterns,
@@ -263,3 +263,188 @@ def test_persist_rule_writes_classifier_allowlist(
     classifier_path = workspace / ".agentlab" / CLASSIFIER_ALLOWLIST_FILENAME
     assert classifier_path.exists()
     assert load_persisted_patterns(workspace) == frozenset({"tool:FileEdit:*"})
+
+
+# ---------------------------------------------------------------------------
+# P5.T2 — Dialog persist_scope=="session" must teach through to the classifier
+# ---------------------------------------------------------------------------
+#
+# Before P5.T2, approving a tool with "always this session" only taught the
+# legacy PermissionManager._session_allow list. The classifier's
+# ``persisted_allow_patterns`` was a frozen snapshot taken once at the
+# orchestrator boundary, so the next identical tool call in the same session
+# re-ran the classifier heuristic from scratch — which for tools whose
+# default is PROMPT (FileEdit, FileWrite, unknown) meant the dialog fired
+# again. Users hit "always this session" precisely to avoid that.
+#
+# The fix lives inside ``execute_tool_call``: before invoking the classifier,
+# merge ``permissions._session_allow`` into ``classifier_context.persisted_allow_patterns``.
+# That keeps ``ClassifierContext`` immutable while still letting the live
+# session state influence each subsequent decision.
+
+
+def test_persist_rule_session_scope_teaches_classifier_for_next_call(
+    workspace: Path, context: ToolContext
+) -> None:
+    """After the user chooses "Approve always (this session)" for FileEdit,
+    the very next FileEdit in the same session must AUTO_APPROVE via the
+    classifier — no dialog, no PermissionManager ask path."""
+    (workspace / "a.txt").write_text("one", encoding="utf-8")
+    (workspace / "b.txt").write_text("three", encoding="utf-8")
+
+    registry = ToolRegistry()
+    registry.register(FileEditTool())
+    manager = PermissionManager(root=workspace)
+
+    # First call: dialog returns APPROVE_PERSIST with session scope.
+    first_dialog_calls = 0
+
+    def first_dialog(
+        tool: Any, tool_input: Any, *, include_persist_option: bool
+    ) -> DialogOutcome:
+        nonlocal first_dialog_calls
+        first_dialog_calls += 1
+        return DialogOutcome(
+            choice=DialogChoice.APPROVE_PERSIST,
+            allow=True,
+            persist_rule="tool:FileEdit:*",
+            persist_scope="session",
+        )
+
+    first_exec = execute_tool_call(
+        "FileEdit",
+        {"path": "a.txt", "old_string": "one", "new_string": "two"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=first_dialog,
+        classifier_context=_ctx(workspace),
+    )
+    assert first_exec.decision.value == "allow"
+    assert first_dialog_calls == 1
+
+    # A session-scope rule must NOT have written to settings.json on disk.
+    # (If it did, we'd be violating the user's "this session only" intent.)
+    settings_path = workspace / ".agentlab" / "settings.json"
+    if settings_path.exists():
+        raw = json.loads(settings_path.read_text(encoding="utf-8"))
+        allow_list = (
+            raw.get("permissions", {}).get("rules", {}).get("allow", [])
+            if isinstance(raw, dict)
+            else []
+        )
+        assert "tool:FileEdit:*" not in allow_list, (
+            "session scope must not persist to settings.json"
+        )
+    classifier_path = workspace / ".agentlab" / CLASSIFIER_ALLOWLIST_FILENAME
+    assert not classifier_path.exists(), (
+        "session scope must not persist to the classifier JSON"
+    )
+
+    # Second call: classifier sees the session-allow pattern and AUTO_APPROVES.
+    # The dialog runner must NOT be invoked again.
+    second_exec = execute_tool_call(
+        "FileEdit",
+        {"path": "b.txt", "old_string": "three", "new_string": "four"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=_fail_dialog,   # asserts if called
+        classifier_context=_ctx(workspace),
+    )
+    assert second_exec.decision.value == "allow"
+
+
+def test_session_scope_merge_does_not_mutate_classifier_context(
+    workspace: Path, context: ToolContext
+) -> None:
+    """The ``ClassifierContext`` passed in by the caller is a frozen
+    dataclass — the executor must never mutate it. We assert the caller's
+    context object is observationally unchanged after the call."""
+    (workspace / "a.txt").write_text("one", encoding="utf-8")
+    registry = ToolRegistry()
+    registry.register(FileEditTool())
+    manager = PermissionManager(root=workspace)
+
+    def dialog(tool: Any, tool_input: Any, *, include_persist_option: bool) -> DialogOutcome:
+        return DialogOutcome(
+            choice=DialogChoice.APPROVE_PERSIST,
+            allow=True,
+            persist_rule="tool:FileEdit:*",
+            persist_scope="session",
+        )
+
+    caller_ctx = _ctx(workspace)
+    before = caller_ctx.persisted_allow_patterns
+    execute_tool_call(
+        "FileEdit",
+        {"path": "a.txt", "old_string": "one", "new_string": "two"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=dialog,
+        classifier_context=caller_ctx,
+    )
+    assert caller_ctx.persisted_allow_patterns is before
+    assert caller_ctx.persisted_allow_patterns == frozenset()
+
+
+def test_session_allow_from_permissions_is_visible_to_classifier_on_first_call(
+    workspace: Path, context: ToolContext
+) -> None:
+    """If the caller has already populated ``permissions._session_allow``
+    (e.g. via a /permissions command), the executor must honor it on the
+    very first tool call — without requiring the dialog to run first."""
+    (workspace / "a.txt").write_text("one", encoding="utf-8")
+    registry = ToolRegistry()
+    registry.register(FileEditTool())
+    manager = PermissionManager(root=workspace)
+    manager.allow_for_session("tool:FileEdit:*")
+
+    execution = execute_tool_call(
+        "FileEdit",
+        {"path": "a.txt", "old_string": "one", "new_string": "two"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=_fail_dialog,
+        classifier_context=_ctx(workspace),
+    )
+    assert execution.decision.value == "allow"
+
+
+def test_session_allow_is_reported_as_auto_approve_in_audit_log(
+    workspace: Path, context: ToolContext, tmp_path: Path
+) -> None:
+    """When the caller has session-allowed a pattern, the classifier
+    audit log must record the decision as AUTO_APPROVE — not PROMPT with
+    a downstream legacy allow. Otherwise an operator reading the audit
+    log sees a pile of misleading PROMPT entries for tools the user
+    explicitly whitelisted for the session."""
+    from cli.permissions.audit_log import ClassifierAuditLog
+
+    (workspace / "a.txt").write_text("one", encoding="utf-8")
+    registry = ToolRegistry()
+    registry.register(FileEditTool())
+    manager = PermissionManager(root=workspace)
+    manager.allow_for_session("tool:FileEdit:*")
+    audit = ClassifierAuditLog(path=tmp_path / "audit.jsonl")
+
+    execute_tool_call(
+        "FileEdit",
+        {"path": "a.txt", "old_string": "one", "new_string": "two"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=_fail_dialog,
+        classifier_context=_ctx(workspace),
+        audit_log=audit,
+    )
+
+    entries = list(audit.iter_recent())
+    assert len(entries) == 1
+    entry = entries[0]
+    # The classifier decision — not the final PermissionDecision — is
+    # what the audit log stores. A session-allowed pattern should drive
+    # the classifier to AUTO_APPROVE.
+    assert entry["decision"] == ClassifierDecision.AUTO_APPROVE.value, entry

@@ -20,6 +20,7 @@ gating behaviour without each re-implementing it.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from fnmatch import fnmatch
 from typing import Any, Callable, Mapping
 
 from cli.permissions import PermissionManager
@@ -50,6 +51,69 @@ class ToolExecution:
     """``None`` when the tool was denied before running."""
 
     denial_reason: str | None = None
+
+
+def _with_session_patterns(
+    base: ClassifierContext,
+    permissions: PermissionManager,
+    *,
+    tool: Any,
+    tool_input: Mapping[str, Any],
+) -> ClassifierContext:
+    """Return a new ``ClassifierContext`` whose persisted allow/deny sets
+    include the :class:`PermissionManager`'s in-memory session patterns —
+    but only those that actually match the tool call we're about to
+    classify.
+
+    The classifier checks patterns at the *tool-level* (``tool:<Name>``)
+    whereas the :class:`PermissionManager` checks at the *action-level*
+    (``tool:<Name>:<path>``). A session pattern like ``tool:FileEdit:*``
+    matches every FileEdit at the permission layer but would never match
+    ``tool:FileEdit`` at the classifier layer. To bridge the two, we:
+
+    1. Compute the *actual* action string for this tool call.
+    2. For each session pattern, ask ``fnmatch`` whether it matches the
+       action string. If so, fold it in — and also fold in the tool-name
+       form (``tool:<Name>``) so the classifier's tool-level check
+       succeeds.
+
+    The caller's ``ClassifierContext`` is left untouched — it is frozen
+    so a worker thread can share one safely. We build a fresh context
+    per tool call because session patterns can change between calls
+    (the dialog just added one; a ``/permissions`` command toggled
+    another) and the classifier needs to see the *current* state.
+    """
+    session_allow_raw = tuple(getattr(permissions, "_session_allow", ()) or ())
+    session_deny_raw = tuple(getattr(permissions, "_session_deny", ()) or ())
+    if not session_allow_raw and not session_deny_raw:
+        return base
+
+    try:
+        action = tool.permission_action(tool_input)
+    except Exception:  # pragma: no cover - defensive
+        action = ""
+    tool_key = f"tool:{tool.name}" if getattr(tool, "name", None) else ""
+
+    def _promote(patterns: tuple[str, ...]) -> frozenset[str]:
+        extras: set[str] = set()
+        for pattern in patterns:
+            # Keep the original pattern so future calls with the same
+            # pattern-form still match — and synthesize a tool-level key
+            # for any pattern that matches the current call's action.
+            extras.add(pattern)
+            if action and fnmatch(action, pattern) and tool_key:
+                extras.add(tool_key)
+        return frozenset(extras)
+
+    merged_allow = base.persisted_allow_patterns | _promote(session_allow_raw)
+    merged_deny = base.persisted_deny_patterns | _promote(session_deny_raw)
+    from dataclasses import replace as _replace
+
+    return _replace(
+        base,
+        persisted_allow_patterns=merged_allow,
+        persisted_deny_patterns=merged_deny,
+    )
 
 
 def execute_tool_call(
@@ -130,8 +194,20 @@ def execute_tool_call(
         tracker_escalated = True
 
     if classifier_context is not None and not tracker_escalated:
+        # P5.T2 — teach the classifier about session-level allow/deny
+        # patterns the PermissionManager has accumulated. The caller's
+        # ``ClassifierContext`` is frozen (deliberately, so a worker
+        # thread can share one safely); we rebuild a fresh context per
+        # call with the live session patterns merged into the persisted
+        # ones. This keeps the audit log accurate — a tool the user
+        # session-approved appears as AUTO_APPROVE, not PROMPT — and
+        # positions the classifier as the single source of truth for
+        # "did we auto-short-circuit?" going forward.
+        effective_classifier_context = _with_session_patterns(
+            classifier_context, permissions, tool=tool, tool_input=tool_input
+        )
         classifier_decision = classify_tool_call(
-            tool_name, dict(tool_input), classifier_context
+            tool_name, dict(tool_input), effective_classifier_context
         )
         # Audit log: record EVERY classifier decision, including PROMPT,
         # so operators can correlate after the fact which tools fell
