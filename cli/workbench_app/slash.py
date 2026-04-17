@@ -24,7 +24,9 @@ value so that handler return types stay aligned with
 from __future__ import annotations
 
 import difflib
+import os
 import shlex
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +51,7 @@ from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.help_text import render_shortcuts_help
 
 if TYPE_CHECKING:
+    from cli.memory.retrieval import RetrievalResult
     from cli.workbench_app.spinner import StreamingSpinner
     from cli.workbench_app.transcript import Transcript
 
@@ -79,6 +82,16 @@ class SlashContext:
     coordinator_session: Any | None = None
     exit_requested: bool = False
     meta: dict[str, Any] = field(default_factory=dict)
+    # P2.T9: callback fired by /uncompact with the restored TurnMessage list.
+    # The orchestrator wires this in P2.orch; until then it defaults to None so
+    # every existing construction path stays unchanged and the handler is a
+    # no-op on the in-memory context.
+    uncompact_callback: Callable[[list], None] | None = None
+    # P2.T9: last RetrievalResult the orchestrator attached for /memory-debug.
+    # Typed ``Any`` here to avoid a runtime import cycle with cli.memory; the
+    # real type is :class:`cli.memory.retrieval.RetrievalResult` (see
+    # TYPE_CHECKING import above).
+    memory_last_retrieval: Any | None = None
 
     def request_exit(self) -> None:
         """Ask the enclosing loop to terminate after this dispatch returns."""
@@ -510,6 +523,121 @@ def _handle_compact(ctx: SlashContext, *_: str) -> str:
     return f"  Session summary saved to {summary_path}"
 
 
+def _handle_uncompact(ctx: SlashContext, *_: str) -> str:
+    """Restore the most recent compacted range from the session's archive.
+
+    Looks up ``<workspace>/.agentlab/compact_archive`` for the active
+    session, picks the most recent ``(start, end)`` range, loads its
+    :class:`TurnMessage` list, and (when wired) hands them to
+    ``ctx.uncompact_callback`` so the orchestrator can splice them back
+    into the live transcript. Until P2.orch lands the callback is ``None``
+    and the handler still reports what would have been restored — that
+    way users can audit the archive before the orchestrator integration
+    goes live.
+    """
+    from cli.llm.compact_archive import CompactArchive
+
+    workspace = ctx.workspace
+    session = ctx.session
+    if workspace is None:
+        return "  No workspace — /uncompact unavailable."
+    if session is None:
+        return "  No active session to uncompact."
+
+    # Archive root mirrors the location the orchestrator writes to: a
+    # sibling of the memory dir under .agentlab. Session isolation is
+    # baked into CompactArchive via its ``session_id`` field.
+    archive_root: Path = workspace.agentlab_dir / "compact_archive"
+    archive = CompactArchive(root=archive_root, session_id=session.session_id)
+    ranges = archive.ranges()
+    if not ranges:
+        return "Nothing to uncompact — no compaction archive for this session."
+
+    # Most recent = last in sorted order. ``ranges()`` sorts ascending by
+    # (start, end), so ``ranges[-1]`` is the most-recent slice.
+    start, end = ranges[-1]
+    messages = archive.load(start, end)
+
+    callback = ctx.uncompact_callback
+    if callable(callback):
+        try:
+            callback(messages)
+        except Exception as exc:  # Keep the loop alive on callback failures.
+            return (
+                f"  Restored {end - start} messages from range [{start}, {end}), "
+                f"but uncompact_callback raised: {type(exc).__name__}: {exc}"
+            )
+
+    return f"Restored {end - start} messages from range [{start}, {end})."
+
+
+def _handle_memory_debug(ctx: SlashContext, *_: str) -> str:
+    """Show the memories injected on the most recent turn with their scores.
+
+    Reads :attr:`SlashContext.memory_last_retrieval` — a
+    :class:`cli.memory.retrieval.RetrievalResult` the orchestrator stamps
+    onto the context after each turn that invokes retrieval. When nothing
+    is stamped yet (new session, or retrieval was skipped) we emit a
+    friendly hint rather than an empty render.
+    """
+    retrieval = ctx.memory_last_retrieval
+    if not retrieval:
+        return "No memories injected yet. Run a turn with memories in the workspace first."
+
+    reasons = list(getattr(retrieval, "reasons", []) or [])
+    count = len(reasons)
+    lines: list[str] = [f"Injected {count} memories this turn:"]
+    if count == 0:
+        # Retrieval ran but nothing scored — say so explicitly instead of
+        # leaving the user staring at a lone header.
+        lines.append("  (retrieval ran but nothing matched — consider broadening the query)")
+        return "\n".join(lines)
+
+    for reason in reasons:
+        name = getattr(reason, "name", "?")
+        final_score = float(getattr(reason, "final_score", 0.0) or 0.0)
+        recency = float(getattr(reason, "recency_bonus", 0.0) or 0.0)
+        term_hits = getattr(reason, "term_hits", {}) or {}
+        lines.append(
+            f"- {name}: score={final_score:.3f} recency={recency:.3f} terms={dict(term_hits)}"
+        )
+    return "\n".join(lines)
+
+
+def _handle_memory_edit(ctx: SlashContext, *args: str) -> str:
+    """Open the memory index (or a specific memory file) in ``$EDITOR``.
+
+    Default target is ``<workspace>/.agentlab/memory/MEMORY.md`` — the
+    index :class:`cli.memory.store.MemoryStore` rewrites on every save.
+    When a positional slug is supplied we target ``<slug>.md`` in the
+    same directory, matching the per-memory file layout.
+
+    ``$EDITOR`` falls back to ``vi`` to match the POSIX convention and
+    Claude Code's own ``/memory-edit`` behaviour. ``subprocess.run``
+    uses ``check=False`` so a non-zero exit from the editor (e.g.
+    ``:cq`` in vim) doesn't crash the REPL.
+    """
+    workspace = ctx.workspace
+    if workspace is None:
+        return "  No workspace — /memory-edit unavailable."
+
+    memory_dir: Path = workspace.agentlab_dir / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+
+    if args and args[0].strip():
+        slug = args[0].strip()
+        path = memory_dir / f"{slug}.md"
+    else:
+        path = memory_dir / "MEMORY.md"
+
+    editor = os.environ.get("EDITOR") or "vi"
+    # ``subprocess.run`` is called through the module-level name so tests
+    # can ``monkeypatch.setattr("cli.workbench_app.slash.subprocess.run", …)``
+    # without touching the global subprocess module.
+    subprocess.run([editor, str(path)], check=False)
+    return f"Opened {path} in {editor}."
+
+
 def _handle_cost(ctx: SlashContext, *_: str) -> OnDoneResult:
     """Show session cost summary when model/tool runners have recorded it."""
     cost = ctx.meta.get("cost", {})
@@ -679,6 +807,23 @@ _BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
         "Summarize session to .agentlab/memory/latest_session.md",
         _handle_compact,
         sensitive=True,
+    ),
+    _BuiltinSpec(
+        "uncompact",
+        "Restore the most recent compaction",
+        _handle_uncompact,
+        when_to_use="Use when compaction hid a turn you still need.",
+    ),
+    _BuiltinSpec(
+        "memory-debug",
+        "Show which memories were injected this turn and why",
+        _handle_memory_debug,
+    ),
+    _BuiltinSpec(
+        "memory-edit",
+        "Open MEMORY.md in $EDITOR",
+        _handle_memory_edit,
+        argument_hint="[name]",
     ),
     _BuiltinSpec(
         "sessions",
