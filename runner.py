@@ -99,6 +99,7 @@ from cli.intelligence import (
     intelligence_group,
 )
 from cli.mcp_setup import mcp_group
+from cli.strict_live import MockFallbackError
 from cli.workbench import workbench_group
 from cli.mode import load_runtime_with_mode_preference, mode_group, summarize_mode_state
 from cli.permissions import permissions_group
@@ -180,7 +181,7 @@ OPTIMIZE_MIN_COMPOSITE_SCORE = float(
 PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "ship", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {
     "review", "config", "instruction", "model", "provider", "mode", "memory",
-    "template", "connect", "harness", "context",
+    "template", "connect", "harness", "context", "conversation",
 }
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
@@ -2407,7 +2408,16 @@ def cli(ctx: click.Context, classic: bool, quiet: bool, no_banner: bool) -> None
                 else:
                     from cli.workbench_app.app import launch_workbench
 
-                    launch_workbench(workspace)
+                    try:
+                        launch_workbench(workspace)
+                    except MockFallbackError as exc:
+                        # R7.C.4 — strict-live workspace without provider
+                        # credentials. Surface the warning text and exit
+                        # 12 so wrappers can react.
+                        from cli.exit_codes import EXIT_MOCK_FALLBACK
+
+                        click.echo(str(exc), err=True)
+                        sys.exit(EXIT_MOCK_FALLBACK)
             else:
                 from cli.onboarding import run_onboarding
 
@@ -2520,7 +2530,14 @@ def shell_command(ctx: click.Context, ui: str | None) -> None:
         return
     from cli.workbench_app.app import launch_workbench
 
-    launch_workbench(workspace)
+    try:
+        launch_workbench(workspace)
+    except MockFallbackError as exc:
+        # R7.C.4 — strict-live workspace without provider credentials.
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
+
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_MOCK_FALLBACK)
 
 
 # ---------------------------------------------------------------------------

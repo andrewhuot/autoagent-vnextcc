@@ -26,7 +26,9 @@ from cli.hooks import HookRegistry, load_hook_registry
 from cli.llm.orchestrator import LLMOrchestrator
 from cli.llm.types import ModelClient
 from cli.permissions import PermissionManager, load_workspace_settings
+from cli.strict_live import MockFallbackError
 from cli.sessions import Session, SessionStore
+from cli.tools.base import ToolError
 from cli.tools.registry import ToolRegistry, default_registry
 from cli.tools.skill_tool import (
     ORCHESTRATOR_FACTORY_KEY as SKILL_ORCHESTRATOR_FACTORY_KEY,
@@ -34,8 +36,15 @@ from cli.tools.skill_tool import (
 )
 from cli.tools.exit_plan_mode import PLAN_WORKFLOW_KEY
 from cli.user_skills.registry import SkillRegistry, default_skill_store
+from cli.workbench_app.agentlab_tools import register_agentlab_tools
 from cli.workbench_app.background_panel import BackgroundTaskRegistry
+from cli.workbench_app.conversation_bridge import ConversationBridge
+from cli.workbench_app.conversation_store import ConversationStore
+from cli.workbench_app.permission_preset import apply_agentlab_defaults
 from cli.workbench_app.plan_mode import PlanStore, PlanWorkflow
+from cli.workbench_app.session_state import WorkbenchSession
+from cli.workbench_app.system_prompt import build_system_prompt
+from cli.workbench_app.tool_registry import build_default_registry as build_prompt_registry
 from cli.workbench_app.transcript_checkpoint import (
     TranscriptCheckpointStore,
     TranscriptRewindManager,
@@ -60,6 +69,16 @@ class WorkbenchRuntime:
     session: Session
     session_store: SessionStore
     model: ModelClient
+    conversation_store: ConversationStore
+    conversation_bridge: ConversationBridge
+    conversation_id: str
+
+    # R7.C.3 — used by ``_run_orchestrator_turn`` to advance the
+    # ``cost_ticker_usd`` after each assistant turn. Both default to
+    # ``None`` so callers that don't supply a session/model still build
+    # cleanly (legacy tests, headless paths).
+    workbench_session: WorkbenchSession | None = None
+    model_id: str | None = None
 
     # Optional extras so callers can hand-inspect warnings (skill-load
     # errors, MCP connection problems, etc.) in diagnostics.
@@ -76,6 +95,8 @@ def build_workbench_runtime(
     active_model: str = "claude-sonnet-4-5",
     mcp_client_factory: Any | None = None,
     echo: Callable[[str], None] | None = None,
+    workbench_session: WorkbenchSession | None = None,
+    provider_key_present: bool = True,
 ) -> WorkbenchRuntime:
     """Construct every subsystem and hand back a packaged
     :class:`WorkbenchRuntime`.
@@ -83,10 +104,33 @@ def build_workbench_runtime(
     ``mcp_client_factory`` is optional; when supplied the MCP bridge
     registers any workspace-configured servers' tools into the registry.
     A missing factory leaves the registry with only bundled tools — safe
-    default for environments where the ``mcp`` SDK isn't installed."""
+    default for environments where the ``mcp`` SDK isn't installed.
+
+    ``provider_key_present`` is a strict-live signal: when the workspace
+    opts in via ``permissions.strict_live`` and the caller signals that
+    no provider credential is configured, this constructor raises
+    :class:`MockFallbackError` instead of silently building a runtime
+    that would fall back to the echo provider. Defaulting to ``True``
+    keeps legacy callers (TUI, tests) unaffected — the gate is opt-in
+    by callers that know whether they picked a real key (R7.C.4)."""
     settings = load_workspace_settings(workspace_root)
 
+    strict_live = bool(settings.get("permissions", {}).get("strict_live"))
+    if strict_live and not provider_key_present:
+        raise MockFallbackError(
+            [
+                "chat: workspace is strict-live but no provider key is "
+                "configured. Set ANTHROPIC_API_KEY (or the appropriate "
+                "provider key) and retry, or remove permissions.strict_live "
+                "from .agentlab/settings.json.",
+            ]
+        )
+
     permission_manager = PermissionManager(root=workspace_root)
+    # AgentLab risk-aware preset: routes EvalRun / Deploy:* / ImproveRun /
+    # ImproveAccept through the ``ask`` gate even when the default mode
+    # would auto-allow them. Workspace settings.json rules still win.
+    apply_agentlab_defaults(permission_manager)
     hook_registry = load_hook_registry(settings)
 
     session_store = session_store or SessionStore(workspace_dir=workspace_root)
@@ -111,8 +155,47 @@ def build_workbench_runtime(
     background_tasks = BackgroundTaskRegistry()
 
     tool_registry = default_registry()
+    # Register the 7 AgentLab in-process command adapters. ``default_registry()``
+    # returns a process-wide singleton, so a second runtime build (common in
+    # tests, and possible when the REPL rebuilds the runtime mid-session)
+    # would otherwise raise ``ToolError`` on the duplicate registration.
+    # Skip silently if the tools are already present.
+    if not tool_registry.has("EvalRun"):
+        try:
+            register_agentlab_tools(tool_registry)
+        except ToolError:
+            # Race-safe: another caller registered the tools between the
+            # ``has`` check and the call. Treat as success.
+            pass
     if mcp_client_factory is not None:
         _register_mcp_tools(workspace_root, mcp_client_factory, tool_registry)
+
+    # Build the lean R7 system prompt unless the caller supplied an
+    # explicit override (back-compat for tests + Phase-C callers).
+    effective_system_prompt = system_prompt
+    if not system_prompt:
+        prompt_registry = build_prompt_registry()
+        effective_system_prompt = build_system_prompt(
+            workspace_name=workspace_root.name,
+            agent_card_path=None,
+            registry=prompt_registry,
+        )
+
+    # Conversation persistence (R7.B.7): SQLite store at
+    # ``<workspace>/.agentlab/conversations.db`` plus a ConversationBridge
+    # bound to a freshly seeded conversation row. The bridge is opt-in for
+    # callers — ``_run_orchestrator_turn`` only mirrors turns when a
+    # bundle with a bridge is threaded through.
+    conv_db_path = workspace_root / ".agentlab" / "conversations.db"
+    conversation_store = ConversationStore(conv_db_path)
+    conversation = conversation_store.create_conversation(
+        workspace_root=str(workspace_root),
+        model=active_model,
+    )
+    conversation_bridge = ConversationBridge(
+        store=conversation_store,
+        conversation_id=conversation.id,
+    )
 
     # Factory the SkillTool uses to spin up a nested orchestrator. We
     # share most state but give the nested turn a clean message list
@@ -150,7 +233,7 @@ def build_workbench_runtime(
         session_store=session_store,
         hook_registry=hook_registry,
         transcript_manager=transcript_rewind,
-        system_prompt=system_prompt,
+        system_prompt=effective_system_prompt,
         echo=echo or (lambda _line: None),
     )
 
@@ -176,6 +259,11 @@ def build_workbench_runtime(
         session=session,
         session_store=session_store,
         model=model,
+        conversation_store=conversation_store,
+        conversation_bridge=conversation_bridge,
+        conversation_id=conversation.id,
+        workbench_session=workbench_session,
+        model_id=active_model,
         skill_warnings=list(skill_store.warnings),
     )
 

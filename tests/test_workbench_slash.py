@@ -170,6 +170,7 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "save",
         "compact",
         "resume",
+        "fork",
         "exit",
         "eval",
         "optimize",
@@ -286,9 +287,9 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     # Existing built-ins + Phase 2–6 additions: the five /plan* commands,
     # /usage + three transcript-rewind commands, three /skill* commands,
     # /background + /background-clear, /init, /theme, /output-style, the R2
-    # Slice D.1 ``/improve`` passthrough, and the /custom supplied via
-    # ``extra``.
-    assert len(registry) == 51
+    # Slice D.1 ``/improve`` passthrough, the R7.C.7 ``/fork`` command, and
+    # the /custom supplied via ``extra``.
+    assert len(registry) == 52
 
 
 # ---------------------------------------------------------------------------
@@ -470,9 +471,10 @@ def test_help_handler_argument_hint_rendered_as_column(
     resume_line = next(
         line for line in rendered.splitlines() if line.lstrip().startswith("/resume ")
     )
-    # ``/resume`` declares an argument hint of ``[session_id]`` in the
-    # registry — it must reach the rendered row.
-    assert "[session_id]" in resume_line
+    # ``/resume`` declares an argument hint of ``[conversation_id]`` in
+    # the registry (R7.C.6: the conversation-aware variant) — it must
+    # reach the rendered row.
+    assert "[conversation_id]" in resume_line
 
     clear_line = next(
         line for line in rendered.splitlines() if line.lstrip().startswith("/clear ")
@@ -491,7 +493,7 @@ def test_help_handler_shows_command_detail(
     plain = click.unstyle(result.raw_result)
     assert "/resume" in plain
     assert "Arguments:" in plain
-    assert "[session_id]" in plain
+    assert "[conversation_id]" in plain
     assert "Aliases:" in plain
     assert "/r" in plain
     assert echo.lines == [result.output]

@@ -681,14 +681,6 @@ _BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
         sensitive=True,
     ),
     _BuiltinSpec(
-        "resume",
-        "Resume the most recent session",
-        _handle_resume,
-        argument_hint="[session_id]",
-        aliases=("r",),
-        when_to_use="Use after restarting Workbench or switching back to prior work.",
-    ),
-    _BuiltinSpec(
         "sessions",
         "List recent Workbench sessions",
         _handle_sessions,
@@ -765,7 +757,11 @@ def build_builtin_registry(
     from cli.workbench_app.init_slash import build_init_command
     from cli.workbench_app.theme_slash import build_theme_command
     from cli.workbench_app.output_style_slash import build_output_style_command
+    from cli.workbench_app.fork_slash import build_fork_command
+    from cli.workbench_app.resume_slash import build_resume_command
 
+    registry.register(build_resume_command())
+    registry.register(build_fork_command())
     registry.register(build_model_command())
     registry.register(build_tasks_command())
     registry.register(build_context_command())

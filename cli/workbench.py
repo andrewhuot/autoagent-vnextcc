@@ -1299,6 +1299,16 @@ def interactive_command(no_banner: bool) -> None:
     tool-call blocks, and full-screen screens onto this loop.
     """
     from cli.workbench_app.app import launch_workbench
+    from cli.strict_live import MockFallbackError
 
     workspace = discover_workspace()
-    launch_workbench(workspace, show_banner=not no_banner)
+    try:
+        launch_workbench(workspace, show_banner=not no_banner)
+    except MockFallbackError as exc:
+        # R7.C.4 — strict-live workspace without provider credentials.
+        import sys
+
+        from cli.exit_codes import EXIT_MOCK_FALLBACK
+
+        click.echo(str(exc), err=True)
+        sys.exit(EXIT_MOCK_FALLBACK)

@@ -23,7 +23,7 @@ import os
 import threading
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 logger = logging.getLogger(__name__)
@@ -34,6 +34,7 @@ _SERIALIZED_FIELDS = (
     "last_eval_run_id",
     "last_attempt_id",
     "cost_ticker_usd",
+    "current_conversation_id",
 )
 
 
@@ -45,18 +46,45 @@ class WorkbenchSession:
     last_eval_run_id: str | None = None
     last_attempt_id: str | None = None
     cost_ticker_usd: float = 0.0
+    current_conversation_id: str | None = None
 
     # Internals: excluded from equality, repr, and on-disk serialization.
     _lock: threading.Lock = field(
         default_factory=threading.Lock, repr=False, compare=False
     )
     _path: Path | None = field(default=None, repr=False, compare=False)
+    _observers: list[Callable[[str, Any], None]] = field(
+        default_factory=list, repr=False, compare=False
+    )
+
+    def add_observer(self, fn: Callable[[str, Any], None]) -> None:
+        """Register ``fn`` to receive ``(field_name, new_value)`` on changes.
+
+        Observers fire from :meth:`update` for each field whose value
+        actually changed (no-op assignments are skipped). They do NOT fire
+        from :meth:`increment_cost` — cost ticks are too high-frequency to
+        be interesting for change-notice consumers.
+
+        The same callable may be added more than once and will fire that
+        many times per change; deduplication is the caller's job.
+        """
+        self._observers.append(fn)
+
+    def remove_observer(self, fn: Callable[[str, Any], None]) -> None:
+        """Unregister ``fn``. Silently ignores observers that aren't present."""
+        try:
+            self._observers.remove(fn)
+        except ValueError:
+            pass
 
     def update(self, **changes: Any) -> None:
         """Atomically mutate one or more public fields and flush to disk.
 
         Raises :class:`ValueError` if any key starts with ``_`` — internal
-        attributes are not caller-controlled.
+        attributes are not caller-controlled. After the lock is released,
+        registered observers are notified once per field whose value
+        actually changed. Observer exceptions are logged and swallowed so
+        one bad listener can't break the rest of the chain.
         """
         for key in changes:
             if key.startswith("_"):
@@ -67,9 +95,28 @@ class WorkbenchSession:
                 raise ValueError(f"Unknown session field: {key}")
 
         with self._lock:
+            changed: list[tuple[str, Any]] = []
             for key, value in changes.items():
-                setattr(self, key, value)
+                if getattr(self, key) != value:
+                    setattr(self, key, value)
+                    changed.append((key, value))
             self._flush_locked()
+            # Snapshot observers under the lock so concurrent
+            # add/remove_observer calls don't race the iteration below.
+            observers = list(self._observers)
+
+        # Fire observers OUTSIDE the lock to prevent reentrancy if a
+        # listener turns around and calls update()/increment_cost().
+        for name, value in changed:
+            for fn in observers:
+                try:
+                    fn(name, value)
+                except Exception:
+                    logger.exception(
+                        "workbench session observer %r raised on field %s",
+                        fn,
+                        name,
+                    )
 
     def increment_cost(self, delta_usd: float) -> None:
         """Atomically bump ``cost_ticker_usd`` and flush."""

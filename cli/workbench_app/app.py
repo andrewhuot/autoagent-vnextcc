@@ -381,6 +381,16 @@ def run_workbench_app(
         if hint is not None:
             out(theme.meta(hint))
             out("")
+        # R7.C.6 — surface a separate hint when the most recent persisted
+        # *conversation* (distinct from session above) was killed mid
+        # tool call. Wrapped in try/except so a flaky DB on boot can
+        # never bring down the REPL.
+        _emit_resume_hint(orchestrator, out)
+        # R7.C.7 — wire the workspace-change observer onto the runtime's
+        # WorkbenchSession so a mid-conversation config switch surfaces
+        # a "stale context" warning. Wrapped in try/except so a flaky
+        # observer can't take down boot.
+        _maybe_register_config_change_observer(orchestrator, out)
         if active_workflow_runtime is not None:
             degraded = getattr(active_workflow_runtime, "worker_mode_degraded_reason", None)
             if degraded:
@@ -578,6 +588,9 @@ def run_workbench_app(
                         ctx=ctx,
                         result=result,
                         echo=out,
+                        bridge=getattr(orchestrator, "conversation_bridge", None),
+                        session=getattr(orchestrator, "workbench_session", None),
+                        model_id=getattr(orchestrator, "model_id", None),
                     )
                     handled_as_slash = True
             if ctx.exit_requested:
@@ -603,11 +616,17 @@ def run_workbench_app(
                 # permission dialogs, hooks, and streaming markdown. All
                 # subsystems were published onto ctx.meta above so slash
                 # commands fired from inside this turn see the same state.
+                # Pull the conversation bridge from the bundle (R7.B.7) so
+                # each user/assistant turn mirrors into SQLite. Legacy
+                # callers that pass a bare orchestrator skip the bridge.
                 _run_orchestrator_turn(
                     orchestrator=active_orchestrator,
                     ctx=ctx,
                     line=line,
                     echo=out,
+                    bridge=getattr(orchestrator, "conversation_bridge", None),
+                    session=getattr(orchestrator, "workbench_session", None),
+                    model_id=getattr(orchestrator, "model_id", None),
                 )
             else:
                 _run_chat_unavailable_turn(echo=out)
@@ -991,6 +1010,9 @@ def _run_follow_up_turns(
     ctx: "SlashContext | None",
     result: Any,
     echo: EchoFn,
+    bridge: Any | None = None,
+    session: Any | None = None,
+    model_id: str | None = None,
 ) -> None:
     """Process command-requested follow-up prompts through the chat path."""
     prompt: str | None = None
@@ -1008,6 +1030,9 @@ def _run_follow_up_turns(
         ctx=ctx,
         line=prompt,
         echo=echo,
+        bridge=bridge,
+        session=session,
+        model_id=model_id,
     )
 
 
@@ -1200,6 +1225,8 @@ def _maybe_build_orchestrator(
     if choice is None:
         return None
 
+    from cli.strict_live import MockFallbackError
+
     try:
         from cli.llm.providers import create_model_client
         from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
@@ -1218,7 +1245,13 @@ def _maybe_build_orchestrator(
             session_store=store,
             active_model=choice.active_model,
             echo=echo,
+            provider_key_present=choice.api_key is not None,
         )
+    except MockFallbackError:
+        # R7.C.4 — strict-live workspaces must surface a hard error
+        # rather than silently falling back to the local guidance path.
+        # The CLI boundary translates this to ``EXIT_MOCK_FALLBACK``.
+        raise
     except Exception:  # pragma: no cover — chat setup must never crash boot
         return None
 
@@ -1378,6 +1411,97 @@ def _resolve_orchestrator(bundle: Any | None) -> Any | None:
     return None
 
 
+def _register_config_change_observer(
+    workbench_session: Any,
+    runtime: Any,
+    echo: EchoFn,
+) -> None:
+    """Wire a warning when ``current_config_path`` switches mid-conversation.
+
+    Only fires when the path moves between two non-None values. The
+    initial None → ``"x.yaml"`` set is a workspace coming online, not a
+    switch, and a value → None clear is a teardown — neither warrants a
+    "stale context" warning. Safe to call with a session that already
+    has a non-None ``current_config_path`` — the closure snapshots the
+    current value as the baseline so the next real change fires.
+    """
+    state: dict[str, Any] = {
+        "previous": getattr(workbench_session, "current_config_path", None),
+    }
+
+    def _on_change(field: str, new_value: Any) -> None:
+        if field != "current_config_path":
+            return
+        prev = state["previous"]
+        state["previous"] = new_value
+        if prev is None or new_value is None:
+            return  # initial set or clear — not a "switch"
+        if prev == new_value:
+            return  # belt-and-braces; observer shouldn't fire on no-op
+        old_id = getattr(runtime, "conversation_id", None)
+        message = (
+            f"  ⚠ Active config switched: {prev} → {new_value}. "
+            f"The current conversation may have stale context. "
+            f"Type /fork to start fresh"
+        )
+        if old_id:
+            message += f", or stay on /resume {old_id} to keep going."
+        else:
+            message += "."
+        echo(theme.warning(message))
+
+    workbench_session.add_observer(_on_change)
+
+
+def _maybe_register_config_change_observer(
+    bundle: Any | None, echo: EchoFn
+) -> None:
+    """Register the workspace-change observer when a runtime + session exist.
+
+    Wrapped in a broad try/except — boot must NEVER crash if the
+    session shape changed under us or ``add_observer`` raises. The
+    warning is purely an affordance.
+    """
+    if bundle is None:
+        return
+    workbench_session = getattr(bundle, "workbench_session", None)
+    if workbench_session is None:
+        return
+    try:
+        _register_config_change_observer(workbench_session, bundle, echo)
+    except Exception:  # pragma: no cover — boot must never crash on a hint
+        pass
+
+
+def _emit_resume_hint(bundle: Any | None, echo: EchoFn) -> None:
+    """Echo the conversation-resume hint when the most recent conversation
+    has interrupted tool calls (R7.C.6).
+
+    Wrapped in a broad try/except — boot must never crash on a hint
+    failure (a flaky DB on disk, a stale schema, anything). When the
+    bundle has no ``conversation_store`` (bare orchestrator, headless
+    test) we silently skip; the hint is purely an affordance, not state.
+    """
+    if bundle is None:
+        return
+    try:
+        from cli.workbench_app.conversation_resume import format_resume_hint
+
+        store = getattr(bundle, "conversation_store", None)
+        if store is None:
+            return
+        recent = store.list_recent(limit=1)
+        if not recent:
+            return
+        full = store.get_conversation(recent[0].id)
+        hint = format_resume_hint(full)
+        if hint:
+            echo(theme.meta(f"  {hint}"))
+            echo("")
+    except Exception:  # pragma: no cover — boot must never crash on a hint
+        pass
+
+
 def _publish_orchestrator_meta(ctx: "SlashContext", bundle: Any) -> None:
     """Thread every subsystem from the :class:`WorkbenchRuntime` into
     ``SlashContext.meta`` so slash handlers (``/plan``, ``/skill``,
@@ -1389,6 +1513,12 @@ def _publish_orchestrator_meta(ctx: "SlashContext", bundle: Any) -> None:
     keys land where."""
     if bundle is None or ctx is None:
         return
+
+    # R7.C.6 — publish the full runtime bundle so handlers like /resume
+    # can reach the conversation_store + workbench_session in one step
+    # without each one re-deriving them from scattered ctx.meta keys.
+    if hasattr(bundle, "conversation_store"):
+        ctx.meta["workbench_runtime"] = bundle
 
     from cli.tools.exit_plan_mode import PLAN_WORKFLOW_KEY
     from cli.tools.skill_tool import SKILL_REGISTRY_KEY
@@ -1439,6 +1569,9 @@ def _run_orchestrator_turn(
     ctx: "SlashContext | None",
     line: str,
     echo: EchoFn,
+    bridge: Any | None = None,
+    session: Any | None = None,
+    model_id: str | None = None,
 ) -> None:
     """Route one natural-language user turn through :meth:`run_turn`.
 
@@ -1456,6 +1589,12 @@ def _run_orchestrator_turn(
     except Exception:  # pragma: no cover — orchestrator without echo attribute
         previous_echo = None
 
+    if bridge is not None:
+        try:
+            bridge.record_user_turn(line)
+        except Exception:  # pragma: no cover — bridge persistence is best-effort
+            pass
+
     try:
         result = orchestrator.run_turn(line)
     except Exception as exc:  # pragma: no cover — defensive REPL
@@ -1467,6 +1606,26 @@ def _run_orchestrator_turn(
                 orchestrator.echo = previous_echo
             except Exception:  # pragma: no cover
                 pass
+
+    if bridge is not None and result is not None:
+        try:
+            bridge.record_assistant_turn(result)
+        except Exception:  # pragma: no cover — bridge persistence is best-effort
+            pass
+
+    # R7.C.3 — advance the workbench cost ticker. Wrapped in try/except
+    # because cost reporting must NEVER block the conversation: an unknown
+    # model, missing capability, or write failure on the session file is a
+    # diagnostics issue, not a UX-blocking error.
+    if result is not None and session is not None and model_id is not None:
+        try:
+            from cli.workbench_app.cost_calculator import compute_turn_cost
+
+            delta = compute_turn_cost(getattr(result, "usage", None), model_id)
+            if delta > 0:
+                session.increment_cost(delta)
+        except Exception:  # pragma: no cover — cost reporting must never block UX
+            pass
 
     if ctx is None or result is None:
         return
