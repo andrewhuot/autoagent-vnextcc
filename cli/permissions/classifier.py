@@ -172,10 +172,18 @@ def _classify_bash(tool_input: dict[str, Any], context: ClassifierContext) -> Cl
     head = tokens[0]
     if head == "git":
         if len(tokens) >= 2 and tokens[1] in _GIT_SAFE_SUBCOMMANDS:
+            if not _git_args_stay_within_workspace(tokens[2:], context):
+                return ClassifierDecision.PROMPT
             return ClassifierDecision.AUTO_APPROVE
         return ClassifierDecision.PROMPT
 
     if head not in _BASH_SAFE_COMMANDS:
+        return ClassifierDecision.PROMPT
+
+    if head == "ls" and not _ls_args_stay_within_workspace(tokens[1:], context):
+        return ClassifierDecision.PROMPT
+
+    if head == "which" and not _which_args_stay_within_workspace(tokens[1:], context):
         return ClassifierDecision.PROMPT
 
     if head == "cat" and len(tokens) >= 2:
@@ -242,11 +250,15 @@ def _classify_file_edit(
 
 def _classify_glob(tool_input: dict[str, Any], context: ClassifierContext) -> ClassifierDecision:
     """Glob is a read-only directory listing; safe to auto-approve."""
+    if not _optional_workspace_path_is_safe(tool_input, context):
+        return ClassifierDecision.PROMPT
     return ClassifierDecision.AUTO_APPROVE
 
 
 def _classify_grep(tool_input: dict[str, Any], context: ClassifierContext) -> ClassifierDecision:
     """Grep is a read-only content scan; safe to auto-approve."""
+    if not _optional_workspace_path_is_safe(tool_input, context):
+        return ClassifierDecision.PROMPT
     return ClassifierDecision.AUTO_APPROVE
 
 
@@ -341,6 +353,77 @@ def _classify_url(url: str, context: ClassifierContext) -> ClassifierDecision:
         if _host_matches(normalized_host, entry):
             return ClassifierDecision.AUTO_APPROVE
     return ClassifierDecision.PROMPT
+
+
+def _optional_workspace_path_is_safe(
+    tool_input: dict[str, Any], context: ClassifierContext
+) -> bool:
+    """Return True when the tool's optional ``path`` input stays inside the workspace.
+
+    Tools like ``Glob`` and ``Grep`` default to the workspace root when no path
+    is provided. We only need to intervene when the caller explicitly scopes the
+    search somewhere else.
+    """
+    raw_path = tool_input.get("path")
+    if raw_path in (None, ""):
+        return True
+    if not isinstance(raw_path, str):
+        return False
+    return _workspace_path_is_safe(raw_path, context)
+
+
+def _ls_args_stay_within_workspace(args: list[str], context: ClassifierContext) -> bool:
+    for arg in args:
+        if arg.startswith("-"):
+            continue
+        if not _workspace_path_is_safe(arg, context):
+            return False
+    return True
+
+
+def _which_args_stay_within_workspace(args: list[str], context: ClassifierContext) -> bool:
+    for arg in args:
+        if not _looks_like_path(arg):
+            continue
+        if not _workspace_path_is_safe(arg, context):
+            return False
+    return True
+
+
+def _git_args_stay_within_workspace(args: list[str], context: ClassifierContext) -> bool:
+    idx = 0
+    while idx < len(args):
+        token = args[idx]
+        if token in {"-C", "--git-dir", "--work-tree"}:
+            idx += 1
+            if idx >= len(args):
+                return False
+            if not _workspace_path_is_safe(args[idx], context):
+                return False
+        elif token.startswith("--git-dir="):
+            if not _workspace_path_is_safe(token.split("=", 1)[1], context):
+                return False
+        elif token.startswith("--work-tree="):
+            if not _workspace_path_is_safe(token.split("=", 1)[1], context):
+                return False
+        elif token.startswith("/") and not _workspace_path_is_safe(token, context):
+            return False
+        idx += 1
+    return True
+
+
+def _workspace_path_is_safe(raw_path: str, context: ClassifierContext) -> bool:
+    root = context.workspace_root
+    if root is None:
+        return False
+    path_obj = Path(raw_path)
+    if not path_obj.is_absolute():
+        path_obj = root / raw_path
+    return _is_within(path_obj, root)
+
+
+def _looks_like_path(token: str) -> bool:
+    return token.startswith(("/", ".", "~")) or "/" in token
 
 
 def _normalize_host(host: str) -> str | None:

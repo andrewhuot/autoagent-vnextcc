@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal, Mapping, Union
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -58,7 +58,7 @@ class SseServerConfig(BaseModel):
 class HttpServerConfig(BaseModel):
     """MCP Streamable-HTTP transport."""
 
-    transport: Literal["streamable-http"]
+    transport: Literal["http"] = "http"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
 
@@ -107,10 +107,22 @@ class McpConfig(BaseModel):
         for name, entry in servers.items():
             if isinstance(entry, dict) and "transport" not in entry:
                 entry = {**entry, "transport": "stdio"}
-            patched[name] = entry
+            elif isinstance(entry, dict) and entry.get("transport") == "streamable-http":
+                entry = {**entry, "transport": "http"}
+        patched[name] = entry
         data = dict(data)
         data[servers_key] = patched
         return data
+
+
+def validate_server_mapping(entry: Mapping[str, Any]) -> ServerConfig:
+    """Validate one raw MCP server mapping via the same pydantic surface.
+
+    This is used when server entries come from settings-cascade data instead of
+    `.mcp.json`, so both inputs share the same transport validation rules.
+    """
+    cfg = McpConfig.model_validate({"mcpServers": {"__one__": dict(entry)}})
+    return cfg.mcp_servers["__one__"]
 
 
 def load_config(path: Path) -> McpConfig:
@@ -135,10 +147,21 @@ def load_config(path: Path) -> McpConfig:
         # an empty config rather than exploding — matches the legacy
         # loader's behaviour.
         return McpConfig()
-    try:
-        return McpConfig.model_validate(data)
-    except ValidationError as exc:
-        raise ValueError(_friendly_validation_message(path, exc)) from exc
+    servers = data.get("mcpServers")
+    if not isinstance(servers, dict):
+        return McpConfig()
+
+    validated_servers: dict[str, ServerConfig] = {}
+    for name, entry in servers.items():
+        if not isinstance(name, str) or not isinstance(entry, Mapping):
+            continue
+        try:
+            validated_servers[name] = validate_server_mapping(entry)
+        except Exception as exc:
+            raise ValueError(f"Invalid MCP config at {path}: server '{name}' - {exc}") from exc
+    config = McpConfig()
+    config.mcp_servers = validated_servers
+    return config
 
 
 def save_config(path: Path, config: McpConfig) -> None:
@@ -171,10 +194,11 @@ def build_transport(server: ServerConfig) -> Transport:
     if isinstance(server, SseServerConfig):
         return SseTransport(
             url=server.url,
+            headers=dict(server.headers),
             ping_interval_seconds=server.ping_interval_seconds,
         )
     if isinstance(server, HttpServerConfig):
-        return HttpStreamableTransport(url=server.url)
+        return HttpStreamableTransport(url=server.url, headers=dict(server.headers))
     raise TypeError(f"Unsupported server config: {type(server).__name__}")
 
 
@@ -218,4 +242,5 @@ __all__ = [
     "build_transport",
     "load_config",
     "save_config",
+    "validate_server_mapping",
 ]

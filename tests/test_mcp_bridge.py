@@ -338,6 +338,65 @@ def test_load_specs_from_workspace_parses_mcp_json(tmp_path: Path) -> None:
     assert notion.command == "notion-mcp"
     assert notion.args == ["--stdio"]
     assert notion.env == {"NOTION_TOKEN": "abc"}
+    assert notion.transport == "stdio"
+
+
+def test_load_specs_from_workspace_includes_remote_transports(tmp_path: Path) -> None:
+    (tmp_path / ".mcp.json").write_text(
+        """{
+            "mcpServers": {
+                "remoteSse": {
+                    "transport": "sse",
+                    "url": "https://mcp.example.com/sse",
+                    "headers": {"Authorization": "Bearer x"},
+                    "ping_interval_seconds": 12.5
+                },
+                "remoteHttp": {
+                    "transport": "http",
+                    "url": "https://mcp.example.com/http",
+                    "headers": {"X-Key": "secret"}
+                }
+            }
+        }""",
+        encoding="utf-8",
+    )
+
+    specs = load_specs_from_workspace(tmp_path)
+    by_name = {spec.name: spec for spec in specs}
+
+    assert by_name["remoteSse"].transport == "sse"
+    assert by_name["remoteSse"].url == "https://mcp.example.com/sse"
+    assert by_name["remoteSse"].headers == {"Authorization": "Bearer x"}
+    assert by_name["remoteSse"].ping_interval_seconds == 12.5
+
+    assert by_name["remoteHttp"].transport == "http"
+    assert by_name["remoteHttp"].url == "https://mcp.example.com/http"
+    assert by_name["remoteHttp"].headers == {"X-Key": "secret"}
+
+
+def test_load_specs_from_workspace_includes_settings_servers(tmp_path: Path) -> None:
+    (tmp_path / ".agentlab").mkdir()
+    (tmp_path / ".agentlab" / "settings.json").write_text(
+        """{
+            "mcp": {
+                "servers": {
+                    "settingsRemote": {
+                        "transport": "sse",
+                        "url": "https://settings.example.com/sse",
+                        "headers": {"X-Settings": "1"}
+                    }
+                }
+            }
+        }""",
+        encoding="utf-8",
+    )
+
+    specs = load_specs_from_workspace(tmp_path)
+    by_name = {spec.name: spec for spec in specs}
+
+    assert by_name["settingsRemote"].transport == "sse"
+    assert by_name["settingsRemote"].url == "https://settings.example.com/sse"
+    assert by_name["settingsRemote"].headers == {"X-Settings": "1"}
 
 
 def test_load_specs_from_workspace_handles_missing_file(tmp_path: Path) -> None:

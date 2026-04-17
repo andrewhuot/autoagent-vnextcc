@@ -31,7 +31,7 @@ from cli.mcp.config import (
 
 MCP_CONFIG_FILENAME = ".mcp.json"
 
-VALID_TRANSPORTS = ("stdio", "sse", "streamable-http")
+VALID_TRANSPORTS = ("stdio", "sse", "http", "streamable-http")
 
 
 def mcp_config_path(root: str | Path = ".") -> Path:
@@ -172,13 +172,13 @@ def _build_server_config(
         if ping_interval_seconds is not None:
             sse.ping_interval_seconds = ping_interval_seconds
         return sse
-    if transport == "streamable-http":
+    if transport in {"http", "streamable-http"}:
         if not url:
             raise ValueError(
-                f"streamable-http MCP server '{name}' requires --url"
+                f"http MCP server '{name}' requires --url"
             )
         return HttpServerConfig(
-            transport="streamable-http",
+            transport="http",
             url=url,
             headers=dict(headers or {}),
         )
@@ -300,12 +300,12 @@ def register_runtime_commands(mcp_group: click.Group) -> None:
     )
     @click.option("--command", "command_name", default=None, help="Command to launch the server (stdio only).")
     @click.option("--arg", "args", multiple=True, help="Server argument. Repeat for multiple args (stdio only).")
-    @click.option("--url", default=None, help="Server URL (sse / streamable-http only).")
+    @click.option("--url", default=None, help="Server URL (sse / http only).")
     @click.option(
         "--header",
         "headers",
         multiple=True,
-        help="HTTP header 'Key: Value' (sse / streamable-http only). Repeat for multiple.",
+        help="HTTP header 'Key: Value' (sse / http only). Repeat for multiple.",
     )
     @click.option(
         "--ping-interval-seconds",
@@ -360,14 +360,14 @@ def register_runtime_commands(mcp_group: click.Group) -> None:
                     headers=header_map,
                     ping_interval_seconds=ping_interval_seconds,
                 )
-            else:  # streamable-http
+            else:  # http / streamable-http
                 if ping_interval_seconds is not None:
                     raise click.UsageError(
                         "--ping-interval-seconds is sse-only"
                     )
                 path = add_mcp_server(
                     name,
-                    transport="streamable-http",
+                    transport="http",
                     url=url,
                     headers=header_map,
                 )

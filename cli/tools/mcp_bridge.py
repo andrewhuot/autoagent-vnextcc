@@ -79,9 +79,13 @@ class McpServerSpec:
     programmatic setup) can build spec lists directly."""
 
     name: str
+    transport: str = "stdio"
     command: str = ""
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
+    url: str = ""
+    headers: dict[str, str] = field(default_factory=dict)
+    ping_interval_seconds: float | None = None
 
 
 @dataclass
@@ -314,31 +318,70 @@ def _flatten_content_blocks(blocks: Iterable[Any]) -> str:
 
 
 def load_specs_from_workspace(workspace_root: str | Any = ".") -> list[McpServerSpec]:
-    """Build :class:`McpServerSpec` records from ``.mcp.json``.
+    """Build :class:`McpServerSpec` records from workspace MCP config sources.
 
     Lives here (rather than in :mod:`cli.mcp_runtime`) because the
     dataclass is bridge-specific — keeping the MCP runtime module free
-    of tool-registry concerns preserves its boundary."""
-    from cli.mcp_runtime import list_mcp_servers
+    of tool-registry concerns preserves its boundary.
 
-    specs: list[McpServerSpec] = []
-    for entry in list_mcp_servers(workspace_root):
-        # The stdio bridge spec cannot represent SSE / Streamable-HTTP
-        # servers (no command to spawn). Skip non-stdio entries here;
-        # remote transports are wired through cli.mcp.config.build_transport
-        # by the parts of the stack that speak Transport rather than
-        # McpServerSpec.
-        if entry.get("transport", "stdio") != "stdio":
-            continue
-        specs.append(
-            McpServerSpec(
-                name=str(entry.get("name") or ""),
-                command=str(entry.get("command") or ""),
-                args=list(entry.get("args") or []),
-                env={str(k): str(v) for k, v in (entry.get("env") or {}).items()},
+    Sources, in precedence order:
+
+    1. Workspace ``.mcp.json``.
+    2. P0 settings-cascade ``.agentlab/settings.json::mcp.servers``.
+
+    Settings-backed entries override same-named `.mcp.json` entries. Both
+    sources are validated through :mod:`cli.mcp.config` so transport aliases
+    like ``http`` and legacy names like ``streamable-http`` converge onto the
+    same canonical spec shape.
+    """
+    from pathlib import Path
+
+    from cli.mcp.config import validate_server_mapping
+    from cli.mcp_runtime import load_mcp_config_raw
+    from cli.settings import load_settings
+
+    specs_by_name: dict[str, McpServerSpec] = {}
+    raw_config = load_mcp_config_raw(workspace_root)
+    raw_servers = raw_config.get("mcpServers", {})
+    if isinstance(raw_servers, dict):
+        for name, raw_entry in raw_servers.items():
+            if not isinstance(raw_entry, Mapping):
+                continue
+            validated = validate_server_mapping(raw_entry)
+            spec = _spec_from_mapping(
+                name=str(name or ""),
+                entry={"name": name, **validated.model_dump()},
             )
+            specs_by_name[spec.name] = spec
+
+    workspace_path = Path(workspace_root)
+    settings = load_settings(workspace_path)
+    for name, raw_entry in settings.mcp.servers.items():
+        validated = validate_server_mapping(raw_entry)
+        specs_by_name[name] = _spec_from_mapping(
+            name=name,
+            entry={"name": name, **validated.model_dump()},
         )
-    return specs
+
+    return [specs_by_name[name] for name in sorted(specs_by_name)]
+
+
+def _spec_from_mapping(name: str, entry: Mapping[str, Any]) -> McpServerSpec:
+    transport = str(entry.get("transport") or "stdio")
+    return McpServerSpec(
+        name=name,
+        transport=transport,
+        command=str(entry.get("command") or ""),
+        args=list(entry.get("args") or []),
+        env={str(k): str(v) for k, v in (entry.get("env") or {}).items()},
+        url=str(entry.get("url") or ""),
+        headers={str(k): str(v) for k, v in (entry.get("headers") or {}).items()},
+        ping_interval_seconds=(
+            float(entry["ping_interval_seconds"])
+            if entry.get("ping_interval_seconds") is not None
+            else None
+        ),
+    )
 
 
 __all__ = [

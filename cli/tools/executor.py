@@ -29,7 +29,6 @@ from cli.permissions.classifier import (
     ClassifierDecision,
     classify_tool_call,
 )
-from cli.permissions.classifier_persistence import append_persisted_allow
 from cli.permissions.denial_tracking import DenialTracker
 from cli.tools.base import PermissionDecision, ToolContext, ToolResult
 from cli.tools.registry import ToolRegistry
@@ -222,6 +221,7 @@ def execute_tool_call(
             permissions=permissions,
             dialog_runner=dialog_runner,
             include_persist_option=include_persist_option,
+            denial_tracker=denial_tracker,
         )
         if denied is not None:
             return denied
@@ -252,6 +252,7 @@ def execute_tool_call(
                 permissions=permissions,
                 dialog_runner=dialog_runner,
                 include_persist_option=include_persist_option,
+                denial_tracker=denial_tracker,
             )
             if denied is not None:
                 return denied
@@ -419,6 +420,7 @@ def _run_permission_dialog(
     permissions: PermissionManager,
     dialog_runner: DialogRunner | None,
     include_persist_option: bool,
+    denial_tracker: DenialTracker | None = None,
 ) -> ToolExecution | None:
     runner = dialog_runner or _lazy_default_dialog_runner()
     outcome = runner(
@@ -427,6 +429,8 @@ def _run_permission_dialog(
         include_persist_option=include_persist_option,
     )
     if not outcome.allow:
+        if denial_tracker is not None:
+            denial_tracker.record_denial(tool_name)
         return ToolExecution(
             tool_name=tool_name,
             decision=PermissionDecision.DENY,
@@ -437,13 +441,6 @@ def _run_permission_dialog(
         permissions.allow_for_session(outcome.persist_rule)
     elif outcome.persist_rule and outcome.persist_scope == "settings":
         permissions.persist_allow_rule(outcome.persist_rule)
-        # P3.T3: also teach the transcript classifier so the NEXT session
-        # auto-approves this pattern without round-tripping through the
-        # legacy PermissionManager allow list. Failures are swallowed by
-        # ``append_persisted_allow`` — this is a best-effort side-effect.
-        root = getattr(permissions, "root", None)
-        if root is not None:
-            append_persisted_allow(root, outcome.persist_rule)
     return None
 
 

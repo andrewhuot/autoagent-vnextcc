@@ -49,6 +49,7 @@ from cli.llm.types import (
     TurnMessage,
 )
 from cli.permissions import PermissionManager
+from cli.permissions.classifier import ClassifierContext
 from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolContext
 from cli.tools.executor import ToolExecution, execute_tool_call
@@ -113,14 +114,6 @@ class LLMOrchestrator:
     """Passed through to :func:`execute_tool_call`. The default (``None``)
     uses the interactive prompt dialog."""
 
-    echo: Callable[[str], None] = print
-    """Line sink for streaming assistant output. Tests point this at a
-    list; the REPL wires :class:`click.echo`."""
-
-    styler: Any | None = None
-    """Optional markdown-stream styler — tests pass a tagger to assert
-    mode transitions."""
-
     classifier_context: Any | None = None
     """Optional :class:`cli.permissions.classifier.ClassifierContext` —
     forwarded to :func:`execute_tool_call` on every tool call so the
@@ -142,6 +135,14 @@ class LLMOrchestrator:
     when set, every classifier decision (including PROMPT pass-through)
     is appended as a JSONL line with a size-rotated file on disk. Opt-in
     so unit tests and ephemeral harnesses don't touch the filesystem."""
+
+    echo: Callable[[str], None] = print
+    """Line sink for streaming assistant output. Tests point this at a
+    list; the REPL wires :class:`click.echo`."""
+
+    styler: Any | None = None
+    """Optional markdown-stream styler — tests pass a tagger to assert
+    mode transitions."""
 
     # Accumulated conversation across turns (a list to preserve order).
     messages: list[TurnMessage] = field(default_factory=list)
@@ -535,9 +536,32 @@ class LLMOrchestrator:
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
-            classifier_context=self.classifier_context,
+            classifier_context=(
+                self.classifier_context
+                if self.classifier_context is not None
+                else self._classifier_context()
+            ),
             denial_tracker=self.denial_tracker,
             audit_log=self.audit_log,
+        )
+
+    def _classifier_context(self) -> ClassifierContext | None:
+        """Build a classifier context from the current permission settings.
+
+        This keeps persisted allow/deny patterns aligned with the live P0
+        settings cascade after the user saves a rule during the session.
+        Callers that want to force a specific classifier context can pass
+        ``classifier_context=...`` at construction time; that explicit context
+        wins over this derived one.
+        """
+        workspace_root = getattr(self, "workspace_root", None)
+        if workspace_root is None:
+            return None
+        rules = self.permissions.explicit_rules
+        return ClassifierContext(
+            workspace_root=workspace_root,
+            persisted_allow_patterns=frozenset(rules.get("allow", [])),
+            persisted_deny_patterns=frozenset(rules.get("deny", [])),
         )
 
     def _build_streaming_tool_dispatcher(self) -> StreamingToolDispatcher:

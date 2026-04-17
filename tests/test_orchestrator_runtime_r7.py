@@ -8,11 +8,13 @@ and the ConversationStore + ConversationBridge pair. The pre-existing
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
 
+from cli.llm.types import AssistantToolUseBlock
 from cli.llm.streaming import MessageStop
 from cli.llm.types import TurnMessage
 from cli.workbench_app.agentlab_tools import (
@@ -139,6 +141,28 @@ def test_runtime_read_only_improve_tools_short_circuit_to_allow(
     )
 
 
+def test_runtime_wires_classifier_for_safe_bash_auto_approve(
+    workspace: Path,
+) -> None:
+    """The live orchestrator path should pass classifier context into
+    execute_tool_call so an allowlisted read-only Bash command does not
+    fall through to the interactive dialog."""
+    runtime = build_workbench_runtime(
+        workspace_root=workspace,
+        model=_ScriptedModel(),
+    )
+
+    def fail_dialog(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("safe Bash should have auto-approved, not prompted")
+
+    runtime.orchestrator.dialog_runner = fail_dialog
+    execution = runtime.orchestrator._execute_tool(
+        AssistantToolUseBlock(id="t1", name="Bash", input={"command": "ls"})
+    )
+
+    assert execution.decision.value == "allow"
+
+
 # ---------------------------------------------------------------------------
 # System prompt — default-built lean R7 prompt vs explicit override
 # ---------------------------------------------------------------------------
@@ -240,3 +264,51 @@ def test_runtime_conversation_id_persists_across_load(workspace: Path) -> None:
     ids = {c.id for c in fresh.list_recent(limit=10)}
     assert first.conversation_id in ids
     assert second.conversation_id in ids
+
+
+def test_runtime_registers_remote_mcp_tools_by_default(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A workspace-level remote MCP server should register tools even when the
+    caller does not supply a custom MCP client factory."""
+    (workspace / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "remote": {
+                        "transport": "sse",
+                        "url": "https://mcp.example.com/sse",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _FakeMcpClient:
+        def list_tools(self) -> list[dict[str, Any]]:
+            return [
+                {
+                    "name": "search",
+                    "description": "Search remote",
+                    "inputSchema": {"type": "object"},
+                }
+            ]
+
+        def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+            return {"content": [{"type": "text", "text": f"{name}:{arguments}"}]}
+
+    from cli.workbench_app import orchestrator_runtime as runtime_mod
+
+    monkeypatch.setattr(
+        runtime_mod,
+        "_default_mcp_client_factory",
+        lambda spec: _FakeMcpClient(),
+    )
+
+    runtime = build_workbench_runtime(
+        workspace_root=workspace,
+        model=_ScriptedModel(),
+    )
+
+    assert runtime.tool_registry.has("mcp__remote__search")

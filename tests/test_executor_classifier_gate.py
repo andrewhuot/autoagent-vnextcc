@@ -9,11 +9,11 @@ These test the pre-check sequence added in P3.T3:
 3. ``AUTO_DENY`` returns a DENY execution with
    ``denial_reason="classifier_deny"`` and increments the tracker.
 4. ``PROMPT`` falls through to the existing ask-path (dialog fires).
-5. Denial-tracker escalation: after N denials, even an AUTO_APPROVE
-   command is forced to prompt.
+5. Denial-tracker escalation: after N USER denials, even an
+   AUTO_APPROVE command is forced to prompt.
 6. The dialog's ``persist_scope=="settings"`` branch writes the new rule
-   into BOTH the legacy ``settings.json`` allowlist AND the classifier
-   allowlist JSON.
+   into the legacy ``settings.json`` allowlist, which the live
+   classifier context reads from as its persisted source of truth.
 """
 
 from __future__ import annotations
@@ -27,10 +27,6 @@ import pytest
 
 from cli.permissions import PermissionManager
 from cli.permissions.classifier import ClassifierContext
-from cli.permissions.classifier_persistence import (
-    CLASSIFIER_ALLOWLIST_FILENAME,
-    load_persisted_patterns,
-)
 from cli.permissions.denial_tracking import DenialTracker
 from cli.tools import ToolRegistry
 from cli.tools.base import ToolContext
@@ -218,16 +214,51 @@ def test_tracker_escalation_overrides_auto_approve(
     assert execution.denial_reason == "user_deny"
 
 
+def test_user_deny_records_denial_for_tracker(
+    workspace: Path, context: ToolContext
+) -> None:
+    """A user pressing deny in the permission dialog must advance the
+    per-tool tracker so future safe calls can escalate back to prompt."""
+    registry = ToolRegistry()
+    registry.register(BashTool())
+    manager = PermissionManager(root=workspace)
+    tracker = DenialTracker(max_per_session_per_tool=1)
+
+    def dialog(tool: Any, tool_input: Any, *, include_persist_option: bool) -> DialogOutcome:
+        return DialogOutcome(
+            choice=DialogChoice.DENY,
+            allow=False,
+            persist_rule=None,
+            persist_scope=None,
+        )
+
+    execution = execute_tool_call(
+        "Bash",
+        {"command": "banana-custom-script"},
+        registry=registry,
+        permissions=manager,
+        context=context,
+        dialog_runner=dialog,
+        classifier_context=_ctx(workspace),
+        denial_tracker=tracker,
+    )
+
+    assert execution.decision.value == "deny"
+    assert execution.denial_reason == "user_deny"
+    assert tracker.denial_count("Bash") == 1
+
+
 # ---------------------------------------------------------------------------
 # Dialog persist_scope=="settings" → both stores updated
 # ---------------------------------------------------------------------------
 
 
-def test_persist_rule_writes_classifier_allowlist(
+def test_persist_rule_writes_settings_rule(
     workspace: Path, context: ToolContext
 ) -> None:
-    """The settings-scope persist branch must update BOTH the legacy
-    settings.json allowlist AND the classifier allowlist JSON."""
+    """The settings-scope persist branch must write the allow rule into
+    ``settings.json`` so future classifier contexts can read it back
+    from the P0 settings cascade."""
     (workspace / "a.txt").write_text("one", encoding="utf-8")
     registry = ToolRegistry()
     registry.register(FileEditTool())
@@ -253,13 +284,7 @@ def test_persist_rule_writes_classifier_allowlist(
         classifier_context=_ctx(workspace),
     )
 
-    # Legacy store still updated (back-compat).
     settings = json.loads(
         (workspace / ".agentlab" / "settings.json").read_text(encoding="utf-8")
     )
     assert "tool:FileEdit:*" in settings["permissions"]["rules"]["allow"]
-
-    # New classifier allowlist file written.
-    classifier_path = workspace / ".agentlab" / CLASSIFIER_ALLOWLIST_FILENAME
-    assert classifier_path.exists()
-    assert load_persisted_patterns(workspace) == frozenset({"tool:FileEdit:*"})
