@@ -14,6 +14,11 @@ from typing import Any, Mapping
 
 from cli.tools._safe_path import PathOutsideWorkspace, resolve_within_workspace
 from cli.tools.base import Tool, ToolContext, ToolResult
+from cli.tools.rendering import (
+    StructuredDiffRenderable,
+    build_unified_diff_display,
+    infer_language,
+)
 
 
 class FileEditTool(Tool):
@@ -109,12 +114,23 @@ class FileEditTool(Tool):
             return ToolResult.failure(f"Write failed: {exc}")
 
         replacements = occurrences if replace_all else 1
+        file_path = str(target.relative_to(context.workspace_root))
+        renderable = StructuredDiffRenderable(
+            old=original,
+            new=updated,
+            file_path=file_path,
+            language=infer_language(file_path),
+        )
         return ToolResult.success(
             f"Applied {replacements} replacement(s) to "
             f"{target.relative_to(context.workspace_root)}.",
-            metadata={
-                "path": str(target),
-                "replacements": replacements,
-                "replace_all": replace_all,
-            },
+            display=build_unified_diff_display(
+                old=original,
+                new=updated,
+                file_path=file_path,
+            ),
+            path=str(target),
+            replacements=replacements,
+            replace_all=replace_all,
+            renderable=renderable.to_payload(),
         )

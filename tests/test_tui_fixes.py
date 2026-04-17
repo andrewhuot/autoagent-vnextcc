@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from cli.tools.base import PermissionDecision, ToolResult
+from cli.tools.executor import ToolExecution
 from cli.workbench_app.background_panel import (
     BackgroundTask,
     BackgroundTaskRegistry,
@@ -32,7 +34,9 @@ from cli.workbench_app.store import (
 from cli.workbench_app.tui.app import WorkbenchTUIApp
 from cli.workbench_app.tui.slash_adapter import TUISlashAdapter
 from cli.workbench_app.tui.widgets.message_widget import MessageWidget
+from cli.workbench_app.tui.widgets.structured_diff import StructuredDiff
 from cli.workbench_app.transcript import TranscriptEntry
+from cli.tools.rendering import StructuredDiffRenderable
 
 
 # ---------------------------------------------------------------------------
@@ -90,6 +94,33 @@ class TestMessageWidgetMarkdown:
             # It should have a Markdown child.
             md_children = list(msg_widget.query(Markdown))
             assert len(md_children) >= 1
+
+    @pytest.mark.asyncio
+    async def test_message_widget_mounts_structured_diff_for_renderable_data(self) -> None:
+        store = Store(get_default_app_state())
+        app = WorkbenchTUIApp(store=store)
+        renderable = StructuredDiffRenderable(
+            old="hello\n",
+            new="world\n",
+            file_path="demo.py",
+            language="python",
+        )
+        async with app.run_test() as pilot:
+            store.set_state(
+                append_message(
+                    "tool",
+                    "--- a/demo.py\n+++ b/demo.py\n-hello\n+world\n",
+                    data={"renderable": renderable.to_payload()},
+                )
+            )
+            await pilot.pause()
+
+            from cli.workbench_app.tui.widgets.message_list import MessageList
+
+            widgets = list(app.query_one(MessageList).query(MessageWidget))
+            assert len(widgets) >= 1
+            msg_widget = widgets[-1]
+            assert msg_widget.query_one(StructuredDiff) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +361,52 @@ class TestChatOrchestratorRouting:
         msgs = store.get_state().messages
         assert msgs[0].role == "user"
         assert any(m.role == "assistant" and "AI assistant" in m.content for m in msgs)
+
+    def test_chat_with_orchestrator_appends_tool_display_messages(self) -> None:
+        """Tool displays should surface as transcript entries with renderables."""
+        store = Store(get_default_app_state())
+
+        renderable = StructuredDiffRenderable(
+            old="before\n",
+            new="after\n",
+            file_path="demo.py",
+            language="python",
+        )
+
+        @dataclass
+        class FakeResult:
+            assistant_text: str = "done"
+            stop_reason: str = "end_turn"
+            tool_executions: list = None
+
+            def __post_init__(self):
+                if self.tool_executions is None:
+                    self.tool_executions = [
+                        ToolExecution(
+                            tool_name="FileEdit",
+                            decision=PermissionDecision.ALLOW,
+                            result=ToolResult(
+                                ok=True,
+                                content="ok",
+                                display="--- a/demo.py\n+++ b/demo.py\n-before\n+after\n",
+                                metadata={"renderable": renderable.to_payload()},
+                            ),
+                        )
+                    ]
+
+        mock_orchestrator = MagicMock()
+        mock_orchestrator.echo = print
+        mock_orchestrator.run_turn = MagicMock(return_value=FakeResult())
+
+        adapter = TUISlashAdapter(store, orchestrator=mock_orchestrator)
+        adapter.handle_input("hello world")
+        time.sleep(0.5)
+
+        tool_messages = [message for message in store.get_state().messages if message.role == "tool"]
+        assert len(tool_messages) == 1
+        assert tool_messages[0].data is not None
+        assert tool_messages[0].data["renderable"]["kind"] == "structured_diff"
+        assert tool_messages[0].data["tool_name"] == "FileEdit"
 
     def test_chat_with_orchestrator_threads_adapter_cancellation_token(self) -> None:
         """The TUI adapter should expose its shared cancel token during a turn."""

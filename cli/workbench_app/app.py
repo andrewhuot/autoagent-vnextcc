@@ -26,6 +26,7 @@ import click
 from cli.branding import get_agentlab_version, render_startup_banner
 from cli.permissions import DEFAULT_PERMISSION_MODE, PermissionManager
 from cli.terminal_renderer import render_box, terminal_width
+from cli.tools.rendering import iter_tool_display_payloads
 from cli.workbench_app import theme
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.help_text import render_shortcuts_help
@@ -1688,6 +1689,10 @@ def _run_orchestrator_turn(
             bridge.record_assistant_turn(result)
         except Exception:  # pragma: no cover — bridge persistence is best-effort
             pass
+
+    if result is not None:
+        for payload in iter_tool_display_payloads(getattr(result, "tool_executions", []) or []):
+            echo(payload.display)
 
     # R7.C.3 — advance the workbench cost ticker. Wrapped in try/except
     # because cost reporting must NEVER block the conversation: an unknown

@@ -21,6 +21,8 @@ from cli.tools.executor import ToolExecution
 from cli.llm.types import OrchestratorResult
 from cli.workbench_app.conversation_bridge import ConversationBridge, _truncate
 from cli.workbench_app.conversation_store import ConversationStore
+from cli.tools.rendering import StructuredDiffRenderable
+from cli.tools.rendering import PERSISTED_RENDER_TEXT_MAX_CHARS
 
 
 # ----- Helpers ------------------------------------------------------------
@@ -104,6 +106,69 @@ def test_record_assistant_turn_records_succeeded_tool_call(tmp_path):
     assert tc.status == "succeeded"
     assert tc.result == {"display": "eval ran"}
     assert tc.arguments == {}
+
+
+def test_record_assistant_turn_persists_renderable_payload(tmp_path):
+    store, conv, bridge = _bridge(tmp_path)
+    renderable = StructuredDiffRenderable(
+        old="old\n",
+        new="new\n",
+        file_path="demo.py",
+        language="python",
+    )
+    execution = ToolExecution(
+        tool_name="FileEdit",
+        decision=PermissionDecision.ALLOW,
+        result=ToolResult(
+            ok=True,
+            content="ok",
+            display="diff text",
+            metadata={"renderable": renderable.to_payload()},
+        ),
+    )
+
+    bridge.record_assistant_turn(
+        OrchestratorResult(assistant_text="edited", tool_executions=[execution])
+    )
+
+    fetched = store.get_conversation(conv.id)
+    payload = fetched.messages[0].tool_calls[0].result
+    assert payload is not None
+    assert payload["display"] == "diff text"
+    assert payload["renderable"]["kind"] == "structured_diff"
+    assert payload["renderable"]["file_path"] == "demo.py"
+
+
+def test_record_assistant_turn_caps_persisted_renderable_text(tmp_path):
+    store, conv, bridge = _bridge(tmp_path)
+    long_text = "x" * (PERSISTED_RENDER_TEXT_MAX_CHARS + 25)
+    renderable = StructuredDiffRenderable(
+        old=long_text,
+        new=long_text,
+        file_path="demo.py",
+        language="python",
+    )
+    execution = ToolExecution(
+        tool_name="FileEdit",
+        decision=PermissionDecision.ALLOW,
+        result=ToolResult(
+            ok=True,
+            content="ok",
+            display="diff text",
+            metadata={"renderable": renderable.to_payload()},
+        ),
+    )
+
+    bridge.record_assistant_turn(
+        OrchestratorResult(assistant_text="edited", tool_executions=[execution])
+    )
+
+    fetched = store.get_conversation(conv.id)
+    payload = fetched.messages[0].tool_calls[0].result
+    assert payload is not None
+    assert len(payload["renderable"]["old"]) == PERSISTED_RENDER_TEXT_MAX_CHARS
+    assert len(payload["renderable"]["new"]) == PERSISTED_RENDER_TEXT_MAX_CHARS
+    assert payload["renderable"]["truncated"] is True
 
 
 def test_record_assistant_turn_records_failed_tool_call(tmp_path):

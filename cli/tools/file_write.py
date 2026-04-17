@@ -12,6 +12,13 @@ from typing import Any, Mapping
 
 from cli.tools._safe_path import PathOutsideWorkspace, resolve_within_workspace
 from cli.tools.base import Tool, ToolContext, ToolResult
+from cli.tools.rendering import (
+    MAX_FILE_WRITE_RENDER_LINES,
+    StructuredDiffRenderable,
+    build_unified_diff_display,
+    infer_language,
+    truncate_render_text,
+)
 
 
 class FileWriteTool(Tool):
@@ -63,6 +70,22 @@ class FileWriteTool(Tool):
             return ToolResult.failure(str(exc))
 
         existed = target.exists()
+        if existed and target.is_dir():
+            return ToolResult.failure(f"Path is a directory: {raw_path}")
+
+        previous_content = ""
+        if existed:
+            try:
+                previous_content = target.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                previous_content = "[previous file contained non-UTF-8 bytes]\n"
+            except OSError as exc:
+                return ToolResult.failure(f"Read failed: {exc}")
+
+        rendered_new, truncated = truncate_render_text(
+            content,
+            max_lines=MAX_FILE_WRITE_RENDER_LINES,
+        )
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
@@ -70,12 +93,26 @@ class FileWriteTool(Tool):
             return ToolResult.failure(f"Write failed: {exc}")
 
         verb = "Overwrote" if existed else "Created"
+        file_path = str(target.relative_to(context.workspace_root))
+        renderable = StructuredDiffRenderable(
+            old=previous_content,
+            new=rendered_new,
+            file_path=file_path,
+            language=infer_language(file_path),
+            change_type="create" if not existed else "write",
+            truncated=truncated,
+        )
         return ToolResult.success(
             f"{verb} {target.relative_to(context.workspace_root)} "
             f"({len(content)} bytes).",
-            metadata={
-                "path": str(target),
-                "bytes": len(content),
-                "created": not existed,
-            },
+            display=build_unified_diff_display(
+                old=previous_content,
+                new=rendered_new,
+                file_path=file_path,
+                truncated=truncated,
+            ),
+            path=str(target),
+            bytes=len(content),
+            created=not existed,
+            renderable=renderable.to_payload(),
         )
