@@ -228,6 +228,47 @@ class TestPreflight:
         assert result.passed is True  # warnings don't block
         assert len(result.warnings) > 0
 
+    def test_preflight_can_block_lossy_and_blocked_surfaces_for_deploy(self):
+        client = MagicMock()
+        deployer = CxDeployer(client)
+        config = {"agent_type": "LlmAgent", "tools": {}}
+        matrix = {
+            "ready_surfaces": ["instructions"],
+            "lossy_surfaces": ["routing"],
+            "blocked_surfaces": ["flows"],
+        }
+
+        result = deployer.run_preflight(
+            config,
+            matrix,
+            fail_on_lossy_surfaces=True,
+            fail_on_blocked_surfaces=True,
+        )
+
+        assert result.passed is False
+        assert any("routing" in error for error in result.errors)
+        assert any("flows" in error for error in result.errors)
+
+
+class TestAppScopedDeployer:
+    """Verify app-scoped deploy helpers reject ambiguous CX targets."""
+
+    def test_deploy_to_environment_requires_explicit_app_id(self):
+        client = MagicMock()
+        deployer = CxDeployer(client)
+        ref = CxAgentRef(project="test-project", location="us-central1", agent_id="agent-123")
+
+        with pytest.raises(CxStudioError, match="app_id"):
+            deployer.deploy_to_environment(ref, "production")
+
+    def test_get_deploy_status_requires_explicit_app_id(self):
+        client = MagicMock()
+        deployer = CxDeployer(client)
+        ref = CxAgentRef(project="test-project", location="us-central1", agent_id="agent-123")
+
+        with pytest.raises(CxStudioError, match="app_id"):
+            deployer.get_deploy_status(ref)
+
 
 # ---------------------------------------------------------------------------
 # Canary / promote / rollback tests
@@ -398,14 +439,41 @@ class TestPreflightRoute:
         assert "routing" in data["lossy_surfaces"]
         assert "flows" in data["blocked_surfaces"]
 
+    def test_preflight_can_block_deploy_on_lossy_and_blocked_surfaces(self, api_client: TestClient):
+        response = api_client.post("/api/cx/preflight", json={
+            "config": {"agent_type": "LlmAgent", "tools": {}},
+            "export_matrix": {
+                "ready_surfaces": ["instructions"],
+                "lossy_surfaces": ["routing"],
+                "blocked_surfaces": ["flows"],
+            },
+            "fail_on_lossy_surfaces": True,
+            "fail_on_blocked_surfaces": True,
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["passed"] is False
+        assert any("routing" in error for error in data["errors"])
+        assert any("flows" in error for error in data["errors"])
+
 
 class TestDeployRoute:
+    def test_deploy_requires_explicit_app_id(self, api_client: TestClient):
+        response = api_client.post("/api/cx/deploy", json={
+            "project": "test-project",
+            "location": "us-central1",
+            "agent_id": "agent-123",
+            "environment": "production",
+        })
+        assert response.status_code == 422
+
     def test_canary_deploy_strategy(
         self,
         api_client: TestClient,
         monkeypatch: pytest.MonkeyPatch,
     ):
         def _fake_canary(self, ref, env, traffic_pct):
+            assert ref.app_id == "test-app"
             return (
                 DeployResult(environment=env, status="canary", version_info={"phase": "canary"}),
                 CanaryState(
@@ -423,6 +491,7 @@ class TestDeployRoute:
         response = api_client.post("/api/cx/deploy", json={
             "project": "test-project",
             "location": "us-central1",
+            "app_id": "test-app",
             "agent_id": "agent-123",
             "environment": "production",
             "strategy": "canary",
@@ -441,6 +510,7 @@ class TestPromoteRoute:
         monkeypatch: pytest.MonkeyPatch,
     ):
         def _fake_promote(self, ref, canary):
+            assert ref.app_id == "test-app"
             return (
                 DeployResult(environment="production", status="promoted", version_info={}),
                 CanaryState(
@@ -459,6 +529,7 @@ class TestPromoteRoute:
         response = api_client.post("/api/cx/promote", json={
             "project": "test-project",
             "location": "us-central1",
+            "app_id": "test-app",
             "agent_id": "agent-123",
             "canary": {
                 "phase": "canary",
@@ -481,6 +552,7 @@ class TestRollbackRoute:
         monkeypatch: pytest.MonkeyPatch,
     ):
         def _fake_rollback(self, ref, canary):
+            assert ref.app_id == "test-app"
             return (
                 DeployResult(environment="production", status="rolled_back", version_info={}),
                 CanaryState(
@@ -500,6 +572,7 @@ class TestRollbackRoute:
         response = api_client.post("/api/cx/rollback", json={
             "project": "test-project",
             "location": "us-central1",
+            "app_id": "test-app",
             "agent_id": "agent-123",
             "canary": {
                 "phase": "canary",
@@ -513,3 +586,36 @@ class TestRollbackRoute:
         data = response.json()
         assert data["phase"] == "rolled_back"
         assert data["canary"]["deployed_version"] == "v1"
+
+
+class TestStatusRoute:
+    def test_status_requires_explicit_app_id(self, api_client: TestClient):
+        response = api_client.get("/api/cx/status", params={
+            "project": "test-project",
+            "location": "us-central1",
+            "agent_id": "agent-123",
+        })
+        assert response.status_code == 422
+
+    def test_status_uses_explicit_app_id(
+        self,
+        api_client: TestClient,
+        monkeypatch: pytest.MonkeyPatch,
+    ):
+        def _fake_status(self, ref):
+            assert ref.app_id == "test-app"
+            return {"app": ref.app_name, "agent": ref.name, "deployments": []}
+
+        monkeypatch.setattr("cx_studio.CxDeployer.get_deploy_status", _fake_status)
+        monkeypatch.setattr("cx_studio.CxAuth.__init__", lambda self, **kw: None)
+        monkeypatch.setattr("cx_studio.CxClient.__init__", lambda self, auth: None)
+
+        response = api_client.get("/api/cx/status", params={
+            "project": "test-project",
+            "location": "us-central1",
+            "app_id": "test-app",
+            "agent_id": "agent-123",
+        })
+        assert response.status_code == 200
+        data = response.json()
+        assert data["app"].endswith("/apps/test-app")

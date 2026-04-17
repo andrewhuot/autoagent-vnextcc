@@ -120,16 +120,30 @@ def _build_failure_samples_from_eval_payload(
         if not isinstance(case, dict) or bool(case.get("passed")):
             continue
 
+        input_payload = dict(case.get("input_payload") or {})
+        actual_output = dict(case.get("actual_output") or {})
         details = str(case.get("details") or "")
         category = str(case.get("category") or "")
         samples.append({
-            "user_message": str(case.get("user_message") or case.get("case_id") or ""),
-            "agent_response": str(case.get("response") or details),
+            "user_message": str(
+                case.get("user_message")
+                or input_payload.get("user_message")
+                or case.get("case_id")
+                or ""
+            ),
+            "agent_response": str(
+                case.get("response")
+                or actual_output.get("response")
+                or actual_output.get("details")
+                or details
+            ),
             "outcome": "fail",
-            "error_message": details or category,
+            "error_message": "; ".join(case.get("failure_reasons", []) or []) or details or category,
             "safety_flags": ["eval_safety_failure"] if case.get("safety_passed") is False else [],
-            "tool_calls": [],
-            "specialist_used": str(case.get("specialist_used") or ""),
+            "tool_calls": list(case.get("tool_calls") or actual_output.get("tool_calls") or []),
+            "specialist_used": str(
+                case.get("specialist_used") or actual_output.get("specialist_used") or ""
+            ),
             "latency_ms": float(case.get("latency_ms") or 0.0),
             "component_attributions": list(case.get("component_attributions", []) or []),
         })
@@ -242,6 +256,27 @@ def _assert_eval_run_ready_for_optimization(request: Request, eval_run_id: str |
             status_code=409,
             detail=f"Eval run {eval_run_id} is {eval_task.status}; results not yet available",
         )
+
+
+def _baseline_eval_metadata(request: Request, eval_run_id: str | None) -> dict[str, Any]:
+    """Return structured baseline metadata for an explicit eval run when available."""
+
+    if not eval_run_id:
+        return {}
+    task_manager = request.app.state.task_manager
+    eval_task = task_manager.get_task(eval_run_id)
+    if eval_task is None or not isinstance(eval_task.result, dict):
+        return {}
+    payload = dict(eval_task.result or {})
+    provenance = dict(payload.get("provenance") or {})
+    return {
+        "baseline_eval_run_id": eval_run_id,
+        "baseline_result_run_id": str(payload.get("run_id") or eval_run_id),
+        "baseline_config_fingerprint": str(provenance.get("config_fingerprint") or ""),
+        "baseline_dataset_path": str(payload.get("dataset_path") or provenance.get("dataset_path") or ""),
+        "baseline_split": str(payload.get("split") or provenance.get("split") or ""),
+        "baseline_category": str(provenance.get("category") or ""),
+    }
 
 
 def _ensure_active_config(deployer: Any) -> dict:
@@ -364,6 +399,7 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                 "config_path": body.config_path,
             },
         )
+        baseline_meta = _baseline_eval_metadata(request, body.eval_run_id)
         try:
             if body.eval_run_id:
                 report, failure_samples = _build_scoped_optimization_context(
@@ -545,6 +581,12 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
                         deploy_scores=scores_dict,
                         deploy_strategy=deploy_strategy,
                         patch_bundle=patch_bundle,
+                        baseline_eval_run_id=baseline_meta.get("baseline_eval_run_id") or None,
+                        baseline_result_run_id=baseline_meta.get("baseline_result_run_id") or None,
+                        baseline_config_fingerprint=baseline_meta.get("baseline_config_fingerprint") or None,
+                        baseline_dataset_path=baseline_meta.get("baseline_dataset_path") or None,
+                        baseline_split=baseline_meta.get("baseline_split") or None,
+                        baseline_category=baseline_meta.get("baseline_category") or None,
                     )
                     pending_review_store.save_review(pending_review)
                     if recent_attempt is not None:
@@ -603,22 +645,26 @@ async def start_optimization(body: OptimizeRequest, request: Request) -> Optimiz
             if improvement_lineage is not None and recent:
                 try:
                     lineage_attempt_id = recent[0].attempt_id
-                    lineage_event_type = (
-                        "pending_review"
-                        if pending_review is not None
-                        else ("accept" if new_config is not None else "reject")
+                    improvement_lineage.record_attempt(
+                        attempt_id=lineage_attempt_id,
+                        status=recent[0].status,
+                        score_before=score_before,
+                        score_after=score_after,
+                        eval_run_id=baseline_meta.get("baseline_eval_run_id") or body.eval_run_id,
+                        eval_result_run_id=baseline_meta.get("baseline_result_run_id") or None,
+                        change_description=change_desc,
+                        config_path=body.config_path,
+                        objective=body.objective,
+                        status_message=result["status_message"],
                     )
-                    improvement_lineage.record(
-                        lineage_attempt_id,
-                        lineage_event_type,
-                        payload={
-                            "status_message": result["status_message"],
-                            "score_before": score_before,
-                            "score_after": score_after,
-                            "change_description": change_desc,
-                            "eval_run_id": body.eval_run_id,
-                        },
-                    )
+                    if recent[0].status.startswith("rejected"):
+                        improvement_lineage.record_rejection(
+                            attempt_id=lineage_attempt_id,
+                            reason=recent[0].status,
+                            detail=result["status_message"],
+                            eval_run_id=baseline_meta.get("baseline_eval_run_id") or body.eval_run_id,
+                            eval_result_run_id=baseline_meta.get("baseline_result_run_id") or None,
+                        )
                 except Exception:
                     LOG.debug("Failed to record improvement lineage", exc_info=True)
             emit(
@@ -777,6 +823,7 @@ async def approve_pending_review(attempt_id: str, request: Request) -> PendingRe
     review_store = request.app.state.pending_review_store
     deployer = request.app.state.deployer
     memory = request.app.state.optimization_memory
+    improvement_lineage = getattr(request.app.state, "improvement_lineage", None)
 
     raw_review = review_store.get_review(attempt_id)
     if raw_review is None:
@@ -790,6 +837,24 @@ async def approve_pending_review(attempt_id: str, request: Request) -> PendingRe
     )
     review_store.delete_review(attempt_id)
     _update_attempt_status(memory, attempt_id, "accepted")
+    if improvement_lineage is not None:
+        try:
+            manifest = getattr(getattr(deployer, "version_manager", None), "manifest", {}) or {}
+            deployed_version = (
+                manifest.get("active_version")
+                if review.deploy_strategy == "immediate"
+                else manifest.get("canary_version")
+            )
+            deployment_id = f"{review.deploy_strategy}:{deployed_version or attempt_id}"
+            improvement_lineage.record_deployment(
+                attempt_id=attempt_id,
+                deployment_id=deployment_id,
+                version=deployed_version,
+                strategy=review.deploy_strategy,
+                source="pending_review_approval",
+            )
+        except Exception:
+            LOG.debug("Failed to record approval deployment lineage", exc_info=True)
 
     return PendingReviewActionResponse(
         status="approved",
@@ -808,13 +873,26 @@ async def reject_pending_review(attempt_id: str, request: Request) -> PendingRev
 
     review_store = request.app.state.pending_review_store
     memory = request.app.state.optimization_memory
+    improvement_lineage = getattr(request.app.state, "improvement_lineage", None)
 
     raw_review = review_store.get_review(attempt_id)
     if raw_review is None:
         raise HTTPException(status_code=404, detail=f"Pending review not found: {attempt_id}")
 
+    review = _coerce_pending_review(raw_review)
     review_store.delete_review(attempt_id)
     _update_attempt_status(memory, attempt_id, "rejected_human")
+    if improvement_lineage is not None:
+        try:
+            improvement_lineage.record_rejection(
+                attempt_id=attempt_id,
+                reason="human_review_rejected",
+                detail="Pending review rejected by operator",
+                eval_run_id=review.baseline_eval_run_id,
+                eval_result_run_id=review.baseline_result_run_id,
+            )
+        except Exception:
+            LOG.debug("Failed to record rejection lineage", exc_info=True)
 
     return PendingReviewActionResponse(
         status="rejected",

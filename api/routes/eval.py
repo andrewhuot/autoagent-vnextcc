@@ -39,6 +39,12 @@ def _score_to_response(run_id: str, score: Any, completed_at: datetime | None = 
     """Convert a CompositeScore to an EvalResultsResponse-compatible dict."""
     cases = []
     for r in getattr(score, "results", []):
+        input_payload = dict(getattr(r, "input_payload", {}) or {})
+        expected_payload = getattr(r, "expected_payload", None)
+        expected_payload = dict(expected_payload or {}) if expected_payload is not None else None
+        actual_output = dict(getattr(r, "actual_output", {}) or {})
+        response = actual_output.get("response") or actual_output.get("details") or r.details
+        tool_calls = actual_output.get("tool_calls")
         cases.append({
             "case_id": r.case_id,
             "category": r.category,
@@ -48,6 +54,15 @@ def _score_to_response(run_id: str, score: Any, completed_at: datetime | None = 
             "latency_ms": r.latency_ms,
             "token_count": r.token_count,
             "details": r.details,
+            "user_message": str(input_payload.get("user_message", "")),
+            "response": str(response or ""),
+            "specialist_used": str(actual_output.get("specialist_used") or ""),
+            "tool_calls": list(tool_calls) if isinstance(tool_calls, list) else [],
+            "failure_reasons": list(getattr(r, "failure_reasons", []) or []),
+            "component_attributions": list(getattr(r, "component_attributions", []) or []),
+            "input_payload": input_payload,
+            "expected_payload": expected_payload,
+            "actual_output": actual_output,
         })
     return {
         "run_id": run_id,

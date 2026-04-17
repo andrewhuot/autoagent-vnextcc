@@ -26,6 +26,7 @@ from deployer import Deployer
 from evals.scorer import CompositeScore, DimensionScores, EvalResult
 from observer.metrics import HealthMetrics, HealthReport
 from optimizer.loop import Optimizer
+from optimizer.improvement_lineage import ImprovementLineageStore
 from optimizer.memory import OptimizationAttempt, OptimizationMemory
 from optimizer.proposer import Proposal
 from optimizer.search import SearchStrategy
@@ -975,6 +976,7 @@ def test_approve_pending_review_deploys_and_removes_review(tmp_path: Path) -> No
     review_store = _InMemoryPendingReviewStore()
     review_store.save_review(_pending_review_payload())
     memory = OptimizationMemory(db_path=str(tmp_path / "optimizer_memory.db"))
+    lineage = ImprovementLineageStore(db_path=str(tmp_path / "improvement_lineage.db"))
     memory.log(
         OptimizationAttempt(
             attempt_id="attempt-pending",
@@ -1000,6 +1002,7 @@ def test_approve_pending_review_deploys_and_removes_review(tmp_path: Path) -> No
     test_app.state.conversation_store = _DummyStore()
     test_app.state.optimization_memory = memory
     test_app.state.pending_review_store = review_store
+    test_app.state.improvement_lineage = lineage
 
     client = TestClient(test_app)
 
@@ -1016,6 +1019,9 @@ def test_approve_pending_review_deploys_and_removes_review(tmp_path: Path) -> No
     assert history_response.status_code == 200
     history = history_response.json()
     assert history[0]["status"] == "accepted"
+    lineage_view = lineage.view_attempt("attempt-pending")
+    assert lineage_view.deployment_id is not None
+    assert lineage_view.deployed_version is not None
 
 
 def test_reject_pending_review_discards_review_without_deploy(tmp_path: Path) -> None:
@@ -1023,6 +1029,7 @@ def test_reject_pending_review_discards_review_without_deploy(tmp_path: Path) ->
     review_store = _InMemoryPendingReviewStore()
     review_store.save_review(_pending_review_payload(attempt_id="attempt-reject"))
     memory = OptimizationMemory(db_path=str(tmp_path / "optimizer_memory.db"))
+    lineage = ImprovementLineageStore(db_path=str(tmp_path / "improvement_lineage.db"))
     memory.log(
         OptimizationAttempt(
             attempt_id="attempt-reject",
@@ -1048,6 +1055,7 @@ def test_reject_pending_review_discards_review_without_deploy(tmp_path: Path) ->
     test_app.state.conversation_store = _DummyStore()
     test_app.state.optimization_memory = memory
     test_app.state.pending_review_store = review_store
+    test_app.state.improvement_lineage = lineage
 
     client = TestClient(test_app)
 
@@ -1063,6 +1071,8 @@ def test_reject_pending_review_discards_review_without_deploy(tmp_path: Path) ->
     assert history_response.status_code == 200
     history = history_response.json()
     assert history[0]["status"] == "rejected_human"
+    lineage_view = lineage.view_attempt("attempt-reject")
+    assert lineage_view.rejection_reason == "human_review_rejected"
 
 
 def test_start_optimization_bootstraps_active_config_from_base_config_when_none_exists(

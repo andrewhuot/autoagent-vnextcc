@@ -119,3 +119,37 @@ def test_view_attempt_parent_attempt_id(store):
     )
     view = store.view_attempt(aid)
     assert view.parent_attempt_id == "parent01"
+
+
+def test_view_attempt_surfaces_verification_details(store):
+    aid = "verify001"
+    store.record_attempt(
+        attempt_id=aid,
+        status="pending_review",
+        eval_run_id="eval-task-1",
+        eval_result_run_id="baseline-run-1",
+        score_before=0.71,
+        score_after=0.79,
+    )
+    store.record_verification(
+        attempt_id=aid,
+        verification_id="verify-run-1",
+        status="passed",
+        eval_run_id="verify-run-1",
+        baseline_eval_run_id="eval-task-1",
+        baseline_result_run_id="baseline-run-1",
+        score_before=0.71,
+        score_after=0.82,
+        phase="pre_deploy",
+    )
+
+    view = store.view_attempt(aid)
+
+    assert view.eval_run_id == "eval-task-1"
+    assert view.eval_result_run_id == "baseline-run-1"
+    assert view.verification_id == "verify-run-1"
+    assert view.verification_status == "passed"
+    assert view.verification_eval_run_id == "verify-run-1"
+    assert view.verification_phase == "pre_deploy"
+    assert view.verification_score_before == 0.71
+    assert view.verification_score_after == 0.82

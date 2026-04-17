@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from api.models import CxExportResponse, CxImportResponse
@@ -40,6 +40,10 @@ class CxAgentRefPayload(BaseModel):
     agent_id: str
     credentials_path: str | None = None
 
+
+class CxAppScopedRefPayload(CxAgentRefPayload):
+    app_id: str = Field(min_length=1)
+
 class CxImportRequest(CxAgentRefPayload):
     output_dir: str = "."
     include_test_cases: bool = True
@@ -72,6 +76,8 @@ class CxSyncRequest(CxDiffRequest):
 class CxPreflightRequest(BaseModel):
     config: dict
     export_matrix: dict | None = None
+    fail_on_lossy_surfaces: bool = False
+    fail_on_blocked_surfaces: bool = False
 
 
 class CxPreflightResponse(BaseModel):
@@ -83,8 +89,8 @@ class CxPreflightResponse(BaseModel):
     blocked_surfaces: list[str] = Field(default_factory=list)
 
 
-class CxDeployRequest(CxAgentRefPayload):
-    environment: str = "production"
+class CxDeployRequest(CxAppScopedRefPayload):
+    environment: str = Field(default="production", min_length=1)
     strategy: str = "immediate"
     traffic_pct: int = 100
 
@@ -97,11 +103,11 @@ class CxDeployResponse(BaseModel):
     canary: dict = Field(default_factory=dict)
 
 
-class CxPromoteRequest(CxAgentRefPayload):
+class CxPromoteRequest(CxAppScopedRefPayload):
     canary: dict
 
 
-class CxRollbackRequest(CxAgentRefPayload):
+class CxRollbackRequest(CxAppScopedRefPayload):
     canary: dict
 
 
@@ -305,7 +311,12 @@ async def preflight_cx(body: CxPreflightRequest) -> CxPreflightResponse:
     client._timeout = 30.0
     client._max_retries = 3
     deployer = CxDeployer(client)
-    result = deployer.run_preflight(body.config, body.export_matrix)
+    result = deployer.run_preflight(
+        body.config,
+        body.export_matrix,
+        fail_on_lossy_surfaces=body.fail_on_lossy_surfaces,
+        fail_on_blocked_surfaces=body.fail_on_blocked_surfaces,
+    )
     return CxPreflightResponse(
         passed=result.passed,
         errors=result.errors,
@@ -330,7 +341,12 @@ async def deploy_cx_agent(body: CxDeployRequest) -> CxDeployResponse:
         auth = CxAuth(credentials_path=body.credentials_path)
         client = CxClient(auth)
         deployer = CxDeployer(client)
-        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        ref = CxAgentRef(
+            project=body.project,
+            location=body.location,
+            app_id=body.app_id,
+            agent_id=body.agent_id,
+        )
 
         if body.strategy == "canary":
             result, canary = deployer.deploy_canary(
@@ -364,7 +380,12 @@ async def promote_cx_canary(body: CxPromoteRequest) -> CxDeployResponse:
         auth = CxAuth(credentials_path=body.credentials_path)
         client = CxClient(auth)
         deployer = CxDeployer(client)
-        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        ref = CxAgentRef(
+            project=body.project,
+            location=body.location,
+            app_id=body.app_id,
+            agent_id=body.agent_id,
+        )
         canary = CanaryState.model_validate(body.canary)
         result, updated_canary = deployer.promote_canary(ref, canary)
         return CxDeployResponse(
@@ -387,7 +408,12 @@ async def rollback_cx_deploy(body: CxRollbackRequest) -> CxDeployResponse:
         auth = CxAuth(credentials_path=body.credentials_path)
         client = CxClient(auth)
         deployer = CxDeployer(client)
-        ref = CxAgentRef(project=body.project, location=body.location, agent_id=body.agent_id)
+        ref = CxAgentRef(
+            project=body.project,
+            location=body.location,
+            app_id=body.app_id,
+            agent_id=body.agent_id,
+        )
         canary = CanaryState.model_validate(body.canary)
         result, updated_canary = deployer.rollback(ref, canary)
         return CxDeployResponse(
@@ -433,19 +459,18 @@ async def generate_cx_widget(body: CxWidgetRequest) -> CxWidgetResponse:
 async def get_cx_status(
     project: str,
     location: str = "global",
-    agent_id: str = "",
+    app_id: str = Query(..., min_length=1),
+    agent_id: str = Query(..., min_length=1),
     credentials_path: str | None = None,
 ) -> CxDeployStatusResponse:
     """Get CX agent deployment status with environment versions."""
-    if not agent_id:
-        raise HTTPException(status_code=400, detail="agent_id is required")
     from cx_studio import CxAuth, CxClient, CxDeployer
     from cx_studio.types import CxAgentRef
     try:
         auth = CxAuth(credentials_path=credentials_path)
         client = CxClient(auth)
         deployer = CxDeployer(client)
-        ref = CxAgentRef(project=project, location=location, agent_id=agent_id)
+        ref = CxAgentRef(project=project, location=location, app_id=app_id, agent_id=agent_id)
         status = deployer.get_deploy_status(ref)
         return CxDeployStatusResponse(
             app=status.get("app", ""),

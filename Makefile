@@ -1,4 +1,8 @@
-.PHONY: setup start stop dev test lint build deploy docker-build docker-run clean help
+.PHONY: setup start stop dev test test-verbose lint build deploy docker-build docker-run clean help
+
+PYTHON ?= $(if $(wildcard .venv/bin/python),./.venv/bin/python,$(shell command -v python3))
+PYTEST_ARGS ?= tests/ --tb=short -q
+PYTEST_VERBOSE_ARGS ?= tests/ -v --tb=long
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -21,10 +25,10 @@ dev: ## Setup + start (full first-run experience)
 	./start.sh
 
 test: ## Run full test suite
-	python3 -m pytest tests/ --tb=short -q
+	$(PYTHON) -m pytest $(PYTEST_ARGS)
 
 test-verbose: ## Run tests with verbose output
-	python3 -m pytest tests/ -v --tb=long
+	$(PYTHON) -m pytest $(PYTEST_VERBOSE_ARGS)
 
 lint: ## Run linting (ruff if available, else basic checks)
 	@which ruff > /dev/null 2>&1 && ruff check . || echo "Install ruff for linting: pip install ruff"

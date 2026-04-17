@@ -31,6 +31,7 @@ EVENT_ATTEMPT = "attempt"
 EVENT_REJECTION = "rejection"
 EVENT_DEPLOYMENT = "deployment"
 EVENT_MEASUREMENT = "measurement"
+EVENT_VERIFICATION = "verification"
 
 
 @dataclass
@@ -53,6 +54,7 @@ class AttemptLineageView:
     """
     attempt_id: str
     eval_run_id: str | None = None
+    eval_result_run_id: str | None = None
     deployment_id: str | None = None
     deployed_version: int | None = None
     measurement_id: str | None = None
@@ -63,6 +65,13 @@ class AttemptLineageView:
     parent_attempt_id: str | None = None
     rejection_reason: str | None = None
     rejection_detail: str | None = None
+    verification_id: str | None = None
+    verification_status: str | None = None
+    verification_eval_run_id: str | None = None
+    verification_phase: str | None = None
+    verification_score_before: float | None = None
+    verification_score_after: float | None = None
+    verification_composite_delta: float | None = None
     rolled_back: bool = False
     events: list[LineageEvent] = field(default_factory=list)
 
@@ -155,6 +164,7 @@ class ImprovementLineageStore:
         score_before: float | None = None,
         score_after: float | None = None,
         eval_run_id: str | None = None,
+        eval_result_run_id: str | None = None,
         parent_attempt_id: str | None = None,
         **extra: Any,
     ) -> LineageEvent:
@@ -163,6 +173,7 @@ class ImprovementLineageStore:
             "score_before": score_before,
             "score_after": score_after,
             "eval_run_id": eval_run_id,
+            "eval_result_run_id": eval_result_run_id,
             "parent_attempt_id": parent_attempt_id,
             **extra,
         }
@@ -207,6 +218,37 @@ class ImprovementLineageStore:
         }
         return self.record(attempt_id, EVENT_MEASUREMENT, payload=payload)
 
+    def record_verification(
+        self,
+        *,
+        attempt_id: str,
+        verification_id: str,
+        status: str,
+        eval_run_id: str | None = None,
+        baseline_eval_run_id: str | None = None,
+        baseline_result_run_id: str | None = None,
+        score_before: float | None = None,
+        score_after: float | None = None,
+        phase: str | None = None,
+        **extra: Any,
+    ) -> LineageEvent:
+        composite_delta = None
+        if score_before is not None and score_after is not None:
+            composite_delta = score_after - score_before
+        payload = {
+            "verification_id": verification_id,
+            "status": status,
+            "eval_run_id": eval_run_id,
+            "baseline_eval_run_id": baseline_eval_run_id,
+            "baseline_result_run_id": baseline_result_run_id,
+            "score_before": score_before,
+            "score_after": score_after,
+            "composite_delta": composite_delta,
+            "phase": phase,
+            **extra,
+        }
+        return self.record(attempt_id, EVENT_VERIFICATION, payload=payload)
+
     def events_for(self, attempt_id: str) -> list[LineageEvent]:
         with sqlite3.connect(self.db_path) as conn:
             rows = conn.execute(
@@ -237,6 +279,8 @@ class ImprovementLineageStore:
                 view.status = p.get("status", view.status)
                 if p.get("eval_run_id"):
                     view.eval_run_id = p["eval_run_id"]
+                if p.get("eval_result_run_id"):
+                    view.eval_result_run_id = p["eval_result_run_id"]
                 if p.get("parent_attempt_id"):
                     view.parent_attempt_id = p["parent_attempt_id"]
                 if p.get("score_before") is not None:
@@ -253,6 +297,25 @@ class ImprovementLineageStore:
                     view.deployed_version = ev.version
             elif t == "rollback":
                 view.rolled_back = True
+            elif t == EVENT_VERIFICATION:
+                if p.get("baseline_eval_run_id"):
+                    view.eval_run_id = p["baseline_eval_run_id"]
+                if p.get("baseline_result_run_id"):
+                    view.eval_result_run_id = p["baseline_result_run_id"]
+                if p.get("verification_id"):
+                    view.verification_id = p["verification_id"]
+                if p.get("status"):
+                    view.verification_status = p["status"]
+                if p.get("eval_run_id"):
+                    view.verification_eval_run_id = p["eval_run_id"]
+                if p.get("phase"):
+                    view.verification_phase = p["phase"]
+                if p.get("score_before") is not None:
+                    view.verification_score_before = p["score_before"]
+                if p.get("score_after") is not None:
+                    view.verification_score_after = p["score_after"]
+                if p.get("composite_delta") is not None:
+                    view.verification_composite_delta = p["composite_delta"]
             elif t == EVENT_MEASUREMENT:
                 if p.get("measurement_id"):
                     view.measurement_id = p["measurement_id"]
@@ -271,7 +334,7 @@ class ImprovementLineageStore:
 
     def latest_deployed_version_for(self, attempt_id: str) -> int | None:
         for event in reversed(self.events_for(attempt_id)):
-            if event.event_type in ("promote", "deploy_canary") and event.version is not None:
+            if event.event_type in (EVENT_DEPLOYMENT, "promote", "deploy_canary") and event.version is not None:
                 return event.version
         return None
 

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import inspect
+import json
 import logging
 import time
 import uuid
@@ -472,14 +473,26 @@ class Optimizer:
         # R3.6: auto-grow cases on low-coverage surfaces before proposing.
         self._maybe_auto_grow_cases()
 
-        proposal = self.proposer.propose(
-            current_config=current_config,
-            health_metrics=health_report.metrics.to_dict(),
-            failure_samples=normalized_failure_samples,
-            failure_buckets=health_report.failure_buckets,
-            past_attempts=past_attempts,
-            project_memory_context=reflection_context,
-        )
+        propose_kwargs = {
+            "current_config": current_config,
+            "health_metrics": health_report.metrics.to_dict(),
+            "failure_samples": normalized_failure_samples,
+            "failure_buckets": health_report.failure_buckets,
+            "past_attempts": past_attempts,
+            "project_memory_context": reflection_context,
+        }
+        try:
+            signature = inspect.signature(self.proposer.propose)
+        except (TypeError, ValueError):
+            signature = None
+        if signature is not None:
+            accepted = set(signature.parameters.keys())
+            propose_kwargs = {
+                key: value for key, value in propose_kwargs.items()
+                if key in accepted
+            }
+
+        proposal = self.proposer.propose(**propose_kwargs)
         if proposal is None:
             return None, "No proposal generated"
 

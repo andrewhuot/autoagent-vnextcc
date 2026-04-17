@@ -45,6 +45,16 @@ class CxDeployer:
     def __init__(self, client: CxClient):
         self._client = client
 
+    @staticmethod
+    def _require_app_name(ref: CxAgentRef) -> str:
+        """Return the app-scoped resource path required for CX deploy operations."""
+
+        if not ref.app_id:
+            raise CxStudioError(
+                "CX app_id is required for app-level deploy/status operations."
+            )
+        return ref.app_name
+
     def deploy_to_environment(
         self,
         ref: CxAgentRef,
@@ -67,7 +77,8 @@ class CxDeployer:
         """
         try:
             # Build deployment resource name at app level
-            deployment_name = f"{ref.app_name}/deployments/{environment}"
+            app_name = self._require_app_name(ref)
+            deployment_name = f"{app_name}/deployments/{environment}"
             result = self._client.deploy_to_environment(deployment_name, [])
             return DeployResult(
                 environment=environment,
@@ -116,9 +127,10 @@ class CxDeployer:
         """
         try:
             # List deployments at app level, not agent level
-            envs = self._client.list_environments(ref.app_name)
+            app_name = self._require_app_name(ref)
+            envs = self._client.list_environments(app_name)
             return {
-                "app": ref.app_name,
+                "app": app_name,
                 "agent": ref.name,
                 "deployments": [
                     {
@@ -161,10 +173,12 @@ class CxDeployer:
         }
 
         try:
+            app_name = self._require_app_name(ref)
+
             # Deploy integration templates as tools (app-level resource)
             integration_templates = artifact.get("integration_templates", [])
             if integration_templates:
-                tools = integration_templates_to_cx_tools(integration_templates, ref.app_name)
+                tools = integration_templates_to_cx_tools(integration_templates, app_name)
                 for tool in tools:
                     # In real implementation, would call client.create_tool at app level
                     # For now, just count
@@ -175,7 +189,7 @@ class CxDeployer:
             if knowledge_asset and knowledge_asset.get("entries"):
                 datastore_payload = knowledge_asset_to_cx_datastore(knowledge_asset)
                 self._client.create_data_store(
-                    app_name=ref.app_name,  # Use app_name, not agent_name
+                    app_name=app_name,  # Use app_name, not agent_name
                     **datastore_payload,
                 )
                 results["datastores_created"] = 1
@@ -205,6 +219,9 @@ class CxDeployer:
         self,
         config: dict,
         export_matrix: dict | None = None,
+        *,
+        fail_on_lossy_surfaces: bool = False,
+        fail_on_blocked_surfaces: bool = False,
     ) -> PreflightResult:
         """Run preflight validation before export or deploy.
 
@@ -223,9 +240,21 @@ class CxDeployer:
             lossy = export_matrix.get("lossy_surfaces", [])
             blocked = export_matrix.get("blocked_surfaces", [])
 
+        errors = list(validation.errors)
+        if fail_on_lossy_surfaces and lossy:
+            errors.append(
+                "Lossy CX deploy surfaces must be resolved before deploy: "
+                + ", ".join(lossy)
+            )
+        if fail_on_blocked_surfaces and blocked:
+            errors.append(
+                "Blocked CX deploy surfaces must be resolved before deploy: "
+                + ", ".join(blocked)
+            )
+
         return PreflightResult(
-            passed=validation.valid,
-            errors=validation.errors,
+            passed=len(errors) == 0,
+            errors=errors,
             warnings=validation.warnings,
             safe_surfaces=safe,
             lossy_surfaces=lossy,
@@ -244,7 +273,8 @@ class CxDeployer:
         while keeping the previous version serving the remainder.
         """
         try:
-            deployment_name = f"{ref.app_name}/deployments/{environment}"
+            app_name = self._require_app_name(ref)
+            deployment_name = f"{app_name}/deployments/{environment}"
             result = self._client.deploy_to_environment(deployment_name, [])
             version_id = result.get("version", f"canary-{environment}")
 
@@ -282,7 +312,8 @@ class CxDeployer:
             )
 
         try:
-            deployment_name = f"{ref.app_name}/deployments/{canary.environment}"
+            app_name = self._require_app_name(ref)
+            deployment_name = f"{app_name}/deployments/{canary.environment}"
             result = self._client.deploy_to_environment(deployment_name, [])
 
             from datetime import datetime, timezone
@@ -324,7 +355,8 @@ class CxDeployer:
             )
 
         try:
-            deployment_name = f"{ref.app_name}/deployments/{canary.environment}"
+            app_name = self._require_app_name(ref)
+            deployment_name = f"{app_name}/deployments/{canary.environment}"
             result = self._client.deploy_to_environment(deployment_name, [])
 
             from datetime import datetime, timezone

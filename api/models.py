@@ -74,6 +74,33 @@ class EvalCaseResult(BaseModel):
     latency_ms: float
     token_count: int
     details: str = ""
+    user_message: str = ""
+    response: str = ""
+    specialist_used: str = ""
+    tool_calls: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured tool calls observed during this case",
+    )
+    failure_reasons: list[str] = Field(
+        default_factory=list,
+        description="Structured failure reasons used by diagnostics and optimization",
+    )
+    component_attributions: list[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Component-level failure attributions for this case",
+    )
+    input_payload: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured case input payload used during evaluation",
+    )
+    expected_payload: Optional[dict[str, Any]] = Field(
+        None,
+        description="Structured expected-output payload for this case when available",
+    )
+    actual_output: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured actual output payload emitted during evaluation",
+    )
 
 
 class EvalRunResponse(BaseModel):
@@ -722,6 +749,30 @@ class PendingReview(BaseModel):
     patch_bundle: Optional[dict[str, Any]] = Field(
         None,
         description="Typed canonical component patch bundle for validation and review",
+    )
+    baseline_eval_run_id: Optional[str] = Field(
+        None,
+        description="Background task id of the baseline eval run that justified this proposal",
+    )
+    baseline_result_run_id: Optional[str] = Field(
+        None,
+        description="Structured eval result set id used to reconstruct baseline cases for verification",
+    )
+    baseline_config_fingerprint: Optional[str] = Field(
+        None,
+        description="Baseline config fingerprint recorded by the originating eval run",
+    )
+    baseline_dataset_path: Optional[str] = Field(
+        None,
+        description="Dataset or generated-suite reference used for the baseline eval",
+    )
+    baseline_split: Optional[str] = Field(
+        None,
+        description="Baseline split selector (train, test, all)",
+    )
+    baseline_category: Optional[str] = Field(
+        None,
+        description="Baseline category filter when the proposal came from a scoped eval",
     )
 
 

@@ -21,25 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd --gid 1001 agentlab && \
     useradd --uid 1001 --gid agentlab --create-home agentlab
 
-# Copy Python project files
-COPY pyproject.toml ./
-COPY runner.py ./
-COPY agentlab.yaml ./
-COPY agent/ ./agent/
-COPY api/ ./api/
-COPY configs/ ./configs/
-COPY context/ ./context/
-COPY control/ ./control/
-COPY core/ ./core/
-COPY data/ ./data/
-COPY deployer/ ./deployer/
-COPY evals/ ./evals/
-COPY graders/ ./graders/
-COPY judges/ ./judges/
-COPY logger/ ./logger/
-COPY observer/ ./observer/
-COPY optimizer/ ./optimizer/
-COPY registry/ ./registry/
+# Copy the repo sources needed by the packaged app. .dockerignore keeps the
+# build context tight while avoiding drift as new runtime packages are added.
+COPY . ./
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -e .
