@@ -10,7 +10,9 @@ that shape to its own provider without the orchestrator needing to know.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping, Protocol
+from typing import Any, Iterable, Iterator, Mapping, Protocol
+
+from cli.llm.provider_capabilities import ProviderCapabilities
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +107,17 @@ class ModelClient(Protocol):
     tokenisation). It returns a :class:`ModelResponse` per call and must
     honour the ``tools`` schema list — the orchestrator provides one via
     :meth:`ToolRegistry.to_schema`.
+
+    Adapters declare their runtime surface via the ``capabilities``
+    class attribute so the orchestrator can branch on streaming,
+    thinking, prompt-cache, and vision support without importing
+    provider SDKs. ``complete()`` remains on the protocol as a fallback
+    path for non-streaming callers (print mode, echo tests).
     """
+
+    capabilities: ProviderCapabilities
+    """Declared runtime surface. See
+    :class:`cli.llm.provider_capabilities.ProviderCapabilities`."""
 
     def complete(
         self,
@@ -120,6 +132,22 @@ class ModelClient(Protocol):
         prior tool_result blocks the orchestrator has appended. The
         adapter should *not* persist messages; state lives in
         :mod:`cli.sessions`."""
+        ...
+
+    def stream(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[TurnMessage],
+        tools: list[dict[str, Any]],
+    ) -> Iterator[Any]:  # pragma: no cover - protocol
+        """Yield :mod:`cli.llm.streaming` events for this turn.
+
+        Adapters whose ``capabilities.streaming`` is ``False`` may
+        synthesise events from a one-shot ``complete()`` call (see
+        :func:`cli.llm.streaming.events_from_model_response`). The
+        orchestrator's renderer contract is uniform across both paths.
+        """
         ...
 
 
@@ -165,6 +193,7 @@ __all__ = [
     "ModelClient",
     "ModelResponse",
     "OrchestratorResult",
+    "ProviderCapabilities",
     "TurnMessage",
     "flatten_messages",
 ]

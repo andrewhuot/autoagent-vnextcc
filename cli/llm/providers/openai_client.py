@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, ClassVar, Iterator
 
+from cli.llm.provider_capabilities import ProviderCapabilities
 from cli.llm.retries import RetryPolicy, retry_call
 from cli.llm.streaming import (
     events_from_model_response,
@@ -48,6 +49,24 @@ def _default_sdk_factory(api_key: str) -> Any:
 @dataclass
 class OpenAIClient:
     """OpenAI chat-completions client translating to/from tool blocks."""
+
+    capabilities: ClassVar[ProviderCapabilities] = ProviderCapabilities(
+        streaming=False,
+        native_tool_use=True,
+        parallel_tool_calls=True,
+        thinking=False,
+        prompt_cache=True,
+        vision=True,
+        json_mode=True,
+        max_context_tokens=128_000,
+        max_output_tokens=16_384,
+    )
+    """Declared runtime surface *as of today*. ``streaming=False``
+    because :meth:`stream` currently synthesises events from a one-shot
+    ``complete()`` response — P0.5d flips this once real chunk
+    translation lands. ``thinking=False`` is model-dependent; reasoning
+    models (``o1``/``o3``/``o4``) will be flipped in P0.5d once
+    ``reasoning_content`` deltas are mapped."""
 
     model: str = "gpt-4o"
     api_key: str | None = None
