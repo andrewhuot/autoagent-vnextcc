@@ -77,14 +77,19 @@ def create_model_client(
         return OpenAIClient(model=model, api_key=key, request_options=options)
 
     if provider == "gemini":
-        # Placeholder — Gemini adapter ships later. For now we fall through
-        # to echo when the fallback is allowed so tests keep working.
-        if echo_fallback_on_missing_keys:
-            return _echo_client()
-        raise ProviderFactoryError(
-            f"No Gemini adapter bundled yet for model {model!r}. "
-            "Use --model echo for smoke tests or wait for the adapter."
+        # Prefer ``GEMINI_API_KEY`` — user-explicit beats the Google-wide
+        # default — and fall back to ``GOOGLE_API_KEY`` for parity with
+        # the Google SDK's default resolution order.
+        key = (
+            api_key
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
         )
+        if not key and echo_fallback_on_missing_keys:
+            return _echo_client()
+        from cli.llm.providers.gemini_client import GeminiClient
+
+        return GeminiClient(model=model, api_key=key, request_options=options)
 
     if provider == "echo":
         return _echo_client()
