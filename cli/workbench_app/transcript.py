@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Iterable, Iterator, Literal, Mapping, Sequence
 
 import click
 
@@ -94,6 +94,39 @@ class TranscriptEntry:
     data: Mapping[str, Any] | None = None
 
 
+_COMPACT_BOUNDARY_EVENT = "compact_boundary"
+"""``event_name`` marker for a transcript entry that represents a compact
+boundary. Kept as a module-level constant so callers (and tests) can
+reference the same literal the renderer branches on."""
+
+
+_BOUNDARY_RULE = "─" * 40
+"""Horizontal rule rendered above and below a compact-boundary entry.
+
+40 chars is wide enough to read as a divider in a narrow terminal while
+still leaving room for the content line on a single row. The renderer
+contract only requires ``≥ 10`` characters, so consumers may not rely on
+the exact width."""
+
+
+def _format_compact_boundary(entry: TranscriptEntry, *, color: bool) -> str:
+    """Render a compact-boundary entry as ``rule / content / rule``.
+
+    The three lines are joined with ``\n`` and returned as a single
+    string so the existing ``echo(format_entry(...))`` path prints the
+    whole block atomically. Colored output dims the rules (they're
+    structural, not content) while leaving the content on the default
+    role color so "Compacted N turns — /uncompact to restore" reads as
+    a normal meta line.
+    """
+    rule = _BOUNDARY_RULE
+    content = entry.content
+    if color:
+        rule = theme.meta(rule)
+        content = theme.meta(content)
+    return f"{rule}\n{content}\n{rule}"
+
+
 def format_entry(entry: TranscriptEntry, *, color: bool = True) -> str:
     """Render a single :class:`TranscriptEntry` to a terminal line.
 
@@ -102,7 +135,15 @@ def format_entry(entry: TranscriptEntry, *, color: bool = True) -> str:
     apply their own styling; the prefix table above reserves no prefix for
     them either, so round-tripping through ``format_entry`` is a no-op aside
     from optional color stripping.
+
+    Compact-boundary system entries (``event_name == "compact_boundary"``)
+    are rendered as a fenced block — a horizontal rule above and below the
+    content — so the operator sees a clear visual break between the live
+    tail and the archived prefix.
     """
+    if entry.role == "system" and entry.event_name == _COMPACT_BOUNDARY_EVENT:
+        return _format_compact_boundary(entry, color=color)
+
     prefix = _ROLE_PREFIX[entry.role]
     text = f"{prefix}{entry.content}"
 
@@ -235,6 +276,32 @@ class Transcript:
 
     def append_meta(self, content: str, *, emit: bool = True) -> TranscriptEntry:
         return self.append(TranscriptEntry(role="meta", content=content), emit=emit)
+
+    def append_compact_boundary(
+        self,
+        *,
+        start: int,
+        end: int,
+        summary: str,
+        emit: bool = True,
+    ) -> TranscriptEntry:
+        """Append a compact-boundary marker for the range ``[start, end)``.
+
+        ``start`` is inclusive and ``end`` is exclusive — matches
+        :mod:`cli.llm.compact_archive` so ``end - start`` is the number
+        of compacted turns. The ``summary`` is stashed on ``data`` so a
+        later tooltip / detail pane can surface the digest without a
+        second round-trip through the archive.
+        """
+        count = end - start
+        content = f"Compacted {count} turns — /uncompact to restore"
+        entry = TranscriptEntry(
+            role="system",
+            content=content,
+            event_name=_COMPACT_BOUNDARY_EVENT,
+            data={"range": (start, end), "summary": summary},
+        )
+        return self.append(entry, emit=emit)
 
     def append_event(
         self,
@@ -402,6 +469,19 @@ def _redact(entry: TranscriptEntry) -> TranscriptEntry:
     return replace(entry, data=None)
 
 
+def transcript_has_boundary(entries: Sequence[TranscriptEntry]) -> bool:
+    """Return ``True`` iff any entry in ``entries`` is a compact boundary.
+
+    Used by the status-bar renderer to show a "compacted" indicator when
+    at least one range in the live transcript has been archived. Pure
+    predicate: no side effects, no echo, safe to call in a hot loop.
+    """
+    for entry in entries:
+        if entry.event_name == _COMPACT_BOUNDARY_EVENT:
+            return True
+    return False
+
+
 __all__ = [
     "EchoFn",
     "Transcript",
@@ -409,4 +489,5 @@ __all__ = [
     "TranscriptRole",
     "_redact",
     "format_entry",
+    "transcript_has_boundary",
 ]
