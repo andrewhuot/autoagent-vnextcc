@@ -666,6 +666,19 @@
 - Optimize can be opened with the selected saved agent, but without a completed eval run ID it still asks the operator to run eval first. The UI lets the user arrive while the eval is only running, which is understandable but not frictionless.
 - Improvements and Deploy are reachable. Deploy lists the newly saved candidate version, but it does not carry the candidate selection from Build/Eval into the deploy form.
 
+## 2026-04-16 Architectural Audit - Working Findings
+
+### Mission
+
+- Audit the five-stage CLI loop for actual loop closure and real performance improvement.
+- Prioritize silent no-ops, artifact race conditions, evaluation contamination, fake significance, and deployment gates that can be bypassed or misled.
+- Produce a seven-section markdown report with `file:line` citations for every load-bearing claim.
+
+### Early Notes
+
+- Existing planning files are historical and mostly UI-focused; this audit needs fresh CLI-level evidence.
+- The report must distinguish between runnable proof, code-only proof, and `UNVERIFIED` areas that need additional environment or provider setup.
+
 ### Fixes Applied
 
 - Added a SaaS FAQ support fallback shape for Build generation when live provider output is invalid JSON or unavailable.
