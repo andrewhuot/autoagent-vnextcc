@@ -23,6 +23,13 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
 from cli.permissions import PermissionManager
+from cli.permissions.classifier import (
+    ClassifierContext,
+    ClassifierDecision,
+    classify_tool_call,
+)
+from cli.permissions.classifier_persistence import append_persisted_allow
+from cli.permissions.denial_tracking import DenialTracker
 from cli.tools.base import PermissionDecision, ToolContext, ToolResult
 from cli.tools.registry import ToolRegistry
 
@@ -54,6 +61,8 @@ def execute_tool_call(
     dialog_runner: DialogRunner | None = None,
     include_persist_option: bool = True,
     hook_registry: Any | None = None,
+    classifier_context: ClassifierContext | None = None,
+    denial_tracker: DenialTracker | None = None,
 ) -> ToolExecution:
     """Execute a single tool call end-to-end.
 
@@ -73,6 +82,26 @@ def execute_tool_call(
     * ``PostToolUse``          — after :meth:`Tool.run` returns. Its
       messages are attached to result metadata, and Claude-style updated
       output metadata can replace the content forwarded to the model.
+
+    When ``classifier_context`` is supplied the transcript classifier
+    runs as a PRE-CHECK ahead of ``permissions.decision_for_tool``:
+
+    * ``AUTO_APPROVE`` short-circuits to the tool-run path — the
+      permission manager is never consulted.
+    * ``AUTO_DENY`` returns a DENY execution with
+      ``denial_reason="classifier_deny"`` and (if
+      ``denial_tracker`` is supplied) increments the per-tool counter.
+    * ``PROMPT`` falls through to the legacy decision_for_tool path.
+
+    When ``denial_tracker`` is supplied it is consulted BEFORE the
+    classifier: if
+    :meth:`~cli.permissions.denial_tracking.DenialTracker.should_escalate_to_prompt`
+    returns True the classifier pre-check is skipped and the tool is
+    forced through the legacy ask path (but an explicit ``deny`` from
+    the permission manager still trumps).
+
+    Both kwargs default to ``None`` — existing callers (tests,
+    print-mode, the legacy REPL) see no behaviour change.
     """
 
     if not registry.has(tool_name):
@@ -84,6 +113,45 @@ def execute_tool_call(
         )
 
     tool = registry.get(tool_name)
+
+    # Classifier pre-check (P3.T3). Only runs when the caller opted in
+    # with a ClassifierContext. The denial tracker's escalation short-
+    # circuits BEFORE the classifier, forcing a prompt for tools that
+    # the user has already denied N times this session — even if the
+    # heuristic would otherwise auto-approve. A persisted ``deny`` rule
+    # in the PermissionManager still trumps the forced prompt because
+    # the legacy decision_for_tool runs below.
+    tracker_escalated = False
+    if denial_tracker is not None and denial_tracker.should_escalate_to_prompt(
+        tool_name
+    ):
+        tracker_escalated = True
+
+    if classifier_context is not None and not tracker_escalated:
+        classifier_decision = classify_tool_call(
+            tool_name, dict(tool_input), classifier_context
+        )
+        if classifier_decision == ClassifierDecision.AUTO_DENY:
+            if denial_tracker is not None:
+                denial_tracker.record_denial(tool_name)
+            return ToolExecution(
+                tool_name=tool_name,
+                decision=PermissionDecision.DENY,
+                result=ToolResult.failure(
+                    f"Classifier denied {tool_name}."
+                ),
+                denial_reason="classifier_deny",
+            )
+        if classifier_decision == ClassifierDecision.AUTO_APPROVE:
+            return _run_tool_and_wrap(
+                tool=tool,
+                tool_name=tool_name,
+                tool_input=tool_input,
+                context=context,
+                hook_registry=hook_registry,
+            )
+        # PROMPT: fall through to the legacy path below.
+
     raw_decision = permissions.decision_for_tool(tool, tool_input)
 
     if raw_decision == "deny":
@@ -203,6 +271,75 @@ def execute_tool_call(
     )
 
 
+def _run_tool_and_wrap(
+    *,
+    tool: Any,
+    tool_name: str,
+    tool_input: Mapping[str, Any],
+    context: ToolContext,
+    hook_registry: Any | None,
+) -> ToolExecution:
+    """Fire the Pre/PostToolUse hooks and run the tool, returning a
+    :class:`ToolExecution`. Used by the classifier's AUTO_APPROVE branch
+    to bypass :meth:`PermissionManager.decision_for_tool` without losing
+    hook coverage.
+
+    A PreToolUse hook DENY still hard-blocks the call; ASK from the hook
+    is honoured via the default dialog runner. Hook-emitted messages are
+    mirrored onto the result metadata as in the main path.
+    """
+    hook_messages: list[str] = []
+    if hook_registry is not None:
+        pre_use = _fire_hook(
+            hook_registry,
+            "PreToolUse",
+            tool_name=tool_name,
+            payload=_tool_hook_payload(tool_name, tool_input),
+        )
+        if pre_use:
+            hook_messages.extend(pre_use.messages)
+        if pre_use and _verdict(pre_use) == "deny":
+            return ToolExecution(
+                tool_name=tool_name,
+                decision=PermissionDecision.DENY,
+                result=ToolResult.failure(
+                    "denied by hook: " + _hook_message(pre_use, default=tool_name)
+                ),
+                denial_reason="hook_deny",
+            )
+
+    try:
+        result = tool.run(tool_input, context)
+    except Exception as exc:  # pragma: no cover - defensive; tools must not raise
+        result = ToolResult.failure(f"{tool_name} crashed: {exc}")
+
+    if hook_registry is not None:
+        post_use = _fire_hook(
+            hook_registry,
+            "PostToolUse",
+            tool_name=tool_name,
+            payload={
+                "tool_name": tool_name,
+                "tool_input": dict(tool_input),
+                "tool_response": _tool_response_payload(result),
+            },
+        )
+        if post_use:
+            hook_messages.extend(post_use.messages)
+            updated_response = _updated_tool_response(post_use)
+            if updated_response is not None:
+                result.content = updated_response
+
+    if hook_messages and result.metadata is not None:
+        result.metadata.setdefault("hook_messages", []).extend(hook_messages)
+
+    return ToolExecution(
+        tool_name=tool_name,
+        decision=PermissionDecision.ALLOW,
+        result=result,
+    )
+
+
 def _fire_hook(hook_registry: Any, event_name: str, *, tool_name: str, payload: dict[str, Any]):
     """Thin adapter around :class:`HookRegistry.fire`.
 
@@ -281,6 +418,13 @@ def _run_permission_dialog(
         permissions.allow_for_session(outcome.persist_rule)
     elif outcome.persist_rule and outcome.persist_scope == "settings":
         permissions.persist_allow_rule(outcome.persist_rule)
+        # P3.T3: also teach the transcript classifier so the NEXT session
+        # auto-approves this pattern without round-tripping through the
+        # legacy PermissionManager allow list. Failures are swallowed by
+        # ``append_persisted_allow`` — this is a best-effort side-effect.
+        root = getattr(permissions, "root", None)
+        if root is not None:
+            append_persisted_allow(root, outcome.persist_rule)
     return None
 
 
