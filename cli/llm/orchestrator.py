@@ -46,6 +46,7 @@ from cli.llm.types import (
     TurnMessage,
 )
 from cli.permissions import PermissionManager
+from cli.permissions.classifier import ClassifierContext
 from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolContext
 from cli.tools.executor import ToolExecution, execute_tool_call
@@ -92,6 +93,9 @@ class LLMOrchestrator:
     dialog_runner: Any | None = None
     """Passed through to :func:`execute_tool_call`. The default (``None``)
     uses the interactive prompt dialog."""
+
+    denial_tracker: Any | None = None
+    classifier_audit_log: Any | None = None
 
     echo: Callable[[str], None] = print
     """Line sink for streaming assistant output. Tests point this at a
@@ -386,6 +390,27 @@ class LLMOrchestrator:
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
+            classifier_context=self._classifier_context(),
+            denial_tracker=self.denial_tracker,
+            audit_log=self.classifier_audit_log,
+        )
+
+    def _classifier_context(self) -> ClassifierContext | None:
+        """Build a fresh classifier context from the current permission settings.
+
+        Recomputing per tool call keeps persisted allow/deny rules in sync with
+        the live ``PermissionManager`` after the user chooses "save as rule" in
+        the dialog. The classifier's source of truth is therefore the P0
+        settings cascade, not a separate sidecar file.
+        """
+        workspace_root = getattr(self, "workspace_root", None)
+        if workspace_root is None:
+            return None
+        rules = self.permissions.explicit_rules
+        return ClassifierContext(
+            workspace_root=workspace_root,
+            persisted_allow_patterns=frozenset(rules.get("allow", [])),
+            persisted_deny_patterns=frozenset(rules.get("deny", [])),
         )
 
     def _build_tool_extra(self) -> dict[str, Any]:

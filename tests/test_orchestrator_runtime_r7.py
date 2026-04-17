@@ -13,6 +13,7 @@ from typing import Any, Iterator
 
 import pytest
 
+from cli.llm.types import AssistantToolUseBlock
 from cli.llm.streaming import MessageStop
 from cli.llm.types import TurnMessage
 from cli.workbench_app.agentlab_tools import (
@@ -137,6 +138,28 @@ def test_runtime_read_only_improve_tools_short_circuit_to_allow(
         runtime.permission_manager.decision_for_tool(ImproveListTool(), {})
         == "allow"
     )
+
+
+def test_runtime_wires_classifier_for_safe_bash_auto_approve(
+    workspace: Path,
+) -> None:
+    """The live orchestrator path should pass classifier context into
+    execute_tool_call so an allowlisted read-only Bash command does not
+    fall through to the interactive dialog."""
+    runtime = build_workbench_runtime(
+        workspace_root=workspace,
+        model=_ScriptedModel(),
+    )
+
+    def fail_dialog(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("safe Bash should have auto-approved, not prompted")
+
+    runtime.orchestrator.dialog_runner = fail_dialog
+    execution = runtime.orchestrator._execute_tool(
+        AssistantToolUseBlock(id="t1", name="Bash", input={"command": "ls"})
+    )
+
+    assert execution.decision.value == "allow"
 
 
 # ---------------------------------------------------------------------------

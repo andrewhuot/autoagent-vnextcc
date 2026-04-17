@@ -25,6 +25,8 @@ from typing import Any, Callable
 from cli.hooks import HookRegistry, load_hook_registry
 from cli.llm.orchestrator import LLMOrchestrator
 from cli.llm.types import ModelClient
+from cli.permissions.audit_log import AUDIT_LOG_FILENAME, ClassifierAuditLog
+from cli.permissions.denial_tracking import DenialTracker
 from cli.permissions import PermissionManager, load_workspace_settings
 from cli.strict_live import MockFallbackError
 from cli.sessions import Session, SessionStore
@@ -132,6 +134,10 @@ def build_workbench_runtime(
     # would auto-allow them. Workspace settings.json rules still win.
     apply_agentlab_defaults(permission_manager)
     hook_registry = load_hook_registry(settings)
+    denial_tracker = DenialTracker()
+    classifier_audit_log = ClassifierAuditLog(
+        workspace_root / ".agentlab" / AUDIT_LOG_FILENAME
+    )
 
     session_store = session_store or SessionStore(workspace_dir=workspace_root)
     session = session or session_store.create(title="orchestrator session")
@@ -216,6 +222,8 @@ def build_workbench_runtime(
             transcript_manager=None,
             system_prompt=system_prompt,
             echo=echo or (lambda _line: None),
+            denial_tracker=denial_tracker,
+            classifier_audit_log=classifier_audit_log,
         )
         # Stash the skill recursion depth so nested SkillTool invocations
         # see the updated counter. We attach it on the orchestrator's
@@ -235,6 +243,8 @@ def build_workbench_runtime(
         transcript_manager=transcript_rewind,
         system_prompt=effective_system_prompt,
         echo=echo or (lambda _line: None),
+        denial_tracker=denial_tracker,
+        classifier_audit_log=classifier_audit_log,
     )
 
     # Publish the subsystem handles on the orchestrator's builder seed

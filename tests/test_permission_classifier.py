@@ -121,6 +121,20 @@ def test_bash_git_status_with_safe_flag_auto_approves():
     )
 
 
+def test_bash_ls_absolute_path_outside_workspace_prompts():
+    assert (
+        classify_tool_call("Bash", {"command": "ls /etc"}, _ctx())
+        == ClassifierDecision.PROMPT
+    )
+
+
+def test_bash_git_dash_c_outside_workspace_prompts():
+    assert (
+        classify_tool_call("Bash", {"command": "git -C /tmp status"}, _ctx())
+        == ClassifierDecision.PROMPT
+    )
+
+
 @pytest.mark.parametrize(
     "sub",
     ["commit", "push", "checkout", "reset", "clean", "rebase", "merge", "pull", "fetch", "tag"],
@@ -402,6 +416,20 @@ def test_glob_with_empty_input_still_auto_approves():
 def test_grep_with_none_input_still_auto_approves():
     # Non-dict input is normalised to an empty dict.
     assert classify_tool_call("Grep", None, _ctx()) == ClassifierDecision.AUTO_APPROVE
+
+
+def test_glob_path_outside_workspace_prompts():
+    assert (
+        classify_tool_call("Glob", {"pattern": "*.py", "path": "/etc"}, _ctx())
+        == ClassifierDecision.PROMPT
+    )
+
+
+def test_grep_path_outside_workspace_prompts():
+    assert (
+        classify_tool_call("Grep", {"pattern": "foo", "path": "/etc"}, _ctx())
+        == ClassifierDecision.PROMPT
+    )
 
 
 # ---------------------------------------------------------------------------
