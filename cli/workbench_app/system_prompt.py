@@ -18,6 +18,9 @@ stale snapshots, and is the same shape Claude Code's REPL uses.
 
 from __future__ import annotations
 
+from typing import Sequence
+
+from cli.memory import Memory
 from cli.workbench_app.tool_registry import ToolRegistry
 
 
@@ -35,6 +38,7 @@ def build_system_prompt(
     workspace_name: str | None,
     agent_card_path: str | None,
     registry: ToolRegistry,
+    relevant_memories: Sequence[Memory] | None = None,
 ) -> str:
     """Assemble the system prompt sent at the start of every LLM turn."""
     lines: list[str] = []
@@ -57,6 +61,11 @@ def build_system_prompt(
     for desc in registry.list():
         lines.append(f"- `{desc.name}` — {desc.description}")
     lines.append("")
+    if relevant_memories:
+        lines.append("## Relevant memories")
+        for mem in relevant_memories:
+            lines.append(f"- {mem.name}: {mem.description}")
+        lines.append("")
     lines.append("## Reading tool output safely")
     lines.append(PROMPT_INJECTION_GUARD)
     return "\n".join(lines)
