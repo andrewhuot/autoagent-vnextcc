@@ -98,6 +98,8 @@ class Hooks(BaseModel):
     timeout_seconds: int = 5
     beforeQuery: list[HookMatcher] = Field(default_factory=list)
     afterQuery: list[HookMatcher] = Field(default_factory=list)
+    beforeTool: list[HookMatcher] = Field(default_factory=list)
+    afterTool: list[HookMatcher] = Field(default_factory=list)
     PreToolUse: list[HookMatcher] = Field(default_factory=list)
     PostToolUse: list[HookMatcher] = Field(default_factory=list)
     OnPermissionRequest: list[HookMatcher] = Field(default_factory=list)
@@ -110,6 +112,8 @@ class Hooks(BaseModel):
         event_names = (
             "beforeQuery",
             "afterQuery",
+            "beforeTool",
+            "afterTool",
             "PreToolUse",
             "PostToolUse",
             "OnPermissionRequest",

@@ -13,9 +13,13 @@ class HookEvent(str, Enum):
     String values match the :mod:`settings.json` keys Claude Code uses so
     an author can copy a configuration between the two tools unchanged."""
 
+    BEFORE_QUERY = "beforeQuery"
+    AFTER_QUERY = "afterQuery"
     PRE_TOOL_USE = "PreToolUse"
     POST_TOOL_USE = "PostToolUse"
     ON_PERMISSION_REQUEST = "OnPermissionRequest"
+    SUBAGENT_STOP = "SubagentStop"
+    SESSION_END = "SessionEnd"
     STOP = "Stop"
 
 
@@ -23,15 +27,19 @@ class HookVerdict(str, Enum):
     """Decision communicated back to the tool executor.
 
     * ``ALLOW``   — proceed with the action (default for 0-exit).
+    * ``ASK``     — pause for an explicit user decision.
     * ``DENY``    — block the tool invocation (non-zero exit for any
                    ``PreToolUse`` / ``OnPermissionRequest`` hook).
     * ``INFORM``  — hook produced output but the event doesn't gate the
                    action (``PostToolUse``, ``Stop``).
+    * ``TIMEOUT`` — hook exceeded its configured runtime budget.
     """
 
     ALLOW = "allow"
+    ASK = "ask"
     DENY = "deny"
     INFORM = "inform"
+    TIMEOUT = "timeout"
 
 
 class HookType(str, Enum):
@@ -69,7 +77,7 @@ class HookDefinition:
     """Delivery mechanism. Defaults to COMMAND so pre-existing settings
     files keep the original meaning."""
 
-    timeout_seconds: int = 30
+    timeout_seconds: int = 5
     """Hard ceiling on shell hooks — we cap the REPL's exposure to a
     buggy validator. Authors who need longer runtimes should move the
     work to a background job and signal completion another way."""
@@ -130,6 +138,18 @@ class HookOutcome:
 
     def record_deny(self, message: str) -> None:
         self.verdict = HookVerdict.DENY
+        if message:
+            self.messages.append(message)
+
+    def record_ask(self, message: str) -> None:
+        if self.verdict not in {HookVerdict.DENY, HookVerdict.TIMEOUT}:
+            self.verdict = HookVerdict.ASK
+        if message:
+            self.messages.append(message)
+
+    def record_timeout(self, message: str) -> None:
+        if self.verdict is not HookVerdict.DENY:
+            self.verdict = HookVerdict.TIMEOUT
         if message:
             self.messages.append(message)
 
