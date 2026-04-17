@@ -110,7 +110,7 @@ failure than refusing to start.
 
 When `strict_live` is true and no provider key is detected, the
 runtime constructor raises `MockFallbackError` and the CLI exits
-with code `14` (`EXIT_MISSING_PROVIDER`). The error message names
+with code `12` (`EXIT_MOCK_FALLBACK`). The error message names
 the missing variable explicitly:
 
 ```
