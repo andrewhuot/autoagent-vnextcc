@@ -163,3 +163,11 @@ class SessionStore:
             encoding="utf-8",
         )
         return path
+
+
+__all__ = [
+    "SESSIONS_DIR_NAME",
+    "Session",
+    "SessionEntry",
+    "SessionStore",
+]
