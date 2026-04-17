@@ -200,7 +200,9 @@ describe('ArtifactViewer', () => {
         improvement_bridge: {
           kind: 'workbench_eval_optimize',
           schema_version: 1,
+          journey_id: 'journey-wb-filter',
           candidate: {
+            candidate_id: 'candidate-wb-filter',
             project_id: 'wb-filter',
             run_id: 'run-1',
             version: 2,
@@ -219,7 +221,7 @@ describe('ArtifactViewer', () => {
             label: 'Ready for Eval',
             description: 'The Workbench candidate is saved and ready for an Eval run.',
             primary_action_label: 'Open Eval with this candidate',
-            primary_action_target: '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml',
+            primary_action_target: '/evals?from=workbench&new=1&workbenchProjectId=wb-filter&journeyId=journey-wb-filter',
             request: {
               config_path: '/workspace/configs/v003.yaml',
               split: 'all',
@@ -233,7 +235,7 @@ describe('ArtifactViewer', () => {
             label: 'Run Eval before Optimize',
             description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
             primary_action_label: 'Open Eval with this candidate',
-            primary_action_target: '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml',
+            primary_action_target: '/evals?from=workbench&new=1&workbenchProjectId=wb-filter&journeyId=journey-wb-filter',
             requires_eval_run: true,
             request_template: {
               config_path: '/workspace/configs/v003.yaml',
@@ -269,7 +271,7 @@ describe('ArtifactViewer', () => {
     expect(screen.getByText('The Workbench candidate is saved and ready for an Eval run.')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eval with this candidate' })).toHaveAttribute(
       'href',
-      '/evals?source=workbench&new=1&configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml'
+      '/evals?from=workbench&new=1&workbenchProjectId=wb-filter&journeyId=journey-wb-filter'
     );
     expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
     expect(screen.getByText('Optimize waiting for eval')).toBeInTheDocument();
@@ -292,7 +294,9 @@ describe('ArtifactViewer', () => {
         improvement_bridge: {
           kind: 'workbench_eval_optimize',
           schema_version: 1,
+          journey_id: 'journey-wb-filter',
           candidate: {
+            candidate_id: 'candidate-wb-filter',
             project_id: 'wb-filter',
             run_id: 'run-3',
             version: 2,

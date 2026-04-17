@@ -18,6 +18,7 @@ import {
   useApproveUnifiedReview,
   useRejectUnifiedReview,
   useChangeAudit,
+  useVerifyImprovement,
 } from '../lib/api';
 import { classNames, formatTimestamp } from '../lib/utils';
 import type { UnifiedReviewItem } from '../lib/types';
@@ -156,17 +157,24 @@ function ReviewItemDetail({
   item,
   onApprove,
   onReject,
+  onVerify,
   isApproving,
   isRejecting,
+  isVerifying,
 }: {
   item: UnifiedReviewItem;
   onApprove: () => void;
   onReject: (reason: string) => void;
+  onVerify: (() => void) | null;
   isApproving: boolean;
   isRejecting: boolean;
+  isVerifying: boolean;
 }) {
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectInput, setShowRejectInput] = useState(false);
+  const verificationPassed =
+    item.source !== 'optimizer' ||
+    (item.verification?.status === 'passed' && item.verification?.phase === 'pre_deploy');
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -248,6 +256,35 @@ function ReviewItemDetail({
       {/* Audit trail for change cards */}
       {item.has_detailed_audit && <AuditDetail cardId={item.id} />}
 
+      {item.source === 'optimizer' && (
+        <div className="mt-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
+          <div className="flex items-center gap-2">
+            <Shield className="h-4 w-4 text-sky-700" />
+            <p className="text-xs font-semibold uppercase tracking-wide text-sky-800">Verification</p>
+          </div>
+          {item.verification ? (
+            <div className="mt-2 space-y-1 text-sm text-sky-900">
+              <p className="font-medium">
+                {item.verification.status === 'passed' ? 'Passed' : 'Failed'}
+                {item.verification.phase ? ` · ${item.verification.phase.replace('_', ' ')}` : ''}
+              </p>
+              {item.verification.eval_run_id ? (
+                <p className="font-mono text-xs text-sky-800">{item.verification.eval_run_id}</p>
+              ) : null}
+              {typeof item.verification.composite_delta === 'number' ? (
+                <p className="text-xs text-sky-800">
+                  Composite delta {formatDelta(item.verification.composite_delta * 100)}%
+                </p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="mt-2 text-sm text-sky-900">
+              Run verification before approving this optimizer proposal for deployment.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Reject input */}
       {showRejectInput && (
         <div className="mt-4 flex items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3">
@@ -275,10 +312,32 @@ function ReviewItemDetail({
 
       {/* Action buttons */}
       <div className="mt-4 flex flex-wrap gap-2">
+        {item.source === 'optimizer' && onVerify ? (
+          <button
+            type="button"
+            onClick={onVerify}
+            disabled={isVerifying}
+            className="inline-flex items-center gap-2 rounded-lg border border-sky-200 bg-white px-4 py-2 text-sm font-medium text-sky-800 transition hover:bg-sky-50 disabled:opacity-60"
+          >
+            <Shield className="h-4 w-4" />
+            {isVerifying
+              ? 'Verifying...'
+              : item.verification?.status === 'passed'
+                ? 'Verify again'
+                : item.verification?.status === 'failed'
+                  ? 'Re-verify candidate'
+                  : 'Verify candidate'}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={onApprove}
-          disabled={isApproving}
+          disabled={isApproving || !verificationPassed}
+          title={
+            !verificationPassed
+              ? 'Run verification before approving this optimizer proposal'
+              : undefined
+          }
           className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:opacity-60"
         >
           <CheckCircle2 className="h-4 w-4" />
@@ -316,6 +375,7 @@ export function UnifiedReviewQueue({ embedded = false }: UnifiedReviewQueueProps
   const { data: items = [], isLoading, isError } = useUnifiedReviews();
   const approveMutation = useApproveUnifiedReview();
   const rejectMutation = useRejectUnifiedReview();
+  const verifyMutation = useVerifyImprovement();
 
   const pendingItems = items.filter((item) => item.status === 'pending');
   const optimizerCount = pendingItems.filter((item) => item.source === 'optimizer').length;
@@ -343,6 +403,13 @@ export function UnifiedReviewQueue({ embedded = false }: UnifiedReviewQueueProps
         },
       }
     );
+  }
+
+  function handleVerify(item: UnifiedReviewItem) {
+    if (item.source !== 'optimizer') {
+      return;
+    }
+    verifyMutation.mutate({ attemptId: item.id });
   }
 
   return (
@@ -475,8 +542,10 @@ export function UnifiedReviewQueue({ embedded = false }: UnifiedReviewQueueProps
           item={expandedItem}
           onApprove={() => handleApprove(expandedItem)}
           onReject={(reason) => handleReject(expandedItem, reason)}
+          onVerify={expandedItem.source === 'optimizer' ? () => handleVerify(expandedItem) : null}
           isApproving={approveMutation.isPending}
           isRejecting={rejectMutation.isPending}
+          isVerifying={verifyMutation.isPending}
         />
       )}
     </div>

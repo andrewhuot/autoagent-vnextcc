@@ -63,6 +63,7 @@ import type {
   ExperimentCard,
   HealthReport,
   IntelligenceAnswer,
+  ImprovementRecord,
   JudgeCalibration,
   JudgeDriftReport,
   JudgeFeedbackRecord,
@@ -2657,6 +2658,7 @@ export function useUnifiedReviews(poll = true) {
           operator_family: string | null;
           has_detailed_audit: boolean;
           patch_bundle?: Record<string, unknown> | null;
+          verification?: UnifiedReviewItem['verification'];
         }>
       >('/reviews/pending');
       return items.map((item) => ({
@@ -2675,6 +2677,7 @@ export function useUnifiedReviews(poll = true) {
         operator_family: item.operator_family ?? null,
         has_detailed_audit: item.has_detailed_audit ?? false,
         patch_bundle: item.patch_bundle ?? null,
+        verification: item.verification ?? null,
       }));
     },
     refetchInterval: poll ? 8000 : false,
@@ -2723,6 +2726,31 @@ export function useRejectUnifiedReview() {
       fetchApi(`/reviews/${encodeURIComponent(id)}/reject`, {
         method: 'POST',
         body: JSON.stringify({ source, reason: reason ?? '' }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['unifiedReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizePendingReviews'] });
+      queryClient.invalidateQueries({ queryKey: ['optimizeHistory'] });
+      queryClient.invalidateQueries({ queryKey: ['changes'] });
+    },
+  });
+}
+
+export function useVerifyImprovement() {
+  const queryClient = useQueryClient();
+
+  return useMutation<
+    ImprovementRecord,
+    ApiRequestError,
+    { attemptId: string; strictLive?: boolean; configPath?: string }
+  >({
+    mutationFn: ({ attemptId, strictLive, configPath }) =>
+      fetchApi(`/improvements/${encodeURIComponent(attemptId)}/verify`, {
+        method: 'POST',
+        body: JSON.stringify({
+          strict_live: strictLive ?? false,
+          ...(configPath ? { config_path: configPath } : {}),
+        }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['unifiedReviews'] });
@@ -3173,6 +3201,8 @@ export function useCxPreflight() {
   return useMutation<CxPreflightResult, ApiRequestError, {
     config: Record<string, unknown>;
     export_matrix?: Record<string, unknown> | null;
+    fail_on_lossy_surfaces?: boolean;
+    fail_on_blocked_surfaces?: boolean;
   }>({
     mutationFn: (body) => fetchApi('/cx/preflight', { method: 'POST', body: JSON.stringify(body) }),
   });
@@ -3182,6 +3212,7 @@ export function useCxDeploy() {
   return useMutation<CxDeployResult, ApiRequestError, {
     project: string;
     location: string;
+    app_id: string;
     agent_id: string;
     environment?: string;
     strategy?: string;
@@ -3196,6 +3227,7 @@ export function useCxPromote() {
   return useMutation<CxDeployResult, ApiRequestError, {
     project: string;
     location: string;
+    app_id: string;
     agent_id: string;
     canary: CxCanaryState;
     credentials_path?: string;
@@ -3208,6 +3240,7 @@ export function useCxRollback() {
   return useMutation<CxDeployResult, ApiRequestError, {
     project: string;
     location: string;
+    app_id: string;
     agent_id: string;
     canary: CxCanaryState;
     credentials_path?: string;
@@ -3216,14 +3249,14 @@ export function useCxRollback() {
   });
 }
 
-export function useCxDeployStatus(project: string, location: string, agentId: string) {
+export function useCxDeployStatus(project: string, location: string, appId: string, agentId: string) {
   return useQuery<CxDeployStatusResult>({
-    queryKey: ['cx-deploy-status', project, location, agentId],
+    queryKey: ['cx-deploy-status', project, location, appId, agentId],
     queryFn: () => {
-      const params = new URLSearchParams({ project, location, agent_id: agentId });
+      const params = new URLSearchParams({ project, location, app_id: appId, agent_id: agentId });
       return fetchApi<CxDeployStatusResult>(`/cx/status?${params}`);
     },
-    enabled: !!project && !!agentId,
+    enabled: !!project && !!appId && !!agentId,
   });
 }
 

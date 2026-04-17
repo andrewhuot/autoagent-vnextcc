@@ -28,6 +28,10 @@ const apiMocks = vi.hoisted(() => ({
   useTaskStatus: vi.fn(),
 }));
 
+const workbenchApiMocks = vi.hoisted(() => ({
+  useWorkbenchBridge: vi.fn(),
+}));
+
 const toastMocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastInfo: vi.fn(),
@@ -43,6 +47,10 @@ vi.mock('../lib/api', () => ({
   useRejectReview: apiMocks.useRejectReview,
   useStartOptimize: apiMocks.useStartOptimize,
   useTaskStatus: apiMocks.useTaskStatus,
+}));
+
+vi.mock('../lib/workbench-api', () => ({
+  useWorkbenchBridge: workbenchApiMocks.useWorkbenchBridge,
 }));
 
 vi.mock('../lib/websocket', () => ({
@@ -143,6 +151,11 @@ describe('Optimize', () => {
       data: null,
       refetch: vi.fn(),
     });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false,
+    });
   });
 
   it('starts optimization against the selected agent config and keeps the tabbed layout intact', async () => {
@@ -229,10 +242,74 @@ describe('Optimize', () => {
       mutate: vi.fn(),
       isPending: false,
     });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: {
+        bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          journey_id: 'journey-wb-test',
+          candidate: {
+            candidate_id: 'candidate-wb-test',
+            project_id: 'wb-test',
+            run_id: 'run-wb-test',
+            version: 3,
+            target: 'portable',
+            environment: 'draft',
+            agent_name: 'Airline Support Agent',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:abc',
+            config_path: '/workspace/configs/workbench-v003.yaml',
+            eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+            export_targets: ['adk', 'cx'],
+          },
+          evaluation: {
+            status: 'ready',
+            readiness_state: 'ready_for_eval',
+            label: 'Ready for Eval',
+            description: 'The Workbench candidate is saved and ready for an Eval run.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: [],
+            request: {
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              dataset_path: '/workspace/evals/cases/generated_build.yaml',
+              split: 'all',
+            },
+          },
+          optimization: {
+            status: 'awaiting_eval_run',
+            readiness_state: 'awaiting_eval_run',
+            label: 'Run Eval before Optimize',
+            description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            requires_eval_run: true,
+            request_template: {
+              window: 100,
+              force: true,
+              require_human_approval: true,
+              require_eval_evidence: true,
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              eval_run_id: null,
+              mode: 'standard',
+              objective: 'Improve failures.',
+              guardrails: [],
+              research_algorithm: '',
+              budget_cycles: 10,
+              budget_dollars: 50,
+            },
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: ['Run Eval first; Optimize requires a completed eval run.'],
+          },
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
 
-    renderOptimize(
-      '/optimize?from=workbench&workbenchProjectId=wb-test&candidate=Airline%20Support%20Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml'
-    );
+    renderOptimize('/optimize?from=workbench&workbenchProjectId=wb-test');
 
     expect(screen.getByText('Run Eval first')).toBeInTheDocument();
     expect(
@@ -240,7 +317,7 @@ describe('Optimize', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Open Eval with this candidate' })).toHaveAttribute(
       'href',
-      '/evals?new=1&from=workbench&workbenchProjectId=wb-test&candidate=Airline+Support+Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml'
+      '/evals?new=1&from=workbench&workbenchProjectId=wb-test'
     );
     expect(screen.getByRole('button', { name: 'Start Optimization' })).toBeDisabled();
   });
@@ -254,10 +331,74 @@ describe('Optimize', () => {
       mutate,
       isPending: false,
     });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: {
+        bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          journey_id: 'journey-wb-test',
+          candidate: {
+            candidate_id: 'candidate-wb-test',
+            project_id: 'wb-test',
+            run_id: 'run-wb-test',
+            version: 3,
+            target: 'portable',
+            environment: 'draft',
+            agent_name: 'Airline Support Agent',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:abc',
+            config_path: '/workspace/configs/workbench-v003.yaml',
+            eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+            export_targets: ['adk', 'cx'],
+          },
+          evaluation: {
+            status: 'ready',
+            readiness_state: 'ready_for_eval',
+            label: 'Ready for Eval',
+            description: 'The Workbench candidate is saved and ready for an Eval run.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: [],
+            request: {
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              dataset_path: '/workspace/evals/cases/generated_build.yaml',
+              split: 'all',
+            },
+          },
+          optimization: {
+            status: 'ready',
+            readiness_state: 'ready_for_optimize',
+            label: 'Ready for Optimize',
+            description: 'Eval has run for this Workbench candidate, so Optimize can use that failure context.',
+            primary_action_label: 'Start Optimize from Eval run',
+            primary_action_target: '/optimize?from=workbench&workbenchProjectId=wb-test&evalRunId=eval-workbench-123',
+            requires_eval_run: true,
+            request_template: {
+              window: 100,
+              force: true,
+              require_human_approval: true,
+              require_eval_evidence: true,
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              eval_run_id: 'eval-workbench-123',
+              mode: 'standard',
+              objective: 'Improve failures.',
+              guardrails: [],
+              research_algorithm: '',
+              budget_cycles: 10,
+              budget_dollars: 50,
+            },
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: [],
+          },
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
 
-    renderOptimize(
-      '/optimize?from=workbench&workbenchProjectId=wb-test&candidate=Airline%20Support%20Agent&configPath=%2Fworkspace%2Fconfigs%2Fworkbench-v003.yaml&evalRunId=eval-workbench-123'
-    );
+    renderOptimize('/optimize?from=workbench&workbenchProjectId=wb-test&evalRunId=eval-workbench-123');
 
     expect(screen.getByText('Workbench Eval context ready')).toBeInTheDocument();
     expect(screen.getByText(/eval-work/)).toBeInTheDocument();

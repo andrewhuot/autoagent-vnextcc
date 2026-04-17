@@ -23,6 +23,7 @@ import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { wsClient } from '../lib/websocket';
 import { useActiveAgent } from '../lib/active-agent';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
+import { recordWorkbenchEvalRun, useWorkbenchBridge } from '../lib/workbench-api';
 import { toastError, toastInfo, toastSuccess } from '../lib/toast';
 import { classNames, formatTimestamp, statusVariant } from '../lib/utils';
 import type { AgentLibraryItem, ContinuityState, EvalRun } from '../lib/types';
@@ -34,6 +35,11 @@ interface EvalJourneyState {
   draftEvalCount?: number;
   latestUserRequest?: string;
   evalCasesPath?: string;
+  workbenchBridge?: {
+    candidate?: {
+      project_id?: string;
+    };
+  } | null;
 }
 
 /** Use selected eval evidence to point operators forward without inventing a hidden eval state. */
@@ -41,15 +47,20 @@ function getEvalJourneySummary(input: {
   activeAgent: AgentLibraryItem | null;
   completedAgent: AgentLibraryItem | null;
   completedRunId: string | null;
+  workbenchProjectId?: string | null;
 }) {
   if (input.completedAgent && input.completedRunId) {
-    const optimizeParams = new URLSearchParams({
-      agent: input.completedAgent.id,
-      evalRunId: input.completedRunId,
-    });
-    if (input.completedAgent.config_path) {
-      optimizeParams.set('configPath', input.completedAgent.config_path);
+    const optimizeParams = new URLSearchParams();
+    if (input.workbenchProjectId) {
+      optimizeParams.set('from', 'workbench');
+      optimizeParams.set('workbenchProjectId', input.workbenchProjectId);
+    } else {
+      optimizeParams.set('agent', input.completedAgent.id);
+      if (input.completedAgent.config_path) {
+        optimizeParams.set('configPath', input.completedAgent.config_path);
+      }
     }
+    optimizeParams.set('evalRunId', input.completedRunId);
     return createJourneyStatusSummary({
       currentStep: 'eval',
       status: 'ready',
@@ -80,6 +91,14 @@ export function EvalRuns() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { activeAgent, setActiveAgent } = useActiveAgent();
   const navigationState = (location.state as EvalJourneyState | null) ?? null;
+  const workbenchProjectId =
+    navigationState?.workbenchBridge?.candidate?.project_id ??
+    searchParams.get('workbenchProjectId') ??
+    searchParams.get('projectId');
+  const workbenchBridgeQuery = useWorkbenchBridge(workbenchProjectId, {
+    enabled: Boolean(workbenchProjectId),
+  });
+  const workbenchBridge = workbenchBridgeQuery.data?.bridge ?? null;
   const requestedAgentId = navigationState?.agent?.id ?? searchParams.get('agent');
   const { data: agents } = useAgents();
   const agentDetailId =
@@ -108,7 +127,28 @@ export function EvalRuns() {
   const [completedAgent, setCompletedAgent] = useState<AgentLibraryItem | null>(null);
   const [completedRunId, setCompletedRunId] = useState<string | null>(null);
 
-  const buildEvalCasesPath = navigationState?.evalCasesPath ?? searchParams.get('evalCasesPath') ?? undefined;
+  const workbenchAgent = useMemo<AgentLibraryItem | null>(() => {
+    if (!workbenchBridge?.candidate.config_path) {
+      return null;
+    }
+    return {
+      id: `workbench-${workbenchBridge.candidate.project_id}-v${workbenchBridge.candidate.version}`,
+      name: workbenchBridge.candidate.agent_name || 'Workbench Agent',
+      model: 'workbench',
+      created_at: new Date().toISOString(),
+      source: 'built',
+      config_path: workbenchBridge.candidate.config_path,
+      status: 'candidate',
+    };
+  }, [workbenchBridge]);
+  const effectiveAgent = activeAgent ?? workbenchAgent;
+
+  const buildEvalCasesPath =
+    workbenchBridge?.evaluation.request?.dataset_path ??
+    workbenchBridge?.candidate.eval_cases_path ??
+    navigationState?.evalCasesPath ??
+    searchParams.get('evalCasesPath') ??
+    undefined;
   const showCreateForm = showForm || searchParams.get('new') === '1' || navigationState?.open === 'run';
   const showGeneratorPanel =
     showGenerator || searchParams.get('generator') === '1' || navigationState?.open === 'generate';
@@ -127,20 +167,21 @@ export function EvalRuns() {
       !selectedAgentDetail &&
       !selectedAgentDetailError
   );
-  const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(activeAgent);
+  const isFirstRunJourney = showCreateForm && (runs?.length ?? 0) === 0 && Boolean(effectiveAgent);
   const latestCompletedRunIdForActiveAgent = useMemo(() => {
-    if (!activeAgent) {
+    if (!effectiveAgent) {
       return null;
     }
     const completedRun = (runs || []).find(
-      (run) => run.status === 'completed' && runAgents[run.run_id]?.id === activeAgent.id
+      (run) => run.status === 'completed' && runAgents[run.run_id]?.id === effectiveAgent.id
     );
     return completedRun?.run_id ?? null;
-  }, [activeAgent, runAgents, runs]);
+  }, [effectiveAgent, runAgents, runs]);
   const journeySummary = getEvalJourneySummary({
-    activeAgent,
-    completedAgent: completedAgent ?? (activeAgent && latestCompletedRunIdForActiveAgent ? activeAgent : null),
+    activeAgent: effectiveAgent,
+    completedAgent: completedAgent ?? (effectiveAgent && latestCompletedRunIdForActiveAgent ? effectiveAgent : null),
     completedRunId: completedRunId ?? latestCompletedRunIdForActiveAgent,
+    workbenchProjectId,
   });
 
   useEffect(() => {
@@ -148,6 +189,11 @@ export function EvalRuns() {
       if (activeAgent?.id !== navigationState.agent.id) {
         setActiveAgent(navigationState.agent);
       }
+      return;
+    }
+
+    if (workbenchAgent && activeAgent?.id !== workbenchAgent.id) {
+      setActiveAgent(workbenchAgent);
       return;
     }
 
@@ -170,12 +216,13 @@ export function EvalRuns() {
     requestedAgentId,
     selectedAgentDetail,
     setActiveAgent,
+    workbenchAgent,
   ]);
 
   useEffect(() => {
     const unsubscribe = wsClient.onMessage('eval_complete', (payload) => {
       const data = payload as { task_id: string; composite: number; passed: number; total: number };
-      const evalAgent = runAgents[data.task_id] ?? activeAgent ?? null;
+      const evalAgent = runAgents[data.task_id] ?? effectiveAgent ?? null;
 
       const failed = Math.max(0, (data.total ?? 0) - (data.passed ?? 0));
       toastSuccess(
@@ -196,6 +243,9 @@ export function EvalRuns() {
         setCompletedAgent(evalAgent);
         setCompletedRunId(data.task_id);
       }
+      if (workbenchProjectId) {
+        void recordWorkbenchEvalRun(workbenchProjectId, data.task_id).catch(() => undefined);
+      }
 
       setRunAgents((current) => {
         const next = { ...current };
@@ -206,7 +256,7 @@ export function EvalRuns() {
     });
 
     return () => unsubscribe();
-  }, [activeAgent, navigate, refetch, runAgents]);
+  }, [effectiveAgent, navigate, refetch, runAgents, workbenchProjectId]);
 
   const comparisonRuns = useMemo(() => {
     if (!runs || selectedRuns.length !== 2) return [];
@@ -214,7 +264,7 @@ export function EvalRuns() {
   }, [runs, selectedRuns]);
   const continuitySummary = useMemo(() => summarizeEvalRunContinuity(runs ?? []), [runs]);
   const shouldShowStandaloneNoAgentEmptyState =
-    !activeAgent &&
+    !effectiveAgent &&
     !showCreateForm &&
     generatedSuites.length === 0 &&
     (curriculumData?.batches?.length ?? 0) === 0 &&
@@ -238,7 +288,7 @@ export function EvalRuns() {
   }
 
   function handleStartEval(options?: { generatedSuiteId?: string }) {
-    if (!activeAgent) {
+    if (!effectiveAgent) {
       toastError('Select an agent', 'Pick an agent from the library before starting an eval.');
       return;
     }
@@ -251,10 +301,10 @@ export function EvalRuns() {
       require_live?: boolean;
       split?: 'train' | 'test' | 'all';
     } = {
-      config_path: activeAgent.config_path,
+      config_path: effectiveAgent.config_path,
       category: options?.generatedSuiteId ? undefined : category.trim() || undefined,
       generated_suite_id: options?.generatedSuiteId,
-      require_live: shouldRequireLiveEval(activeAgent),
+      require_live: shouldRequireLiveEval(effectiveAgent),
     };
     if (!options?.generatedSuiteId && buildEvalCasesPath) {
       request.dataset_path = buildEvalCasesPath;
@@ -267,13 +317,13 @@ export function EvalRuns() {
         onSuccess: (response) => {
           setRunAgents((current) => ({
             ...current,
-            [response.task_id]: activeAgent,
+            [response.task_id]: effectiveAgent,
           }));
           toastInfo(
             `Eval ${response.task_id.slice(0, 8)} started`,
             options?.generatedSuiteId
-              ? `Running eval set against ${activeAgent.name}.`
-              : `Running against ${activeAgent.name}.`
+              ? `Running eval set against ${effectiveAgent.name}.`
+              : `Running against ${effectiveAgent.name}.`
           );
           setShowForm(false);
           setCategory('');
@@ -463,9 +513,15 @@ export function EvalRuns() {
               onClick={() =>
                 navigate(
                   `/optimize?${new URLSearchParams({
-                    agent: completedAgent.id,
+                    ...(workbenchProjectId
+                      ? { from: 'workbench', workbenchProjectId }
+                      : { agent: completedAgent.id }),
                     evalRunId: completedRunId,
-                    ...(completedAgent.config_path ? { configPath: completedAgent.config_path } : {}),
+                    ...(workbenchProjectId
+                      ? {}
+                      : completedAgent.config_path
+                        ? { configPath: completedAgent.config_path }
+                        : {}),
                   }).toString()}`,
                   {
                   state: {
@@ -509,9 +565,9 @@ export function EvalRuns() {
               ) : null}
             </div>
           )}
-          {activeAgent ? (
+          {effectiveAgent ? (
             <EvalGenerator
-              defaultAgentName={activeAgent.name}
+              defaultAgentName={effectiveAgent.name}
               defaultAgentConfig={selectedAgentDetail?.config ?? null}
               onSuiteGenerated={(suiteId) => setGeneratedSuiteId(suiteId)}
             />
@@ -562,7 +618,7 @@ export function EvalRuns() {
               Browse generated eval suites, accept drafts, and launch accepted eval sets with the active agent.
             </p>
           </div>
-          {!activeAgent && (
+          {!effectiveAgent && (
             <p className="max-w-xs text-right text-xs text-gray-500">
               Select an agent above to run an eval set from this page.
             </p>
@@ -612,7 +668,7 @@ export function EvalRuns() {
                       {suite.status === 'accepted' && (
                         <button
                           onClick={() => handleStartEval({ generatedSuiteId: suite.suite_id })}
-                          disabled={startEval.isPending || !activeAgent}
+                          disabled={startEval.isPending || !effectiveAgent}
                           className="rounded-lg bg-gray-900 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:opacity-60"
                         >
                           Run Eval
@@ -717,7 +773,7 @@ export function EvalRuns() {
 
       {showCreateForm && (
         <section className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,rgba(248,250,252,0.96),rgba(255,255,255,1))] p-5 shadow-sm shadow-sky-100/60">
-          {isFirstRunJourney && activeAgent ? (
+          {isFirstRunJourney && effectiveAgent ? (
             <div className="mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-4">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="inline-flex rounded-full border border-sky-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-800">
@@ -725,7 +781,7 @@ export function EvalRuns() {
                 </span>
                 <span className="text-xs font-medium text-sky-700">Ready to evaluate</span>
               </div>
-              <p className="mt-3 text-sm font-semibold text-sky-950">Run the first eval for {activeAgent.name}</p>
+              <p className="mt-3 text-sm font-semibold text-sky-950">Run the first eval for {effectiveAgent.name}</p>
               <p className="mt-1 text-sm leading-relaxed text-sky-900">
                 The saved config is already selected, so you can add an optional label and launch the first run without jumping back to Build.
               </p>
@@ -761,13 +817,13 @@ export function EvalRuns() {
               <label className="mb-1 block text-xs font-semibold uppercase tracking-[0.18em] text-gray-400">
                 Selected agent
               </label>
-              {activeAgent ? (
+              {effectiveAgent ? (
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">{activeAgent.name}</p>
+                  <p className="text-sm font-semibold text-gray-900">{effectiveAgent.name}</p>
                   <p className="text-xs text-gray-500">
-                    {activeAgent.model} · {activeAgent.status}
+                    {effectiveAgent.model} · {effectiveAgent.status}
                   </p>
-                  <p className="mt-2 truncate text-xs text-gray-500">{activeAgent.config_path}</p>
+                  <p className="mt-2 truncate text-xs text-gray-500">{effectiveAgent.config_path}</p>
                 </div>
               ) : (
                 <p className="text-sm text-gray-500">Choose an agent from the library above to run this eval.</p>
@@ -791,13 +847,13 @@ export function EvalRuns() {
             <div className="flex flex-col items-stretch gap-2">
               <button
                 onClick={() => handleStartEval()}
-                disabled={startEval.isPending || !activeAgent}
+                disabled={startEval.isPending || !effectiveAgent}
                 className="w-full rounded-lg bg-gray-900 px-3.5 py-2 text-sm font-medium text-white transition hover:bg-gray-800 disabled:opacity-60"
-                title={!activeAgent ? 'Select an agent from the library above to enable this button' : undefined}
+                title={!effectiveAgent ? 'Select an agent from the library above to enable this button' : undefined}
               >
                 {startEval.isPending ? 'Starting...' : isFirstRunJourney ? 'Run First Eval' : 'Start Eval'}
               </button>
-              {!activeAgent && !startEval.isPending && (
+              {!effectiveAgent && !startEval.isPending && (
                 <p className="text-center text-xs text-amber-600">
                   Select an agent from the Agent Library above to start an eval.
                 </p>
@@ -910,7 +966,7 @@ export function EvalRuns() {
             </table>
           </div>
         </section>
-      ) : activeAgent ? (
+      ) : effectiveAgent ? (
         showCreateForm ? null : (
           <EmptyState
             icon={FlaskConical}

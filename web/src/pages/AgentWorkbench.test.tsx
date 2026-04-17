@@ -584,7 +584,9 @@ describe('AgentWorkbench', () => {
     const bridge = {
       kind: 'workbench_eval_optimize',
       schema_version: 1,
+      journey_id: 'journey-wb-test',
       candidate: {
+        candidate_id: 'candidate-wb-test',
         project_id: 'wb-test',
         run_id: 'run-1',
         version: 2,
@@ -604,7 +606,7 @@ describe('AgentWorkbench', () => {
         label: 'Ready for Eval',
         description: 'The Workbench candidate is saved and ready for an Eval run.',
         primary_action_label: 'Open Eval with this candidate',
-        primary_action_target: '/evals?source=workbench&new=1',
+        primary_action_target: '/evals?from=workbench&new=1&workbenchProjectId=wb-test&journeyId=journey-wb-test',
         request: {
           config_path: '/workspace/configs/v003.yaml',
           dataset_path: '/workspace/evals/cases/generated_build.yaml',
@@ -619,7 +621,7 @@ describe('AgentWorkbench', () => {
         label: 'Run Eval before Optimize',
         description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
         primary_action_label: 'Open Eval with this candidate',
-        primary_action_target: '/evals?source=workbench&new=1',
+        primary_action_target: '/evals?from=workbench&new=1&workbenchProjectId=wb-test&journeyId=journey-wb-test',
         requires_eval_run: true,
         request_template: {
           config_path: '/workspace/configs/v003.yaml',
@@ -746,11 +748,10 @@ describe('AgentWorkbench', () => {
     expect(screen.getByText('Airline Support Agent')).toBeInTheDocument();
     expect(screen.getByText('/workspace/configs/v003.yaml')).toBeInTheDocument();
     expect(screen.getByText('/workspace/evals/cases/generated_build.yaml')).toBeInTheDocument();
-    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('agent=agent-v003');
-    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent('configPath=%2Fworkspace%2Fconfigs%2Fv003.yaml');
-    expect(screen.getByText(/\?source=workbench/)).toHaveTextContent(
-      'evalCasesPath=%2Fworkspace%2Fevals%2Fcases%2Fgenerated_build.yaml'
-    );
+    expect(screen.getByText(/\?from=workbench/)).toHaveTextContent('workbenchProjectId=wb-test');
+    expect(screen.getByText(/\?from=workbench/)).toHaveTextContent('journeyId=');
+    expect(screen.getByText(/\?from=workbench/)).not.toHaveTextContent('configPath=');
+    expect(screen.getByText(/\?from=workbench/)).not.toHaveTextContent('evalCasesPath=');
   });
 
   it('labels an interrupted hydrated run as restored historical work', async () => {

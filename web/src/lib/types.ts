@@ -1099,6 +1099,16 @@ export interface ChangeAuditSummary {
 
 export type UnifiedReviewSource = 'optimizer' | 'change_card';
 
+export interface ImprovementVerificationSummary {
+  verification_id: string;
+  status: string;
+  eval_run_id: string | null;
+  phase: string | null;
+  score_before: number | null;
+  score_after: number | null;
+  composite_delta: number | null;
+}
+
 export interface UnifiedReviewItem {
   id: string;
   source: UnifiedReviewSource;
@@ -1115,6 +1125,7 @@ export interface UnifiedReviewItem {
   operator_family: string | null;
   has_detailed_audit: boolean;
   patch_bundle?: Record<string, unknown> | null;
+  verification?: ImprovementVerificationSummary | null;
 }
 
 export interface UnifiedReviewStats {
@@ -1131,6 +1142,28 @@ export interface UnifiedReviewActionResult {
   source: string;
   message: string;
   deploy_message: string | null;
+}
+
+export interface ImprovementRecord {
+  attempt_id: string;
+  status: string;
+  raw_status: string;
+  change_description: string;
+  config_section: string;
+  timestamp: number;
+  score_before: number | null;
+  score_after: number | null;
+  score_delta: number | null;
+  significance_p_value: number | null;
+  pending_review: boolean;
+  eval_run_id: string | null;
+  eval_result_run_id: string | null;
+  deployment_id: string | null;
+  deployed_version: number | null;
+  verification: ImprovementVerificationSummary | null;
+  measurement: Record<string, unknown> | null;
+  lineage: Array<Record<string, unknown>>;
+  rejection_reason: string | null;
 }
 
 // ---------------------------------------------------------------------------

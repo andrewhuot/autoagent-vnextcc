@@ -30,6 +30,7 @@ import { AgentSelector } from '../components/AgentSelector';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
 import { useActiveAgent } from '../lib/active-agent';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
+import { useWorkbenchBridge } from '../lib/workbench-api';
 import {
   useAgents,
   useApproveReview,
@@ -69,6 +70,7 @@ interface OptimizeJourneyState {
 
 interface WorkbenchOptimizeContext {
   projectId: string | null;
+  journeyId: string | null;
   candidateName: string;
   configPath: string | null;
   evalHref: string;
@@ -114,8 +116,7 @@ const optimizeTabs: Array<{ key: OptimizeTab; label: string }> = [
 
 function buildWorkbenchEvalHref(context: {
   projectId: string | null;
-  candidateName: string;
-  configPath: string | null;
+  journeyId: string | null;
 }): string {
   const params = new URLSearchParams();
   params.set('new', '1');
@@ -123,9 +124,8 @@ function buildWorkbenchEvalHref(context: {
   if (context.projectId) {
     params.set('workbenchProjectId', context.projectId);
   }
-  params.set('candidate', context.candidateName);
-  if (context.configPath) {
-    params.set('configPath', context.configPath);
+  if (context.journeyId) {
+    params.set('journeyId', context.journeyId);
   }
   return `/evals?${params.toString()}`;
 }
@@ -136,6 +136,7 @@ function parseWorkbenchOptimizeContext(searchParams: URLSearchParams): Workbench
     return null;
   }
   const projectId = searchParams.get('workbenchProjectId') ?? searchParams.get('projectId');
+  const journeyId = searchParams.get('journeyId');
   const candidateName =
     searchParams.get('candidate') ??
     searchParams.get('agentName') ??
@@ -143,9 +144,10 @@ function parseWorkbenchOptimizeContext(searchParams: URLSearchParams): Workbench
   const configPath = searchParams.get('configPath');
   return {
     projectId,
+    journeyId,
     candidateName,
     configPath,
-    evalHref: buildWorkbenchEvalHref({ projectId, candidateName, configPath }),
+    evalHref: buildWorkbenchEvalHref({ projectId, journeyId }),
   };
 }
 
@@ -597,11 +599,46 @@ export function Optimize() {
   const [selectionHydrated, setSelectionHydrated] = useState(false);
 
   const journeyState = (location.state as OptimizeJourneyState | null) ?? null;
-  const selectedEvalRunId = journeyState?.evalRunId ?? searchParams.get('evalRunId');
-  const workbenchContext = useMemo(
+  const requestedEvalRunId = journeyState?.evalRunId ?? searchParams.get('evalRunId');
+  const workbenchRouteContext = useMemo(
     () => parseWorkbenchOptimizeContext(searchParams),
     [searchParams]
   );
+  const workbenchBridgeQuery = useWorkbenchBridge(workbenchRouteContext?.projectId, {
+    enabled: Boolean(workbenchRouteContext?.projectId),
+    evalRunId: requestedEvalRunId,
+  });
+  const workbenchBridge = workbenchBridgeQuery.data?.bridge ?? null;
+  const selectedEvalRunId =
+    requestedEvalRunId ?? workbenchBridge?.optimization.request_template?.eval_run_id ?? null;
+  const workbenchContext = useMemo(() => {
+    if (!workbenchRouteContext) {
+      return null;
+    }
+    const candidateName =
+      workbenchBridge?.candidate.agent_name ??
+      workbenchRouteContext.candidateName;
+    const configPath =
+      workbenchBridge?.candidate.config_path ??
+      workbenchBridge?.optimization.request_template?.config_path ??
+      workbenchRouteContext.configPath;
+    const journeyId =
+      workbenchBridge?.journey_id ??
+      workbenchRouteContext.journeyId;
+    const evalHref =
+      workbenchBridge?.evaluation.primary_action_target ??
+      buildWorkbenchEvalHref({
+        projectId: workbenchRouteContext.projectId,
+        journeyId,
+      });
+    return {
+      projectId: workbenchRouteContext.projectId,
+      journeyId,
+      candidateName,
+      configPath,
+      evalHref,
+    };
+  }, [workbenchBridge, workbenchRouteContext]);
 
   useEffect(() => {
     if (selectionHydrated) {
@@ -724,6 +761,7 @@ export function Optimize() {
             activeAgent={activeAgent}
             evalRunId={selectedEvalRunId}
             workbenchContext={workbenchContext}
+            workbenchBridgeLoading={workbenchBridgeQuery.isLoading}
           />
         </section>
       )}
@@ -743,10 +781,12 @@ function OptimizeRunSection({
   activeAgent,
   evalRunId,
   workbenchContext,
+  workbenchBridgeLoading,
 }: {
   activeAgent: AgentLibraryItem | null;
   evalRunId: string | null;
   workbenchContext: WorkbenchOptimizeContext | null;
+  workbenchBridgeLoading: boolean;
 }) {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -935,6 +975,10 @@ function OptimizeRunSection({
   const hasFailure = taskStatus.data?.status === 'failed';
 
   function navigateToEval(agent: AgentLibraryItem | null) {
+    if (workbenchContext?.projectId) {
+      navigate(workbenchContext.evalHref);
+      return;
+    }
     if (!agent) {
       toastError('Select an agent', 'Pick an agent from the library before navigating to eval.');
       return;
@@ -1061,6 +1105,12 @@ function OptimizeRunSection({
 
   return (
     <div className="space-y-6">
+      {workbenchBridgeLoading && workbenchContext && !effectiveAgent ? (
+        <div className="rounded-xl border border-gray-200 bg-white p-4 text-sm text-gray-500">
+          Loading Workbench candidate...
+        </div>
+      ) : null}
+
       <OperatorNextStepCard
         summary={journeySummary}
         onAction={

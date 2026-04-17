@@ -29,6 +29,11 @@ const apiMocks = vi.hoisted(() => ({
   useStartEval: vi.fn(),
 }));
 
+const workbenchApiMocks = vi.hoisted(() => ({
+  useWorkbenchBridge: vi.fn(),
+  recordWorkbenchEvalRun: vi.fn(),
+}));
+
 vi.mock('../lib/api', () => ({
   useAgent: apiMocks.useAgent,
   useAgents: apiMocks.useAgents,
@@ -39,6 +44,11 @@ vi.mock('../lib/api', () => ({
   useGenerateEvals: apiMocks.useGenerateEvals,
   useGeneratedSuites: apiMocks.useGeneratedSuites,
   useStartEval: apiMocks.useStartEval,
+}));
+
+vi.mock('../lib/workbench-api', () => ({
+  useWorkbenchBridge: workbenchApiMocks.useWorkbenchBridge,
+  recordWorkbenchEvalRun: workbenchApiMocks.recordWorkbenchEvalRun,
 }));
 
 vi.mock('../lib/websocket', () => ({
@@ -132,6 +142,15 @@ describe('EvalRuns', () => {
     apiMocks.useGenerateEvals.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useGenerateCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useApplyCurriculum.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: null,
+      isLoading: false,
+      isError: false,
+    });
+    workbenchApiMocks.recordWorkbenchEvalRun.mockResolvedValue({
+      project_id: 'wb-test',
+      eval_run_id: 'task-workbench-123',
+    });
   });
 
   it('starts a new eval from the header action using the selected agent config path', async () => {
@@ -259,6 +278,104 @@ describe('EvalRuns', () => {
     );
   });
 
+  it('rehydrates a Workbench candidate from the server bridge after reload', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-workbench-123', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: {
+        bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          journey_id: 'journey-wb-test',
+          candidate: {
+            candidate_id: 'candidate-wb-test',
+            project_id: 'wb-test',
+            run_id: 'run-wb-test',
+            version: 3,
+            target: 'portable',
+            environment: 'draft',
+            agent_name: 'Airline Support Agent',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:abc',
+            config_path: '/workspace/configs/workbench-v003.yaml',
+            eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+            export_targets: ['adk', 'cx'],
+          },
+          evaluation: {
+            status: 'ready',
+            readiness_state: 'ready_for_eval',
+            label: 'Ready for Eval',
+            description: 'The Workbench candidate is saved and ready for an Eval run.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: [],
+            request: {
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              dataset_path: '/workspace/evals/cases/generated_build.yaml',
+              split: 'all',
+            },
+          },
+          optimization: {
+            status: 'awaiting_eval_run',
+            readiness_state: 'awaiting_eval_run',
+            label: 'Run Eval before Optimize',
+            description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            requires_eval_run: true,
+            request_template: {
+              window: 100,
+              force: true,
+              require_human_approval: true,
+              require_eval_evidence: true,
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              eval_run_id: null,
+              mode: 'standard',
+              objective: 'Improve failures.',
+              guardrails: [],
+              research_algorithm: '',
+              budget_cycles: 10,
+              budget_dollars: 50,
+            },
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: ['Run Eval first; Optimize requires a completed eval run.'],
+          },
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage('/evals?from=workbench&workbenchProjectId=wb-test&new=1');
+
+    await screen.findByRole('heading', { name: 'Start First Evaluation' });
+    expect(screen.getByText('/workspace/evals/cases/generated_build.yaml')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Run First Eval' }));
+
+    expect(mutate).toHaveBeenCalledWith(
+      {
+        config_path: '/workspace/configs/workbench-v003.yaml',
+        category: undefined,
+        dataset_path: '/workspace/evals/cases/generated_build.yaml',
+        require_live: true,
+        split: 'all',
+      },
+      expect.any(Object)
+    );
+  });
+
   it('shows setup guidance before an eval is selected or complete', async () => {
     apiMocks.useStartEval.mockReturnValue({ mutate: vi.fn(), isPending: false });
     apiMocks.useEvalRuns.mockReturnValue({
@@ -339,9 +456,113 @@ describe('EvalRuns', () => {
     const journey = await screen.findByRole('region', { name: 'Operator journey' });
     expect(within(journey).getByText('Current step: Eval')).toBeInTheDocument();
     expect(within(journey).getByText('Next: optimize candidate')).toBeInTheDocument();
+    const href = within(journey).getByRole('link', { name: 'Optimize candidate' }).getAttribute('href');
+    expect(href).toContain('/optimize?');
+    expect(href).toContain('agent=agent-v002');
+    expect(href).toContain('evalRunId=task-123456');
+    expect(href).toContain('configPath=%2Fworkspace%2Fconfigs%2Fv002.yaml');
+
+    await user.click(await screen.findByRole('button', { name: 'Optimize' }));
+    expect(await screen.findByText('Optimize Page')).toBeInTheDocument();
+  });
+
+  it('records the eval run against the Workbench journey and keeps the optimize handoff durable', async () => {
+    const user = userEvent.setup();
+    const mutate = vi.fn((_params, options) => {
+      options?.onSuccess?.({ task_id: 'task-workbench-123', message: 'Eval run started' });
+    });
+    apiMocks.useStartEval.mockReturnValue({ mutate, isPending: false });
+    apiMocks.useEvalRuns.mockReturnValue({
+      data: [],
+      isLoading: false,
+      isError: false,
+      refetch: vi.fn(),
+    });
+    workbenchApiMocks.useWorkbenchBridge.mockReturnValue({
+      data: {
+        bridge: {
+          kind: 'workbench_eval_optimize',
+          schema_version: 1,
+          journey_id: 'journey-wb-test',
+          candidate: {
+            candidate_id: 'candidate-wb-test',
+            project_id: 'wb-test',
+            run_id: 'run-wb-test',
+            version: 3,
+            target: 'portable',
+            environment: 'draft',
+            agent_name: 'Airline Support Agent',
+            validation_status: 'passed',
+            review_gate_status: 'review_required',
+            generated_config_hash: 'sha256:abc',
+            config_path: '/workspace/configs/workbench-v003.yaml',
+            eval_cases_path: '/workspace/evals/cases/generated_build.yaml',
+            export_targets: ['adk', 'cx'],
+          },
+          evaluation: {
+            status: 'ready',
+            readiness_state: 'ready_for_eval',
+            label: 'Ready for Eval',
+            description: 'The Workbench candidate is saved and ready for an Eval run.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            start_endpoint: '/api/eval/run',
+            blocking_reasons: [],
+            request: {
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              dataset_path: '/workspace/evals/cases/generated_build.yaml',
+              split: 'all',
+            },
+          },
+          optimization: {
+            status: 'awaiting_eval_run',
+            readiness_state: 'awaiting_eval_run',
+            label: 'Run Eval before Optimize',
+            description: 'Optimize is waiting for a completed Eval run for this saved Workbench candidate.',
+            primary_action_label: 'Open Eval with this candidate',
+            primary_action_target: '/evals?new=1&from=workbench&workbenchProjectId=wb-test',
+            requires_eval_run: true,
+            request_template: {
+              window: 100,
+              force: true,
+              require_human_approval: true,
+              require_eval_evidence: true,
+              config_path: '/workspace/configs/workbench-v003.yaml',
+              eval_run_id: null,
+              mode: 'standard',
+              objective: 'Improve failures.',
+              guardrails: [],
+              research_algorithm: '',
+              budget_cycles: 10,
+              budget_dollars: 50,
+            },
+            start_endpoint: '/api/optimize/run',
+            blocking_reasons: ['Run Eval first; Optimize requires a completed eval run.'],
+          },
+        },
+      },
+      isLoading: false,
+      isError: false,
+    });
+
+    renderPage('/evals?from=workbench&workbenchProjectId=wb-test&new=1');
+
+    await user.click(screen.getByRole('button', { name: 'Run First Eval' }));
+    evalCompleteHandler?.({
+      task_id: 'task-workbench-123',
+      composite: 0.91,
+      passed: 11,
+      total: 12,
+    });
+
+    const journey = await screen.findByRole('region', { name: 'Operator journey' });
     expect(within(journey).getByRole('link', { name: 'Optimize candidate' })).toHaveAttribute(
       'href',
-      '/optimize?agent=agent-v002&evalRunId=task-123456&configPath=%2Fworkspace%2Fconfigs%2Fv002.yaml'
+      '/optimize?from=workbench&workbenchProjectId=wb-test&evalRunId=task-workbench-123'
+    );
+    expect(workbenchApiMocks.recordWorkbenchEvalRun).toHaveBeenCalledWith(
+      'wb-test',
+      'task-workbench-123'
     );
 
     await user.click(await screen.findByRole('button', { name: 'Optimize' }));

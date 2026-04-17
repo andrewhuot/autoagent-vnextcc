@@ -20,6 +20,7 @@ export function CxDeploy() {
   // Deploy state
   const [project, setProject] = useState('');
   const [location, setLocation] = useState('global');
+  const [appId, setAppId] = useState('');
   const [agentId, setAgentId] = useState('');
   const [environment, setEnvironment] = useState('production');
   const [strategy, setStrategy] = useState<'immediate' | 'canary'>('canary');
@@ -43,7 +44,7 @@ export function CxDeploy() {
   const rollbackMutation = useCxRollback();
   const exportMutation = useCxExport();
   const widgetMutation = useCxWidget();
-  const deployStatus = useCxDeployStatus(project, location, agentId);
+  const deployStatus = useCxDeployStatus(project, location, appId, agentId);
 
   useEffect(() => {
     if (!configVersion && configs && configs.length > 0) {
@@ -61,7 +62,12 @@ export function CxDeploy() {
         }
       : null;
     preflightMutation.mutate(
-      { config: selectedConfig.data.config, export_matrix: matrix },
+      {
+        config: selectedConfig.data.config,
+        export_matrix: matrix,
+        fail_on_lossy_surfaces: true,
+        fail_on_blocked_surfaces: true,
+      },
       {
         onSuccess: (result) => {
           setPreflightResult(result);
@@ -77,9 +83,9 @@ export function CxDeploy() {
   }
 
   function handleDeploy() {
-    if (!project || !agentId) return;
+    if (!project || !appId || !agentId) return;
     deployMutation.mutate(
-      { project, location, agent_id: agentId, environment, strategy, traffic_pct: trafficPct },
+      { project, location, app_id: appId, agent_id: agentId, environment, strategy, traffic_pct: trafficPct },
       {
         onSuccess: (result) => {
           if (result.canary) {
@@ -98,9 +104,9 @@ export function CxDeploy() {
   }
 
   function handlePromote() {
-    if (!project || !agentId || !canaryState) return;
+    if (!project || !appId || !agentId || !canaryState) return;
     promoteMutation.mutate(
-      { project, location, agent_id: agentId, canary: canaryState },
+      { project, location, app_id: appId, agent_id: agentId, canary: canaryState },
       {
         onSuccess: (result) => {
           if (result.canary) setCanaryState(result.canary);
@@ -112,9 +118,9 @@ export function CxDeploy() {
   }
 
   function handleRollback() {
-    if (!project || !agentId || !canaryState) return;
+    if (!project || !appId || !agentId || !canaryState) return;
     rollbackMutation.mutate(
-      { project, location, agent_id: agentId, canary: canaryState },
+      { project, location, app_id: appId, agent_id: agentId, canary: canaryState },
       {
         onSuccess: (result) => {
           if (result.canary) setCanaryState(result.canary);
@@ -211,6 +217,13 @@ export function CxDeploy() {
             onChange={(e) => setLocation(e.target.value)}
             className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
           />
+          <input
+            type="text" placeholder="App ID" value={appId}
+            onChange={(e) => setAppId(e.target.value)}
+            className="bg-gray-900 border border-gray-600 rounded px-3 py-1.5 text-sm text-gray-200 focus:border-blue-500 focus:outline-none"
+          />
+        </div>
+        <div className="grid grid-cols-1 gap-2">
           <input
             type="text" placeholder="Agent ID" value={agentId}
             onChange={(e) => setAgentId(e.target.value)}
@@ -429,7 +442,7 @@ export function CxDeploy() {
           )}
           <button
             onClick={handleDeploy}
-            disabled={!project || !agentId || deployMutation.isPending}
+            disabled={!project || !appId || !agentId || deployMutation.isPending}
             className="px-4 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             data-testid="deploy-btn"
           >

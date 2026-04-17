@@ -71,7 +71,13 @@ describe('CxDeploy', () => {
     renderPage();
 
     await userEvent.setup().click(screen.getByTestId('preflight-btn'));
-    expect(preflightMutate).toHaveBeenCalledTimes(1);
+    expect(preflightMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fail_on_lossy_surfaces: true,
+        fail_on_blocked_surfaces: true,
+      }),
+      expect.any(Object)
+    );
   });
 
   it('shows preflight result when passed', () => {
@@ -99,6 +105,86 @@ describe('CxDeploy', () => {
     renderPage();
     expect(screen.getByTestId('deploy-btn')).toBeInTheDocument();
     expect(screen.getByTestId('deploy-btn')).toHaveTextContent('Deploy Canary');
+  });
+
+  it('requires an app id when deploying to CX', async () => {
+    const deployMutate = vi.fn();
+    apiMocks.useCxDeploy.mockReturnValue({ mutate: deployMutate, isPending: false, data: null });
+
+    renderPage();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText('GCP Project ID'), 'demo-project');
+    await user.clear(screen.getByPlaceholderText('Location'));
+    await user.type(screen.getByPlaceholderText('Location'), 'us-central1');
+    await user.type(screen.getByPlaceholderText('App ID'), 'apps/123456789');
+    await user.type(screen.getByPlaceholderText('Agent ID'), 'agent-123');
+    await user.click(screen.getByTestId('deploy-btn'));
+
+    expect(deployMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'demo-project',
+        location: 'us-central1',
+        app_id: 'apps/123456789',
+        agent_id: 'agent-123',
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('includes app id when promoting and rolling back a canary', async () => {
+    const deployMutate = vi.fn((_body, options) => {
+      options?.onSuccess?.({
+        environment: 'production',
+        status: 'ok',
+        version_info: {},
+        canary: {
+          phase: 'canary',
+          traffic_pct: 10,
+          deployed_version: 'v2',
+          previous_version: 'v1',
+          environment: 'production',
+          promoted_at: '',
+          rolled_back_at: '',
+        },
+      });
+    });
+    const promoteMutate = vi.fn();
+    const rollbackMutate = vi.fn();
+    apiMocks.useCxDeploy.mockReturnValue({ mutate: deployMutate, isPending: false, data: null });
+    apiMocks.useCxPromote.mockReturnValue({ mutate: promoteMutate, isPending: false });
+    apiMocks.useCxRollback.mockReturnValue({ mutate: rollbackMutate, isPending: false });
+
+    renderPage();
+
+    const user = userEvent.setup();
+    await user.type(screen.getByPlaceholderText('GCP Project ID'), 'demo-project');
+    await user.clear(screen.getByPlaceholderText('Location'));
+    await user.type(screen.getByPlaceholderText('Location'), 'us-central1');
+    await user.type(screen.getByPlaceholderText('App ID'), 'apps/123456789');
+    await user.type(screen.getByPlaceholderText('Agent ID'), 'agent-123');
+    await user.click(screen.getByTestId('deploy-btn'));
+    await user.click(await screen.findByTestId('promote-btn'));
+    await user.click(screen.getByTestId('rollback-btn'));
+
+    expect(promoteMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'demo-project',
+        location: 'us-central1',
+        app_id: 'apps/123456789',
+        agent_id: 'agent-123',
+      }),
+      expect.any(Object)
+    );
+    expect(rollbackMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        project: 'demo-project',
+        location: 'us-central1',
+        app_id: 'apps/123456789',
+        agent_id: 'agent-123',
+      }),
+      expect.any(Object)
+    );
   });
 
   it('shows changes with safety classification when export data available', () => {

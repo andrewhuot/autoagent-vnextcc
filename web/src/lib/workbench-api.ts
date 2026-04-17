@@ -1,3 +1,5 @@
+import { useQuery } from '@tanstack/react-query';
+
 // ---------------------------------------------------------------------------
 // Harness types (Phase 3 — iteration, reflection, metrics)
 // ---------------------------------------------------------------------------
@@ -559,6 +561,7 @@ export interface WorkbenchBridgeOptimizeRequest {
 }
 
 export interface WorkbenchBridgeCandidate {
+  candidate_id: string;
   project_id: string;
   run_id: string;
   turn_id?: string | null;
@@ -605,6 +608,7 @@ export interface WorkbenchBridgeOptimizationStep {
 export interface WorkbenchImprovementBridge {
   kind: 'workbench_eval_optimize' | string;
   schema_version: number;
+  journey_id: string;
   candidate: WorkbenchBridgeCandidate;
   evaluation: WorkbenchBridgeEvaluationStep;
   optimization: WorkbenchBridgeOptimizationStep;
@@ -615,11 +619,11 @@ export interface WorkbenchImprovementBridge {
 
 export interface WorkbenchEvalBridgeResponse {
   bridge: WorkbenchImprovementBridge;
-  save_result: {
+  save_result?: {
     config_path: string;
     eval_cases_path?: string | null;
     [key: string]: unknown;
-  };
+  } | null;
   eval_request?: WorkbenchBridgeEvalRequest | null;
   optimize_request_template?: WorkbenchBridgeOptimizeRequest | null;
   next?: {
@@ -860,6 +864,90 @@ export function createWorkbenchEvalBridge(
   return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/bridge/eval`, {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+/** Read the durable Workbench handoff without materializing files again. */
+export function getWorkbenchBridge(
+  projectId: string,
+  options: {
+    eval_run_id?: string | null;
+    category?: string | null;
+    dataset_path?: string | null;
+    generated_suite_id?: string | null;
+    split?: string;
+  } = {}
+): Promise<WorkbenchEvalBridgeResponse> {
+  const params = new URLSearchParams();
+  if (options.eval_run_id) {
+    params.set('eval_run_id', options.eval_run_id);
+  }
+  if (options.category) {
+    params.set('category', options.category);
+  }
+  if (options.dataset_path) {
+    params.set('dataset_path', options.dataset_path);
+  }
+  if (options.generated_suite_id) {
+    params.set('generated_suite_id', options.generated_suite_id);
+  }
+  if (options.split) {
+    params.set('split', options.split);
+  }
+  const suffix = params.toString() ? `?${params.toString()}` : '';
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/bridge${suffix}`);
+}
+
+/** Persist the completed eval run id for the active Workbench candidate. */
+export function recordWorkbenchEvalRun(
+  projectId: string,
+  evalRunId: string
+): Promise<{
+  project_id: string;
+  eval_run_id: string;
+  materialized_candidate: Record<string, unknown>;
+}> {
+  return fetchWorkbench(`/api/workbench/projects/${encodeURIComponent(projectId)}/bridge/eval-run`, {
+    method: 'POST',
+    body: JSON.stringify({ eval_run_id: evalRunId }),
+  });
+}
+
+/** React Query hook for hydrating the current Workbench bridge. */
+export function useWorkbenchBridge(
+  projectId: string | null | undefined,
+  options: {
+    enabled?: boolean;
+    evalRunId?: string | null;
+    category?: string | null;
+    datasetPath?: string | null;
+    generatedSuiteId?: string | null;
+    split?: string;
+  } = {}
+) {
+  return useQuery<WorkbenchEvalBridgeResponse>({
+    queryKey: [
+      'workbench-bridge',
+      projectId ?? null,
+      options.evalRunId ?? null,
+      options.category ?? null,
+      options.datasetPath ?? null,
+      options.generatedSuiteId ?? null,
+      options.split ?? 'all',
+    ],
+    enabled: Boolean(projectId) && (options.enabled ?? true),
+    queryFn: async () => {
+      if (!projectId) {
+        throw new WorkbenchApiError('Workbench project id is required', 400);
+      }
+      return getWorkbenchBridge(projectId, {
+        eval_run_id: options.evalRunId,
+        category: options.category,
+        dataset_path: options.datasetPath,
+        generated_suite_id: options.generatedSuiteId,
+        split: options.split,
+      });
+    },
   });
 }
 

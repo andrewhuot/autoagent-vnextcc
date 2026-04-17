@@ -455,6 +455,9 @@ export function AgentWorkbench() {
     setEvalHandoffPending(true);
     try {
       const payload = await createWorkbenchEvalBridge(currentProjectId);
+      if (!payload.save_result) {
+        throw new Error('Workbench did not return the saved candidate details needed for Eval.');
+      }
       const materializedBridge = payload.bridge;
       const configPath =
         materializedBridge.evaluation.request?.config_path ??
@@ -473,25 +476,11 @@ export function AgentWorkbench() {
         agentIdFromConfigVersion(payload.save_result?.config_version) ??
         `workbench-${candidate.project_id}-v${candidate.version}`;
       const params = new URLSearchParams({
-        source: 'workbench',
+        from: 'workbench',
         new: '1',
-        agent: materializedAgentId,
-        projectId: candidate.project_id,
-        runId: candidate.run_id,
-        configPath,
+        workbenchProjectId: candidate.project_id,
+        journeyId: materializedBridge.journey_id,
       });
-      if (candidate.agent_name) {
-        params.set('agentName', candidate.agent_name);
-      }
-      if (materializedBridge.evaluation.request?.generated_suite_id) {
-        params.set('generatedSuiteId', materializedBridge.evaluation.request.generated_suite_id);
-      }
-      if (evalCasesPath) {
-        params.set('evalCasesPath', evalCasesPath);
-      }
-      if (materializedBridge.evaluation.request?.split) {
-        params.set('split', materializedBridge.evaluation.request.split);
-      }
 
       navigate(`/evals?${params.toString()}`, {
         state: {
