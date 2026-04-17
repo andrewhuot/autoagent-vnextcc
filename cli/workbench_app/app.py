@@ -1112,6 +1112,27 @@ def _maybe_run_first_run_onboarding(workspace: Any | None) -> None:
         return
 
 
+def _maybe_migrate_legacy_settings() -> None:
+    """Run the one-time legacy-settings migration on first launch.
+
+    Cheap if-marker-exists check first so we don't hammer the disk on
+    every REPL boot. Wrapped in try/except so a flaky migration cannot
+    bring down launch — /doctor surfaces the warning instead.
+    """
+    try:
+        from cli.settings.loader import USER_CONFIG_DIR
+        from cli.settings.migration import (
+            MARKER_FILENAME,
+            migrate_legacy_settings,
+        )
+
+        if (USER_CONFIG_DIR / MARKER_FILENAME).exists():
+            return
+        migrate_legacy_settings(USER_CONFIG_DIR)
+    except Exception:  # pragma: no cover - defensive startup path
+        return
+
+
 def launch_workbench(
     workspace: Any | None,
     *,
@@ -1137,6 +1158,10 @@ def launch_workbench(
 
     from cli.sessions import Session, SessionStore
     from cli.workbench_app.slash import SlashContext, build_builtin_registry
+
+    # Migrate legacy env vars / config.json into the new cascade exactly once.
+    # Runs before settings load so the first cascade read sees the new file.
+    _maybe_migrate_legacy_settings()
 
     # ---- TUI feature flag ----
     # When AGENTLAB_TUI=1 is set and a TTY is available, launch the Textual
