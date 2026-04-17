@@ -1637,10 +1637,16 @@ def _run_orchestrator_turn(
     restores the prior echo, which matters when the orchestrator lives
     across multiple REPL instances (tests reuse it)."""
     previous_echo = getattr(orchestrator, "echo", None)
+    previous_cancellation = getattr(orchestrator, "tool_cancellation", None)
     try:
         orchestrator.echo = echo
     except Exception:  # pragma: no cover — orchestrator without echo attribute
         previous_echo = None
+    if ctx is not None and ctx.cancellation is not None:
+        try:
+            orchestrator.tool_cancellation = ctx.cancellation
+        except Exception:  # pragma: no cover — defensive for non-standard doubles
+            previous_cancellation = None
 
     if bridge is not None:
         try:
@@ -1657,6 +1663,11 @@ def _run_orchestrator_turn(
         if previous_echo is not None:
             try:
                 orchestrator.echo = previous_echo
+            except Exception:  # pragma: no cover
+                pass
+        if ctx is not None and ctx.cancellation is not None:
+            try:
+                orchestrator.tool_cancellation = previous_cancellation
             except Exception:  # pragma: no cover
                 pass
 

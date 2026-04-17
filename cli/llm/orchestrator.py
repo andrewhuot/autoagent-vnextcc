@@ -53,6 +53,7 @@ from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolContext
 from cli.tools.executor import ToolExecution, execute_tool_call
 from cli.tools.registry import ToolRegistry
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.markdown_stream import StreamingMarkdownRenderer
 
 
@@ -65,6 +66,19 @@ read/edit/verify calls, low enough that a runaway loop surfaces quickly."""
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _PendingToolBatch:
+    """Assistant/tool-result pair staged until the next model call consumes it."""
+
+    assistant_message: TurnMessage
+    tool_results_message: TurnMessage
+    executions: tuple[ToolExecution, ...]
+
+
+class _TurnCancelled(RuntimeError):
+    """Private sentinel used to stop a turn before the next model call."""
 
 
 @dataclass
@@ -109,6 +123,13 @@ class LLMOrchestrator:
 
     # Accumulated conversation across turns (a list to preserve order).
     messages: list[TurnMessage] = field(default_factory=list)
+    tool_cancellation: CancellationToken | None = None
+    """Shared Ctrl+C token for in-flight tool execution during this turn.
+
+    The workbench loop owns the token and swaps it in only for the
+    lifetime of a single natural-language turn so tools can observe
+    cancellation without the orchestrator inventing its own side channel.
+    """
 
     # ------------------------------------------------------------------ API
 
@@ -165,26 +186,37 @@ class LLMOrchestrator:
         # the model can summarise after the cap is reached — but if the
         # model keeps asking for tools past the limit we hard-stop.
         tool_iterations = 0
+        pending_tool_batch: _PendingToolBatch | None = None
         while True:
             allow_tool_dispatch = tool_iterations < self.max_tool_loops
-            response, dispatcher = self._run_model_turn(
-                renderer,
-                final_text_parts,
-                dispatch_tools=allow_tool_dispatch,
-            )
+            try:
+                response, dispatcher = self._run_model_turn(
+                    renderer,
+                    final_text_parts,
+                    dispatch_tools=allow_tool_dispatch,
+                    pending_tool_batch=pending_tool_batch,
+                )
+            except _TurnCancelled:
+                stop_reason = "cancelled"
+                final_text_parts.clear()
+                break
+
+            if pending_tool_batch is not None:
+                executions.extend(pending_tool_batch.executions)
+                pending_tool_batch = None
             _merge_usage(aggregated_usage, response.usage)
 
             tool_uses = response.tool_uses()
-            self.messages.append(
-                TurnMessage(role="assistant", content=response.blocks)
-            )
+            assistant_message = TurnMessage(role="assistant", content=response.blocks)
 
             if not tool_uses:
+                self.messages.append(assistant_message)
                 stop_reason = response.stop_reason or "end_turn"
                 break
 
             if not allow_tool_dispatch:
                 # Already at the cap — do not execute another tool batch.
+                self.messages.append(assistant_message)
                 stop_reason = "max_tool_loops"
                 break
 
@@ -193,6 +225,10 @@ class LLMOrchestrator:
             # Execute tool calls and append a user-side message with the
             # tool_result blocks so the next model call can consume them.
             executions_in_order = dispatcher.results_in_order() if dispatcher else []
+            if self._tool_cancellation_requested():
+                stop_reason = "cancelled"
+                final_text_parts.clear()
+                break
             if len(executions_in_order) != len(tool_uses):
                 raise RuntimeError(
                     "Streaming tool dispatch produced "
@@ -202,7 +238,6 @@ class LLMOrchestrator:
             tool_results: list[dict[str, Any]] = []
             post_fragments: list[str] = []
             for tool_use, execution in zip(tool_uses, executions_in_order):
-                executions.append(execution)
                 tool_results.append(_result_to_block(tool_use.id, execution))
                 post_fragments.extend(self._post_tool_prompt_fragments(tool_use.name))
 
@@ -215,7 +250,16 @@ class LLMOrchestrator:
                     {"type": "text", "text": _render_fragment_block(post_fragments)}
                 )
 
-            self.messages.append(TurnMessage(role="user", content=tool_results))
+            if self._tool_cancellation_requested():
+                stop_reason = "cancelled"
+                final_text_parts.clear()
+                break
+
+            pending_tool_batch = _PendingToolBatch(
+                assistant_message=assistant_message,
+                tool_results_message=TurnMessage(role="user", content=tool_results),
+                executions=tuple(executions_in_order),
+            )
 
         renderer.finalize()
         assistant_text = "".join(final_text_parts)
@@ -264,6 +308,7 @@ class LLMOrchestrator:
         final_text_parts: list[str],
         *,
         dispatch_tools: bool,
+        pending_tool_batch: _PendingToolBatch | None = None,
     ) -> tuple[ModelResponse, StreamingToolDispatcher | None]:
         """Call the model and render its output live.
 
@@ -272,6 +317,17 @@ class LLMOrchestrator:
         thinking. Clients that expose only ``complete()`` still route
         through :func:`events_from_model_response` so the renderer path
         is identical, just non-incremental."""
+        appended_pending = False
+        if pending_tool_batch is not None:
+            if self._tool_cancellation_requested():
+                raise _TurnCancelled()
+            self.messages.append(pending_tool_batch.assistant_message)
+            self.messages.append(pending_tool_batch.tool_results_message)
+            appended_pending = True
+            if self._tool_cancellation_requested():
+                self._rollback_pending_tool_messages(pending_tool_batch)
+                raise _TurnCancelled()
+
         tools_schema = self.tool_registry.to_schema()
         effective_system_prompt = self._compose_system_prompt()
         stream_method = getattr(self.model, "stream", None)
@@ -293,19 +349,28 @@ class LLMOrchestrator:
             )
             cache_hint(hint_blocks)
 
-        if callable(stream_method):
-            events_iter = stream_method(
-                system_prompt=effective_system_prompt,
-                messages=list(self.messages),
-                tools=tools_schema,
-            )
-        else:
-            response = self.model.complete(
-                system_prompt=effective_system_prompt,
-                messages=list(self.messages),
-                tools=tools_schema,
-            )
-            events_iter = events_from_model_response(response)
+        try:
+            messages = list(self.messages)
+            if self._tool_cancellation_requested():
+                raise _TurnCancelled()
+
+            if callable(stream_method):
+                events_iter = stream_method(
+                    system_prompt=effective_system_prompt,
+                    messages=messages,
+                    tools=tools_schema,
+                )
+            else:
+                response = self.model.complete(
+                    system_prompt=effective_system_prompt,
+                    messages=messages,
+                    tools=tools_schema,
+                )
+                events_iter = events_from_model_response(response)
+        except _TurnCancelled:
+            if appended_pending:
+                self._rollback_pending_tool_messages(pending_tool_batch)
+            raise
 
         # Fork the event stream: one consumer drives the renderer live,
         # the other collects the final ModelResponse for bookkeeping.
@@ -421,6 +486,7 @@ class LLMOrchestrator:
         context = ToolContext(
             workspace_root=self.workspace_root,
             session_id=self.session.session_id if self.session else None,
+            cancel_check=self.tool_cancellation,
             extra=self._build_tool_extra(),
         )
         return execute_tool_call(
@@ -499,6 +565,31 @@ class LLMOrchestrator:
         if self.session is not None:
             extra["session_id"] = self.session.session_id
         return extra
+
+    def _tool_cancellation_requested(self) -> bool:
+        """Return whether the active turn cancellation token has been flipped."""
+        cancellation = self.tool_cancellation
+        if cancellation is None:
+            return False
+        cancelled = getattr(cancellation, "cancelled", None)
+        if isinstance(cancelled, bool):
+            return cancelled
+        return bool(cancelled)
+
+    def _rollback_pending_tool_messages(
+        self,
+        pending_tool_batch: _PendingToolBatch | None,
+    ) -> None:
+        """Remove a staged tool batch that was never consumed by the model."""
+        if pending_tool_batch is None:
+            return
+        self._pop_message_if_tail(pending_tool_batch.tool_results_message)
+        self._pop_message_if_tail(pending_tool_batch.assistant_message)
+
+    def _pop_message_if_tail(self, message: TurnMessage) -> None:
+        """Remove ``message`` when it is still the most recent transcript entry."""
+        if self.messages and self.messages[-1] is message:
+            self.messages.pop()
 
     def _append_session_entry(self, *, role: str, content: str) -> None:
         assert self.session is not None
@@ -691,6 +782,12 @@ class _StreamingToolExecutor:
 
     def __call__(self, tool_name: str, tool_input: dict[str, Any]) -> ToolExecution:
         return self.orchestrator._execute_tool_call(tool_name, tool_input)
+
+    def cancel_all(self) -> None:
+        cancellation = self.orchestrator.tool_cancellation
+        cancel = getattr(cancellation, "cancel", None)
+        if callable(cancel):
+            cancel()
 
     def requires_permission_prompt(
         self, tool_name: str, tool_input: dict[str, Any]

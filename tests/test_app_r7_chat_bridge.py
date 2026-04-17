@@ -16,7 +16,9 @@ import pytest
 from cli.llm.streaming import MessageStop
 from cli.llm.types import OrchestratorResult, TurnMessage
 from cli.workbench_app.app import _run_orchestrator_turn
+from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
+from cli.workbench_app.slash import SlashContext
 
 
 class _ScriptedModel:
@@ -99,3 +101,37 @@ def test_run_orchestrator_turn_without_bridge_is_silent(
 
     convo = runtime.conversation_store.get_conversation(runtime.conversation_id)
     assert convo.messages == []
+
+
+def test_run_orchestrator_turn_threads_ctx_cancellation_into_orchestrator(
+    runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The workbench loop should hand the live Ctrl+C token to the orchestrator."""
+    token = CancellationToken()
+    observed: dict[str, Any] = {}
+    ctx = SlashContext(cancellation=token)
+    prior = CancellationToken()
+    runtime.orchestrator.tool_cancellation = prior
+
+    fake = OrchestratorResult(
+        assistant_text="hello",
+        tool_executions=[],
+        stop_reason="end_turn",
+    )
+
+    def _run(_line: str) -> OrchestratorResult:
+        observed["during"] = runtime.orchestrator.tool_cancellation
+        return fake
+
+    monkeypatch.setattr(runtime.orchestrator, "run_turn", _run)
+
+    _run_orchestrator_turn(
+        orchestrator=runtime.orchestrator,
+        ctx=ctx,
+        line="ping",
+        echo=lambda _l: None,
+    )
+
+    assert observed["during"] is token
+    assert runtime.orchestrator.tool_cancellation is prior

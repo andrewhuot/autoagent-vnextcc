@@ -119,6 +119,7 @@ class TUISlashAdapter:
             return
 
         acquired = True
+        self._cancellation.reset()
 
         # Accumulator for the full assistant response.
         parts: list[str] = []
@@ -132,10 +133,15 @@ class TUISlashAdapter:
             )
 
         previous_echo = getattr(orchestrator, "echo", None)
+        previous_cancellation = getattr(orchestrator, "tool_cancellation", None)
         try:
             orchestrator.echo = _streaming_echo
         except Exception:
             previous_echo = None
+        try:
+            orchestrator.tool_cancellation = self._cancellation
+        except Exception:
+            previous_cancellation = None
 
         try:
             result = orchestrator.run_turn(user_prompt)
@@ -151,6 +157,10 @@ class TUISlashAdapter:
                     orchestrator.echo = previous_echo
                 except Exception:
                     pass
+            try:
+                orchestrator.tool_cancellation = previous_cancellation
+            except Exception:
+                pass
             # Clear streaming state and unlock.
             self._store.set_state(
                 lambda s: replace(s, streaming_content=None)
