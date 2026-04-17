@@ -392,3 +392,12 @@ def register_runtime_commands(mcp_group: click.Group) -> None:
             click.echo(render_json_envelope("ok", item, next_command="agentlab mcp remove <name>"))
             return
         click.echo(json.dumps(item, indent=2))
+
+    # ``mcp test`` lives in cli.mcp.test_command so the workspace-runtime
+    # module doesn't have to depend on the typed-config + transport
+    # machinery at import time. Registering it here keeps the user's
+    # mental model of the CLI consistent: every MCP command is on the
+    # same group.
+    from cli.mcp.test_command import register_mcp_test_command
+
+    register_mcp_test_command(mcp_group)
