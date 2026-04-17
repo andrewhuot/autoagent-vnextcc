@@ -29,6 +29,7 @@ from cli.permissions.classifier import ClassifierContext
 from cli.permissions.audit_log import AUDIT_LOG_FILENAME, ClassifierAuditLog
 from cli.permissions.denial_tracking import DenialTracker
 from cli.permissions import PermissionManager, load_workspace_settings
+from cli.settings import load_settings
 from cli.strict_live import MockFallbackError
 from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolError
@@ -117,6 +118,7 @@ def build_workbench_runtime(
     keeps legacy callers (TUI, tests) unaffected — the gate is opt-in
     by callers that know whether they picked a real key (R7.C.4)."""
     settings = load_workspace_settings(workspace_root)
+    resolved_settings = load_settings(workspace_root)
 
     strict_live = bool(settings.get("permissions", {}).get("strict_live"))
     if strict_live and not provider_key_present:
@@ -185,6 +187,9 @@ def build_workbench_runtime(
             workspace_name=workspace_root.name,
             agent_card_path=None,
             registry=prompt_registry,
+            styles_enabled=bool(
+                resolved_settings.get("output.styles_enabled", False)
+            ),
         )
 
     # Conversation persistence (R7.B.7): SQLite store at

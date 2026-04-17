@@ -39,6 +39,7 @@ def build_system_prompt(
     agent_card_path: str | None,
     registry: ToolRegistry,
     relevant_memories: Sequence[Memory] | None = None,
+    styles_enabled: bool = False,
 ) -> str:
     """Assemble the system prompt sent at the start of every LLM turn."""
     lines: list[str] = []
@@ -68,6 +69,19 @@ def build_system_prompt(
         lines.append("")
     lines.append("## Reading tool output safely")
     lines.append(PROMPT_INJECTION_GUARD)
+    if styles_enabled:
+        lines.append("")
+        lines.append("## Output style directive")
+        lines.append(
+            'You may optionally start an assistant message with '
+            '`<agentlab output-style="table">`. Supported styles are '
+            "table, json, markdown, terse, or default; use the "
+            "directive only when a specific rendering style will help the user."
+        )
+        lines.append(
+            "The renderer strips the directive before display, so the user sees "
+            "only the styled response body."
+        )
     return "\n".join(lines)
 
 
