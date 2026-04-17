@@ -181,10 +181,10 @@ OPTIMIZE_MIN_COMPOSITE_SCORE = float(
 PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "ship", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {
     "review", "config", "instruction", "model", "provider", "mode", "memory",
-    "template", "connect", "harness", "context", "conversation",
+    "template", "connect", "harness", "context", "conversation", "loop",
 }
 HIDDEN_COMMANDS = {
-    "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
+    "improve", "compare", "diagnose", "explain", "replay", "autofix",
     "release", "intelligence", "skill", "mcp", "session", "continue",
     "permissions", "usage", "export", "trace", "knowledge", "quickstart", "demo",
     "init", "serve", "server", "full-auto", "edit", "cx", "adk", "dataset",
@@ -3826,7 +3826,7 @@ def _open_in_editor(file_path: Path) -> None:
 # agentlab loop
 # ---------------------------------------------------------------------------
 
-@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True, hidden=True)
+@cli.group("loop", cls=DefaultCommandGroup, default_command="run", default_on_empty=True)
 def loop_group() -> None:
     """Run the optimization loop or control its execution state.
 
@@ -3838,7 +3838,7 @@ def loop_group() -> None:
     """
 
 
-@loop_group.command("run", hidden=True)
+@loop_group.command("run")
 @click.option("--max-cycles", default=50, show_default=True, type=int, help="Maximum optimization cycles.")
 @click.option("--stop-on-plateau", is_flag=True, default=False,
               help="Stop if no improvement for 5 consecutive cycles.")

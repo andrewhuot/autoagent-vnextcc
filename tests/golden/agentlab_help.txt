@@ -37,6 +37,7 @@ Secondary Commands:
   conversation  Inspect, export, and resume Workbench conversations.
   harness       Inspect long-running harness lifecycle, evidence, and...
   instruction   Inspect, edit, validate, generate, and migrate agent...
+  loop          Run the optimization loop or control its execution state.
   memory        Project memory — manage AGENTLAB.md persistent context.
   mode          Show or set explicit CLI execution mode.
   model         Inspect and override workspace model preferences.
