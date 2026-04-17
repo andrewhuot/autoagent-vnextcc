@@ -181,7 +181,7 @@ OPTIMIZE_MIN_COMPOSITE_SCORE = float(
 PRIMARY_COMMANDS = {"new", "build", "workbench", "eval", "optimize", "deploy", "ship", "status", "doctor", "shell"}
 SECONDARY_COMMANDS = {
     "review", "config", "instruction", "model", "provider", "mode", "memory",
-    "template", "connect", "harness", "context",
+    "template", "connect", "harness", "context", "conversation",
 }
 HIDDEN_COMMANDS = {
     "improve", "loop", "compare", "diagnose", "explain", "replay", "autofix",
