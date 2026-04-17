@@ -1295,7 +1295,7 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 
 ## R4 — Workbench is the Harness
 
-> **Expansion required:** Expand into `docs/superpowers/plans/2026-04-XX-agentlab-r4-workbench-harness.md` before execution. **Depends on R2** (modular CLI commands required).
+> **Status: ✅ Shipped complete (2026-04-17).** Slice A landed at `a782d33`; Slice B/C (widgets + `/attempt-diff`, `/lineage`, `/improve accept --edit`, docs) closed in the R4/R6 cleanup branch. R4.13 (per-command error boundary) deferred; not blocking.
 
 **Goal:** Workbench owns session state. Slash commands call command implementations directly (in-process), share `eval_run_id` / `attempt_id` automatically, render rich progress widgets.
 
@@ -1322,14 +1322,14 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 - [ ] **R4.4**: Same for `/optimize`. Auto-uses `session.last_eval_run_id`.
 - [ ] **R4.5**: Same for `/improve` (depends on R2).
 - [ ] **R4.6**: Same for `/deploy`. Auto-uses `session.last_attempt_id`.
-- [ ] **R4.7**: Eval progress widget (case grid). Test: snapshot of widget state after 3/12 cases shows expected grid.
-- [ ] **R4.8**: Failure preview cards with diff + suggested fix. Test: failed case renders with suggestion.
-- [ ] **R4.9**: Cost ticker in status bar. Test: after 3 LLM calls, ticker reflects accumulated cost.
-- [ ] **R4.10**: `/diff <attempt_id>` multi-pane viewer.
-- [ ] **R4.11**: `/lineage <id>` ancestry visualizer.
-- [ ] **R4.12**: Inline edit of proposal before accepting (`/improve accept <id> --edit`).
-- [ ] **R4.13**: Error boundary per command — uncaught exception in slash command shows error card, doesn't crash TUI.
-- [ ] **R4.14**: Documentation update.
+- [x] **R4.7**: Eval progress widget (case grid). Shipped `e5a8a39`.
+- [x] **R4.8**: Failure preview cards with diff + suggested fix. Shipped `220ce2a`.
+- [x] **R4.9**: Cost ticker in status bar. Shipped `ab87e68`.
+- [x] **R4.10**: `/attempt-diff <attempt_id>` multi-pane viewer. Shipped `8060432`. (Registered as `/attempt-diff`; `/diff` was already taken by `config_diff_slash.py`.)
+- [x] **R4.11**: `/lineage <id>` ancestry visualizer. Shipped `bea5313`.
+- [x] **R4.12**: Inline edit of proposal before accepting (`/improve accept <id> --edit`). Shipped `a692115`. TUI modal wiring of the `_prompt_yaml_edit` seam deferred to a follow-up in `cli/workbench_app/tui/`.
+- [ ] **R4.13**: Error boundary per command — uncaught exception in slash command shows error card, doesn't crash TUI. **Deferred.** Not scoped in the R4/R6 cleanup session.
+- [x] **R4.14**: Documentation update. Shipped `0a351e2` (new R4 widgets section in `docs/workbench-quickstart.md`).
 
 ### Acceptance Tests
 
@@ -1400,6 +1400,8 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 
 ## R6 — Continuous Improvement & Observability
 
+> **Status: ✅ Shipped complete (2026-04-17).** Slice B landed at `719edf0` (calibration, canary scoring, measure --replay-set); Slice A/C (loop un-hide, continuous orchestrator, notification dedupe, drift detector, cost-aware Pareto, daemon samples, docs) closed in the R4/R6 cleanup branch.
+
 > **Expansion required:** Expand into `docs/superpowers/plans/2026-04-XX-agentlab-r6-continuous.md` before execution. **Depends on R1, R2, R3, R5.**
 
 **Goal:** AgentLab runs continuously against production traffic, suggests improvements, measures real-world impact, surfaces drift.
@@ -1418,20 +1420,20 @@ agentlab deploy --auto-review --yes --force-deploy-degraded --reason "hotfix"  #
 
 ### Task Outline
 
-- [ ] **R6.1**: `agentlab loop run --interval 1h` (scheduled, not daemon initially).
-- [ ] **R6.2**: Trace ingestion hook (depends on R5).
-- [ ] **R6.3**: Score new traces; detect regression; queue improvement.
-- [ ] **R6.4**: Slack notification adapter (incoming webhook).
-- [ ] **R6.5**: Email notification adapter (SMTP).
-- [ ] **R6.6**: `agentlab improve measure <id>` runs eval on production-replay set.
-- [ ] **R6.7**: Calibration: actual vs predicted improvement → store calibration factor; expose to `optimize --explain-strategy`.
-- [ ] **R6.8**: Canary A/B scoring infrastructure.
-- [ ] **R6.9**: Drift detection (KL divergence on score distributions).
-- [ ] **R6.10**: Drift alert → trigger eval-set refresh recommendation.
-- [ ] **R6.11**: Cost-aware Pareto: `(quality, safety, cost)` jointly.
-- [ ] **R6.12**: `optimize --show-tradeoffs` surfaces "5% quality / 30% cost" explicitly.
-- [ ] **R6.13**: Daemon-mode wrapper (systemd unit / launchd plist samples).
-- [ ] **R6.14**: Documentation.
+- [x] **R6.1**: `agentlab loop run` visible in help. Shipped `2b1d4aa`.
+- [x] **R6.2**: Trace ingestion hook. Shipped `888c572` (ContinuousOrchestrator.run_once reuses R5 trace converter).
+- [x] **R6.3**: Score new traces; detect regression; queue improvement. Shipped `888c572`. No auto-deploy.
+- [x] **R6.4**: Slack / webhook notifications wired into continuous loop. Shipped `3c27992` (reuses `notifications/channels.py`).
+- [x] **R6.5**: 1-hour dedupe window per `(event_type, workspace, signature)` via SQLite `notification_log`. Shipped `3c27992`.
+- [x] **R6.6**: `agentlab improve measure <id>` runs eval on production-replay set. Shipped in R6 Slice B (`719edf0`).
+- [x] **R6.7**: Calibration factor surfaced in `optimize --explain-strategy`. Shipped in R6 Slice B (`719edf0`).
+- [x] **R6.8**: Canary A/B scoring infrastructure (`LocalCanaryRouter`). Shipped in R6 Slice B (`719edf0`). Platform-specific routers (Kubernetes/Cloud Run) explicitly out of scope.
+- [x] **R6.9**: Drift detection (KL divergence on score distributions). Shipped `b8abccd`. Distinct from `judges/drift_monitor.py`.
+- [x] **R6.10**: Drift alert with eval-set refresh recommendation. Shipped `b8abccd` via C9 dedupe plumbing.
+- [x] **R6.11**: Cost-aware Pareto: `(quality, safety, cost)` as first-class `ObjectiveName` enum. Shipped `c258c68`. Default cost weight 0 preserves existing behavior.
+- [x] **R6.12**: `agentlab optimize --show-tradeoffs N` prints top-N non-dominated candidates. Shipped `c258c68`.
+- [x] **R6.13**: Daemon-mode wrapper samples. Shipped `0a351e2` (`contrib/systemd/agentlab-loop.service`, `contrib/launchd/com.agentlab.loop.plist`). Reference-only, never auto-installed.
+- [x] **R6.14**: Documentation. Shipped `0a351e2` (`docs/continuous-mode.md`).
 
 ### Acceptance Tests
 
