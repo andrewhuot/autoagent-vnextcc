@@ -62,11 +62,12 @@ ANTHROPIC_EXPECTED = {
     "max_output_tokens": 8192,
 }
 
-# Declared for today's non-streaming OpenAI adapter. P0.5d flips
-# ``streaming`` to True. If that flip lands silently, this test tells
-# the reviewer.
+# P0.5d flipped ``streaming`` to True — the adapter now consumes
+# real-time ``chat.completions.create(stream=True)`` chunk deltas.
+# ``thinking`` stays False for the gpt-4o family; reasoning models
+# (``o1``/``o3``/``o4``) flip it True — see the dedicated test below.
 OPENAI_EXPECTED = {
-    "streaming": False,
+    "streaming": True,
     "native_tool_use": True,
     "parallel_tool_calls": True,
     "thinking": False,
@@ -131,6 +132,24 @@ def test_openai_adapter_declares_current_non_streaming_reality():
     caps = client.capabilities
     assert isinstance(caps, ProviderCapabilities)
     assert _caps_to_dict(caps) == OPENAI_EXPECTED
+
+
+def test_openai_reasoning_model_declares_thinking_capability():
+    """``o3``/``o1``/``o4`` expose a reasoning channel; the adapter flips
+    ``thinking=True`` so the orchestrator can route ``reasoning_content``
+    deltas to the thinking panel."""
+    o3_caps = OpenAIClient(model="o3", api_key="sk-test").capabilities
+    o3_mini_caps = OpenAIClient(model="o3-mini", api_key="sk-test").capabilities
+    o1_caps = OpenAIClient(model="o1-preview", api_key="sk-test").capabilities
+    gpt4o_caps = OpenAIClient(model="gpt-4o", api_key="sk-test").capabilities
+
+    assert o3_caps.thinking is True
+    assert o3_caps.streaming is True
+    assert o3_mini_caps.thinking is True
+    assert o1_caps.thinking is True
+    assert gpt4o_caps.thinking is False
+    # Reasoning models still stream — same adapter path, same events.
+    assert o3_caps.streaming is True and o1_caps.streaming is True
 
 
 def test_gemini_adapter_declares_expected_capabilities():
