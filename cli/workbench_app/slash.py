@@ -750,6 +750,7 @@ def build_builtin_registry(
         build_reject_command,
     )
     from cli.workbench_app.attempt_diff_slash import build_attempt_diff_command
+    from cli.workbench_app.lineage_view_slash import build_lineage_view_command
     from cli.workbench_app.plan_slash import all_plan_commands
     from cli.workbench_app.context_viz_slash import build_usage_command
     from cli.workbench_app.transcript_rewind_slash import all_transcript_rewind_commands
@@ -773,6 +774,7 @@ def build_builtin_registry(
     registry.register(build_accept_command())
     registry.register(build_reject_command())
     registry.register(build_attempt_diff_command())
+    registry.register(build_lineage_view_command())
     registry.register(build_usage_command())
     for plan_command in all_plan_commands():
         registry.register(plan_command)
