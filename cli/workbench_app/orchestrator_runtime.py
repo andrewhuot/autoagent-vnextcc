@@ -25,6 +25,7 @@ from typing import Any, Callable
 from cli.hooks import HookRegistry, load_hook_registry
 from cli.llm.orchestrator import LLMOrchestrator
 from cli.llm.types import ModelClient
+from cli.permissions.classifier import ClassifierContext
 from cli.permissions.audit_log import AUDIT_LOG_FILENAME, ClassifierAuditLog
 from cli.permissions.denial_tracking import DenialTracker
 from cli.permissions import PermissionManager, load_workspace_settings
@@ -221,6 +222,9 @@ def build_workbench_runtime(
             transcript_manager=None,
             system_prompt=system_prompt,
             echo=echo or (lambda _line: None),
+            classifier_context_factory=lambda pm=permission_manager, root=workspace_root: _classifier_context(
+                pm, root
+            ),
             denial_tracker=denial_tracker,
             audit_log=classifier_audit_log,
         )
@@ -242,6 +246,9 @@ def build_workbench_runtime(
         transcript_manager=transcript_rewind,
         system_prompt=effective_system_prompt,
         echo=echo or (lambda _line: None),
+        classifier_context_factory=lambda pm=permission_manager, root=workspace_root: _classifier_context(
+            pm, root
+        ),
         denial_tracker=denial_tracker,
         audit_log=classifier_audit_log,
     )
@@ -274,6 +281,24 @@ def build_workbench_runtime(
         workbench_session=workbench_session,
         model_id=active_model,
         skill_warnings=list(skill_store.warnings),
+    )
+
+
+def _classifier_context(
+    permission_manager: PermissionManager,
+    workspace_root: Path,
+) -> ClassifierContext:
+    """Build the live transcript-classifier context from workspace settings.
+
+    Recomputing on each tool call keeps persisted allow/deny rules in
+    ``.agentlab/settings.json`` authoritative immediately after the user
+    saves a rule from the permission dialog.
+    """
+    rules = permission_manager.explicit_rules
+    return ClassifierContext(
+        workspace_root=workspace_root,
+        persisted_allow_patterns=frozenset(rules.get("allow", [])),
+        persisted_deny_patterns=frozenset(rules.get("deny", [])),
     )
 
 

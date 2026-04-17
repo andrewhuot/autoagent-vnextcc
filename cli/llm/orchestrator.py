@@ -122,6 +122,14 @@ class LLMOrchestrator:
     disables the classifier gate (the executor handles ``None`` as a
     no-op), which keeps pre-P3 callers working unchanged."""
 
+    classifier_context_factory: Callable[[], ClassifierContext | None] | None = None
+    """Optional lazy context provider for the transcript classifier.
+
+    The workbench runtime uses this to rebuild the classifier context
+    from live workspace settings on every tool call, so a freshly saved
+    allow/deny rule takes effect immediately. Callers that pass an
+    explicit ``classifier_context`` still win over the factory."""
+
     denial_tracker: Any | None = None
     """Optional :class:`cli.permissions.denial_tracking.DenialTracker` —
     forwarded to :func:`execute_tool_call` so AUTO_DENY decisions
@@ -536,33 +544,25 @@ class LLMOrchestrator:
             context=context,
             dialog_runner=self.dialog_runner,
             hook_registry=self.hook_registry,
-            classifier_context=(
-                self.classifier_context
-                if self.classifier_context is not None
-                else self._classifier_context()
-            ),
+            classifier_context=self._resolve_classifier_context(),
             denial_tracker=self.denial_tracker,
             audit_log=self.audit_log,
         )
 
-    def _classifier_context(self) -> ClassifierContext | None:
-        """Build a classifier context from the current permission settings.
+    def _resolve_classifier_context(self) -> ClassifierContext | None:
+        """Return the classifier context for the next tool execution.
 
-        This keeps persisted allow/deny patterns aligned with the live P0
-        settings cascade after the user saves a rule during the session.
-        Callers that want to force a specific classifier context can pass
-        ``classifier_context=...`` at construction time; that explicit context
-        wins over this derived one.
+        Compatibility matters here: legacy orchestrator callers that do
+        not opt into classifier plumbing should continue passing
+        ``None``. The dedicated factory hook lets the workbench runtime
+        opt into per-call refreshes without changing that default.
         """
-        workspace_root = getattr(self, "workspace_root", None)
-        if workspace_root is None:
-            return None
-        rules = self.permissions.explicit_rules
-        return ClassifierContext(
-            workspace_root=workspace_root,
-            persisted_allow_patterns=frozenset(rules.get("allow", [])),
-            persisted_deny_patterns=frozenset(rules.get("deny", [])),
-        )
+        if self.classifier_context is not None:
+            return self.classifier_context
+        factory = self.classifier_context_factory
+        if callable(factory):
+            return factory()
+        return None
 
     def _build_streaming_tool_dispatcher(self) -> StreamingToolDispatcher:
         return StreamingToolDispatcher(
