@@ -578,6 +578,7 @@ def run_workbench_app(
                         ctx=ctx,
                         result=result,
                         echo=out,
+                        bridge=getattr(orchestrator, "conversation_bridge", None),
                     )
                     handled_as_slash = True
             if ctx.exit_requested:
@@ -603,11 +604,15 @@ def run_workbench_app(
                 # permission dialogs, hooks, and streaming markdown. All
                 # subsystems were published onto ctx.meta above so slash
                 # commands fired from inside this turn see the same state.
+                # Pull the conversation bridge from the bundle (R7.B.7) so
+                # each user/assistant turn mirrors into SQLite. Legacy
+                # callers that pass a bare orchestrator skip the bridge.
                 _run_orchestrator_turn(
                     orchestrator=active_orchestrator,
                     ctx=ctx,
                     line=line,
                     echo=out,
+                    bridge=getattr(orchestrator, "conversation_bridge", None),
                 )
             else:
                 _run_chat_unavailable_turn(echo=out)
@@ -991,6 +996,7 @@ def _run_follow_up_turns(
     ctx: "SlashContext | None",
     result: Any,
     echo: EchoFn,
+    bridge: Any | None = None,
 ) -> None:
     """Process command-requested follow-up prompts through the chat path."""
     prompt: str | None = None
@@ -1008,6 +1014,7 @@ def _run_follow_up_turns(
         ctx=ctx,
         line=prompt,
         echo=echo,
+        bridge=bridge,
     )
 
 
@@ -1439,6 +1446,7 @@ def _run_orchestrator_turn(
     ctx: "SlashContext | None",
     line: str,
     echo: EchoFn,
+    bridge: Any | None = None,
 ) -> None:
     """Route one natural-language user turn through :meth:`run_turn`.
 
@@ -1456,6 +1464,12 @@ def _run_orchestrator_turn(
     except Exception:  # pragma: no cover — orchestrator without echo attribute
         previous_echo = None
 
+    if bridge is not None:
+        try:
+            bridge.record_user_turn(line)
+        except Exception:  # pragma: no cover — bridge persistence is best-effort
+            pass
+
     try:
         result = orchestrator.run_turn(line)
     except Exception as exc:  # pragma: no cover — defensive REPL
@@ -1467,6 +1481,12 @@ def _run_orchestrator_turn(
                 orchestrator.echo = previous_echo
             except Exception:  # pragma: no cover
                 pass
+
+    if bridge is not None and result is not None:
+        try:
+            bridge.record_assistant_turn(result)
+        except Exception:  # pragma: no cover — bridge persistence is best-effort
+            pass
 
     if ctx is None or result is None:
         return
