@@ -212,6 +212,35 @@ def _consent_or_abort(has_pii: bool, yes: bool) -> None:
     sys.exit(EXIT_REDACTION_REFUSED)
 
 
+def convert_trace_files_to_cases(
+    paths: list[Path],
+    *,
+    max_cases: int | None = None,
+    expected_output: str | None = None,
+) -> list[dict[str, Any]]:
+    """Convert one or more JSONL trace files into eval-case dicts.
+
+    Extracted for R6.2 (ContinuousOrchestrator) so trace ingestion logic is
+    reusable outside the Click command. Each path is read with
+    :func:`_read_traces_jsonl`; traces are then fed through
+    :class:`TraceToEvalConverter`. ``max_cases`` caps the combined output;
+    ``None`` means "no cap".
+
+    This function does NOT redact. Callers that write to disk are responsible
+    for invoking the redaction consent flow — the continuous orchestrator
+    keeps cases in-memory only and never persists them, so redaction is
+    handled upstream at the trace-capture layer.
+    """
+    converter = TraceToEvalConverter()
+    cases: list[dict[str, Any]] = []
+    for path in paths:
+        for trace in _read_traces_jsonl(path):
+            if max_cases is not None and len(cases) >= max_cases:
+                return cases
+            cases.append(converter.convert(trace, expected_output=expected_output))
+    return cases
+
+
 def register_ingest_command(eval_group: click.Group) -> None:
     """Attach `agentlab eval ingest` to *eval_group*."""
 
