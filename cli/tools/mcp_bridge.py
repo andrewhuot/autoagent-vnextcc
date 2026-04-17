@@ -322,6 +322,13 @@ def load_specs_from_workspace(workspace_root: str | Any = ".") -> list[McpServer
 
     specs: list[McpServerSpec] = []
     for entry in list_mcp_servers(workspace_root):
+        # The stdio bridge spec cannot represent SSE / Streamable-HTTP
+        # servers (no command to spawn). Skip non-stdio entries here;
+        # remote transports are wired through cli.mcp.config.build_transport
+        # by the parts of the stack that speak Transport rather than
+        # McpServerSpec.
+        if entry.get("transport", "stdio") != "stdio":
+            continue
         specs.append(
             McpServerSpec(
                 name=str(entry.get("name") or ""),
