@@ -26,6 +26,7 @@ gemini = [
 ]
 providers = [
     "google-genai>=1.15,<1.16",
+]
 vision = [
     "Pillow>=10.0",
 ]
