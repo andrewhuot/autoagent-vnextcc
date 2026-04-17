@@ -14,6 +14,7 @@ from dataclasses import replace
 from typing import Any, TYPE_CHECKING
 
 from cli.sessions import Session, SessionStore
+from cli.tools.rendering import iter_tool_display_payloads
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.commands import CommandRegistry
 from cli.workbench_app.help_text import render_shortcuts_help
@@ -170,6 +171,17 @@ class TUISlashAdapter:
 
         # Append the final assistant message to the transcript.
         assistant_text = getattr(result, "assistant_text", "") or ""
+        for payload in iter_tool_display_payloads(getattr(result, "tool_executions", []) or []):
+            self._store.set_state(
+                append_message(
+                    "tool",
+                    payload.display,
+                    data={
+                        "tool_name": payload.tool_name,
+                        "renderable": payload.renderable,
+                    },
+                )
+            )
         if assistant_text:
             self._store.set_state(append_message("assistant", assistant_text))
 

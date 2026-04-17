@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 from textual.widget import Widget
 from textual.widgets import Markdown
 
+from cli.tools.rendering import structured_diff_from_payload
 from cli.workbench_app.transcript import (
     TranscriptEntry,
     TranscriptRole,
     _ROLE_PREFIX,
 )
+from cli.workbench_app.tui.widgets.structured_diff import StructuredDiff
 
 
 # Map transcript roles to CSS classes for styling.
@@ -40,7 +44,17 @@ class MessageWidget(Widget):
         self._entry = entry
         self._prefix = _ROLE_PREFIX.get(entry.role, "")
 
-    def compose(self):
+    def compose(self) -> Iterator[Widget]:
+        renderable = structured_diff_from_payload((self._entry.data or {}).get("renderable"))
+        if renderable is not None:
+            yield StructuredDiff(
+                old=renderable.old,
+                new=renderable.new,
+                language=renderable.language,
+                file_path=renderable.file_path,
+                width=None,
+            )
+            return
         yield Markdown(f"{self._prefix}{self._entry.content}")
 
     @property

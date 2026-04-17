@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from cli.tools.rendering import persisted_renderable_payload
 from cli.workbench_app.conversation_store import ConversationStore, Message
 
 
@@ -71,6 +72,9 @@ class ConversationBridge:
           returned a denial).
         - The ``result`` column carries the ``ToolResult.display``
           truncated to ``_DISPLAY_CAP`` characters under key ``"display"``.
+          When tool metadata includes a structured renderable payload we
+          persist it alongside the display fallback under key
+          ``"renderable"``.
         - ``arguments`` is ``{}`` — see the module docstring.
         """
         assistant_text = getattr(result, "assistant_text", "") or ""
@@ -98,6 +102,11 @@ class ConversationBridge:
             else:
                 status = "failed"
                 payload = {"display": _truncate(tr.display, _DISPLAY_CAP)}
+            if tr is not None and isinstance(tr.metadata, dict):
+                renderable = tr.metadata.get("renderable")
+                persisted = persisted_renderable_payload(renderable)
+                if persisted is not None:
+                    payload["renderable"] = persisted
             self._store.finish_tool_call(
                 tool_call_id=tool_call.id,
                 status=status,

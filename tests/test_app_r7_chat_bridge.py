@@ -15,6 +15,9 @@ import pytest
 
 from cli.llm.streaming import MessageStop
 from cli.llm.types import OrchestratorResult, TurnMessage
+from cli.tools.base import PermissionDecision, ToolResult
+from cli.tools.executor import ToolExecution
+from cli.tools.rendering import StructuredDiffRenderable
 from cli.workbench_app.app import _run_orchestrator_turn
 from cli.workbench_app.cancellation import CancellationToken
 from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
@@ -161,3 +164,43 @@ def test_run_orchestrator_turn_skips_blank_cancelled_assistant_rows(
     assert len(convo.messages) == 1
     assert convo.messages[0].role == "user"
     assert convo.messages[0].content == "ping"
+
+
+def test_run_orchestrator_turn_echoes_tool_display_fallback(
+    runtime: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Line-mode workbench should surface readable tool displays."""
+    execution = ToolExecution(
+        tool_name="FileEdit",
+        decision=PermissionDecision.ALLOW,
+        result=ToolResult(
+            ok=True,
+            content="ok",
+            display="--- a/demo.py\n+++ b/demo.py\n-hello\n+world\n",
+            metadata={
+                "renderable": StructuredDiffRenderable(
+                    old="hello\n",
+                    new="world\n",
+                    file_path="demo.py",
+                    language="python",
+                ).to_payload()
+            },
+        ),
+    )
+    fake = OrchestratorResult(
+        assistant_text="done",
+        tool_executions=[execution],
+        stop_reason="end_turn",
+    )
+    monkeypatch.setattr(runtime.orchestrator, "run_turn", lambda _line: fake)
+    echoed: list[str] = []
+
+    _run_orchestrator_turn(
+        orchestrator=runtime.orchestrator,
+        ctx=None,
+        line="ping",
+        echo=echoed.append,
+    )
+
+    assert any("--- a/demo.py" in line for line in echoed)
