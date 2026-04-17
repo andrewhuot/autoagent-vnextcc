@@ -26,6 +26,7 @@ from cli.hooks import HookRegistry, load_hook_registry
 from cli.llm.orchestrator import LLMOrchestrator
 from cli.llm.types import ModelClient
 from cli.permissions import PermissionManager, load_workspace_settings
+from cli.strict_live import MockFallbackError
 from cli.sessions import Session, SessionStore
 from cli.tools.base import ToolError
 from cli.tools.registry import ToolRegistry, default_registry
@@ -95,6 +96,7 @@ def build_workbench_runtime(
     mcp_client_factory: Any | None = None,
     echo: Callable[[str], None] | None = None,
     workbench_session: WorkbenchSession | None = None,
+    provider_key_present: bool = True,
 ) -> WorkbenchRuntime:
     """Construct every subsystem and hand back a packaged
     :class:`WorkbenchRuntime`.
@@ -102,8 +104,27 @@ def build_workbench_runtime(
     ``mcp_client_factory`` is optional; when supplied the MCP bridge
     registers any workspace-configured servers' tools into the registry.
     A missing factory leaves the registry with only bundled tools — safe
-    default for environments where the ``mcp`` SDK isn't installed."""
+    default for environments where the ``mcp`` SDK isn't installed.
+
+    ``provider_key_present`` is a strict-live signal: when the workspace
+    opts in via ``permissions.strict_live`` and the caller signals that
+    no provider credential is configured, this constructor raises
+    :class:`MockFallbackError` instead of silently building a runtime
+    that would fall back to the echo provider. Defaulting to ``True``
+    keeps legacy callers (TUI, tests) unaffected — the gate is opt-in
+    by callers that know whether they picked a real key (R7.C.4)."""
     settings = load_workspace_settings(workspace_root)
+
+    strict_live = bool(settings.get("permissions", {}).get("strict_live"))
+    if strict_live and not provider_key_present:
+        raise MockFallbackError(
+            [
+                "chat: workspace is strict-live but no provider key is "
+                "configured. Set ANTHROPIC_API_KEY (or the appropriate "
+                "provider key) and retry, or remove permissions.strict_live "
+                "from .agentlab/settings.json.",
+            ]
+        )
 
     permission_manager = PermissionManager(root=workspace_root)
     # AgentLab risk-aware preset: routes EvalRun / Deploy:* / ImproveRun /

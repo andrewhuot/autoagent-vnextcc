@@ -1215,6 +1215,8 @@ def _maybe_build_orchestrator(
     if choice is None:
         return None
 
+    from cli.strict_live import MockFallbackError
+
     try:
         from cli.llm.providers import create_model_client
         from cli.workbench_app.orchestrator_runtime import build_workbench_runtime
@@ -1233,7 +1235,13 @@ def _maybe_build_orchestrator(
             session_store=store,
             active_model=choice.active_model,
             echo=echo,
+            provider_key_present=choice.api_key is not None,
         )
+    except MockFallbackError:
+        # R7.C.4 — strict-live workspaces must surface a hard error
+        # rather than silently falling back to the local guidance path.
+        # The CLI boundary translates this to ``EXIT_MOCK_FALLBACK``.
+        raise
     except Exception:  # pragma: no cover — chat setup must never crash boot
         return None
 
