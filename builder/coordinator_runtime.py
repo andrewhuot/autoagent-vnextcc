@@ -166,6 +166,7 @@ class CoordinatorWorkerRuntime:
             payload={
                 "status": run.status.value,
                 "worker_count": len(worker_nodes),
+                "worker_roster": self._worker_roster(run),
             },
         )
 
@@ -340,8 +341,29 @@ class CoordinatorWorkerRuntime:
             run,
             node_id=state.node_id,
             worker_role=state.worker_role,
-            payload={"status": status.value, **payload},
+            payload={
+                "status": status.value,
+                "owner": state.worker_role.value,
+                "title": state.title,
+                **payload,
+            },
         )
+
+    def _worker_roster(self, run: CoordinatorExecutionRun) -> list[dict[str, Any]]:
+        """Return the user-visible worker roster for a coordinator run."""
+        return [
+            {
+                "worker_id": state.node_id,
+                "node_id": state.node_id,
+                "role": state.worker_role.value,
+                "worker_role": state.worker_role.value,
+                "owner": state.worker_role.value,
+                "title": state.title,
+                "status": state.status.value,
+                "depends_on": list(state.depends_on),
+            }
+            for state in run.worker_states
+        ]
 
     def _gather_context(
         self,
@@ -604,17 +626,20 @@ class CoordinatorWorkerRuntime:
         node_id: str | None = None,
         worker_role: SpecialistRole | None = None,
     ) -> None:
+        event_payload = {
+            "run_id": run.run_id,
+            "plan_id": run.plan_id,
+            "node_id": node_id,
+            "worker_role": worker_role.value if worker_role else None,
+        }
+        if node_id is not None:
+            event_payload["worker_id"] = node_id
+        event_payload.update(payload)
         self._events.publish(
             event_type,
             session_id=run.session_id,
             task_id=run.root_task_id,
-            payload={
-                "run_id": run.run_id,
-                "plan_id": run.plan_id,
-                "node_id": node_id,
-                "worker_role": worker_role.value if worker_role else None,
-                **payload,
-            },
+            payload=event_payload,
         )
 
 

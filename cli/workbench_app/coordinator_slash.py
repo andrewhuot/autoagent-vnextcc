@@ -8,6 +8,10 @@ from typing import Any, Callable
 
 from agent.config.schema import AgentConfig
 from builder.workbench import apply_coordinator_synthesis
+from cli.workbench_app.collaboration_presence import (
+    build_presence_snapshot_from_tasks_snapshot,
+    render_presence_lines,
+)
 from cli.workbench_app import theme
 from cli.workbench_app.checkpoint import CheckpointManager
 from cli.workbench_app.commands import LocalCommand, OnDoneResult, on_done
@@ -442,6 +446,14 @@ def _render_session_tasks(snapshot: dict[str, Any]) -> str:
     if session_id:
         lines.append(f"    Session: {session_id}")
     lines.append(f"    Active runs: {int(snapshot.get('active_run_count') or 0)}")
+    lines.append("")
+    lines.extend(
+        render_presence_lines(
+            build_presence_snapshot_from_tasks_snapshot(snapshot),
+            markup=False,
+            indent="    ",
+        )
+    )
     tasks = list(snapshot.get("tasks") or [])
     if tasks:
         lines.append("")

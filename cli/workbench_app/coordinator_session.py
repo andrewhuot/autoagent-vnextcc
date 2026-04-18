@@ -356,9 +356,36 @@ class CoordinatorSession:
                     "status": run.status.value,
                     "worker_count": len(run.worker_states),
                     "goal": run.goal,
+                    "workers": [
+                        self._worker_presence(worker)
+                        for worker in run.worker_states
+                    ],
                 }
                 for run in runs
             ],
+        }
+
+    @staticmethod
+    def _worker_presence(state: Any) -> dict[str, Any]:
+        """Return a compact user-visible snapshot for one worker."""
+        detail = ""
+        if getattr(state, "result", None) is not None:
+            detail = str(state.result.summary or "")
+        if not detail:
+            detail = str(
+                getattr(state, "blocker_reason", None)
+                or getattr(state, "error", None)
+                or ""
+            )
+        return {
+            "worker_id": state.node_id,
+            "node_id": state.node_id,
+            "role": state.worker_role.value,
+            "worker_role": state.worker_role.value,
+            "owner": state.worker_role.value,
+            "title": state.title,
+            "status": state.status.value,
+            "detail": CoordinatorSession._trim_worker_summary(detail),
         }
 
     def _build_session_context(self) -> dict[str, Any]:

@@ -138,3 +138,5 @@ def test_coordinator_session_tasks_snapshot_lists_tasks_and_runs(tmp_path: Path)
         first.task_id,
     ]
     assert {run["run_id"] for run in snapshot["runs"]} == {first.run_id, second.run_id}
+    assert all(run["workers"] for run in snapshot["runs"])
+    assert {"worker_id", "owner", "title", "status"} <= set(snapshot["runs"][0]["workers"][0])

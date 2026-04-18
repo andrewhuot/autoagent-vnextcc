@@ -162,6 +162,8 @@ class WorkerState:
     """Snapshot of a single coordinator worker."""
     worker_id: str = ""
     role: str = ""
+    owner: str = ""
+    title: str = ""
     phase: WorkerPhase = WorkerPhase.QUEUED
     detail: str | None = None
     started_at: float = 0.0

@@ -290,13 +290,14 @@ class TestFullStreamingSequence:
             ))
             await pilot.pause()
 
-            # 5. Coordinator completes.
+            # 5. Coordinator completes, leaving recent work visible.
             adapter.handle_event(_event(
                 BuilderEventType.COORDINATOR_EXECUTION_COMPLETED,
             ))
             await pilot.pause()
             assert app.store.get_state().coordinator_status == CoordinatorStatus.IDLE
-            assert panel.display is False
+            assert panel.display is True
+            assert "finished recently" in str(panel.renderable)
 
 
 # ---------------------------------------------------------------------------

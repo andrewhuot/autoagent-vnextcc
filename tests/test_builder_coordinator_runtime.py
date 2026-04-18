@@ -113,6 +113,26 @@ class TestCoordinatorWorkerRuntime:
         assert BuilderEventType.WORKER_COMPLETED in event_types
         assert BuilderEventType.COORDINATOR_SYNTHESIS_COMPLETED in event_types
 
+        started = next(
+            event
+            for event in events.list_events(session_id=task.session_id)
+            if event.event_type == BuilderEventType.COORDINATOR_EXECUTION_STARTED
+        )
+        assert started.payload["worker_count"] == len(run.worker_states)
+        assert len(started.payload["worker_roster"]) == len(run.worker_states)
+        first_worker = started.payload["worker_roster"][0]
+        assert first_worker["worker_id"] == run.worker_states[0].node_id
+        assert first_worker["owner"] == run.worker_states[0].worker_role.value
+        assert first_worker["title"] == run.worker_states[0].title
+        assert first_worker["status"] == WorkerExecutionStatus.PENDING.value
+
+        gathering = next(
+            event
+            for event in events.list_events(session_id=task.session_id)
+            if event.event_type == BuilderEventType.WORKER_GATHERING_CONTEXT
+        )
+        assert gathering.payload["worker_id"] == gathering.payload["node_id"]
+
     def test_execute_plan_blocks_worker_with_unsatisfied_dependency(
         self,
         store,

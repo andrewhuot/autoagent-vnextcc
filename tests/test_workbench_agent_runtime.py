@@ -167,6 +167,8 @@ def test_tasks_command_renders_persisted_coordinator_session_state(tmp_path: Pat
 
     joined = click.unstyle("\n".join(lines))
     assert "Coordinator Tasks" in joined
+    assert "Team state:" in joined
+    assert "Finished recently:" in joined
     assert "Recent tasks:" in joined
     assert "Recent runs:" in joined
     assert "Build agent" in joined

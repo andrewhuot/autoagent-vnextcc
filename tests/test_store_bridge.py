@@ -68,6 +68,29 @@ class TestCoordinatorLifecycle:
         assert state.coordinator_session_id == "sess-1"
         assert state.coordinator_task_id == "task-1"
 
+    def test_coordinator_started_preserves_worker_ownership_and_titles(self) -> None:
+        store: Store[AppState] = Store(get_default_app_state())
+        adapter = EventStoreAdapter(store)
+
+        adapter.handle_event(_event(
+            BuilderEventType.COORDINATOR_EXECUTION_STARTED,
+            worker_roster=[
+                {
+                    "worker_id": "node-build",
+                    "role": "BUILD_ENGINEER",
+                    "owner": "build_engineer",
+                    "title": "Implement config change",
+                    "status": "pending",
+                },
+            ],
+        ))
+
+        worker = store.get_state().coordinator_workers[0]
+        assert worker.worker_id == "node-build"
+        assert worker.role == "BUILD_ENGINEER"
+        assert worker.owner == "build_engineer"
+        assert worker.title == "Implement config change"
+
     def test_coordinator_completed(self) -> None:
         store: Store[AppState] = Store(replace(
             get_default_app_state(),
@@ -137,6 +160,23 @@ class TestWorkerLifecycle:
         workers = store.get_state().coordinator_workers
         assert len(workers) == 1
         assert workers[0].phase == WorkerPhase.GATHERING_CONTEXT
+
+    def test_worker_phase_uses_runtime_node_id_as_worker_id(self) -> None:
+        store: Store[AppState] = Store(get_default_app_state())
+        adapter = EventStoreAdapter(store)
+
+        adapter.handle_event(_event(
+            BuilderEventType.WORKER_BLOCKED,
+            node_id="node-deploy",
+            worker_role="DEPLOYMENT_ENGINEER",
+            reason="Waiting for canary approval",
+        ))
+
+        worker = store.get_state().coordinator_workers[0]
+        assert worker.worker_id == "node-deploy"
+        assert worker.owner == "DEPLOYMENT_ENGINEER"
+        assert worker.phase == WorkerPhase.BLOCKED
+        assert worker.detail == "Waiting for canary approval"
 
     def test_worker_acting(self) -> None:
         store: Store[AppState] = Store(get_default_app_state())

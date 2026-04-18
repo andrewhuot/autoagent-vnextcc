@@ -166,7 +166,8 @@ class TestFullLifecycle:
             await pilot.pause()
 
             assert app.store.get_state().coordinator_status == CoordinatorStatus.IDLE
-            assert app.query_one(CoordinatorPanel).display is False
+            assert app.query_one(CoordinatorPanel).display is True
+            assert "finished recently" in str(app.query_one(CoordinatorPanel).renderable)
 
             # 6. Add background task.
             task = BackgroundTask(

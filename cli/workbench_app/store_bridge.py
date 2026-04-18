@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import Any
+from typing import Any, Mapping
 
 from builder.events import BuilderEvent, BuilderEventType, EventBroker
 from cli.workbench_app.store import (
@@ -63,6 +63,31 @@ _WORKER_PHASE_MAP: dict[BuilderEventType, WorkerPhase] = {
     BuilderEventType.WORKER_FAILED: WorkerPhase.FAILED,
     BuilderEventType.WORKER_BLOCKED: WorkerPhase.BLOCKED,
 }
+
+_WORKER_STATUS_TO_PHASE: dict[str, WorkerPhase] = {
+    "pending": WorkerPhase.QUEUED,
+    "queued": WorkerPhase.QUEUED,
+    "gathering_context": WorkerPhase.GATHERING_CONTEXT,
+    "acting": WorkerPhase.ACTING,
+    "verifying": WorkerPhase.VERIFYING,
+    "completed": WorkerPhase.COMPLETED,
+    "failed": WorkerPhase.FAILED,
+    "blocked": WorkerPhase.BLOCKED,
+}
+
+
+def _phase_from_status(value: Any, fallback: WorkerPhase) -> WorkerPhase:
+    """Return a ``WorkerPhase`` for runtime status strings."""
+    return _WORKER_STATUS_TO_PHASE.get(str(value or "").lower(), fallback)
+
+
+def _first_payload_text(payload: Mapping[str, Any], keys: tuple[str, ...]) -> str | None:
+    """Return the first non-empty text field from an event payload."""
+    for key in keys:
+        value = payload.get(key)
+        if value:
+            return str(value)
+    return None
 
 
 class EventStoreAdapter:
@@ -190,11 +215,22 @@ class EventStoreAdapter:
         worker_roster = payload.get("worker_roster", [])
         workers = tuple(
             WorkerState(
-                worker_id=w.get("worker_id", f"worker-{i}"),
-                role=w.get("role", "worker"),
-                phase=WorkerPhase.QUEUED,
+                worker_id=str(
+                    w.get("worker_id") or w.get("node_id") or f"worker-{i}"
+                ),
+                role=str(w.get("role") or w.get("worker_role") or "worker"),
+                owner=str(
+                    w.get("owner")
+                    or w.get("role")
+                    or w.get("worker_role")
+                    or "worker"
+                ),
+                title=str(w.get("title") or ""),
+                detail=_first_payload_text(w, ("detail", "note", "summary")),
+                phase=_phase_from_status(w.get("status"), WorkerPhase.QUEUED),
             )
             for i, w in enumerate(worker_roster)
+            if isinstance(w, dict)
         )
 
         def _update(state: AppState) -> AppState:
@@ -228,11 +264,21 @@ class EventStoreAdapter:
 
     def _on_worker_phase(self, event: BuilderEvent, phase: WorkerPhase) -> None:
         payload = event.payload
-        worker_id = payload.get("worker_id", "")
-        role = payload.get("worker_role", "worker")
-        detail = payload.get("detail") or payload.get("note") or None
+        worker_id = str(payload.get("worker_id") or payload.get("node_id") or "")
+        role = str(payload.get("worker_role") or payload.get("role") or "worker")
+        detail = _first_payload_text(
+            payload,
+            ("detail", "note", "summary", "reason", "error"),
+        )
 
-        fields: dict[str, Any] = {"role": role, "phase": phase}
+        fields: dict[str, Any] = {
+            "role": role,
+            "owner": str(payload.get("owner") or role),
+            "phase": phase,
+        }
+        title = payload.get("title")
+        if title:
+            fields["title"] = str(title)
         if detail:
             fields["detail"] = detail
         if phase in (WorkerPhase.COMPLETED, WorkerPhase.FAILED, WorkerPhase.BLOCKED):

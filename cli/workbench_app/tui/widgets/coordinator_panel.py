@@ -1,15 +1,4 @@
-"""Coordinator worker progress tree widget.
-
-Renders the coordinator's worker roster as a compact tree with glyphs
-matching the legacy ``coordinator_render.py`` style::
-
-    ● Coordinator running (2 workers)
-    ├─ BUILD ENGINEER  gathering context
-    └─ EVAL AUTHOR     queued
-
-Colors change per phase: queued (dim), gathering (dim), acting (cyan),
-verifying (yellow), completed (green), failed (red), blocked (yellow).
-"""
+"""Collaboration presence widget for coordinator and background work."""
 
 from __future__ import annotations
 
@@ -17,43 +6,20 @@ from typing import Callable
 
 from textual.widgets import Static
 
-from cli.workbench_app.store import (
-    AppState,
-    CoordinatorStatus,
-    Store,
-    WorkerPhase,
-    WorkerState,
-    select_footer,
+from cli.workbench_app.collaboration_presence import (
+    CollaborationPresenceSnapshot,
+    build_presence_snapshot,
+    render_presence_lines,
 )
-
-
-# Tree glyphs matching coordinator_render.py.
-_RUNNING_GLYPH = "\u25cf"  # ●
-_BRANCH_GLYPH = "\u251c\u2500"  # ├─
-_END_GLYPH = "\u2514\u2500"  # └─
-
-# Phase → (Rich markup color, display label).
-_PHASE_STYLE: dict[WorkerPhase, tuple[str, str]] = {
-    WorkerPhase.QUEUED: ("dim", "queued"),
-    WorkerPhase.GATHERING_CONTEXT: ("dim", "gathering context"),
-    WorkerPhase.ACTING: ("cyan", "acting"),
-    WorkerPhase.VERIFYING: ("yellow", "verifying"),
-    WorkerPhase.COMPLETED: ("green", "completed"),
-    WorkerPhase.FAILED: ("red", "failed"),
-    WorkerPhase.BLOCKED: ("yellow", "blocked"),
-}
-
-
-def _format_role(role: str) -> str:
-    """Normalize worker role for display."""
-    return role.replace("_", " ").strip().upper() or "WORKER"
+from cli.workbench_app.store import AppState, Store
 
 
 class CoordinatorPanel(Static):
-    """Reactive widget showing coordinator worker progress.
+    """Reactive widget showing collaboration presence and worker progress.
 
-    Hidden when coordinator is idle. Appears during active coordinator
-    workflows and renders a tree of worker states.
+    Hidden when there is no coordinator, background, review, or recent
+    worker state. Appears during active coordinator workflows and remains
+    visible after completion so recent ownership and progress are legible.
     """
 
     DEFAULT_CSS = """
@@ -68,8 +34,7 @@ class CoordinatorPanel(Static):
         super().__init__(**kwargs)
         self._store = store
         self._unsub: Callable[[], None] = lambda: None
-        self._last_status: CoordinatorStatus | None = None
-        self._last_workers: tuple[WorkerState, ...] = ()
+        self._last_presence: CollaborationPresenceSnapshot | None = None
 
     def on_mount(self) -> None:
         self._sync()
@@ -90,55 +55,25 @@ class CoordinatorPanel(Static):
             pass
 
     def _sync(self) -> None:
-        state = self._store.get_state()
-        status = state.coordinator_status
-        workers = state.coordinator_workers
+        presence = build_presence_snapshot(self._store.get_state())
 
         # Skip if nothing changed.
-        if status == self._last_status and workers == self._last_workers:
+        if presence == self._last_presence:
             return
-        self._last_status = status
-        self._last_workers = workers
+        self._last_presence = presence
 
-        if status == CoordinatorStatus.IDLE or not workers:
+        if not presence.has_visible_activity:
             self.display = False
             self.update("")
             return
 
         self.display = True
-        lines = self._render_tree(status, workers)
+        lines = self._render_presence(presence)
         self.update("\n".join(lines))
 
-    def _render_tree(
+    def _render_presence(
         self,
-        status: CoordinatorStatus,
-        workers: tuple[WorkerState, ...],
+        presence: CollaborationPresenceSnapshot,
     ) -> list[str]:
-        """Build the worker tree as Rich-markup lines."""
-        lines: list[str] = []
-
-        # Header line.
-        status_color = "cyan" if status == CoordinatorStatus.RUNNING else "red"
-        lines.append(
-            f"[{status_color} bold]{_RUNNING_GLYPH} Coordinator {status.value} "
-            f"({len(workers)} worker{'s' if len(workers) != 1 else ''})[/]"
-        )
-
-        # Worker lines.
-        for i, worker in enumerate(workers):
-            is_last = i == len(workers) - 1
-            glyph = _END_GLYPH if is_last else _BRANCH_GLYPH
-            color, label = _PHASE_STYLE.get(
-                worker.phase, ("dim", worker.phase.value)
-            )
-            role = _format_role(worker.role)
-
-            detail = ""
-            if worker.detail:
-                detail = f" — {worker.detail}"
-
-            lines.append(
-                f"[dim]  {glyph} [/][{color}]{role}[/]  {label}{detail}"
-            )
-
-        return lines
+        """Build collaboration presence lines as Rich markup."""
+        return render_presence_lines(presence, markup=True)
