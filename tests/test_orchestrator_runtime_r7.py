@@ -298,12 +298,18 @@ def test_runtime_registers_remote_mcp_tools_by_default(
         def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
             return {"content": [{"type": "text", "text": f"{name}:{arguments}"}]}
 
-    from cli.workbench_app import orchestrator_runtime as runtime_mod
+    # P5.T3 rewired the default MCP factory path: when no explicit
+    # ``mcp_client_factory`` is passed and ``.mcp.json`` exists, the
+    # runtime now calls :func:`cli.mcp.live_factory.build_live_client_factory`
+    # to get a factory closure. To keep this test honest without
+    # touching real SSE servers, we monkeypatch the live-factory
+    # builder to hand back a closure that returns our fake client.
+    def _fake_build_live_client_factory(**_kwargs: Any):
+        return lambda spec: _FakeMcpClient()
 
     monkeypatch.setattr(
-        runtime_mod,
-        "_default_mcp_client_factory",
-        lambda spec: _FakeMcpClient(),
+        "cli.mcp.live_factory.build_live_client_factory",
+        _fake_build_live_client_factory,
     )
 
     runtime = build_workbench_runtime(
