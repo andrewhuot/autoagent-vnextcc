@@ -235,49 +235,163 @@ def _run_click(ctx: SlashContext, command_path: str) -> str:
 
 
 def _handle_help(ctx: SlashContext, *args: str) -> OnDoneResult:
-    """Render source-grouped help or a detailed command card."""
+    """Render categorized help, a filtered search, or a detailed command card.
+
+    Behaviour ladder:
+
+    * ``/help`` with no argument — category-grouped table of every visible
+      command, with a footer pointing at the discoverability affordances.
+    * ``/help <command>`` where ``<command>`` is an exact name or alias — the
+      detail card (unchanged).
+    * ``/help <query>`` — fuzzy filter across name, aliases, description, and
+      ``when_to_use``. Returns the same category-grouped table narrowed to the
+      matches, or a "no matches" hint.
+    """
     registry = ctx.registry
     if registry is None:
         return on_done("  /help unavailable: no command registry bound.")
     if args:
-        target_name = args[0]
-        command = registry.get(target_name)
-        if command is None:
+        target = args[0]
+        # Exact / alias lookup first so `/help resume` still goes to the card.
+        command = registry.get(target)
+        if command is not None:
+            return on_done(_render_command_detail(command), display="user")
+        # Otherwise treat the whole argv as a free-text filter.
+        query = " ".join(args).strip()
+        matches = _filter_commands(registry, query)
+        if not matches:
             return on_done(
-                f"  No command named /{target_name.lstrip('/').lower()}.",
+                f"  No commands matched {query!r}. Try /help on its own, "
+                "or /find to search sessions and memories.",
                 display="system",
             )
-        return on_done(_render_command_detail(command), display="user")
+        return on_done(
+            _render_help_table(matches, header=f"Matching {query!r}"),
+            display="user",
+        )
 
-    lines = [theme.heading("\n  Slash Commands")]
+    commands = [command for command in registry.visible()]
+    return on_done(_render_help_table(commands, header="Slash Commands"), display="user")
+
+
+def _render_help_table(
+    commands: Sequence[SlashCommand],
+    *,
+    header: str,
+) -> str:
+    """Render ``commands`` as a Claude-Code-style three-column help table.
+
+    Commands are grouped by source first (builtin / project / user / plugin)
+    so custom extensions stay visually separated from the core surface, then
+    by category inside each source so long lists (like ``builtin``) stay
+    scannable. The category order matches :data:`_CATEGORY_ORDER` so the
+    layout is stable across runs.
+    """
+    lines: list[str] = [theme.heading(f"\n  {header}")]
+    by_source: dict[str, list[SlashCommand]] = {}
+    for command in commands:
+        by_source.setdefault(command.source, []).append(command)
+
+    rendered_any = False
     for source, label in _SOURCE_LABELS:
-        commands = [
-            command for command in registry.by_source(source) if not command.hidden
-        ]
-        if not commands:
+        bucket = by_source.get(source)
+        if not bucket:
             continue
+        rendered_any = True
+        lines.append("")
         lines.append(theme.meta(f"  {label}"))
-        # Size the name column to fit the longest name in this source so the
-        # description column stays aligned — Claude Code's /help reads as a
-        # three-column table (name | description | argument hint) and we
-        # lose that table feel when long names like /transcript-checkpoints
-        # bleed into the next column.
-        name_width = max(len(f"/{command.name}") for command in commands)
-        for command in commands:
-            name_cell = f"/{command.name}".ljust(name_width)
-            # Put the argument hint in meta color, separated by two spaces
-            # so it reads as its own column (mirrors the ``aliases:`` suffix
-            # treatment below) rather than trailing the description.
-            hint = (
-                f"  {theme.meta(command.argument_hint)}"
-                if command.argument_hint
-                else ""
-            )
-            aliases = _format_aliases(command.aliases)
-            lines.append(f"    {name_cell}  {command.description}{hint}{aliases}")
+
+        # Sort into categories so builtin's long list splits into clearer
+        # sections — Session / Workflow / Memory / Diagnostics / …
+        name_width = max(len(f"/{command.name}") for command in bucket)
+        by_category: dict[str, list[SlashCommand]] = {}
+        for command in bucket:
+            by_category.setdefault(
+                _category_for(command), []
+            ).append(command)
+
+        ordered = [c for c in _CATEGORY_ORDER if c in by_category] + [
+            c for c in sorted(by_category) if c not in _CATEGORY_ORDER
+        ]
+        for category in ordered:
+            category_cmds = sorted(by_category[category], key=lambda c: c.name)
+            lines.append(theme.meta(f"    {category}"))
+            for command in category_cmds:
+                lines.append(_render_help_row(command, name_width=name_width))
+
+    if not rendered_any:
+        lines.append("")
+        lines.append(theme.meta("  (no matches)"))
     lines.append("")
-    lines.append("  Type /help <command> for details. Type ? for shortcuts.")
-    return on_done("\n".join(lines), display="user")
+    lines.append(
+        "  Type /help <command> for details, /help <query> to filter, "
+        "? for shortcuts."
+    )
+    return "\n".join(lines)
+
+
+def _render_help_row(command: SlashCommand, *, name_width: int) -> str:
+    """Render one command row so the name / description / hint columns align."""
+    name_cell = f"/{command.name}".ljust(name_width)
+    hint = (
+        f"  {theme.meta(command.argument_hint)}"
+        if command.argument_hint
+        else ""
+    )
+    aliases = _format_aliases(command.aliases)
+    return f"      {name_cell}  {command.description}{hint}{aliases}"
+
+
+def _filter_commands(
+    registry: CommandRegistry, query: str
+) -> list[SlashCommand]:
+    """Return every visible command matching ``query`` (fuzzy, case-insensitive).
+
+    Scoring prefers:
+
+    1. Exact substring hits in name/alias (very common for re-typing a half-
+       remembered command).
+    2. Substring hits in the description / ``when_to_use`` help text.
+    3. ``difflib`` close-match on the command name as a last resort so
+       typos still surface something useful.
+
+    The ordering is stable: matches with equal score are returned in the
+    registry's natural alphabetical order so users building muscle memory
+    always see the same list for the same query.
+    """
+    token = query.strip().lower()
+    if not token:
+        return list(registry.visible())
+
+    scored: list[tuple[int, str, SlashCommand]] = []
+    names = [command.name for command in registry.visible()]
+    close = set(difflib.get_close_matches(token, names, n=8, cutoff=0.55))
+
+    for command in registry.visible():
+        name = command.name.lower()
+        alias_hits = any(token in alias.lower() for alias in command.aliases)
+        description = (command.description or "").lower()
+        guidance = (command.when_to_use or "").lower()
+        score = 0
+        if token == name:
+            score = 100
+        elif name.startswith(token):
+            score = 80
+        elif token in name:
+            score = 60
+        elif alias_hits:
+            score = 55
+        elif token in description:
+            score = 40
+        elif token in guidance:
+            score = 30
+        elif command.name in close:
+            score = 20
+        if score > 0:
+            scored.append((score, command.name, command))
+
+    scored.sort(key=lambda row: (-row[0], row[1]))
+    return [command for _score, _name, command in scored]
 
 
 def _render_command_detail(command: SlashCommand) -> str:
@@ -708,6 +822,304 @@ def _handle_clear(ctx: SlashContext, *_: str) -> OnDoneResult:
     return on_done("  Transcript cleared.", display="system", meta_messages=meta)
 
 
+def _handle_find(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Quick-open fuzzy search across commands, sessions, and memories.
+
+    Modes:
+
+    * ``/find`` — render a help card showing the supported scopes.
+    * ``/find <query>`` — search all scopes and return a ranked list.
+    * ``/find cmd:<query>`` / ``sess:<query>`` / ``mem:<query>`` — scope
+      the search to one source. The ``cmd:``/``sess:``/``mem:`` prefixes
+      are matched case-insensitively so ``/find CMD:status`` also works.
+
+    The handler is the terminal analog of Claude Code's ``GlobalSearchDialog``
+    — it reads like a `fd`/`fzf` one-shot: you type a query, you get a list
+    of hits you can copy-paste into the next prompt.
+    """
+    if not args:
+        return on_done(_render_find_help(), display="user")
+
+    raw = " ".join(args).strip()
+    scope, query = _parse_find_scope(raw)
+    if not query:
+        return on_done(
+            "  /find needs a query. Try /find status or /find sess:r6.",
+            display="system",
+        )
+
+    lines: list[str] = [theme.heading(f"\n  Search: {query!r}")]
+    any_hits = False
+
+    if scope in ("all", "cmd"):
+        cmd_hits = _filter_commands(ctx.registry, query) if ctx.registry else []
+        if cmd_hits:
+            any_hits = True
+            lines.append("")
+            lines.append(theme.meta("  Commands"))
+            for command in cmd_hits[:10]:
+                lines.append(
+                    f"    /{command.name}  {theme.meta(command.description)}"
+                )
+
+    if scope in ("all", "sess"):
+        session_hits = _filter_sessions(ctx, query)
+        if session_hits:
+            any_hits = True
+            lines.append("")
+            lines.append(theme.meta("  Sessions"))
+            for session in session_hits[:10]:
+                title = session.title or session.session_id
+                age = _format_session_age(time.time() - (session.updated_at or 0.0))
+                lines.append(
+                    f"    {session.session_id}  {title}  {theme.meta(age)}"
+                )
+            lines.append(theme.meta("    (use /resume <id> to switch)"))
+
+    if scope in ("all", "mem"):
+        memory_hits = _filter_memories(ctx, query)
+        if memory_hits:
+            any_hits = True
+            lines.append("")
+            lines.append(theme.meta("  Memories"))
+            for slug, snippet in memory_hits[:10]:
+                lines.append(f"    {slug}  {theme.meta(snippet)}")
+            lines.append(theme.meta("    (use /memory-edit <slug> to open)"))
+
+    if not any_hits:
+        return on_done(
+            f"  No matches for {query!r} in {scope if scope != 'all' else 'any scope'}.",
+            display="system",
+        )
+
+    lines.append("")
+    return on_done("\n".join(lines), display="user")
+
+
+def _render_find_help() -> str:
+    """Short usage card for ``/find`` with no arguments."""
+    rows = [
+        ("/find <query>", "Search commands, sessions, and memories"),
+        ("/find cmd:<query>", "Restrict the search to slash commands"),
+        ("/find sess:<query>", "Restrict the search to saved sessions"),
+        ("/find mem:<query>", "Restrict the search to memory entries"),
+    ]
+    width = max(len(row[0]) for row in rows)
+    lines = [theme.heading("\n  Find — quick-open search")]
+    for key, desc in rows:
+        lines.append(f"    {key.ljust(width)}  {desc}")
+    lines.append("")
+    lines.append("  Tip: /find is fuzzy — typos land close matches too.")
+    return "\n".join(lines)
+
+
+def _parse_find_scope(raw: str) -> tuple[str, str]:
+    """Split ``"cmd:status"`` → ``("cmd", "status")``; default scope ``"all"``."""
+    lowered = raw.lower()
+    for prefix, scope in (
+        ("cmd:", "cmd"),
+        ("sess:", "sess"),
+        ("session:", "sess"),
+        ("mem:", "mem"),
+        ("memory:", "mem"),
+    ):
+        if lowered.startswith(prefix):
+            return scope, raw[len(prefix):].strip()
+    return "all", raw
+
+
+def _filter_sessions(ctx: SlashContext, query: str) -> list[Session]:
+    """Return saved sessions whose title or id matches ``query`` (fuzzy)."""
+    store = ctx.session_store
+    if store is None:
+        return []
+    token = query.strip().lower()
+    if not token:
+        return []
+    try:
+        sessions = store.list_sessions(limit=50)
+    except Exception:  # pragma: no cover — defensive
+        return []
+    scored: list[tuple[int, Session]] = []
+    for session in sessions:
+        title = (session.title or "").lower()
+        sid = session.session_id.lower()
+        score = 0
+        if token == sid or token == title:
+            score = 100
+        elif sid.startswith(token) or title.startswith(token):
+            score = 80
+        elif token in sid or token in title:
+            score = 60
+        elif any(token in entry.content.lower() for entry in session.transcript[-5:]):
+            score = 40
+        if score > 0:
+            scored.append((score, session))
+    scored.sort(key=lambda row: (-row[0], -row[1].updated_at))
+    return [session for _score, session in scored]
+
+
+def _filter_memories(ctx: SlashContext, query: str) -> list[tuple[str, str]]:
+    """Return ``(slug, snippet)`` pairs from the workspace memory dir."""
+    workspace = ctx.workspace
+    if workspace is None:
+        return []
+    memory_dir = getattr(workspace, "agentlab_dir", None)
+    if memory_dir is None:
+        return []
+    memory_dir = memory_dir / "memory"
+    if not memory_dir.exists():
+        return []
+    token = query.strip().lower()
+    if not token:
+        return []
+    hits: list[tuple[int, str, str]] = []
+    for path in sorted(memory_dir.glob("*.md")):
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        slug = path.stem
+        lower = text.lower()
+        if token not in slug.lower() and token not in lower:
+            continue
+        score = 80 if token in slug.lower() else 40
+        # Snippet: the line containing the first hit, trimmed.
+        snippet = ""
+        for line in text.splitlines():
+            if token in line.lower():
+                snippet = line.strip()
+                break
+        if not snippet:
+            snippet = text.splitlines()[0].strip() if text.splitlines() else ""
+        if len(snippet) > 80:
+            snippet = snippet[:77] + "..."
+        hits.append((score, slug, snippet))
+    hits.sort(key=lambda row: (-row[0], row[1]))
+    return [(slug, snippet) for _score, slug, snippet in hits]
+
+
+def _handle_keybindings(ctx: SlashContext, *args: str) -> OnDoneResult:
+    """Inspect active keyboard bindings, or open the config for editing.
+
+    ``/keybindings`` renders a Claude-Code-style grouped table with each
+    binding's keys, action, context, and whether it is built-in or came
+    from the user's ``keybindings.json``. ``/keybindings edit`` opens that
+    file in ``$EDITOR`` (creating a starter stub when the file is absent)
+    so users can customise without having to remember the path.
+    """
+    from cli.keybindings.loader import (
+        DEFAULT_BINDINGS,
+        DEFAULT_CONFIG_PATH,
+        KeyBindingMode,
+        load_bindings,
+    )
+
+    if args and args[0].lower() == "edit":
+        return _keybindings_edit(DEFAULT_CONFIG_PATH)
+
+    try:
+        binding_set = load_bindings()
+    except Exception as exc:  # Malformed config shouldn't crash the REPL.
+        return on_done(
+            f"  Could not load keybindings: {exc}\n"
+            "  Run /keybindings edit to repair the config.",
+            display="system",
+        )
+
+    default_keys = {(b.keys, b.when) for b in DEFAULT_BINDINGS}
+    user_bindings = [
+        b for b in binding_set.bindings if (b.keys, b.when) not in default_keys
+    ]
+    default_kept = [
+        b for b in binding_set.bindings if (b.keys, b.when) in default_keys
+    ]
+    # Hard-coded prompt bindings that live in pt_prompt.py but the user
+    # can't override. Listed explicitly so the surface honestly reflects
+    # what will fire at the keyboard.
+    hardwired: tuple[tuple[str, str, str], ...] = (
+        ("/", "open-slash-menu", "prompt"),
+        ("shift+tab", "mode-cycle", "prompt"),
+        ("ctrl+t", "toggle-transcript", "prompt"),
+    )
+
+    lines: list[str] = [theme.heading("\n  Keyboard Bindings")]
+    mode_label = (
+        "Vim" if binding_set.mode == KeyBindingMode.VIM else "Default (emacs)"
+    )
+    lines.append(theme.meta(f"  Mode: {mode_label}"))
+
+    lines.append("")
+    lines.append(theme.meta("  Built-in"))
+    width = _keybindings_column_width(default_kept, hardwired)
+    for binding in default_kept:
+        keys = "+".join(binding.keys) if len(binding.keys) > 1 else binding.keys[0]
+        context = binding.when or "global"
+        lines.append(
+            f"    {keys.ljust(width)}  {binding.command}  {theme.meta('(' + context + ')')}"
+        )
+    for keys_text, action, context in hardwired:
+        lines.append(
+            f"    {keys_text.ljust(width)}  {action}  "
+            f"{theme.meta('(' + context + ', hard-wired)')}"
+        )
+
+    if user_bindings:
+        lines.append("")
+        lines.append(theme.meta("  User overrides"))
+        for binding in user_bindings:
+            keys = "+".join(binding.keys) if len(binding.keys) > 1 else binding.keys[0]
+            context = binding.when or "global"
+            lines.append(
+                f"    {keys.ljust(width)}  {binding.command}  "
+                f"{theme.meta('(' + context + ')')}"
+            )
+    else:
+        lines.append("")
+        lines.append(theme.meta("  No user overrides — /keybindings edit to add some."))
+
+    lines.append("")
+    lines.append(
+        f"  Config file: {DEFAULT_CONFIG_PATH}  "
+        f"{theme.meta('(edit with /keybindings edit)')}"
+    )
+    return on_done("\n".join(lines), display="user")
+
+
+def _keybindings_column_width(
+    default_kept: Sequence[Any], hardwired: Sequence[tuple[str, str, str]]
+) -> int:
+    """Compute a shared column width so keys line up across sections."""
+    widths = [6]  # sensible minimum
+    for binding in default_kept:
+        keys = "+".join(binding.keys) if len(binding.keys) > 1 else binding.keys[0]
+        widths.append(len(keys))
+    for keys_text, _action, _context in hardwired:
+        widths.append(len(keys_text))
+    return max(widths)
+
+
+def _keybindings_edit(path: Path) -> OnDoneResult:
+    """Open ``keybindings.json`` in ``$EDITOR``, creating a stub if needed."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.write_text(
+            '{\n'
+            '  "mode": "default",\n'
+            '  "bindings": [\n'
+            '    {"keys": "ctrl+k", "command": "clear-transcript"}\n'
+            '  ]\n'
+            '}\n',
+            encoding="utf-8",
+        )
+    editor = os.environ.get("EDITOR") or "vi"
+    subprocess.run([editor, str(path)], check=False)
+    return on_done(
+        f"Opened {path} in {editor}. Restart the Workbench to pick up changes.",
+        display="system",
+    )
+
+
 def _handle_new(ctx: SlashContext, *args: str) -> OnDoneResult:
     """Start a fresh session, swap it onto the context, and clear the transcript.
 
@@ -762,6 +1174,10 @@ class _BuiltinSpec:
     aliases: tuple[str, ...] = ()
     immediate: bool = False
     sensitive: bool = False
+    # Narrow category label used by the new categorized /help renderer.
+    # Optional — unset commands fall through to _category_for()'s keyword
+    # heuristic so new built-ins don't have to ship a category on day one.
+    category: str | None = None
 
 
 _SOURCE_LABELS: tuple[tuple[str, str], ...] = (
@@ -770,6 +1186,137 @@ _SOURCE_LABELS: tuple[tuple[str, str], ...] = (
     ("user", "User Commands"),
     ("plugin", "Plugin Commands"),
 )
+
+# Category display order for the ``/help`` table. Anything not listed here
+# is rendered alphabetically after the known categories so future additions
+# still appear without a code change.
+_CATEGORY_ORDER: tuple[str, ...] = (
+    "Session",
+    "Memory & Context",
+    "Config & Theme",
+    "Workflow",
+    "Planning",
+    "Lineage & Diff",
+    "Skills & Plugins",
+    "Shell",
+    "Diagnostics",
+    "Help & Meta",
+    "Other",
+)
+
+# Map of built-in command name → category. Kept separate from ``_BuiltinSpec``
+# so command categorization can be edited in one table without churning the
+# spec list. Names not in the map fall through to _category_keyword() and
+# finally to "Other".
+_BUILTIN_CATEGORIES: dict[str, str] = {
+    # Session lifecycle
+    "resume": "Session",
+    "new": "Session",
+    "sessions": "Session",
+    "clear": "Session",
+    "fork": "Session",
+    "exit": "Session",
+    "compact": "Session",
+    "uncompact": "Session",
+    # Memory and context
+    "memory": "Memory & Context",
+    "memory-debug": "Memory & Context",
+    "memory-edit": "Memory & Context",
+    "usage": "Memory & Context",
+    "context": "Memory & Context",
+    "transcript-checkpoint": "Memory & Context",
+    "transcript-checkpoints": "Memory & Context",
+    "transcript-rewind": "Memory & Context",
+    "checkpoint": "Memory & Context",
+    "checkpoints": "Memory & Context",
+    "rewind": "Memory & Context",
+    # Config and theme
+    "config": "Config & Theme",
+    "theme": "Config & Theme",
+    "output-style": "Config & Theme",
+    "model": "Config & Theme",
+    "permissions": "Config & Theme",
+    "init": "Config & Theme",
+    "mcp": "Config & Theme",
+    # Workflow (streaming coordinator)
+    "eval": "Workflow",
+    "optimize": "Workflow",
+    "build": "Workflow",
+    "deploy": "Workflow",
+    "ship": "Workflow",
+    "improve": "Workflow",
+    "save": "Workflow",
+    "review": "Workflow",
+    "tasks": "Workflow",
+    # Planning
+    "plan": "Planning",
+    "plan-approve": "Planning",
+    "plan-discard": "Planning",
+    "plan-done": "Planning",
+    "plan-list": "Planning",
+    # Lineage and diff
+    "diff": "Lineage & Diff",
+    "accept": "Lineage & Diff",
+    "reject": "Lineage & Diff",
+    "attempt-diff": "Lineage & Diff",
+    "lineage": "Lineage & Diff",
+    # Skills and plugins
+    "skill": "Skills & Plugins",
+    "skills": "Skills & Plugins",
+    "skill-list": "Skills & Plugins",
+    "skill-reload": "Skills & Plugins",
+    "background": "Skills & Plugins",
+    "background-clear": "Skills & Plugins",
+    # Diagnostics
+    "status": "Diagnostics",
+    "doctor": "Diagnostics",
+    "cost": "Diagnostics",
+    # Help and meta
+    "help": "Help & Meta",
+    "shortcuts": "Help & Meta",
+    "find": "Help & Meta",
+    "keybindings": "Help & Meta",
+}
+
+
+def _category_for(command: SlashCommand) -> str:
+    """Resolve the display category for a command.
+
+    Precedence:
+
+    1. Explicit ``_BUILTIN_CATEGORIES`` mapping — authoritative.
+    2. Keyword heuristic on ``name`` / ``description`` — lets unmapped
+       plugin/user commands still land in a sensible bucket.
+    3. ``"Other"`` — everything else, rendered last.
+    """
+    explicit = _BUILTIN_CATEGORIES.get(command.name)
+    if explicit is not None:
+        return explicit
+    return _category_keyword(command)
+
+
+def _category_keyword(command: SlashCommand) -> str:
+    """Heuristic fallback for commands not present in the explicit map."""
+    haystack = f"{command.name} {command.description or ''}".lower()
+    if any(k in haystack for k in ("session", "resume", "fork", "compact")):
+        return "Session"
+    if any(k in haystack for k in ("memory", "transcript", "checkpoint", "context")):
+        return "Memory & Context"
+    if any(k in haystack for k in ("theme", "config", "style", "model", "permission", "mcp")):
+        return "Config & Theme"
+    if any(k in haystack for k in ("plan", "plan-", "planning")):
+        return "Planning"
+    if any(k in haystack for k in ("diff", "accept", "reject", "lineage")):
+        return "Lineage & Diff"
+    if any(k in haystack for k in ("skill", "plugin", "background")):
+        return "Skills & Plugins"
+    if any(k in haystack for k in ("status", "doctor", "cost", "diagnose")):
+        return "Diagnostics"
+    if any(k in haystack for k in ("help", "shortcut", "find", "keybind")):
+        return "Help & Meta"
+    if any(k in haystack for k in ("eval", "optim", "build", "deploy", "ship", "improve", "review", "task")):
+        return "Workflow"
+    return "Other"
 
 
 _BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
@@ -837,6 +1384,22 @@ _BUILTIN_SPECS: tuple[_BuiltinSpec, ...] = (
         "Show keyboard shortcuts",
         _handle_shortcuts,
         aliases=("?",),
+    ),
+    _BuiltinSpec(
+        "find",
+        "Fuzzy search commands, sessions, memories",
+        _handle_find,
+        argument_hint="[cmd:|sess:|mem:]<q>",
+        aliases=("search",),
+        when_to_use="Use when you know part of a name but not where it lives.",
+    ),
+    _BuiltinSpec(
+        "keybindings",
+        "Show active key bindings; `edit` opens the config",
+        _handle_keybindings,
+        argument_hint="[edit]",
+        aliases=("keys",),
+        when_to_use="Use to inspect what keys do what, or to customize the config.",
     ),
     _BuiltinSpec("clear", "Wipe the transcript but keep the active session", _handle_clear),
     _BuiltinSpec(
@@ -906,8 +1469,10 @@ def build_builtin_registry(
     from cli.workbench_app.output_style_slash import build_output_style_command
     from cli.workbench_app.fork_slash import build_fork_command
     from cli.workbench_app.resume_slash import build_resume_command
+    from cli.workbench_app.suggest_slash import build_suggest_command
 
     registry.register(build_resume_command())
+    registry.register(build_suggest_command())
     registry.register(build_fork_command())
     registry.register(build_model_command())
     registry.register(build_tasks_command())

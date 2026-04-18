@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
+import { GuidancePanel } from '../components/GuidancePanel';
 import {
   useSaveProviderKeys,
   useSetRuntimeMode,
@@ -389,6 +390,15 @@ export function Setup() {
           )}>
             {data.workspace.found ? 'Workspace ready' : 'Workspace not initialized'}
           </div>
+        }
+      />
+
+      <GuidancePanel
+        limit={3}
+        includeIds={(id) =>
+          id.startsWith('provider') ||
+          id.startsWith('setup') ||
+          id.startsWith('deploy')
         }
       />
 

@@ -59,6 +59,11 @@ class WorkbenchPromptState:
     The prompt_toolkit key handlers can't return data back to the caller,
     so instead they mutate this object. The loop reads the current mode
     after each turn to re-render the footer accordingly.
+
+    ``session_label`` is an optional short string that the toolbar
+    prepends when the terminal has room (e.g. ``"r6-fix · a3b1"``). It is
+    mutable so the outer loop can update it after ``/resume`` / ``/new``
+    without having to rebuild the input provider.
     """
 
     workspace: Any | None = None
@@ -66,6 +71,7 @@ class WorkbenchPromptState:
     cycle_count: int = 0
     transcript_view: TranscriptViewState = field(default_factory=TranscriptViewState)
     transcript_view_cycles: int = 0
+    session_label: str | None = None
     _persisted_failed: bool = field(default=False, repr=False)
 
     def persist(self) -> None:
@@ -120,27 +126,48 @@ def _fit_toolbar(text: str, width: int) -> str:
     return clean[: width - 1].rstrip() + "…"
 
 
-def render_bottom_toolbar(mode: str, *, width: int | None = None) -> str:
+def render_bottom_toolbar(
+    mode: str,
+    *,
+    width: int | None = None,
+    session_label: str | None = None,
+) -> str:
     """Return the single-line prompt-owned toolbar for the live TTY path.
 
     Claude Code keeps the bottom chrome compact: permission mode first,
     then only the keyboard affordances that fit. Narrow terminals get a
     shorter one-row variant so prompt_toolkit never reserves a surprise
     second toolbar row at the bottom of the screen.
+
+    ``session_label`` is an optional hint string (e.g. a session title
+    or id suffix) that is prepended when room allows — it surfaces the
+    active session at a glance without forcing the user to run
+    ``/sessions``. When space is tight it is the first thing dropped so
+    the keyboard affordances always remain readable.
     """
     resolved_width = width if width is not None else _terminal_width()
     label = theme.format_mode(mode, color=False)
-    variants = (
+    base_variants = (
         f"{label} permissions on · shift+tab to cycle · ? shortcuts · / commands · ctrl+t transcript",
+        f"{label} permissions on · shift+tab · ? shortcuts · / commands · ctrl+t",
         f"{label} permissions on · shift+tab · ? shortcuts · / commands",
         f"{label} permissions on · shift+tab",
         f"{label} permissions on",
     )
+    variants: list[str] = list(base_variants)
+    if session_label:
+        # Session prefix gets its own widest-to-narrowest ladder so the
+        # layout collapses gracefully without yanking the mode label off
+        # screen first.
+        session_variants = [
+            f"{session_label} · {variant}" for variant in base_variants[:3]
+        ]
+        variants = session_variants + variants
     for variant in variants:
         padded = f"  {variant}"
         if len(padded) <= resolved_width:
             return padded
-    return _fit_toolbar(f"  {variants[-1]}", resolved_width)
+    return _fit_toolbar(f"  {base_variants[-1]}", resolved_width)
 
 
 def build_prompt_input_provider(
@@ -301,7 +328,12 @@ def build_prompt_input_provider(
 
     def _bottom_toolbar() -> Any:
         return FormattedText(
-            [("class:toolbar", render_bottom_toolbar(state.mode))]
+            [(
+                "class:toolbar",
+                render_bottom_toolbar(
+                    state.mode, session_label=state.session_label
+                ),
+            )]
         )
 
     # Only pass editing_mode when vim is active: letting prompt_toolkit
