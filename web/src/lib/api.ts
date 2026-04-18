@@ -1260,6 +1260,59 @@ export function useSetupOverview() {
   });
 }
 
+export interface GuidanceSuggestion {
+  id: string;
+  title: string;
+  body: string;
+  severity: 'info' | 'warn' | 'blocker';
+  priority: number;
+  command?: string | null;
+  href?: string | null;
+  cooldown_seconds: number;
+}
+
+export interface GuidanceResponse {
+  workspace_valid: boolean;
+  suggestions: GuidanceSuggestion[];
+}
+
+export function useGuidance(options?: { includeSuppressed?: boolean }) {
+  const suffix = options?.includeSuppressed ? '?include_suppressed=true' : '';
+  return useQuery<GuidanceResponse>({
+    queryKey: ['guidance', options?.includeSuppressed ?? false],
+    queryFn: () => fetchApi(`/guidance${suffix}`),
+    refetchInterval: 30000,
+  });
+}
+
+export function useDismissGuidance() {
+  const queryClient = useQueryClient();
+  return useMutation<{ dismissed: string }, ApiRequestError, { suggestionId: string }>({
+    mutationFn: ({ suggestionId }) =>
+      fetchApi('/guidance/dismiss', {
+        method: 'POST',
+        body: JSON.stringify({ suggestion_id: suggestionId }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['guidance'] });
+    },
+  });
+}
+
+export function useAcceptGuidance() {
+  const queryClient = useQueryClient();
+  return useMutation<{ accepted: string }, ApiRequestError, { suggestionId: string }>({
+    mutationFn: ({ suggestionId }) =>
+      fetchApi('/guidance/accept', {
+        method: 'POST',
+        body: JSON.stringify({ suggestion_id: suggestionId }),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['guidance'] });
+    },
+  });
+}
+
 export function useSaveProviderKeys() {
   const queryClient = useQueryClient();
 

@@ -4626,6 +4626,20 @@ def status(db: str, configs_dir: str, memory_db: str, json_output: bool = False,
     )
     render_status_home(snapshot, verbose=verbose)
 
+    # Proactive guidance — surface up to two context-grounded suggestions
+    # below the status home. Any failure here is swallowed so a bug in the
+    # guidance engine can't take down the core status command.
+    try:
+        from cli.guidance.render import render_suggestions_block
+        from cli.workbench_app.suggest_slash import select_active_suggestions
+
+        suggestions = select_active_suggestions(workspace, limit=2)
+        if suggestions:
+            click.echo("")
+            click.echo(render_suggestions_block(suggestions))
+    except Exception:  # pragma: no cover — defensive: status must never crash
+        pass
+
 
 # ---------------------------------------------------------------------------
 # agentlab logs

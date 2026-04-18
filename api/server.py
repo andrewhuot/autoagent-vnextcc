@@ -76,6 +76,7 @@ from api.routes import (
     results as results_routes,
     reviews as reviews_routes,
     improvements as improvements_routes,
+    guidance as guidance_routes,
 )
 from api.optimize_event_bus import OptimizeEventBus
 from api.tasks import TaskManager
@@ -549,6 +550,7 @@ app.include_router(optimize_stream_routes.router)
 app.include_router(quickfix_routes.router)
 app.include_router(config_routes.router)
 app.include_router(setup_routes.router)
+app.include_router(guidance_routes.router)
 app.include_router(settings_routes.router)
 app.include_router(health_routes.router)
 app.include_router(conversations_routes.router)

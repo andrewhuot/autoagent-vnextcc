@@ -28,6 +28,7 @@ import { ScoreChart } from '../components/ScoreChart';
 import { StatusBadge } from '../components/StatusBadge';
 import { AgentSelector } from '../components/AgentSelector';
 import { OperatorNextStepCard } from '../components/OperatorNextStepCard';
+import { GuidancePanel } from '../components/GuidancePanel';
 import { useActiveAgent } from '../lib/active-agent';
 import { createJourneyStatusSummary } from '../lib/operator-journey';
 import { useWorkbenchBridge } from '../lib/workbench-api';
@@ -702,6 +703,8 @@ export function Optimize() {
       />
 
       <AgentSelector onChange={syncAgentSearchParam} />
+
+      <GuidancePanel limit={2} />
 
       {selectedEvalRunId && activeAgent && (
         <section className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-900">
