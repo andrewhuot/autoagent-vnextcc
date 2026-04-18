@@ -225,6 +225,11 @@ def test_builtin_registry_contains_all_ten_commands(registry: CommandRegistry) -
         "uncompact",
         "memory-debug",
         "memory-edit",
+        # Terminal UX polish — discoverability + keybindings.
+        "find",
+        "keybindings",
+        # Proactive guidance branch — already registered on this branch.
+        "suggest",
     }
     assert set(registry.names()) == expected
 
@@ -296,9 +301,11 @@ def test_builtin_registry_accepts_extra_commands() -> None:
     # /usage + three transcript-rewind commands, three /skill* commands,
     # /background + /background-clear, /init, /theme, /output-style, the R2
     # Slice D.1 ``/improve`` passthrough, the R7.C.7 ``/fork`` command,
-    # the P2.T9 /uncompact + /memory-debug + /memory-edit handlers, and the
+    # the P2.T9 /uncompact + /memory-debug + /memory-edit handlers, the
+    # terminal-UX-polish /find + /keybindings commands, the
+    # /suggest command from the proactive-guidance branch, and the
     # /custom supplied via ``extra``.
-    assert len(registry) == 57
+    assert len(registry) == 60
 
 
 # ---------------------------------------------------------------------------
@@ -448,13 +455,14 @@ def test_help_handler_renders_three_column_table(
     assert len(builtin_lines) > 5  # sanity: the builtin group is populous
 
     def _description_offset(line: str) -> int:
-        # The row starts with 4 spaces of indent, then the name cell
-        # (ljust-padded), then two spaces, then the description. We locate
-        # the description by finding the run of 2+ spaces after the name.
+        # Rows are nested under a category label, so indent is 6 spaces,
+        # then the name cell (ljust-padded), then two spaces, then the
+        # description. We locate the description by finding the run of 2+
+        # spaces after the name.
         stripped = line.rstrip()
-        assert stripped.startswith("    /"), stripped
+        assert stripped.startswith("      /"), stripped
         # Find the first run of two-or-more spaces after the name token.
-        idx = 5  # past the "    /" prefix
+        idx = 7  # past the "      /" prefix
         while idx < len(stripped) and not stripped[idx:].startswith("  "):
             idx += 1
         # Skip the double-space separator to land on the description column.
